@@ -1,0 +1,8 @@
+# Working documents and progress logs stay local (not production code)
+docs/
+
+# macOS
+.DS_Store
+
+# Local Cursor / Claude tooling
+.claude/
