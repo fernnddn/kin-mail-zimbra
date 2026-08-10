@@ -159,21 +159,63 @@ tls_manual() {
   command -v certbot >/dev/null || { fail "certbot tidak terpasang"; exit 1; }
   ok "certbot siap"
 
-  say "2. Menerbitkan sertifikat (DNS-01 manual, interaktif)"
-  info "Saat diminta, buat TXT record di panel DNS (Rumahweb / provider zona),"
-  info "tunggu propagasi, lalu tekan Enter di terminal ini."
+  say "2. Menerbitkan sertifikat (DNS-01 manual)"
   if [ -f "${LE_DIR}/cert.pem" ]; then
     ok "Sertifikat sudah ada, penerbitan dilewati"
   else
-    # Interactive: operator must be present to create the ACME TXT record.
-    certbot certonly \
-      --manual \
-      --preferred-challenges dns \
-      -d "$MAIL_HOST" \
-      --preferred-chain "ISRG Root X1" \
-      --agree-tos --no-eff-email -m "$LE_EMAIL" \
-      --manual-public-ip-logging-ok
-    [ -f "${LE_DIR}/cert.pem" ] || { fail "Penerbitan gagal. Lihat /var/log/letsencrypt/"; exit 1; }
+    # Interactive TTY: classic certbot prompts.
+    # Non-TTY / KIN_MAIL_DNS_POLL=1: print TXT + poll public DNS until the
+    # operator creates the record (needed for remote/bootstrap deploys).
+    if [ -t 0 ] && [ "${KIN_MAIL_DNS_POLL:-0}" != "1" ]; then
+      info "Mode interaktif: buat TXT di panel DNS saat diminta, lalu Enter."
+      certbot certonly \
+        --manual \
+        --preferred-challenges dns \
+        -d "$MAIL_HOST" \
+        --preferred-chain "ISRG Root X1" \
+        --agree-tos --no-eff-email -m "$LE_EMAIL" \
+        --manual-public-ip-logging-ok
+    else
+      info "Mode poll: challenge ditulis ke /tmp/kin-mail-acme-challenge.txt"
+      info "Buat TXT di panel DNS zona ${MAIL_DOMAIN}, lalu tunggu propagasi."
+      AUTH_HOOK=$(mktemp /tmp/kin-mail-acme-auth.XXXXXX)
+      CLEAN_HOOK=$(mktemp /tmp/kin-mail-acme-clean.XXXXXX)
+      chmod 700 "$AUTH_HOOK" "$CLEAN_HOOK"
+      cat > "$AUTH_HOOK" <<'HOOK'
+#!/bin/bash
+set -u
+printf '%s\n' "=== KIN Mail ACME DNS-01 challenge ===" | tee /tmp/kin-mail-acme-challenge.txt
+printf '%s\n' "Host/Name : _acme-challenge.${CERTBOT_DOMAIN}" | tee -a /tmp/kin-mail-acme-challenge.txt
+printf '%s\n' "Type      : TXT" | tee -a /tmp/kin-mail-acme-challenge.txt
+printf '%s\n' "Value     : ${CERTBOT_VALIDATION}" | tee -a /tmp/kin-mail-acme-challenge.txt
+printf '%s\n' "Waiting up to 20 minutes for public DNS (1.1.1.1)…" | tee -a /tmp/kin-mail-acme-challenge.txt
+for _i in $(seq 1 120); do
+  if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @1.1.1.1 2>/dev/null | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
+    echo "TXT visible on 1.1.1.1" | tee -a /tmp/kin-mail-acme-challenge.txt
+    exit 0
+  fi
+  sleep 10
+done
+echo "TIMEOUT waiting for TXT _acme-challenge.${CERTBOT_DOMAIN}" | tee -a /tmp/kin-mail-acme-challenge.txt
+exit 1
+HOOK
+      cat > "$CLEAN_HOOK" <<'HOOK'
+#!/bin/bash
+exit 0
+HOOK
+      certbot certonly \
+        --manual \
+        --preferred-challenges dns \
+        --manual-auth-hook "$AUTH_HOOK" \
+        --manual-cleanup-hook "$CLEAN_HOOK" \
+        -d "$MAIL_HOST" \
+        --preferred-chain "ISRG Root X1" \
+        --agree-tos --no-eff-email -m "$LE_EMAIL" \
+        --manual-public-ip-logging-ok \
+        --non-interactive
+      rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
+    fi
+    [ -f "${LE_DIR}/cert.pem" ] || { fail "Penerbitan gagal. Lihat /var/log/letsencrypt/ dan /tmp/kin-mail-acme-challenge.txt"; exit 1; }
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
 
