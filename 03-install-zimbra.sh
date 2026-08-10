@@ -145,8 +145,11 @@ trap cleanup_redactor EXIT
 
 tmux kill-session -t "$SESS" 2>/dev/null
 tmux new-session -d -s "$SESS" -x 200 -y 50
-# Filter BEFORE tee: pane scrollback and $LOG both see only redacted output.
-tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check 2>&1 | $REDACTOR | tee $LOG" Enter
+# Run install.sh on a real TTY (the tmux pane). Piping stdout breaks the driver:
+# bash fully-buffers when stdout is a pipe, so prompts never reach capture-pane
+# and the installer blocks forever on read. Log via pipe-pane instead (redact then tee).
+tmux pipe-pane -t "$SESS" -o "$REDACTOR | tee -a $LOG"
+tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check" Enter
 
 send()   { tmux send-keys -t "$SESS" "$1" Enter; sleep "${2:-2}"; }
 scr()    { tmux capture-pane -p -t "$SESS" | grep -v '^[[:space:]]*$'; }
