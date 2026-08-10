@@ -199,6 +199,12 @@ before public release. The builds carry no warranty and are not official Zimbra
 binaries. See **Patch monitoring** below before offering the platform to a
 paying customer.
 
+**Checklist — repository visibility.** This deploy repo is intentionally still
+**public** (conscious operator decision as of 2026-08-10, not an accidental
+default). Before the first customer handoff it **must** be reviewed again:
+consider making it private and having `kin-mail.sh` clone via token or deploy
+key. Do not treat current public visibility as the final production posture.
+
 ---
 
 ## Patch monitoring
