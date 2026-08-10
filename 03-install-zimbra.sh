@@ -20,6 +20,21 @@ MANUAL=0; [ "${1:-}" = "--manual" ] && MANUAL=1
 SESS="zcs"
 LOG="/var/log/kin-mail-install.log"
 
+# The interactive installer may echo the admin password (typed via tmux) and can
+# dump CREATEADMINPASS / LDAP*PASS into the apply/save stream. Bare `tee` would
+# leave those values plaintext in $LOG. Redact known secrets before anything is
+# written, keep the log mode 0600, and scrub again after verification.
+scrub_install_log() {
+  local f="${1:-$LOG}"
+  [ -f "$f" ] || return 0
+  ADMIN_PASS="$ADMIN_PASS" perl -i -pe '
+    BEGIN { $p = quotemeta($ENV{ADMIN_PASS} // ""); }
+    s/$p/***REDACTED***/g if length $p;
+    s/^(\s*(?:CREATEADMINPASS|LDAPROOTPASS|LDAPADMINPASS|LDAPPOSTPASS|LDAPAMAVISPASS|LDAPREPPASS|zimbra_store_adminpass)\s*=\s*).*/$1***REDACTED***/i;
+  ' "$f"
+  chmod 600 "$f" 2>/dev/null || true
+}
+
 # --- 1. download and verify --------------------------------------------------
 say "1. Mengambil ${ZCS_FILE}"
 mkdir -p "$ZCS_SRC"; cd "$ZCS_SRC"
@@ -75,9 +90,39 @@ fi
 
 # --- 2. drive the installer --------------------------------------------------
 say "2. Menjalankan installer di tmux (attach: tmux attach -t ${SESS})"
+
+# Prepare a mode-0600 log and a redacting filter so ADMIN_PASS never lands in
+# $LOG even if the installer echoes it or dumps CREATEADMINPASS=... on apply.
+: > "$LOG"
+chmod 600 "$LOG"
+
+ENVF=$(mktemp /tmp/kin-mail-install.env.XXXXXX)
+REDACTOR=$(mktemp /tmp/kin-mail-redact.XXXXXX)
+chmod 600 "$ENVF"
+chmod 700 "$REDACTOR"
+printf 'ADMIN_PASS=%q\n' "$ADMIN_PASS" > "$ENVF"
+cat > "$REDACTOR" <<EOF
+#!/usr/bin/env bash
+set -u
+# shellcheck disable=SC1090
+. "$ENVF"
+export ADMIN_PASS
+exec perl -pe '
+  BEGIN { \$p = quotemeta(\$ENV{ADMIN_PASS} // ""); }
+  s/\$p/***REDACTED***/g if length \$p;
+  s/^(\\s*(?:CREATEADMINPASS|LDAPROOTPASS|LDAPADMINPASS|LDAPPOSTPASS|LDAPAMAVISPASS|LDAPREPPASS|zimbra_store_adminpass)\\s*=\\s*).*/\$1***REDACTED***/i;
+'
+EOF
+
+cleanup_redactor() {
+  rm -f "$ENVF" "$REDACTOR"
+}
+trap cleanup_redactor EXIT
+
 tmux kill-session -t "$SESS" 2>/dev/null
 tmux new-session -d -s "$SESS" -x 200 -y 50
-tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check 2>&1 | tee $LOG" Enter
+# Filter BEFORE tee: pane scrollback and $LOG both see only redacted output.
+tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check 2>&1 | $REDACTOR | tee $LOG" Enter
 
 send()   { tmux send-keys -t "$SESS" "$1" Enter; sleep "${2:-2}"; }
 scr()    { tmux capture-pane -p -t "$SESS" | grep -v '^[[:space:]]*$'; }
@@ -139,6 +184,8 @@ done
 # --- 3. verify ---------------------------------------------------------------
 echo; say "3. Verifikasi"
 sleep 5
+# Scrub even on failure paths so a broken install cannot leave a dirty log behind.
+scrub_install_log "$LOG"
 if [ ! -d /opt/zimbra ]; then fail "/opt/zimbra tidak ada - instalasi gagal. Lihat $LOG"; exit 1; fi
 
 STATUS=$(su - zimbra -c "zmcontrol status" 2>&1)
@@ -154,6 +201,14 @@ fi
 su - zimbra -c "zmcontrol -v" 2>/dev/null | sed 's/^/    /'
 echo "    domain: $(su - zimbra -c 'zmprov gad' 2>/dev/null | tr '\n' ' ')"
 
+# Final scrub + proof the admin password is absent from the install log.
+scrub_install_log "$LOG"
+if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
+  fail "Password admin masih terdeteksi di $LOG setelah redact - periksa filter"
+  exit 1
+fi
+ok "Log instalasi bersih dari password admin (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
+
 echo
 say "SELESAI"
 info "Webmail : https://${MAIL_HOST}"
@@ -161,3 +216,5 @@ info "Admin   : https://${MAIL_HOST}:7071  (admin@${MAIL_DOMAIN})"
 info "Sertifikat masih self-signed. Lanjut ke 04-tls-dkim.sh"
 echo
 tmux kill-session -t "$SESS" 2>/dev/null
+cleanup_redactor
+trap - EXIT
