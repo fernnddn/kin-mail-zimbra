@@ -1,8 +1,41 @@
 # Working documents and progress logs stay local (not production code)
 docs/
 
-# macOS
-.DS_Store
-
 # Local Cursor / Claude tooling
 .claude/
+
+# --- never commit deployment state or credentials ---------------------------
+config
+*.conf.local
+cloudflare.ini
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# --- installer artefacts -----------------------------------------------------
+*.tgz
+*.tar.gz
+*.sha256
+*.md5
+zcs-*/
+
+# --- logs and scratch --------------------------------------------------------
+*.log
+*.bak
+*.bak.*
+/tmp/
+cap.txt
+
+# --- internal documents: these must never leave the company ------------------
+*.docx
+*.pdf
+
+# --- editors and OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

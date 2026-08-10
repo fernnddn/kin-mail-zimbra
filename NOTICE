@@ -1,0 +1,30 @@
+Copyright (c) 2026 PT Karya Informasi Nusantara.
+All rights reserved.
+
+This repository is proprietary and confidential. It is published without an
+open source licence, which means no permission is granted to use, copy, modify,
+merge, publish, distribute, sublicense, or sell any part of it.
+
+Internal use by PT Karya Informasi Nusantara and its authorised personnel is
+permitted. Any other use requires prior written permission.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY SOFTWARE
+
+These scripts install and configure software they do not own or redistribute.
+That software is governed by its own licence terms:
+
+  Zimbra Collaboration
+    Installed from the community FOSS build published by BTACTIC at
+    https://github.com/maldua/zimbra-foss, compiled from Zimbra's published
+    open source sources. Licensed GPL-2.0. Not an official Zimbra binary and
+    supplied by its authors without warranty.
+
+  Ubuntu, dnsmasq, Postfix, OpenLDAP, nginx, Amavis, SpamAssassin, ClamAV
+    Distributed under their respective licences by their respective projects.
+
+  certbot and certbot-dns-cloudflare
+    Licensed Apache-2.0 by the Electronic Frontier Foundation.
+
+No warranty is provided. Operating a mail server exposed to the internet carries
+security and deliverability obligations that remain entirely with the operator.
