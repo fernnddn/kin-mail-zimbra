@@ -89,6 +89,30 @@ EOF
 fi
 
 # --- 2. drive the installer --------------------------------------------------
+# The download/extract steps above are safe to re-run. The tmux driver is not:
+# a second pass against an already-installed system hits upgrade/reconfigure
+# prompts the state machine does not recognise (hang or wrong answers).
+SKIP_INSTALLER=0
+if [ -d /opt/zimbra ]; then
+  STATUS_PRE=$(su - zimbra -c "zmcontrol status" 2>&1) || STATUS_PRE=""
+  STOPPED_PRE=$(printf '%s' "$STATUS_PRE" | grep -v Running | grep -vE "^Host|^$" | wc -l | tr -d ' ')
+  if [ -n "$STATUS_PRE" ] && [ "${STOPPED_PRE:-1}" -eq 0 ]; then
+    say "2. Installer dilewati — Zimbra sudah terpasang dan sehat"
+    ok "/opt/zimbra ada; zmcontrol status: semua service Running"
+    info "Re-run tidak menjalankan ulang install.sh (hindari alur upgrade/reconfigure)."
+    SKIP_INSTALLER=1
+  else
+    fail "Zimbra ada di /opt/zimbra tetapi tidak semua service Running (atau status tidak terbaca)."
+    info "Script ini tidak akan menjalankan ulang installer pada instalasi parsial/rusak."
+    info "Tangani manual dulu: perbaiki service yang mati, atau uninstall bersih lalu jalankan 03 lagi."
+    if [ -n "$STATUS_PRE" ]; then
+      printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
+    fi
+    exit 1
+  fi
+fi
+
+if [ "$SKIP_INSTALLER" -eq 0 ]; then
 say "2. Menjalankan installer di tmux (attach: tmux attach -t ${SESS})"
 
 # Prepare a mode-0600 log and a redacting filter so ADMIN_PASS never lands in
@@ -180,10 +204,13 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         ;;
   esac
 done
+fi
 
 # --- 3. verify ---------------------------------------------------------------
 echo; say "3. Verifikasi"
-sleep 5
+if [ "$SKIP_INSTALLER" -eq 0 ]; then
+  sleep 5
+fi
 # Scrub even on failure paths so a broken install cannot leave a dirty log behind.
 scrub_install_log "$LOG"
 if [ ! -d /opt/zimbra ]; then fail "/opt/zimbra tidak ada - instalasi gagal. Lihat $LOG"; exit 1; fi
@@ -202,12 +229,17 @@ su - zimbra -c "zmcontrol -v" 2>/dev/null | sed 's/^/    /'
 echo "    domain: $(su - zimbra -c 'zmprov gad' 2>/dev/null | tr '\n' ' ')"
 
 # Final scrub + proof the admin password is absent from the install log.
-scrub_install_log "$LOG"
-if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
-  fail "Password admin masih terdeteksi di $LOG setelah redact - periksa filter"
-  exit 1
+# On a healthy skip there may be no fresh tee log; only gate when the file exists.
+if [ -f "$LOG" ]; then
+  scrub_install_log "$LOG"
+  if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
+    fail "Password admin masih terdeteksi di $LOG setelah redact - periksa filter"
+    exit 1
+  fi
+  ok "Log instalasi bersih dari password admin (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
+elif [ "$SKIP_INSTALLER" -eq 1 ]; then
+  info "Tidak ada log installer baru (driver dilewati)"
 fi
-ok "Log instalasi bersih dari password admin (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
 
 # The installer "save config to file" step writes /opt/zimbra/config.<pid> with
 # plaintext CREATEADMINPASS / LDAP*PASS. That file is not used by a running
@@ -261,5 +293,7 @@ info "Admin   : https://${MAIL_HOST}:7071  (admin@${MAIL_DOMAIN})"
 info "Sertifikat masih self-signed. Lanjut ke 04-tls-dkim.sh"
 echo
 tmux kill-session -t "$SESS" 2>/dev/null
-cleanup_redactor
-trap - EXIT
+if declare -F cleanup_redactor >/dev/null 2>&1; then
+  cleanup_redactor
+  trap - EXIT
+fi

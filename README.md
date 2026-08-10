@@ -38,7 +38,7 @@ Reconfigure at any time: `sudo ./00-config.sh --reset`
 | `00-config.sh` | Shared library and first-run wizard. Not run directly. | — |
 | `01-preflight.sh` | Sizing, OS, conflicting services, outbound access, **SMTP egress**, DNS state, PTR. Read-only. | yes |
 | `02-prepare-os.sh` | Hostname, `/etc/hosts`, dnsmasq split-horizon resolver, dependencies. | yes |
-| `03-install-zimbra.sh` | Fetches the FOSS build, verifies SHA-256, drives the interactive installer inside tmux. | yes |
+| `03-install-zimbra.sh` | Fetches the FOSS build, verifies SHA-256, drives the interactive installer inside tmux. Skips the driver if Zimbra is already healthy; refuses to re-drive a partial install. | yes |
 | `04-tls-dkim.sh` | Certificate via DNS-01, deploy hook, **hook executed for real**, DKIM generation. | yes |
 | `06-hybrid-auth.sh` | Optional AD LDAP auth on the mail domain with local password fallback. No-op if AD was skipped. | yes |
 | `05-healthcheck.sh` | Services, listeners, certificate, DNS, DKIM, SMTP egress, **both auth paths**, internal mail flow, open-relay check. | yes |
