@@ -15,6 +15,23 @@ The scripts ask questions **once**. Answers are stored in `/etc/kin-mail/config`
 
 ## Quick start
 
+One entry point:
+
+```bash
+sudo ./kin-mail.sh
+```
+
+If the stage scripts are missing from the current directory, `kin-mail.sh` clones
+[`fernnddn/kin-mail-zimbra`](https://github.com/fernnddn/kin-mail-zimbra) into
+`/opt/kin-mail-deploy` (override with `KIN_MAIL_REPO_URL` / `KIN_MAIL_DEPLOY_DIR`)
+and continues from there. If you are already inside a full clone, it uses the
+local files and does not clone again.
+
+The menu can run a full pipeline (`01 → 02 → 03 → 04 → 06 → 05`, stopping on the
+first failure) or a single stage.
+
+### Manual stage-by-stage (full control / debug)
+
 ```bash
 chmod +x *.sh
 
@@ -27,7 +44,8 @@ sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback (skips if unse
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
-Reconfigure at any time: `sudo ./00-config.sh --reset`
+Reconfigure at any time: `sudo ./00-config.sh --reset` (also available from the
+bootstrap menu under “satu tahap tertentu”).
 
 ---
 
@@ -35,6 +53,7 @@ Reconfigure at any time: `sudo ./00-config.sh --reset`
 
 | Script | Purpose | Idempotent |
 |---|---|---|
+| `kin-mail.sh` | Bootstrap menu: ensure scripts present, then full install or one stage. | yes |
 | `00-config.sh` | Shared library and first-run wizard. Not run directly. | — |
 | `01-preflight.sh` | Sizing, OS, conflicting services, outbound access, **SMTP egress**, DNS state, PTR. Read-only. | yes |
 | `02-prepare-os.sh` | Hostname, `/etc/hosts`, dnsmasq split-horizon resolver, dependencies. | yes |
