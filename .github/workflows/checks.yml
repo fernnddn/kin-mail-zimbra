@@ -1,0 +1,114 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell quality
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # A parse error reaches the server as a half-finished deployment, so this
+      # gate runs before anything else.
+      - name: Syntax (bash -n)
+        run: |
+          fail=0
+          for f in *.sh; do
+            if bash -n "$f"; then
+              echo "ok      $f"
+            else
+              echo "FAILED  $f"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Install shellcheck
+        run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
+
+      # Errors fail the build. Warnings are reported but tolerated: these
+      # scripts intentionally source a config file that shellcheck cannot see.
+      - name: ShellCheck (errors fail)
+        run: |
+          fail=0
+          for f in *.sh; do
+            echo "--- $f"
+            shellcheck -S error -e SC1090,SC1091 "$f" || fail=1
+          done
+          exit $fail
+
+      - name: ShellCheck (warnings, informational)
+        continue-on-error: true
+        run: |
+          for f in *.sh; do
+            shellcheck -S warning -e SC1090,SC1091 "$f" || true
+          done
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # A CRLF in a shell script produces "bad interpreter: /bin/bash^M",
+      # which is a confusing failure on the target host.
+      - name: Reject CRLF line endings
+        run: |
+          bad=$(file *.sh | grep -i CRLF || true)
+          if [ -n "$bad" ]; then echo "CRLF found:"; echo "$bad"; exit 1; fi
+          echo "All scripts use LF"
+
+      # Without the executable bit a fresh clone cannot run ./01-preflight.sh.
+      - name: Require executable bit on scripts
+        run: |
+          fail=0
+          for f in *.sh; do
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            if [ "$mode" != "100755" ]; then
+              echo "not executable ($mode): $f"; fail=1
+            else
+              echo "ok  $f"
+            fi
+          done
+          exit $fail
+
+      # These scripts were written against a live customer environment. This
+      # gate exists so no address, key or token can be reintroduced by accident.
+      - name: Scan for leaked deployment data
+        run: |
+          fail=0
+          scan() {
+            if grep -RInE "$1" --include='*.sh' --include='*.md' --include='NOTICE' . ; then
+              echo ">>> $2"; fail=1
+            fi
+          }
+          scan 'BEGIN (RSA |EC )?PRIVATE KEY'              "private key committed"
+          scan '(cfat_|ghp_|github_pat_)[A-Za-z0-9_]{10,}' "API token committed"
+          # Require a token-length literal. A looser pattern also matches the
+          # line that legitimately writes the file from a variable.
+          scan 'dns_cloudflare_api_token *= *[A-Za-z0-9_-]{25,}' "Cloudflare token value"
+          # Full four-octet match only. A looser pattern matches version
+          # strings such as "10.1.18" and fails the build on nothing.
+          scan '\b10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b'                   "private IP 10.0.0.0/8"
+          scan '\b192\.168\.[0-9]{1,3}\.[0-9]{1,3}\b'                         "private IP 192.168.0.0/16"
+          scan '\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}\b'       "private IP 172.16.0.0/12"
+          exit $fail
+
+      - name: Confirm internal documents are ignored
+        run: |
+          fail=0
+          for f in secret.docx design.pdf config cloudflare.ini server.key; do
+            if git check-ignore -q "$f"; then
+              echo "ok  $f is ignored"
+            else
+              echo "NOT IGNORED: $f"; fail=1
+            fi
+          done
+          exit $fail
