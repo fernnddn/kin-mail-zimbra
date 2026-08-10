@@ -103,18 +103,44 @@ ip2=$(curl -s -m 12 https://api.ipify.org 2>/dev/null)
 info "seen by ifconfig.me : ${ip1:-unknown}"
 info "seen by ipify       : ${ip2:-unknown}"
 if [ -n "$ip1" ] && [ -n "$ip2" ] && [ "$ip1" != "$ip2" ]; then
-  fail "Egress address is NOT STABLE (${ip1} vs ${ip2})"
-  info "Multiple uplinks are load-balancing outbound traffic. For mail this"
-  info "breaks PTR alignment and splits sending reputation. A policy route"
-  info "pinning this host to one uplink is required."
+  warn "HTTP egress is NOT STABLE (${ip1} vs ${ip2})"
+  info "Multiple uplinks are load-balancing outbound traffic. Worth flagging,"
+  info "but it does not settle the question: a host can egress HTTP and SMTP"
+  info "from different addresses, and only the SMTP one decides deliverability."
 elif [ -n "$ip1" ]; then
-  ok "Egress address is stable: $ip1"
-  ptr=$(dig +short +time=5 -x "$ip1" 2>/dev/null | tr '\n' ' ')
-  if [ "$ptr" = "${MAIL_HOST}." ]; then
-    ok "PTR matches ${MAIL_HOST}"
-  else
-    warn "PTR is '${ptr:-none}' - should be ${MAIL_HOST}. Request this from the ISP."
+  info "HTTP egress looks stable at ${ip1}"
+fi
+
+# The address a mail server presents is the only one that matters here, and it
+# has to be measured by asking a real mail server, not an HTTP echo service.
+if [ $BLOCKED_SMTP -eq 0 ] && command -v swaks >/dev/null 2>&1; then
+  smtp_ip() {
+    timeout 60 swaks --server gmail-smtp-in.l.google.com --port 25 \
+      --from "postmaster@${MAIL_DOMAIN}" --to "postmaster@gmail.com" \
+      --quit-after RCPT --timeout 30 2>/dev/null \
+      | grep -oE 'at your service, \[[0-9.]+\]' \
+      | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | head -1
+  }
+  s1=$(smtp_ip); s2=$(smtp_ip)
+  if [ -n "$s1" ] && [ "$s1" = "$s2" ]; then
+    ok "SMTP sending address is consistent: ${s1}"
+    ptr=$(dig +short +time=5 -x "$s1" 2>/dev/null | head -1)
+    if [ -z "$ptr" ]; then
+      warn "No PTR for ${s1}. Request it from the owner of the IP block (the ISP)."
+      info "PTR lives in the reverse zone, not in your domain's DNS provider."
+    else
+      ok "PTR ${s1} -> ${ptr}"
+      back=$(dig +short +time=5 A "${ptr%.}" 2>/dev/null | head -1)
+      [ "$back" = "$s1" ] && ok "Forward-confirmed chain matches" \
+                          || warn "Chain broken: ${ptr%.} resolves to ${back:-nothing}, not ${s1}"
+    fi
+  elif [ -n "$s1" ]; then
+    fail "SMTP sending address is NOT consistent (${s1} vs ${s2})"
+    info "PTR can only name one address, so a share of outbound mail will be"
+    info "rejected. Pin this host to one uplink with a policy route or IP pool."
   fi
+else
+  info "SMTP sending address not measured (swaks unavailable or port 25 filtered)"
 fi
 
 # --- verdict -----------------------------------------------------------------

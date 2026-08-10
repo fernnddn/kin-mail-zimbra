@@ -28,8 +28,19 @@ need_root() {
 # An SMTP port is only usable if it returns a 220 banner. A bare TCP connect
 # is NOT proof: inline security devices complete the handshake and then drop
 # the session, which reads as "open" but delivers nothing.
+#
+# Read a LINE, never a fixed byte count. `head -c N` blocks until N bytes
+# arrive, and a real banner is shorter than that, so it hangs until the
+# timeout and reports a working port as blocked.
 smtp_banner() {
-  timeout "${3:-12}" bash -c "exec 3<>/dev/tcp/${1}/${2}; head -c 100 <&3" 2>/dev/null
+  local host="$1" port="$2" tmo="${3:-15}"
+  if command -v swaks >/dev/null 2>&1; then
+    timeout $((tmo + 10)) swaks --server "$host" --port "$port" \
+      --quit-after CONNECT --timeout "$tmo" 2>/dev/null \
+      | grep -m1 -oE '^<-[[:space:]]+220 .*' | sed 's/^<-[[:space:]]*//'
+  else
+    timeout "$tmo" bash -c "exec 3<>/dev/tcp/${host}/${port}; head -1 <&3" 2>/dev/null
+  fi
 }
 
 # ask VARNAME "Pertanyaan" "default"        -> normal input

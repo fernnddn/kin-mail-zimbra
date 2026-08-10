@@ -114,18 +114,66 @@ for t in "alt1.aspmx.l.google.com 25" "gmail-smtp-in.l.google.com 25"; do
 done
 [ "$SMTP_OUT" -eq 0 ] && info "Server tidak bisa mengirim keluar sampai firewall mengizinkan TCP 25 atau 587."
 
-# --- egress stability --------------------------------------------------------
-echo; say "Alamat egress"
-E1=$(curl -s -m 12 https://ifconfig.me 2>/dev/null)
-E2=$(curl -s -m 12 https://api.ipify.org 2>/dev/null)
-if [ -n "$E1" ] && [ "$E1" = "$E2" ]; then
-  p "Stabil: $E1"
-  PTR=$(dig +short +time=5 -x "$E1" 2>/dev/null | tr '\n' ' ')
-  [ "$PTR" = "${MAIL_HOST}." ] && p "PTR cocok" || b "PTR '${PTR:-tidak ada}' - seharusnya ${MAIL_HOST}"
-elif [ -n "$E1" ]; then
-  f "TIDAK stabil: ${E1} vs ${E2} - PTR dan SPF tidak akan pernah konsisten"
+# --- sending address and forward-confirmed reverse DNS -----------------------
+# Ask a real mail server which address it sees, never an HTTP echo service.
+# A host with several uplinks can egress HTTP and SMTP from different
+# addresses, and only the SMTP one decides whether mail is accepted.
+smtp_egress_ip() {
+  timeout 60 swaks --server gmail-smtp-in.l.google.com --port 25 \
+    --from "postmaster@${MAIL_DOMAIN}" --to "postmaster@gmail.com" \
+    --quit-after RCPT --timeout 30 2>/dev/null \
+    | grep -oE 'at your service, \[[0-9.]+\]' \
+    | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | head -1
+}
+
+echo; say "Alamat pengirim  ${DIM}(dilihat oleh mail server tujuan)${RST}"
+if [ "$SMTP_OUT" -eq 0 ]; then
+  b "Dilewati - SMTP keluar masih diblokir"
+  SEND_IP=""
 else
-  f "Tidak bisa menentukan alamat egress"
+  SEND_IP=$(smtp_egress_ip); S2=$(smtp_egress_ip); S3=$(smtp_egress_ip)
+  if [ -z "$SEND_IP" ]; then
+    f "Tidak bisa menentukan alamat pengirim"
+  elif [ "$SEND_IP" = "$S2" ] && [ "$SEND_IP" = "$S3" ]; then
+    p "Konsisten: ${SEND_IP}"
+  else
+    f "TIDAK konsisten: ${SEND_IP} / ${S2} / ${S3}"
+    info "Beberapa uplink membagi trafik keluar. PTR hanya bisa menunjuk satu"
+    info "alamat, jadi sebagian email akan ditolak. Perlu policy route atau IP"
+    info "pool yang mengunci host ini ke satu uplink."
+  fi
+fi
+
+if [ -n "$SEND_IP" ]; then
+  echo; say "Rantai forward-confirmed reverse DNS"
+  info "Penerima mengambil PTR dari IP pengirim, lalu A dari nama itu, dan"
+  info "hasilnya harus kembali ke IP pengirim yang sama."
+
+  A_REC=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "$MAIL_HOST" 2>/dev/null | head -1)
+  [ "$A_REC" = "$SEND_IP" ] \
+    && p "A ${MAIL_HOST} = ${A_REC} = alamat pengirim" \
+    || f "A ${MAIL_HOST} = ${A_REC:-kosong}, tetapi kirim dari ${SEND_IP}"
+
+  PTR=$(dig +short +time=5 -x "$SEND_IP" 2>/dev/null | head -1)
+  if [ -z "$PTR" ]; then
+    f "PTR ${SEND_IP} belum ada - minta ke pemilik blok IP (ISP), bukan di Cloudflare"
+  elif [ "$PTR" = "${MAIL_HOST}." ]; then
+    p "PTR ${SEND_IP} -> ${PTR}"
+    BACK=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "${PTR%.}" 2>/dev/null | head -1)
+    [ "$BACK" = "$SEND_IP" ] \
+      && p "Rantai lengkap dan cocok" \
+      || f "Rantai putus: ${PTR%.} mengarah ke ${BACK:-kosong}, bukan ${SEND_IP}"
+  else
+    b "PTR ${SEND_IP} -> ${PTR} (bukan ${MAIL_HOST}, boleh asal A-nya kembali ke IP ini)"
+  fi
+
+  case "$SPF" in
+    *"ip4:${SEND_IP}"*) p "SPF menyebut alamat pengirim secara eksplisit" ;;
+    *mx*) [ "$A_REC" = "$SEND_IP" ] \
+            && p "SPF 'mx' mencakup alamat pengirim" \
+            || f "SPF 'mx' TIDAK mencakup ${SEND_IP} - tambahkan ip4:${SEND_IP}" ;;
+    *) b "SPF tidak jelas mencakup ${SEND_IP}" ;;
+  esac
 fi
 
 # --- mail flow ---------------------------------------------------------------

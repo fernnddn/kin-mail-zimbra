@@ -77,7 +77,10 @@ the session. `nc -zv` reports the port as open while nothing can be delivered
 through it. Only a `220` greeting proves a port is usable, so that is what the
 scripts check.
 
-This single detail cost us a misdiagnosed deployment path.
+Read a **line**, never a fixed byte count. An earlier revision used
+`head -c 100`, which blocks until 100 bytes arrive; a real banner is shorter,
+so it hung until the timeout and reported a perfectly working port as blocked.
+That inverted the diagnosis of an entire deployment for half a day.
 
 ### TLS uses the DNS-01 challenge
 
@@ -91,6 +94,36 @@ connectivity and renews unattended.
 renewal that succeeds while Zimbra keeps serving the old certificate is a silent
 outage ninety days later, so `04` runs the hook once in earnest and verifies the
 certificate is still served afterwards.
+
+### The sending address is measured by asking a mail server
+
+A host with more than one uplink can egress HTTP and SMTP from different
+addresses. Reading `ifconfig.me` therefore answers the wrong question: in the
+first live deployment it reported two addresses that alternated, while SMTP
+consistently left from a third. Deliverability is decided entirely by the
+address a receiving mail server sees, so that is what the scripts measure —
+from Gmail's own `EHLO` response.
+
+### Inbound port 25 cannot be tested from an arbitrary host
+
+Most ISPs block outbound port 25 for their customers. A machine that cannot
+reach port 25 anywhere will report a correctly published mail server as
+unreachable, and the result looks identical to a firewall misconfiguration.
+
+Test inbound instead by watching the server — `tcpdump` on the interface, or
+Postfix's own log — while a real mail server connects. The decisive evidence is
+a delivery from a known sender, not a port probe.
+
+### PTR is not in your DNS provider
+
+Reverse DNS lives in the `in-addr.arpa` zone belonging to whoever owns the IP
+block, normally the ISP. It cannot be created in Cloudflare or any other
+provider hosting the forward zone.
+
+Receivers run a forward-confirmed check: PTR of the sending address gives a
+hostname, that hostname's A record must resolve back to the same address. The
+health check walks that whole chain rather than merely noting that a PTR
+exists.
 
 ### Long-lived processes cache DNS failures
 
