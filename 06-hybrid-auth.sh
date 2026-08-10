@@ -27,6 +27,14 @@ if [ "${AD_AUTH_ENABLED}" != "yes" ]; then
   info "AD_AUTH_ENABLED=${AD_AUTH_ENABLED:-no} - dilewati."
   info "Domain memakai auth lokal Zimbra. Jalankan ulang 00-config.sh --reset"
   info "lalu skrip ini bila AD customer sudah siap."
+  # Still prove local auth works (same probe as 05 — not zmprov auth).
+  if ensure_kin_test_mailbox "${TEST_USER_1}" "${TEST_PASS_1}" 2>/dev/null \
+     && zimbra_user_auth_ok "${TEST_USER_1}" "${TEST_PASS_1}"; then
+    ok "Auth lokal terverifikasi: ${TEST_USER_1}"
+  else
+    fail "Auth lokal GAGAL: ${TEST_USER_1} — jalankan 05-healthcheck.sh untuk detail"
+    exit 1
+  fi
   ok "Auth lokal tetap aktif (tidak ada perubahan domain)"
   exit 0
 fi
@@ -84,34 +92,38 @@ say "2. Akun uji — lokal murni + AD-backed"
 # zimbraAuthFallbackToLocal accepts the Zimbra password.
 LOCAL_USER="${TEST_USER_1}"
 LOCAL_PASS="${TEST_PASS_1}"
-if su - zimbra -c "zmprov ga ${LOCAL_USER}" >/dev/null 2>&1; then
-  su - zimbra -c "zmprov sp ${LOCAL_USER} '${LOCAL_PASS}'" >/dev/null 2>&1 || true
-  info "Akun lokal sudah ada: ${LOCAL_USER}"
+if ensure_kin_test_mailbox "$LOCAL_USER" "$LOCAL_PASS" 2>/dev/null; then
+  ok "Akun lokal siap: ${LOCAL_USER}"
 else
-  su - zimbra -c "zmprov ca ${LOCAL_USER} '${LOCAL_PASS}' displayName 'KIN local auth test'" >/dev/null
-  ok "Akun lokal dibuat: ${LOCAL_USER}"
+  fail "Gagal menyiapkan akun lokal: ${LOCAL_USER}"
+  exit 1
 fi
 
 # AD-backed mailbox: must already exist in Active Directory. Zimbra still needs
 # a local account record; password below is a placeholder — login proof uses AD.
-AD_PLACEHOLDER="KinAdPlaceholder#$(hostname -s)"
-if su - zimbra -c "zmprov ga ${AD_TEST_USER}" >/dev/null 2>&1; then
+AD_PLACEHOLDER="KinAdPlaceholder-$(hostname -s)"
+if zimbra_cmd zmprov ga "$AD_TEST_USER" >/dev/null 2>&1; then
   info "Akun AD-backed sudah ada di Zimbra: ${AD_TEST_USER}"
 else
-  su - zimbra -c "zmprov ca ${AD_TEST_USER} '${AD_PLACEHOLDER}' displayName 'KIN AD auth test'" >/dev/null
-  ok "Akun AD-backed dibuat di Zimbra: ${AD_TEST_USER}"
+  if zimbra_cmd zmprov ca "$AD_TEST_USER" "$AD_PLACEHOLDER" displayName 'KIN AD auth test' >/dev/null; then
+    ok "Akun AD-backed dibuat di Zimbra: ${AD_TEST_USER}"
+  else
+    fail "Gagal membuat akun AD-backed: ${AD_TEST_USER}"
+    exit 1
+  fi
 fi
 
-say "3. Verifikasi kedua jalur auth (zmprov auth)"
+say "3. Verifikasi kedua jalur auth (zmmailbox / zimbra_user_auth_ok)"
 
 auth_ok() {
   local user="$1" pass="$2" label="$3"
-  if su - zimbra -c "zmprov auth $(printf '%q' "$user") $(printf '%q' "$pass")" >/dev/null 2>&1; then
+  if zimbra_user_auth_ok "$user" "$pass"; then
     ok "${label}: ${user}"
     return 0
   fi
   fail "${label} GAGAL: ${user}"
-  su - zimbra -c "zmprov auth $(printf '%q' "$user") $(printf '%q' "$pass")" 2>&1 | sed 's/^/    /' || true
+  # Surface a real auth error (zmmailbox), not obsolete zmprov auth usage text.
+  zimbra_cmd zmmailbox -m "$user" -p "$pass" gaf 2>&1 | sed 's/^/    /' | tail -5 || true
   return 1
 }
 
