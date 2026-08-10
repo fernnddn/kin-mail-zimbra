@@ -209,6 +209,51 @@ if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
 fi
 ok "Log instalasi bersih dari password admin (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
 
+# The installer "save config to file" step writes /opt/zimbra/config.<pid> with
+# plaintext CREATEADMINPASS / LDAP*PASS. That file is not used by a running
+# mailbox; delete it after a successful verify so secrets are not left under
+# /opt/zimbra with the installer's default permissions.
+secure_zimbra_install_config() {
+  local f mode removed=0
+
+  while IFS= read -r -d '' f; do
+    mode=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
+    info "Menghapus config installer ${f} (mode ${mode})"
+    rm -f -- "$f"
+    removed=$((removed + 1))
+  done < <(find /opt/zimbra -maxdepth 1 -type f -name 'config.*' -print0 2>/dev/null)
+
+  if [ "$removed" -eq 0 ]; then
+    info "Tidak ada /opt/zimbra/config.* (tidak ada yang dibersihkan)"
+  else
+    ok "File config installer dihapus (${removed} berkas)"
+  fi
+
+  # Gate: nothing may remain world-readable or containing ADMIN_PASS.
+  while IFS= read -r -d '' f; do
+    mode=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
+    case "$mode" in
+      *[4567])
+        fail "Tersisa ${f} yang masih world-readable (mode ${mode})"
+        return 1
+        ;;
+    esac
+    if grep -Fq -- "$ADMIN_PASS" "$f" 2>/dev/null; then
+      fail "Tersisa ${f} yang masih berisi ADMIN_PASS plaintext"
+      return 1
+    fi
+    fail "Tersisa ${f} setelah pembersihan (mode ${mode}) - harusnya sudah dihapus"
+    return 1
+  done < <(find /opt/zimbra -maxdepth 1 -type f -name 'config.*' -print0 2>/dev/null)
+
+  ok "Gate /opt/zimbra/config.*: tidak ada file tertinggal"
+  return 0
+}
+
+if ! secure_zimbra_install_config; then
+  exit 1
+fi
+
 echo
 say "SELESAI"
 info "Webmail : https://${MAIL_HOST}"
