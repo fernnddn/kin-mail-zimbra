@@ -93,10 +93,15 @@ if [ -n "$SEL" ]; then
   p "Selector: ${SEL}"
   TK=$(ls /opt/zimbra/common/sbin/opendkim-testkey /usr/sbin/opendkim-testkey 2>/dev/null | head -1)
   if [ -n "$TK" ]; then
-    if su - zimbra -c "$TK -d ${MAIL_DOMAIN} -s ${SEL}" 2>&1 | grep -qi "key OK"; then
+    # -vvv is required. Without it the tool prints nothing at all on success
+    # and signals the result only through its exit status, so grepping the
+    # output reports a healthy key as broken.
+    TKOUT=$(su - zimbra -c "$TK -d ${MAIL_DOMAIN} -s ${SEL} -vvv" 2>&1)
+    if printf '%s' "$TKOUT" | grep -qi "key OK"; then
       p "Kunci privat cocok dengan record yang dipublish"
     else
       f "opendkim-testkey gagal - record belum ada atau tidak cocok"
+      printf '%s\n' "$TKOUT" | tail -3 | sed 's/^/      /'
     fi
   fi
 else
@@ -156,7 +161,10 @@ if [ -n "$SEND_IP" ]; then
 
   PTR=$(dig +short +time=5 -x "$SEND_IP" 2>/dev/null | head -1)
   if [ -z "$PTR" ]; then
-    f "PTR ${SEND_IP} belum ada - minta ke pemilik blok IP (ISP), bukan di Cloudflare"
+    # Reverse DNS belongs to the owner of the IP block, so this is an external
+    # dependency rather than a server fault. Counting it as a failure would
+    # make the summary blame a host that is configured correctly.
+    b "PTR ${SEND_IP} belum ada - minta ke pemilik blok IP (ISP), bukan di Cloudflare"
   elif [ "$PTR" = "${MAIL_HOST}." ]; then
     p "PTR ${SEND_IP} -> ${PTR}"
     BACK=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "${PTR%.}" 2>/dev/null | head -1)
