@@ -33,12 +33,15 @@ fi
 # --- 2. operating system -----------------------------------------------------
 echo; say "2. Operating system"
 . /etc/os-release
-if [ "${VERSION_ID:-}" = "22.04" ]; then
-  ok "Ubuntu ${VERSION_ID} - supported"
-else
-  fail "Ubuntu ${VERSION_ID:-unknown}. This build targets 22.04 only."
-  FATAL=1
-fi
+case "${VERSION_ID:-}" in
+  22.04|24.04)
+    ok "Ubuntu ${VERSION_ID} - supported (Maldua FOSS ${VERSION_ID} build)"
+    ;;
+  *)
+    fail "Ubuntu ${VERSION_ID:-unknown}. Supported: 22.04 and 24.04 LTS."
+    FATAL=1
+    ;;
+esac
 
 # --- 3. clean host -----------------------------------------------------------
 echo; say "3. Conflicting services"
@@ -84,10 +87,18 @@ ns=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" NS 2>/dev/null | tr '\
 [ -n "$ns" ] && ok "NS     : $ns" || { fail "NS     : none - domain is not delegated"; FATAL=1; }
 
 # A mixed delegation answers from whichever nameserver a resolver happens to
-# pick, so mail fails intermittently. It must be one provider only.
+# pick, so mail fails intermittently. Compare the registrable brand label
+# (penultimate DNS label), not the full parent domain — providers like Rumahweb
+# deliberately use ns*.rumahweb.com/.net/.org/.biz under one organisation.
 if [ "$(echo "$ns" | tr ' ' '\n' | grep -c . )" -gt 0 ]; then
-  providers=$(echo "$ns" | tr ' ' '\n' | sed 's/^[^.]*\.//' | sort -u | grep -c .)
-  [ "$providers" -gt 1 ] && fail "Delegation is SPLIT across $providers providers - mail will fail at random"
+  providers=$(echo "$ns" | tr ' ' '\n' | sed 's/\.$//' \
+    | awk -F. 'NF>=2 {print $(NF-1); next} {print $0}' | sort -u | grep -c .)
+  if [ "$providers" -gt 1 ]; then
+    fail "Delegation is SPLIT across $providers providers - mail will fail at random"
+    FATAL=1
+  else
+    ok "Delegation consistent on one provider brand"
+  fi
 fi
 
 for rec in "MX ${MAIL_DOMAIN}" "TXT ${MAIL_DOMAIN}" "A ${MAIL_HOST}" "TXT _dmarc.${MAIL_DOMAIN}"; do

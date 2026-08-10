@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # KIN Mail - 02 PREPARE OS
-# Base preparation of a clean Ubuntu 22.04 host. Idempotent: safe to re-run.
+# Base preparation of a clean Ubuntu 22.04 / 24.04 host. Idempotent: safe to re-run.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
@@ -43,11 +43,16 @@ say "3. Paket"
 apt-get -y purge postfix exim4-base sendmail apache2 nginx bind9 dovecot-core >/dev/null 2>&1
 apt-get -y autoremove >/dev/null 2>&1
 apt-get -qq update
+. /etc/os-release
+case "${VERSION_ID:-}" in
+  24.04) PERL_LIB=libperl5.38 ;;
+  *)     PERL_LIB=libperl5.34 ;;
+esac
 apt-get -y install \
-  netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 libperl5.34 \
+  netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
   dnsmasq tmux swaks tcpdump traceroute >/dev/null 2>&1
-ok "Dependencies Zimbra + alat uji terpasang"
+ok "Dependencies Zimbra + alat uji terpasang (${PERL_LIB})"
 
 # --- 4. local resolver -------------------------------------------------------
 # Two traps live here:

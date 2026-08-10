@@ -134,7 +134,19 @@ run_wizard() {
   fi
   if [ -z "$ZCS_FILE" ]; then
     ask ZCS_VERSION "Tag versi"  "10.1.18.p1"
-    ask ZCS_FILE    "Nama file"  "zcs-10.1.18_GA_4200001.UBUNTU22_64.20260801175925.tgz"
+    . /etc/os-release 2>/dev/null || true
+    case "${VERSION_ID:-22.04}" in
+      24.04) _plat_hint="UBUNTU24_64" ;;
+      *)     _plat_hint="UBUNTU22_64" ;;
+    esac
+    ask ZCS_FILE    "Nama file"  "zcs-10.1.18_GA_4200001.${_plat_hint}.tgz"
+  fi
+  if [ -z "${ZCS_BASE:-}" ] && [ -n "${ZCS_VERSION:-}" ]; then
+    . /etc/os-release 2>/dev/null || true
+    case "${VERSION_ID:-22.04}" in
+      24.04) ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/zimbra-foss-build-ubuntu-24.04/${ZCS_VERSION}" ;;
+      *)     ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/zimbra-foss-build-ubuntu-22.04/${ZCS_VERSION}" ;;
+    esac
   fi
 
   echo; say "Kredensial"
@@ -217,7 +229,7 @@ INTERNAL_ZONE="${INTERNAL_ZONE}"
 INTERNAL_DNS="${INTERNAL_DNS}"
 ZCS_VERSION="${ZCS_VERSION}"
 ZCS_FILE="${ZCS_FILE}"
-ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/zimbra-foss-build-ubuntu-22.04/${ZCS_VERSION}"
+ZCS_BASE="${ZCS_BASE}"
 ZCS_SRC="/opt/zcs-src"
 ADMIN_PASS='${ADMIN_PASS}'
 LE_EMAIL="${LE_EMAIL}"
@@ -249,17 +261,33 @@ EOF
 
 detect_latest_zcs() {
   command -v curl >/dev/null || return 1
-  local url
+  local url plat tag_prefix
+  # Pick the Maldua artefact that matches this host's Ubuntu release.
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  fi
+  case "${VERSION_ID:-22.04}" in
+    24.04)
+      plat=UBUNTU24_64
+      tag_prefix=zimbra-foss-build-ubuntu-24.04
+      ;;
+    *)
+      plat=UBUNTU22_64
+      tag_prefix=zimbra-foss-build-ubuntu-22.04
+      ;;
+  esac
   url=$(curl -s -m 25 "https://api.github.com/repos/maldua/zimbra-foss/releases?per_page=60" 2>/dev/null \
-        | grep -oE '"browser_download_url": *"[^"]*UBUNTU22_64[^"]*\.tgz"' \
+        | grep -oE "\"browser_download_url\": *\"[^\"]*${plat}[^\"]*\\.tgz\"" \
         | sed -E 's/.*: *"//; s/"$//' | sort -V | tail -1)
   if [ -n "$url" ]; then
     ZCS_FILE="${url##*/}"
     ZCS_VERSION=$(printf '%s' "$url" | awk -F/ '{print $(NF-1)}')
-    ok "Rilis terbaru: ${ZCS_VERSION}"
+    ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/${tag_prefix}/${ZCS_VERSION}"
+    ok "Rilis terbaru untuk Ubuntu ${VERSION_ID:-?} (${plat}): ${ZCS_VERSION}"
     info "$ZCS_FILE"
   else
-    warn "Gagal mendeteksi otomatis, akan ditanyakan manual."
+    warn "Gagal mendeteksi otomatis (${plat}), akan ditanyakan manual."
   fi
 }
 

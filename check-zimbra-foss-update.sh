@@ -3,7 +3,7 @@
 # KIN Mail - optional Zimbra FOSS patch monitor
 #
 # Compares the configured Maldua FOSS build tag (from /etc/kin-mail/config)
-# against the newest UBUNTU22_64 release on GitHub. Read-only; safe for cron.
+# against the newest matching Ubuntu artefact on GitHub. Read-only; safe for cron.
 #
 #   ./check-zimbra-foss-update.sh
 #
@@ -21,13 +21,22 @@ if [ -f "$CONF_FILE" ]; then
 fi
 : "${ZCS_VERSION:=}"
 
+if [ -r /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+fi
+case "${VERSION_ID:-22.04}" in
+  24.04) PLAT=UBUNTU24_64 ;;
+  *)     PLAT=UBUNTU22_64 ;;
+esac
+
 latest_url() {
   curl -sL -m 25 "https://api.github.com/repos/maldua/zimbra-foss/releases?per_page=60" 2>/dev/null \
-    | grep -oE '"browser_download_url": *"[^"]*UBUNTU22_64[^"]*\.tgz"' \
+    | grep -oE "\"browser_download_url\": *\"[^\"]*${PLAT}[^\"]*\\.tgz\"" \
     | sed -E 's/.*: *"//; s/"$//' | sort -V | tail -1
 }
 
-echo "==> KIN Mail — Zimbra FOSS patch check"
+echo "==> KIN Mail — Zimbra FOSS patch check (${PLAT})"
 
 if [ -n "$ZCS_VERSION" ]; then
   echo "    configured build:  ${ZCS_VERSION}"
@@ -39,7 +48,7 @@ fi
 
 URL=$(latest_url)
 if [ -z "$URL" ]; then
-  echo "    ERROR: tidak bisa membaca rilis GitHub maldua/zimbra-foss" >&2
+  echo "    ERROR: tidak bisa membaca rilis GitHub maldua/zimbra-foss (${PLAT})" >&2
   exit 2
 fi
 

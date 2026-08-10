@@ -1,7 +1,7 @@
 # KIN Mail — Zimbra FOSS deployment scripts
 
 Repeatable deployment of Zimbra Collaboration 10 (FOSS build) on Ubuntu Server
-22.04 LTS, with every failure we hit during the first live deployment already
+22.04 or 24.04 LTS, with every failure we hit during the first live deployment already
 handled in code.
 
 The scripts ask questions **once**. Answers are stored in `/etc/kin-mail/config`
@@ -230,7 +230,7 @@ explicit watch process — not a one-time README note.
 |---|---|
 | **Owner** | Technical lead for the KIN Mail product (currently the operator who owns the customer deployment), with backup coverage from the KIN Sight on-call rotation when that person is unavailable. |
 | **Cadence** | Weekly during active PoC / first customer rollouts; monthly once a deployment is in steady state. Align the check with the Monday ops review so it is not ad-hoc. |
-| **What to check** | Newest `UBUNTU22_64` artefact on [`maldua/zimbra-foss` releases](https://github.com/maldua/zimbra-foss/releases) versus the `ZCS_VERSION` stored in `/etc/kin-mail/config` for that customer. |
+| **What to check** | Newest matching `UBUNTU22_64` or `UBUNTU24_64` artefact on [`maldua/zimbra-foss` releases](https://github.com/maldua/zimbra-foss/releases) versus the `ZCS_VERSION` stored in `/etc/kin-mail/config` for that customer. |
 | **How** | Run `./check-zimbra-foss-update.sh` on a machine with outbound HTTPS (the mail host itself is fine). Exit status `1` means a newer tag exists and must be triaged. Optional cron: `0 9 * * 1` (Mondays 09:00) with mail/Slack notification on non-zero exit. |
 | **When an update appears** | (1) Read the Maldua release notes and matching Zimbra security advisories, (2) schedule a maintenance window, (3) re-run the install path on a staging twin or Host B before Host A, (4) record the new `ZCS_VERSION` via `sudo ./00-config.sh --reset` or an edited config, (5) note residual risk if the FOSS tag still lags an embargoed fix. |
 
@@ -263,7 +263,7 @@ and clustering. Hybrid AD authentication is covered by `06-hybrid-auth.sh`
 
 ## Requirements
 
-- Ubuntu Server 22.04 LTS, 64-bit, minimal install
+- Ubuntu Server 22.04 or 24.04 LTS, 64-bit, minimal install
 - 2 vCPU and 8 GB RAM minimum; 4 vCPU and 16 GB recommended
 - 40 GB free minimum; a dedicated volume for `/opt/zimbra` is preferred
 - A static LAN address, and root or sudo access
