@@ -43,6 +43,105 @@ smtp_banner() {
   fi
 }
 
+# Escape for inclusion inside single quotes in a shell -c string.
+shell_single_quote() {
+  printf '%s' "${1:-}" | sed "s/'/'\\\\''/g"
+}
+
+# Run a command as the zimbra user with each argument safely single-quoted
+# (passwords may contain #, spaces, etc. — unquoted values become shell comments).
+zimbra_cmd() {
+  local args=() a q
+  for a in "$@"; do
+    q=$(shell_single_quote "$a")
+    args+=("'$q'")
+  done
+  # shellcheck disable=SC2029
+  su - zimbra -c "${args[*]}"
+}
+
+# Verify an account password the way clients do. `zmprov auth` is NOT a command
+# on Zimbra 10 FOSS (it prints usage and can exit 0) — use zmmailbox instead.
+zimbra_user_auth_ok() {
+  local user="$1" pass="$2"
+  zimbra_cmd zmmailbox -m "$user" -p "$pass" gaf >/dev/null 2>&1
+}
+
+# Create test mailbox if missing; align password; verify auth. Prints zmprov
+# errors on stderr. Return 0 only when the account authenticates.
+ensure_kin_test_mailbox() {
+  local email="$1" pass="$2" out
+  if ! zimbra_cmd zmprov ga "$email" >/dev/null 2>&1; then
+    if ! out=$(zimbra_cmd zmprov ca "$email" "$pass" displayName 'KIN test' 2>&1); then
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  else
+    # Prior runs may have created the account under a different password (or
+    # with a mangled one). Always align to the config password before testing.
+    if ! out=$(zimbra_cmd zmprov sp "$email" "$pass" 2>&1); then
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  fi
+  if zimbra_user_auth_ok "$email" "$pass"; then
+    return 0
+  fi
+  printf 'auth failed for %s after create/reset\n' "$email" >&2
+  return 1
+}
+
+# Brand label for an NS hostname — used to detect split delegation.
+# Providers like Rumahweb intentionally publish ns*.brand.com/.net/.org/.biz;
+# comparing the full parent would false-FAIL. For common two-part public
+# suffixes (co.id, co.uk, …) the brand is the label before that suffix so two
+# unrelated *.co.id operators are not collapsed into one "brand".
+dns_ns_brand() {
+  local host="${1%.}"
+  local IFS=.
+  # shellcheck disable=SC2206
+  local parts=(${host})
+  local n=${#parts[@]}
+  local i
+
+  for ((i = 0; i < n; i++)); do
+    parts[$i]=$(printf '%s' "${parts[$i]}" | tr '[:upper:]' '[:lower:]')
+  done
+
+  if [ "$n" -lt 2 ]; then
+    printf '%s\n' "$host"
+    return 0
+  fi
+
+  local suffix2="${parts[n-2]}.${parts[n-1]}"
+  case "$suffix2" in
+    co.id|or.id|go.id|ac.id|sch.id|my.id|web.id|biz.id|co.uk|org.uk|ac.uk|gov.uk|ltd.uk|plc.uk|me.uk|com.au|net.au|org.au|edu.au|gov.au|asn.au|id.au|co.jp|or.jp|ne.jp|ac.jp|go.jp|com.br|net.br|org.br|co.nz|org.nz|net.nz|com.sg|org.sg|net.sg|co.za|org.za|net.za|web.za|com.mx|org.mx|com.my|org.my|net.my|com.hk|org.hk|net.hk|com.tw|org.tw|co.in|org.in|firm.in|gen.in|ind.in|com.tr|org.tr|com.ar|org.ar|co.kr|or.kr|com.ph|net.ph|org.ph|com.vn|net.vn|co.th|or.th|ac.th|go.th)
+      if [ "$n" -ge 3 ]; then
+        printf '%s\n' "${parts[n-3]}"
+        return 0
+      fi
+      ;;
+  esac
+
+  printf '%s\n' "${parts[n-2]}"
+}
+
+# stdin/arg: whitespace-separated NS hostnames (trailing dots OK).
+# Prints unique brand count on stdout; unique brands on stderr if KIN_DNS_NS_DEBUG=1.
+dns_ns_provider_count() {
+  local ns_list="${1:-}" host brand
+  local brands=""
+  for host in $ns_list; do
+    [ -z "$host" ] && continue
+    brand=$(dns_ns_brand "$host")
+    brands="${brands}${brand}"$'\n'
+  done
+  if [ "${KIN_DNS_NS_DEBUG:-0}" = 1 ]; then
+    printf '%s' "$brands" | sed '/^$/d' | sort -u >&2
+  fi
+  printf '%s' "$brands" | sed '/^$/d' | sort -u | grep -c .
+}
+
 # ask VARNAME "Pertanyaan" "default"        -> normal input
 # ask_secret VARNAME "Pertanyaan"           -> hidden input, no default
 ask() {
@@ -238,9 +337,9 @@ CF_CREDS="/etc/letsencrypt/cloudflare.ini"
 CF_PROPAGATION=40
 EXTERNAL_TEST_ADDRESS="${EXTERNAL_TEST_ADDRESS}"
 TEST_USER_1="test1@${MAIL_DOMAIN}"
-TEST_PASS_1="KinTest#1-\$(hostname -s)"
+TEST_PASS_1="KinTest1-\$(hostname -s)"
 TEST_USER_2="test2@${MAIL_DOMAIN}"
-TEST_PASS_2="KinTest#2-\$(hostname -s)"
+TEST_PASS_2="KinTest2-\$(hostname -s)"
 AD_AUTH_ENABLED="${AD_AUTH_ENABLED}"
 AD_LDAP_URL="${AD_LDAP_URL}"
 AD_SEARCH_BASE="${AD_SEARCH_BASE}"

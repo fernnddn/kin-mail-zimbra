@@ -87,12 +87,10 @@ ns=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" NS 2>/dev/null | tr '\
 [ -n "$ns" ] && ok "NS     : $ns" || { fail "NS     : none - domain is not delegated"; FATAL=1; }
 
 # A mixed delegation answers from whichever nameserver a resolver happens to
-# pick, so mail fails intermittently. Compare the registrable brand label
-# (penultimate DNS label), not the full parent domain — providers like Rumahweb
-# deliberately use ns*.rumahweb.com/.net/.org/.biz under one organisation.
+# pick, so mail fails intermittently. Brand comparison is shared with
+# 05-healthcheck.sh via dns_ns_brand / dns_ns_provider_count in 00-config.sh.
 if [ "$(echo "$ns" | tr ' ' '\n' | grep -c . )" -gt 0 ]; then
-  providers=$(echo "$ns" | tr ' ' '\n' | sed 's/\.$//' \
-    | awk -F. 'NF>=2 {print $(NF-1); next} {print $0}' | sort -u | grep -c .)
+  providers=$(dns_ns_provider_count "$ns")
   if [ "$providers" -gt 1 ]; then
     fail "Delegation is SPLIT across $providers providers - mail will fail at random"
     FATAL=1

@@ -148,6 +148,15 @@ tmux new-session -d -s "$SESS" -x 200 -y 50
 # Run install.sh on a real TTY (the tmux pane). Piping stdout breaks the driver:
 # bash fully-buffers when stdout is a pipe, so prompts never reach capture-pane
 # and the installer blocks forever on read. Log via pipe-pane instead (redact then tee).
+#
+# Security trade-off: before this change, both the live tmux pane and $LOG went
+# through the redactor, so ADMIN_PASS never appeared in either place. With
+# pipe-pane, only $LOG is redacted — the live pane (tmux capture-pane / attach)
+# shows the admin password in cleartext for the whole typed-password prompt
+# window (not just a flash). Accepted because the session is root-only on the
+# mail host, attach requires root, and the durable artifact operators copy off
+# box is $LOG (mode 0600, scrubbed). Do not widen pane access (e.g. shared
+# read-only attach) without restoring pane-level redaction.
 tmux pipe-pane -t "$SESS" -o "$REDACTOR | tee -a $LOG"
 tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check" Enter
 

@@ -68,10 +68,15 @@ sleep 8
 
 # --- public DNS --------------------------------------------------------------
 echo; say "DNS publik"
-NS=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" NS 2>/dev/null | sed 's/^[^.]*\.//' | sort -u)
-NSCOUNT=$(printf '%s' "$NS" | grep -c .)
-[ "$NSCOUNT" -eq 1 ] && p "Delegasi konsisten pada satu provider" \
-                     || f "Delegasi TERPECAH di ${NSCOUNT} provider - mail akan gagal acak"
+NS=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" NS 2>/dev/null | tr '\n' ' ')
+if [ -z "$(echo "$NS" | tr -d '[:space:]')" ]; then
+  f "NS     : none - domain is not delegated"
+else
+  p "NS     : $NS"
+  NSCOUNT=$(dns_ns_provider_count "$NS")
+  [ "$NSCOUNT" -eq 1 ] && p "Delegasi konsisten pada satu provider brand" \
+                       || f "Delegasi TERPECAH di ${NSCOUNT} provider - mail akan gagal acak"
+fi
 
 MX=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" MX 2>/dev/null | tr '\n' ' ')
 [ -n "$MX" ] && p "MX     : $MX" || f "MX belum dipublish"
@@ -193,15 +198,21 @@ FALLBACK=$(su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthFallbackToLocal" 2
 info "zimbraAuthMech=${MECH:-zimbra(default)}  fallback=${FALLBACK:-unset}"
 
 # Local path always expected once test mailboxes exist (fallback or pure local).
-for u in "$TEST_USER_1:$TEST_PASS_1" "$TEST_USER_2:$TEST_PASS_2"; do
-  su - zimbra -c "zmprov ga ${u%%:*}" >/dev/null 2>&1 || \
-    su - zimbra -c "zmprov ca ${u%%:*} '${u##*:}' displayName 'KIN test'" >/dev/null 2>&1
-done
-if su - zimbra -c "zmprov auth $(printf '%q' "$TEST_USER_1") $(printf '%q' "$TEST_PASS_1")" >/dev/null 2>&1; then
+# Root cause of Phase 1 "test1 auth FAIL": `zmprov auth` is not a real command on
+# Zimbra 10 FOSS (prints usage). Also passwords with `#` (old default KinTest#1-…)
+# become shell comments unless single-quoted — see ensure_kin_test_mailbox.
+ERR1=$(mktemp) ERR2=$(mktemp)
+if ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" 2>"$ERR1"; then
   p "Auth lokal Zimbra: ${TEST_USER_1}"
 else
   f "Auth lokal Zimbra gagal: ${TEST_USER_1}"
+  sed 's/^/      /' "$ERR1" | tail -5
 fi
+if ! ensure_kin_test_mailbox "$TEST_USER_2" "$TEST_PASS_2" 2>"$ERR2"; then
+  f "Gagal menyiapkan mailbox uji: ${TEST_USER_2}"
+  sed 's/^/      /' "$ERR2" | tail -5
+fi
+rm -f "$ERR1" "$ERR2"
 
 if [ "${AD_AUTH_ENABLED}" = "yes" ]; then
   case "$MECH" in
@@ -213,7 +224,7 @@ if [ "${AD_AUTH_ENABLED}" = "yes" ]; then
     *)           f "zimbraAuthFallbackToLocal tidak TRUE — akun lokal di domain hybrid akan gagal login" ;;
   esac
   if [ -n "${AD_TEST_USER}" ] && [ -n "${AD_TEST_PASS}" ]; then
-    if su - zimbra -c "zmprov auth $(printf '%q' "$AD_TEST_USER") $(printf '%q' "$AD_TEST_PASS")" >/dev/null 2>&1; then
+    if zimbra_user_auth_ok "$AD_TEST_USER" "$AD_TEST_PASS"; then
       p "Auth AD LDAP: ${AD_TEST_USER}"
     else
       f "Auth AD LDAP gagal: ${AD_TEST_USER}"
@@ -228,10 +239,8 @@ fi
 # --- mail flow ---------------------------------------------------------------
 if [ $QUICK -eq 0 ]; then
   echo; say "T1 - alur mail internal"
-  for u in "$TEST_USER_1:$TEST_PASS_1" "$TEST_USER_2:$TEST_PASS_2"; do
-    su - zimbra -c "zmprov ga ${u%%:*}" >/dev/null 2>&1 || \
-      su - zimbra -c "zmprov ca ${u%%:*} '${u##*:}' displayName 'KIN test'" >/dev/null 2>&1
-  done
+  ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" >/dev/null 2>&1 || true
+  ensure_kin_test_mailbox "$TEST_USER_2" "$TEST_PASS_2" >/dev/null 2>&1 || true
   SUBJ="KIN healthcheck $(date +%s)"
   OUT=$(swaks --to "$TEST_USER_2" --from "$TEST_USER_1" \
         --server 127.0.0.1:587 --auth LOGIN \
