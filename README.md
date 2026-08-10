@@ -23,6 +23,7 @@ sudo ./02-prepare-os.sh       # hostname, hosts, resolver, dependencies
 sudo ./03-install-zimbra.sh   # download, verify checksum, drive the installer
 sudo ./04-tls-dkim.sh         # Let's Encrypt via DNS-01, plus DKIM key
 #                               → publish the DKIM record it prints
+sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback (skips if unset)
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
@@ -39,7 +40,9 @@ Reconfigure at any time: `sudo ./00-config.sh --reset`
 | `02-prepare-os.sh` | Hostname, `/etc/hosts`, dnsmasq split-horizon resolver, dependencies. | yes |
 | `03-install-zimbra.sh` | Fetches the FOSS build, verifies SHA-256, drives the interactive installer inside tmux. | yes |
 | `04-tls-dkim.sh` | Certificate via DNS-01, deploy hook, **hook executed for real**, DKIM generation. | yes |
-| `05-healthcheck.sh` | Services, listeners, certificate, DNS, DKIM, SMTP egress, internal mail flow, open-relay check. | yes |
+| `06-hybrid-auth.sh` | Optional AD LDAP auth on the mail domain with local password fallback. No-op if AD was skipped. | yes |
+| `05-healthcheck.sh` | Services, listeners, certificate, DNS, DKIM, SMTP egress, **both auth paths**, internal mail flow, open-relay check. | yes |
+| `check-zimbra-foss-update.sh` | Optional: compare configured FOSS build vs newest GitHub release. | yes |
 
 `01` is safe to run on any host — it changes nothing.
 
@@ -60,6 +63,7 @@ Asked once, on first run:
 | Customer-internal zone (AD) | none |
 | Zimbra FOSS release | auto-detected from GitHub |
 | Zimbra admin password | — |
+| Active Directory hybrid auth (optional) | skipped → local auth only |
 | Let's Encrypt contact | `admin@<domain>` |
 | External test mailbox | empty |
 
@@ -173,8 +177,27 @@ checksum is verified before installation and the install aborts on mismatch.
 **Disclosure required before commercial use.** That project states its builds may
 lag Zimbra security fixes by up to two months, because those fixes are embargoed
 before public release. The builds carry no warranty and are not official Zimbra
-binaries. A patch monitoring process should be defined before the platform is
-offered to a paying customer.
+binaries. See **Patch monitoring** below before offering the platform to a
+paying customer.
+
+---
+
+## Patch monitoring
+
+The Maldua FOSS build is not an official Zimbra binary and can trail embargoed
+security fixes by up to about two months. KIN Mail deployments therefore need an
+explicit watch process — not a one-time README note.
+
+| Item | Decision |
+|---|---|
+| **Owner** | Technical lead for the KIN Mail product (currently the operator who owns the customer deployment), with backup coverage from the KIN Sight on-call rotation when that person is unavailable. |
+| **Cadence** | Weekly during active PoC / first customer rollouts; monthly once a deployment is in steady state. Align the check with the Monday ops review so it is not ad-hoc. |
+| **What to check** | Newest `UBUNTU22_64` artefact on [`maldua/zimbra-foss` releases](https://github.com/maldua/zimbra-foss/releases) versus the `ZCS_VERSION` stored in `/etc/kin-mail/config` for that customer. |
+| **How** | Run `./check-zimbra-foss-update.sh` on a machine with outbound HTTPS (the mail host itself is fine). Exit status `1` means a newer tag exists and must be triaged. Optional cron: `0 9 * * 1` (Mondays 09:00) with mail/Slack notification on non-zero exit. |
+| **When an update appears** | (1) Read the Maldua release notes and matching Zimbra security advisories, (2) schedule a maintenance window, (3) re-run the install path on a staging twin or Host B before Host A, (4) record the new `ZCS_VERSION` via `sudo ./00-config.sh --reset` or an edited config, (5) note residual risk if the FOSS tag still lags an embargoed fix. |
+
+This process does not remove the lag inherent to the FOSS rebuild; it makes the
+lag visible and owned.
 
 ---
 
@@ -194,8 +217,9 @@ These scripts cannot resolve anything that lives outside the server:
 connect to port 25; there is no mechanism to direct them elsewhere. Other
 services may share the same public address as long as the port numbers differ.
 
-Later phases, not covered here: Active Directory LDAP authentication, backup,
-DRBD replication, and clustering.
+Later phases, not covered here: backup repository automation, DRBD replication,
+and clustering. Hybrid AD authentication is covered by `06-hybrid-auth.sh`
+(optional at config time).
 
 ---
 

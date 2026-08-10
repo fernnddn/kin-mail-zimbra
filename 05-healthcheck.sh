@@ -184,6 +184,47 @@ if [ -n "$SEND_IP" ]; then
   esac
 fi
 
+# --- hybrid authentication ---------------------------------------------------
+echo; say "Autentikasi hybrid"
+MECH=$(su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech" 2>/dev/null \
+       | awk -F': ' '/zimbraAuthMech:/{print $2; exit}')
+FALLBACK=$(su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthFallbackToLocal" 2>/dev/null \
+           | awk -F': ' '/zimbraAuthFallbackToLocal:/{print $2; exit}')
+info "zimbraAuthMech=${MECH:-zimbra(default)}  fallback=${FALLBACK:-unset}"
+
+# Local path always expected once test mailboxes exist (fallback or pure local).
+for u in "$TEST_USER_1:$TEST_PASS_1" "$TEST_USER_2:$TEST_PASS_2"; do
+  su - zimbra -c "zmprov ga ${u%%:*}" >/dev/null 2>&1 || \
+    su - zimbra -c "zmprov ca ${u%%:*} '${u##*:}' displayName 'KIN test'" >/dev/null 2>&1
+done
+if su - zimbra -c "zmprov auth $(printf '%q' "$TEST_USER_1") $(printf '%q' "$TEST_PASS_1")" >/dev/null 2>&1; then
+  p "Auth lokal Zimbra: ${TEST_USER_1}"
+else
+  f "Auth lokal Zimbra gagal: ${TEST_USER_1}"
+fi
+
+if [ "${AD_AUTH_ENABLED}" = "yes" ]; then
+  case "$MECH" in
+    ad|ldap) p "Domain memakai auth eksternal (${MECH})" ;;
+    *)       f "AD_AUTH_ENABLED=yes tetapi zimbraAuthMech=${MECH:-kosong} — jalankan 06-hybrid-auth.sh" ;;
+  esac
+  case "$FALLBACK" in
+    TRUE|true|1) p "zimbraAuthFallbackToLocal aktif" ;;
+    *)           f "zimbraAuthFallbackToLocal tidak TRUE — akun lokal di domain hybrid akan gagal login" ;;
+  esac
+  if [ -n "${AD_TEST_USER}" ] && [ -n "${AD_TEST_PASS}" ]; then
+    if su - zimbra -c "zmprov auth $(printf '%q' "$AD_TEST_USER") $(printf '%q' "$AD_TEST_PASS")" >/dev/null 2>&1; then
+      p "Auth AD LDAP: ${AD_TEST_USER}"
+    else
+      f "Auth AD LDAP gagal: ${AD_TEST_USER}"
+    fi
+  else
+    b "AD aktif di config tetapi AD_TEST_USER/PASS kosong — tidak bisa uji jalur AD"
+  fi
+else
+  info "AD_AUTH_ENABLED bukan yes — jalur AD tidak diuji (lokal saja, sesuai desain skippable)"
+fi
+
 # --- mail flow ---------------------------------------------------------------
 if [ $QUICK -eq 0 ]; then
   echo; say "T1 - alur mail internal"

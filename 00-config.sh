@@ -145,6 +145,38 @@ run_wizard() {
   done
   ask LE_EMAIL "Email untuk notifikasi Let's Encrypt" "admin@${MAIL_DOMAIN}"
 
+  # Hybrid auth is optional. Without AD values the domain stays on local
+  # Zimbra auth only — single-node install must not hard-fail.
+  echo; say "Hybrid authentication (Active Directory)"
+  info "Domain bisa bind ke AD customer, dengan fallback ke password lokal Zimbra"
+  info "(zimbraAuthFallbackToLocal). Lewati bila AD belum siap."
+  AD_AUTH_ENABLED=no
+  AD_LDAP_URL=""; AD_SEARCH_BASE=""; AD_SEARCH_FILTER=""
+  AD_SEARCH_BIND_DN=""; AD_SEARCH_BIND_PASSWORD=""; AD_BIND_DN_TEMPLATE=""
+  AD_TEST_USER=""; AD_TEST_PASS=""
+  if ask_yn "Konfigurasi bind ke Active Directory sekarang?" n; then
+    ask AD_LDAP_URL "LDAP/AD URL (contoh: ldap://dc.corp.local:389)" ""
+    ask AD_SEARCH_BASE "Search base (contoh: DC=corp,DC=local)" ""
+    ask AD_SEARCH_FILTER "Search filter" "(sAMAccountName=%u)"
+    ask AD_SEARCH_BIND_DN "Bind DN untuk search (service account)" ""
+    ask_secret AD_SEARCH_BIND_PASSWORD "Password bind DN search"
+    ask AD_BIND_DN_TEMPLATE "Bind DN template opsional (contoh: %u@corp.local; kosong=pakai search)" ""
+    ask AD_TEST_USER "Akun uji AD (email penuh di domain mail, harus ada di AD)" ""
+    ask_secret AD_TEST_PASS "Password akun uji AD"
+    if [ -n "$AD_LDAP_URL" ] && [ -n "$AD_SEARCH_BASE" ] && \
+       [ -n "$AD_SEARCH_BIND_DN" ] && [ -n "$AD_SEARCH_BIND_PASSWORD" ] && \
+       [ -n "$AD_TEST_USER" ] && [ -n "$AD_TEST_PASS" ]; then
+      AD_AUTH_ENABLED=yes
+      ok "Hybrid AD akan diaktifkan oleh 06-hybrid-auth.sh"
+    else
+      warn "Data AD tidak lengkap - hybrid auth di-skip (auth lokal saja)."
+      AD_AUTH_ENABLED=no
+      AD_SEARCH_BIND_PASSWORD=""; AD_TEST_PASS=""
+    fi
+  else
+    info "Dilewati - auth lokal Zimbra saja."
+  fi
+
   echo; say "Pengujian"
   ask EXTERNAL_TEST_ADDRESS "Alamat email luar untuk tes kirim (kosongkan bila belum)" ""
 
@@ -175,6 +207,15 @@ TEST_USER_1="test1@${MAIL_DOMAIN}"
 TEST_PASS_1="KinTest#1-\$(hostname -s)"
 TEST_USER_2="test2@${MAIL_DOMAIN}"
 TEST_PASS_2="KinTest#2-\$(hostname -s)"
+AD_AUTH_ENABLED="${AD_AUTH_ENABLED}"
+AD_LDAP_URL="${AD_LDAP_URL}"
+AD_SEARCH_BASE="${AD_SEARCH_BASE}"
+AD_SEARCH_FILTER='${AD_SEARCH_FILTER}'
+AD_SEARCH_BIND_DN="${AD_SEARCH_BIND_DN}"
+AD_SEARCH_BIND_PASSWORD='${AD_SEARCH_BIND_PASSWORD}'
+AD_BIND_DN_TEMPLATE="${AD_BIND_DN_TEMPLATE}"
+AD_TEST_USER="${AD_TEST_USER}"
+AD_TEST_PASS='${AD_TEST_PASS}'
 EOF
   chmod 600 "$CONF_FILE"
 
@@ -217,3 +258,14 @@ else
   # shellcheck disable=SC1090
   . "$CONF_FILE"
 fi
+
+# Defaults for configs written before hybrid-auth fields existed.
+: "${AD_AUTH_ENABLED:=no}"
+: "${AD_LDAP_URL:=}"
+: "${AD_SEARCH_BASE:=}"
+: "${AD_SEARCH_FILTER:=(sAMAccountName=%u)}"
+: "${AD_SEARCH_BIND_DN:=}"
+: "${AD_SEARCH_BIND_PASSWORD:=}"
+: "${AD_BIND_DN_TEMPLATE:=}"
+: "${AD_TEST_USER:=}"
+: "${AD_TEST_PASS:=}"
