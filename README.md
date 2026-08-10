@@ -38,7 +38,7 @@ chmod +x *.sh
 sudo ./01-preflight.sh        # can this site host mail at all?
 sudo ./02-prepare-os.sh       # hostname, hosts, resolver, dependencies
 sudo ./03-install-zimbra.sh   # download, verify checksum, drive the installer
-sudo ./04-tls-dkim.sh         # Let's Encrypt via DNS-01, plus DKIM key
+sudo ./04-tls-dkim.sh         # TLS (Cloudflare / manual DNS-01 / customer cert) + DKIM
 #                               → publish the DKIM record it prints
 sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback (skips if unset)
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
@@ -58,7 +58,7 @@ bootstrap menu under “satu tahap tertentu”).
 | `01-preflight.sh` | Sizing, OS, conflicting services, outbound access, **SMTP egress**, DNS state, PTR. Read-only. | yes |
 | `02-prepare-os.sh` | Hostname, `/etc/hosts`, dnsmasq split-horizon resolver, dependencies. | yes |
 | `03-install-zimbra.sh` | Fetches the FOSS build, verifies SHA-256, drives the interactive installer inside tmux. Skips the driver if Zimbra is already healthy; refuses to re-drive a partial install. | yes |
-| `04-tls-dkim.sh` | Certificate via DNS-01, deploy hook, **hook executed for real**, DKIM generation. | yes |
+| `04-tls-dkim.sh` | TLS by `TLS_METHOD` (Cloudflare DNS-01, manual DNS-01, or customer-provided docs) + DKIM. | yes |
 | `06-hybrid-auth.sh` | Optional AD LDAP auth on the mail domain with local password fallback. No-op if AD was skipped. | yes |
 | `05-healthcheck.sh` | Services, listeners, certificate, DNS, DKIM, SMTP egress, **both auth paths**, internal mail flow, open-relay check. | yes |
 | `check-zimbra-foss-update.sh` | Optional: compare configured FOSS build vs newest GitHub release. | yes |
@@ -84,10 +84,16 @@ Asked once, on first run:
 | Zimbra admin password | — |
 | Active Directory hybrid auth (optional) | skipped → local auth only |
 | Let's Encrypt contact | `admin@<domain>` |
+| TLS method | `1` Cloudflare / `2` manual DNS-01 / `3` customer-provided |
 | External test mailbox | empty |
 
-The Cloudflare API token is requested separately by `04` and is never written to
-a log or echoed to the terminal.
+Cloudflare API token is requested by `04` only when `TLS_METHOD=cloudflare`, and is
+never written to a log or echoed to the terminal.
+
+**Manual DNS-01 (`TLS_METHOD=manual`) cannot auto-renew via cron** the way Cloudflare
+mode can. `certbot --manual` needs an operator present for each issue/renew unless a
+provider-specific `--manual-auth-hook` is added later. Plan renewals before expiry;
+do not assume `certbot renew` succeeds unattended in this mode.
 
 ---
 
@@ -105,11 +111,18 @@ Read a **line**, never a fixed byte count. An earlier revision used
 so it hung until the timeout and reported a perfectly working port as blocked.
 That inverted the diagnosis of an entire deployment for half a day.
 
-### TLS uses the DNS-01 challenge
+### TLS uses DNS-01 (or a customer certificate)
 
-The mail host normally sits behind NAT with no inbound path, so the HTTP-01
-challenge cannot complete. DNS-01 via the Cloudflare API needs no inbound
-connectivity and renews unattended.
+The mail host often sits behind NAT with no inbound path, so the HTTP-01
+challenge cannot complete. Two Let's Encrypt paths are supported:
+
+- **Cloudflare DNS-01** — API token automates the TXT record and renewal.
+- **Manual DNS-01** — certbot prints the TXT name/value; the operator creates it
+  in whatever DNS panel hosts the zone (Rumahweb, Bind, etc.). **Renewal is not
+  automatic** in this mode.
+
+Alternatively, `TLS_METHOD=customer` skips certbot and documents installing a
+customer-supplied certificate with `zmcertmgr`.
 
 ### The renewal hook is executed, not merely installed
 

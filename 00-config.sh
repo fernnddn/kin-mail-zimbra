@@ -145,6 +145,27 @@ run_wizard() {
   done
   ask LE_EMAIL "Email untuk notifikasi Let's Encrypt" "admin@${MAIL_DOMAIN}"
 
+  echo; say "Metode penerbitan TLS"
+  info "1) Cloudflare DNS-01  — otomatis (butuh API token Cloudflare)"
+  info "2) DNS-01 manual      — provider apa pun; operator buat TXT sekali di panel DNS"
+  info "3) Customer-provided  — skip certbot; install cert/key customer via zmcertmgr"
+  TLS_METHOD=""
+  while [ -z "$TLS_METHOD" ]; do
+    printf '  Pilihan [1/2/3]: '
+    read -r __tls </dev/tty
+    case "$__tls" in
+      1) TLS_METHOD=cloudflare ;;
+      2) TLS_METHOD=manual ;;
+      3) TLS_METHOD=customer ;;
+      *) warn "Pilih 1, 2, atau 3." ;;
+    esac
+  done
+  ok "TLS_METHOD=${TLS_METHOD}"
+  if [ "$TLS_METHOD" = "manual" ]; then
+    warn "Mode manual TIDAK memperpanjang sertifikat otomatis lewat cron."
+    info "Setiap issue/renew butuh operator hadir di terminal (kecuali nanti ada auth-hook)."
+  fi
+
   # Hybrid auth is optional. Without AD values the domain stays on local
   # Zimbra auth only — single-node install must not hard-fail.
   echo; say "Hybrid authentication (Active Directory)"
@@ -200,6 +221,7 @@ ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/zimbra-foss-bu
 ZCS_SRC="/opt/zcs-src"
 ADMIN_PASS='${ADMIN_PASS}'
 LE_EMAIL="${LE_EMAIL}"
+TLS_METHOD="${TLS_METHOD}"
 CF_CREDS="/etc/letsencrypt/cloudflare.ini"
 CF_PROPAGATION=40
 EXTERNAL_TEST_ADDRESS="${EXTERNAL_TEST_ADDRESS}"
@@ -259,7 +281,7 @@ else
   . "$CONF_FILE"
 fi
 
-# Defaults for configs written before hybrid-auth fields existed.
+# Defaults for configs written before hybrid-auth / TLS_METHOD fields existed.
 : "${AD_AUTH_ENABLED:=no}"
 : "${AD_LDAP_URL:=}"
 : "${AD_SEARCH_BASE:=}"
@@ -269,3 +291,4 @@ fi
 : "${AD_BIND_DN_TEMPLATE:=}"
 : "${AD_TEST_USER:=}"
 : "${AD_TEST_PASS:=}"
+: "${TLS_METHOD:=cloudflare}"
