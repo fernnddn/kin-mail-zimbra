@@ -1,10 +1,8 @@
 ---
-# Example inventory for the Monitoring / qnetd host.
+# Example inventory — Monitoring (qnetd) + mail nodes (qdevice clients).
 # Copy to lab.yml (gitignored) and fill in auth — never commit passwords.
 #
 #   cp inventory/lab.example.yml inventory/lab.yml
-#
-# Or pass credentials via environment / --extra-vars without writing them to disk.
 
 all:
   children:
@@ -16,3 +14,15 @@ all:
           # ansible_password: "..."
           # ansible_become_password: "..."
           # Prefer SSH keys in real use; password auth is lab-only.
+    mail_nodes:
+      hosts:
+        mail.gits-it.site:
+          ansible_host: 10.10.40.13
+          ansible_user: cursor
+          # ansible_password: "..."
+          # ansible_become_password: "..."
+        mail2.gits-it.site:
+          ansible_host: 10.10.40.12
+          ansible_user: cursor
+          # ansible_password: "..."
+          # ansible_become_password: "..."

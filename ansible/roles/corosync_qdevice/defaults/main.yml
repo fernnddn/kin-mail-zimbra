@@ -1,0 +1,24 @@
+---
+# Defaults — qdevice client on mail nodes (task 2.2 §1).
+# Pair with role corosync_qnetd on the Monitoring VM.
+
+corosync_qdevice_package: corosync-qdevice
+corosync_qdevice_service: corosync-qdevice
+
+# Cluster / QNetd pairing (matches lab kin-mail + mon)
+corosync_qdevice_cluster_name: kin-mail
+corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
+corosync_qdevice_qnetd_ip: 10.10.40.14
+corosync_qdevice_qnetd_port: 5403
+corosync_qdevice_algorithm: ffsplit
+corosync_qdevice_tie_breaker: lowest
+
+# Paths (Ubuntu corosync-qdevice-net-certutil / qnetd layout)
+corosync_qdevice_qnetd_cacert_remote: /etc/corosync/qnetd/nssdb/qnetd-cacert.crt
+corosync_qdevice_cacert_local: /etc/corosync/qnetd-cacert.crt
+corosync_qdevice_nssdb_dir: /etc/corosync/qdevice/net/nssdb
+corosync_qdevice_nssdb_cert9: /etc/corosync/qdevice/net/nssdb/cert9.db
+corosync_qdevice_crq_path: /etc/corosync/qdevice/net/nssdb/qdevice-net-node.crq
+corosync_qdevice_p12_path: /etc/corosync/qdevice/net/nssdb/qdevice-net-node.p12
+corosync_qdevice_signed_cert_name: "cluster-{{ corosync_qdevice_cluster_name }}.crt"
+corosync_qdevice_controller_workdir: /tmp/kin-mail-ansible-qdevice

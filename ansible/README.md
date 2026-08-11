@@ -2,14 +2,16 @@
 
 This tree ports proven Phase 2 lab work into Ansible **one small slice at a time**.
 
-## Current slice (3.1)
+## Slices
 
-| Playbook | Role | Source |
-|---|---|---|
-| `playbooks/mon-qnetd.yml` | `corosync_qnetd` | `docs/progress/2.1-…` §2 (qnetd only) |
+| Playbook | Role | Source | Status |
+|---|---|---|---|
+| `playbooks/mon-qnetd.yml` | `corosync_qnetd` | task 2.1 §2 | dry-run checked (3.1) |
+| `playbooks/mail-qdevice.yml` | `corosync_qdevice` | task 2.2 §1 | dry-run checked (3.2) |
 
-**In scope:** install `corosync-qnetd`, ensure NSS/TLS DB, enable+start, verify `:5403`.  
-**Out of scope:** OS prep, iSCSI SBD LUN, `corosync-qdevice` on Host A/B, DRBD, Pacemaker.
+**mail-qdevice scope:** install `corosync-qdevice`, TLS (certutil request/sign/import),
+quorum.device → Monitoring, verify Connected + Expected votes 3.  
+**Out of scope:** iSCSI SBD, softdog, Pacemaker STONITH, DRBD.
 
 ## Layout
 
@@ -19,10 +21,12 @@ ansible/
   inventory/lab.example.yml   # committed template
   inventory/lab.yml           # local secrets — gitignored
   playbooks/mon-qnetd.yml
+  playbooks/mail-qdevice.yml
   roles/corosync_qnetd/
+  roles/corosync_qdevice/
 ```
 
-Task names are Indonesian, user-facing progress labels (e.g. `Menginstal paket qnetd`).
+Task names are Indonesian, user-facing progress labels.
 
 ## Inventory
 
@@ -34,14 +38,13 @@ cp inventory/lab.example.yml inventory/lab.yml
 
 ## Dry-run only against the live lab
 
-The Monitoring / mail hosts already run production qnetd + HA. **Do not** apply this
-playbook for real there until a blank test VM exists.
+Hosts already run production qnetd/qdevice + HA. **Do not** apply for real until a blank
+test environment exists.
 
 ```bash
 cd ansible
 ansible-playbook playbooks/mon-qnetd.yml --check
+ansible-playbook playbooks/mail-qdevice.yml --check
 ```
 
-`--check` validates syntax/module planning and (for verify tasks) read-only probes.
-It is **not** an end-to-end proof that a blank host ends in a correct qnetd state.
-See `docs/progress/3.1-ansible-qdevice-port.md`.
+`--check` is not an end-to-end greenfield proof. See `docs/progress/3.1-…` and `3.2-…`.

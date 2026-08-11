@@ -1,0 +1,23 @@
+---
+# Entry — granular includes; labels are Indonesian progress-UI ready.
+# Source: docs/progress/2.2-fencing-full-wiring-and-test.md §1 (qdevice only).
+
+- name: Sertakan langkah instalasi paket qdevice
+  ansible.builtin.import_tasks: install.yml
+  tags: [qdevice, install]
+
+- name: Sertakan langkah sertifikat TLS qdevice
+  ansible.builtin.import_tasks: tls.yml
+  tags: [qdevice, tls]
+
+- name: Sertakan langkah konfigurasi quorum device
+  ansible.builtin.import_tasks: configure.yml
+  tags: [qdevice, configure]
+
+- name: Sertakan langkah aktivasi layanan qdevice
+  ansible.builtin.import_tasks: service.yml
+  tags: [qdevice, service]
+
+- name: Sertakan langkah verifikasi qdevice
+  ansible.builtin.import_tasks: verify.yml
+  tags: [qdevice, verify]

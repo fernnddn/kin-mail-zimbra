@@ -1,0 +1,196 @@
+---
+# TLS flow from task 2.2 (manual because mon has no pcsd):
+#   copy CA from qnetd → init/request on first mail node → sign on mon →
+#   import (-M) → distribute PKCS#12 to peers (-m).
+#
+# Idempotency marker: NSS cert9.db (present on every fully wired node).
+# PKCS#12 may exist only on the node that ran -M; peers often have NSS only.
+# Mutating steps require not ansible_check_mode (no apply on live lab).
+
+- name: Memeriksa basis sertifikat qdevice di host mail
+  ansible.builtin.stat:
+    path: "{{ corosync_qdevice_nssdb_cert9 }}"
+  register: corosync_qdevice_nss
+  tags: [qdevice, tls]
+
+- name: Menandai apakah semua host mail sudah punya TLS qdevice
+  ansible.builtin.set_fact:
+    corosync_qdevice_tls_ready_all: >-
+      {{ ansible_play_hosts |
+         map('extract', hostvars, 'corosync_qdevice_nss') |
+         map(attribute='stat.exists') |
+         min }}
+  run_once: true
+  tags: [qdevice, tls]
+
+- name: Menyiapkan direktori kerja sertifikat di controller
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_controller_workdir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengambil sertifikat CA dari VM Monitoring
+  ansible.builtin.fetch:
+    src: "{{ corosync_qdevice_qnetd_cacert_remote }}"
+    dest: "{{ corosync_qdevice_controller_workdir }}/qnetd-cacert.crt"
+    flat: true
+  delegate_to: "{{ corosync_qdevice_qnetd_inventory_host }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menyalin sertifikat CA qnetd ke host mail
+  ansible.builtin.copy:
+    src: "{{ corosync_qdevice_controller_workdir }}/qnetd-cacert.crt"
+    dest: "{{ corosync_qdevice_cacert_local }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not corosync_qdevice_nss.stat.exists
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menginisialisasi basis sertifikat qdevice
+  ansible.builtin.command:
+    cmd: >-
+      corosync-qdevice-net-certutil -i -c {{ corosync_qdevice_cacert_local }}
+    creates: "{{ corosync_qdevice_nssdb_cert9 }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Membuat permintaan sertifikat qdevice
+  ansible.builtin.command:
+    cmd: >-
+      corosync-qdevice-net-certutil -r -n {{ corosync_qdevice_cluster_name }}
+    creates: "{{ corosync_qdevice_crq_path }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengunggah permintaan sertifikat ke controller
+  ansible.builtin.fetch:
+    src: "{{ corosync_qdevice_crq_path }}"
+    dest: "{{ corosync_qdevice_controller_workdir }}/qdevice-net-node.crq"
+    flat: true
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menyalin permintaan sertifikat ke VM Monitoring
+  ansible.builtin.copy:
+    src: "{{ corosync_qdevice_controller_workdir }}/qdevice-net-node.crq"
+    dest: /tmp/qdevice-net-node.crq
+    mode: "0644"
+  delegate_to: "{{ corosync_qdevice_qnetd_inventory_host }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menandatangani sertifikat qdevice di VM Monitoring
+  ansible.builtin.command:
+    cmd: >-
+      corosync-qnetd-certutil -s -c /tmp/qdevice-net-node.crq
+      -n {{ corosync_qdevice_cluster_name }}
+    chdir: /etc/corosync/qnetd/nssdb
+    creates: "/etc/corosync/qnetd/nssdb/{{ corosync_qdevice_signed_cert_name }}"
+  delegate_to: "{{ corosync_qdevice_qnetd_inventory_host }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengambil sertifikat yang sudah ditandatangani
+  ansible.builtin.fetch:
+    src: "/etc/corosync/qnetd/nssdb/{{ corosync_qdevice_signed_cert_name }}"
+    dest: "{{ corosync_qdevice_controller_workdir }}/{{ corosync_qdevice_signed_cert_name }}"
+    flat: true
+  delegate_to: "{{ corosync_qdevice_qnetd_inventory_host }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menyalin sertifikat tertandatangani ke host mail utama
+  ansible.builtin.copy:
+    src: "{{ corosync_qdevice_controller_workdir }}/{{ corosync_qdevice_signed_cert_name }}"
+    dest: "/etc/corosync/qdevice/net/nssdb/{{ corosync_qdevice_signed_cert_name }}"
+    mode: "0640"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengimpor sertifikat cluster ke basis qdevice
+  ansible.builtin.command:
+    cmd: >-
+      corosync-qdevice-net-certutil -M
+      -c /etc/corosync/qdevice/net/nssdb/{{ corosync_qdevice_signed_cert_name }}
+    creates: "{{ corosync_qdevice_p12_path }}"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengambil berkas PKCS12 untuk distribusi ke node lain
+  ansible.builtin.fetch:
+    src: "{{ corosync_qdevice_p12_path }}"
+    dest: "{{ corosync_qdevice_controller_workdir }}/qdevice-net-node.p12"
+    flat: true
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Menyalin PKCS12 qdevice ke host mail yang belum punya NSS
+  ansible.builtin.copy:
+    src: "{{ corosync_qdevice_controller_workdir }}/qdevice-net-node.p12"
+    dest: "{{ corosync_qdevice_p12_path }}"
+    mode: "0600"
+  when:
+    - not corosync_qdevice_nss.stat.exists
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mengimpor PKCS12 qdevice di host mail sekunder
+  ansible.builtin.command:
+    cmd: >-
+      corosync-qdevice-net-certutil -m -c {{ corosync_qdevice_p12_path }}
+  when:
+    - not corosync_qdevice_nss.stat.exists
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Mencatat TLS qdevice belum diuji dari nol saat dry-run
+  ansible.builtin.debug:
+    msg: >-
+      Satu atau lebih host belum punya {{ corosync_qdevice_nssdb_cert9 }}.
+      Di --check, langkah mutasi TLS di-skip (bukan bukti greenfield).
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - ansible_check_mode
+  tags: [qdevice, tls]

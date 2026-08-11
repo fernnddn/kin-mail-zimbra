@@ -1,0 +1,17 @@
+---
+# Port of Phase 2 task 2.2 §1 — corosync-qdevice clients on Host A + Host B.
+# Requires Monitoring qnetd (role corosync_qnetd / playbook mon-qnetd.yml).
+# Out of scope: iSCSI/SBD/softdog/Pacemaker STONITH (later slices).
+#
+# Dry-run against live lab only:
+#   ansible-playbook playbooks/mail-qdevice.yml --check
+#
+# Do NOT full-apply on the production HA pair until a blank test cluster exists.
+
+- name: Siapkan klien qdevice di Host A dan Host B
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: corosync_qdevice
+      tags: [qdevice, mail]

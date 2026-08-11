@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket qdevice
+  ansible.builtin.apt:
+    name: "{{ corosync_qdevice_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [qdevice, install]

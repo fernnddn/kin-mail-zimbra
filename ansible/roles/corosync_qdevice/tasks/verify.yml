@@ -1,0 +1,45 @@
+---
+# Read-only probes — check_mode: false so --check still reports live quorum.
+
+- name: Memverifikasi layanan qdevice aktif
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ corosync_qdevice_service }}
+  register: corosync_qdevice_is_active
+  changed_when: false
+  failed_when: corosync_qdevice_is_active.stdout | trim != "active"
+  check_mode: false
+  tags: [qdevice, verify]
+
+- name: Memverifikasi layanan qdevice di-enable saat boot
+  ansible.builtin.command:
+    cmd: systemctl is-enabled {{ corosync_qdevice_service }}
+  register: corosync_qdevice_is_enabled
+  changed_when: false
+  failed_when: corosync_qdevice_is_enabled.stdout | trim != "enabled"
+  check_mode: false
+  tags: [qdevice, verify]
+
+- name: Memverifikasi qdevice terhubung ke qnetd
+  ansible.builtin.command:
+    cmd: corosync-qdevice-tool -s
+  register: corosync_qdevice_tool_status
+  changed_when: false
+  failed_when: >-
+    (corosync_qdevice_tool_status.rc != 0) or
+    ('Connected' not in corosync_qdevice_tool_status.stdout) or
+    (corosync_qdevice_qnetd_ip not in corosync_qdevice_tool_status.stdout)
+  check_mode: false
+  tags: [qdevice, verify]
+
+- name: Memverifikasi vote quorum terbaca tiga
+  ansible.builtin.command:
+    cmd: corosync-quorumtool -s
+  register: corosync_qdevice_quorumtool
+  changed_when: false
+  failed_when: >-
+    (corosync_qdevice_quorumtool.rc != 0) or
+    (corosync_qdevice_quorumtool.stdout is not search('Expected votes:\s+3')) or
+    ('Qdevice' not in corosync_qdevice_quorumtool.stdout)
+  check_mode: false
+  run_once: true
+  tags: [qdevice, verify]
