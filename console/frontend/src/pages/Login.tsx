@@ -1,15 +1,29 @@
 import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth";
+import { useEula } from "../eula";
+import {
+  Brand,
+  Button,
+  Card,
+  Err,
+  Input,
+  Label,
+  Lede,
+  Shell,
+  Title,
+} from "../ui";
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
+  const { accepted, loading: eulaLoading } = useEula();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!loading && user) return <Navigate to="/" replace />;
+  if (!eulaLoading && !accepted) return <Navigate to="/eula" replace />;
+  if (!loading && user) return <Navigate to="/wizard" replace />;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -25,35 +39,37 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="shell">
-      <form className="card" onSubmit={onSubmit}>
-        <p className="brand">KIN Mail</p>
-        <h1>Admin console</h1>
-        <p className="lede">Sign in to continue. Anonymous access is disabled.</p>
-        <label htmlFor="username">Username</label>
-        <input
-          id="username"
-          name="username"
-          autoComplete="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          required
-        />
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <div className="err">{error}</div>
-        <button type="submit" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-    </div>
+    <Shell>
+      <Card>
+        <form onSubmit={onSubmit}>
+          <Brand>KIN Mail</Brand>
+          <Title>Admin console</Title>
+          <Lede>Sign in to continue. Anonymous access to the wizard is disabled.</Lede>
+          <Label htmlFor="username">Username</Label>
+          <Input
+            id="username"
+            name="username"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+          <Label htmlFor="password">Password</Label>
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+          <Err>{error}</Err>
+          <Button type="submit" disabled={busy} style={{ width: "100%" }}>
+            {busy ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+      </Card>
+    </Shell>
   );
 }

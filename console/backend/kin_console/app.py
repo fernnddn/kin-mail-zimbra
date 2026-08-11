@@ -9,10 +9,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth
+from . import auth, draft
 from .settings import settings
 
 app = FastAPI(title="KIN Mail Console", docs_url=None, redoc_url=None, openapi_url=None)
+
+EULA_COOKIE = "kin_console_eula"
+EULA_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 
 
 class LoginBody(BaseModel):
@@ -34,6 +37,46 @@ def _startup() -> None:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "kin-mail-console"}
+
+
+# --- EULA (pre-auth; static disclaimer only) ---------------------------------
+
+
+@app.get("/api/eula")
+def eula_status(request: Request) -> dict[str, object]:
+    accepted = request.cookies.get(EULA_COOKIE) == "1"
+    return {
+        "accepted": accepted,
+        "title": "KIN Mail — Terms of Service",
+        "body": (
+            "PLACEHOLDER EULA\n\n"
+            "This is temporary placeholder text for the KIN Mail appliance terms of service. "
+            "The operator will replace this with the final legal language.\n\n"
+            "By continuing you acknowledge that this console configures mail infrastructure "
+            "and that incorrect settings may affect availability or security. "
+            "No deployment actions run until you explicitly start them in a later step "
+            "(execution is not enabled in the UI-only wizard slice)."
+        ),
+    }
+
+
+@app.post("/api/eula/accept")
+def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, object]:
+    if not body.accepted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Acceptance required")
+    response.set_cookie(
+        key=EULA_COOKIE,
+        value="1",
+        max_age=EULA_MAX_AGE,
+        httponly=False,  # SPA also reads acceptance client-side for routing
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return {"accepted": True}
+
+
+# --- Auth -------------------------------------------------------------------
 
 
 @app.post("/api/login")
@@ -61,21 +104,53 @@ def me(username: str = Depends(auth.require_user)) -> dict[str, str]:
     return {"username": username}
 
 
+# --- Wizard draft (auth required; never applies to the live installer) ------
+
+
+@app.get("/api/wizard/draft")
+def get_wizard_draft(_user: str = Depends(auth.require_user)) -> dict:
+    return draft.public_draft(draft.load_draft())
+
+
+@app.put("/api/wizard/draft")
+def put_wizard_draft(
+    body: draft.DraftPatch,
+    _user: str = Depends(auth.require_user),
+) -> dict:
+    current = draft.load_draft()
+    updated = draft.apply_patch(current, body)
+    # Light validation for known enums — store anyway if empty (in-progress draft).
+    if updated.topology and updated.topology not in ("1vm", "2vm"):
+        raise HTTPException(status_code=400, detail="topology must be 1vm or 2vm")
+    if updated.tls_method and updated.tls_method not in ("cloudflare", "manual", "customer"):
+        raise HTTPException(status_code=400, detail="tls_method invalid")
+    saved = draft.save_draft(updated)
+    return draft.public_draft(saved)
+
+
+@app.post("/api/wizard/deploy")
+def wizard_deploy_stub(_user: str = Depends(auth.require_user)) -> dict[str, str]:
+    """UI stub only — no installer execution in this slice."""
+    return {
+        "status": "not_connected",
+        "message": (
+            "Execution engine belum terhubung - datang di slice berikutnya"
+        ),
+    }
+
+
 def _spa_index() -> Path:
     return settings.static_dir / "index.html"
 
 
 @app.get("/")
 def root(request: Request) -> Response:
-    # Always serve SPA shell; React router enforces login client-side, API enforces server-side.
+    # Always serve SPA shell; React router enforces EULA + login; API enforces auth.
     index = _spa_index()
     if not index.is_file():
         return JSONResponse({"detail": "Frontend not installed"}, status_code=503)
     return FileResponse(index)
 
-
-# Authenticated API only beyond health/login/logout/me — SPA assets are public HTML/JS
-# but every privileged action goes through /api/* with require_user.
 
 static_assets = settings.static_dir / "assets"
 if static_assets.is_dir():
