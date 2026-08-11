@@ -1,5 +1,5 @@
 ---
-- name: Menginstal paket SBD dan fence_sbd
+- name: Install the SBD and fence_sbd packages
   ansible.builtin.apt:
     name: "{{ sbd_stonith_packages }}"
     state: present

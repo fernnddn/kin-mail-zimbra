@@ -1,5 +1,5 @@
 ---
-- name: Menginstal paket open-iscsi
+- name: Install the open-iscsi package
   ansible.builtin.apt:
     name: "{{ iscsi_initiator_packages }}"
     state: present

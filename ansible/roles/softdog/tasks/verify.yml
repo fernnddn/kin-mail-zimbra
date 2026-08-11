@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi layanan kin-softdog aktif
+- name: Verify the kin-softdog service is active
   ansible.builtin.command:
     cmd: systemctl is-active {{ softdog_service_name }}
   register: softdog_active
@@ -8,7 +8,7 @@
   check_mode: false
   tags: [softdog, verify]
 
-- name: Memverifikasi perangkat watchdog tersedia
+- name: Verify the watchdog device is available
   ansible.builtin.stat:
     path: /dev/watchdog
   register: softdog_watchdog_dev
@@ -16,10 +16,10 @@
   check_mode: false
   tags: [softdog, verify]
 
-- name: Mencatat batas dry-run untuk bukti reboot softdog
+- name: Note the dry-run limits for softdog reboot proof
   ansible.builtin.debug:
     msg: >-
-      Verifikasi hanya memastikan kin-softdog aktif dan /dev/watchdog ada.
-      Bukti reboot watchdog sungguhan (boot_id berubah) memerlukan uji seperti
-      task 2.2/2.3 dan TIDAK dijalankan di lab live lewat playbook ini.
+      Verification only confirms kin-softdog is active and /dev/watchdog exists.
+      Proof of a real watchdog reboot (boot_id change) requires a test like
+      task 2.2/2.3 and is NOT run against the live lab through this playbook.
   tags: [softdog, verify]

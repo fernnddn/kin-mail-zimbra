@@ -1,5 +1,5 @@
 ---
-- name: Memasang skrip assert tidak ada dual-primary
+- name: Deploy the no-dual-primary assert script
   ansible.builtin.copy:
     src: kin-assert-no-dual-primary.sh
     dest: "{{ pacemaker_agents_assert_path }}"
@@ -9,13 +9,13 @@
   register: pacemaker_agents_assert_copy
   tags: [pacemaker, agents, assert]
 
-- name: Mencatat apakah skrip assert berbeda dari versi live
+- name: Note whether the assert script differs from the live version
   ansible.builtin.debug:
     msg: >-
       {% if pacemaker_agents_assert_copy is changed %}
-      Assert helper BERBEDA atau belum ada di {{ pacemaker_agents_assert_path }}
-      (Host B mungkin belum punya salinan — role akan memasang).
+      The assert helper DIFFERS or does not exist at {{ pacemaker_agents_assert_path }}
+      (Host B may not have a copy yet — the role will deploy it).
       {% else %}
-      Assert helper live cocok ({{ pacemaker_agents_assert_path }}).
+      The live assert helper matches ({{ pacemaker_agents_assert_path }}).
       {% endif %}
   tags: [pacemaker, agents, assert]

@@ -1,12 +1,12 @@
 ---
-- name: Memeriksa image meta eksternal DRBD
+- name: Check the DRBD external meta image
   ansible.builtin.stat:
     path: "{{ drbd_resource_meta_img }}"
   register: drbd_resource_meta_img_stat
   check_mode: false
   tags: [drbd, resource, meta]
 
-- name: Menyiapkan direktori image meta DRBD
+- name: Prepare the DRBD meta image directory
   ansible.builtin.file:
     path: "{{ drbd_resource_meta_dir }}"
     state: directory
@@ -18,7 +18,7 @@
     - not ansible_check_mode
   tags: [drbd, resource, meta]
 
-- name: Membuat image meta eksternal DRBD
+- name: Create the DRBD external meta image
   ansible.builtin.command:
     cmd: truncate -s {{ drbd_resource_meta_img_size }} {{ drbd_resource_meta_img }}
     creates: "{{ drbd_resource_meta_img }}"
@@ -27,7 +27,7 @@
     - not ansible_check_mode
   tags: [drbd, resource, meta]
 
-- name: Memasang skrip attach loop meta DRBD
+- name: Deploy the DRBD meta loop attach script
   ansible.builtin.template:
     src: kin-drbd-meta-loop.sh.j2
     dest: "{{ drbd_resource_meta_loop_script }}"
@@ -37,25 +37,25 @@
   when: not ansible_check_mode
   tags: [drbd, resource, meta]
 
-- name: Memasang unit systemd meta-loop DRBD
+- name: Deploy the DRBD meta-loop systemd unit
   ansible.builtin.template:
     src: kin-drbd-meta-loop.service.j2
     dest: /etc/systemd/system/{{ drbd_resource_meta_loop_unit }}
     owner: root
     group: root
     mode: "0644"
-  notify: Muat ulang systemd setelah perubahan meta-loop DRBD
+  notify: Reload systemd after DRBD meta-loop changes
   when: not ansible_check_mode
   tags: [drbd, resource, meta]
 
-- name: Memeriksa unit meta-loop DRBD sudah ada (dry-run)
+- name: Check the DRBD meta-loop unit exists (dry-run)
   ansible.builtin.stat:
     path: /etc/systemd/system/{{ drbd_resource_meta_loop_unit }}
   register: drbd_resource_meta_unit_stat
   check_mode: false
   tags: [drbd, resource, meta]
 
-- name: Mengaktifkan layanan meta-loop DRBD agar ikut boot
+- name: Enable the DRBD meta-loop service at boot
   ansible.builtin.systemd:
     name: "{{ drbd_resource_meta_loop_unit }}"
     enabled: true
@@ -63,7 +63,7 @@
   when: not ansible_check_mode or drbd_resource_meta_unit_stat.stat.exists
   tags: [drbd, resource, meta]
 
-- name: Menjalankan layanan meta-loop DRBD
+- name: Start the DRBD meta-loop service
   ansible.builtin.systemd:
     name: "{{ drbd_resource_meta_loop_unit }}"
     state: started

@@ -2,7 +2,7 @@
 # Greenfield targetcli wiring from task 2.1 §3. Skipped under --check and when
 # the IQN already exists (idempotent on the live Monitoring VM).
 
-- name: Memeriksa apakah target IQN SBD sudah ada
+- name: Check whether the SBD target IQN already exists
   ansible.builtin.command:
     cmd: targetcli ls /iscsi/{{ iscsi_target_iqn }}
   register: iscsi_target_iqn_ls
@@ -11,7 +11,7 @@
   check_mode: false
   tags: [iscsi, target, targetcli]
 
-- name: Mengonfigurasi backstore fileio untuk LUN SBD
+- name: Configure the fileio backstore for the SBD LUN
   ansible.builtin.shell: |
     set -euo pipefail
     targetcli /backstores/fileio create {{ iscsi_target_backstore_name }} {{ iscsi_target_lun_img }}
@@ -27,7 +27,7 @@
     ('exists' not in (iscsi_target_backstore_create.stdout | default('')) | lower)
   tags: [iscsi, target, targetcli]
 
-- name: Membuat target iSCSI SBD dan memetakan LUN
+- name: Create the SBD iSCSI target and map the LUN
   ansible.builtin.shell: |
     set -euo pipefail
     targetcli /iscsi create {{ iscsi_target_iqn }}
@@ -42,11 +42,11 @@
     - not ansible_check_mode
   tags: [iscsi, target, targetcli]
 
-- name: Mencatat targetcli belum diuji dari nol saat dry-run
+- name: Note that targetcli is not proven from scratch during a dry-run
   ansible.builtin.debug:
     msg: >-
-      Target {{ iscsi_target_iqn }} belum terdeteksi. Di --check, langkah
-      targetcli di-skip (bukan bukti greenfield).
+      Target {{ iscsi_target_iqn }} has not been detected yet. Under --check the
+      targetcli steps are skipped (not greenfield proof).
   when:
     - iscsi_target_iqn_ls.rc != 0
     - ansible_check_mode

@@ -3,7 +3,7 @@
 # an already-configured host without mutating it. On a blank VM these asserts
 # would fail until a real (non-check) apply has been run — that is expected.
 
-- name: Memverifikasi layanan qnetd aktif
+- name: Verify the qnetd service is active
   ansible.builtin.command:
     cmd: systemctl is-active {{ corosync_qnetd_service }}
   register: corosync_qnetd_is_active
@@ -12,7 +12,7 @@
   check_mode: false
   tags: [qnetd, verify]
 
-- name: Memverifikasi layanan qnetd di-enable saat boot
+- name: Verify the qnetd service is enabled at boot
   ansible.builtin.command:
     cmd: systemctl is-enabled {{ corosync_qnetd_service }}
   register: corosync_qnetd_is_enabled
@@ -21,7 +21,7 @@
   check_mode: false
   tags: [qnetd, verify]
 
-- name: Memverifikasi qnetd mendengarkan port 5403
+- name: Verify qnetd is listening on port 5403
   ansible.builtin.wait_for:
     port: "{{ corosync_qnetd_port }}"
     host: 127.0.0.1
@@ -30,7 +30,7 @@
   check_mode: false
   tags: [qnetd, verify]
 
-- name: Memverifikasi status internal qnetd
+- name: Verify the qnetd internal status
   ansible.builtin.command:
     cmd: corosync-qnetd-tool -s
   register: corosync_qnetd_tool_status

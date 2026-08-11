@@ -3,7 +3,7 @@
 # check_mode: false is intentional and LIMITED to status/constraint queries —
 # never extend that to pcs resource create / constraint add / promote.
 
-- name: Memverifikasi status cluster Pacemaker
+- name: Verify the Pacemaker cluster status
   ansible.builtin.command:
     cmd: pcs status
   register: pacemaker_mail_stack_status
@@ -16,7 +16,7 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
-- name: Memverifikasi clone DRBD dalam mode promotable
+- name: Verify the DRBD clone is in promotable mode
   ansible.builtin.command:
     cmd: pcs resource config {{ pacemaker_mail_stack_drbd_clone }}
   register: pacemaker_mail_stack_clone_cfg
@@ -32,7 +32,7 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
-- name: Memverifikasi preferensi lokasi soft Host A
+- name: Verify the soft location preference for Host A
   ansible.builtin.command:
     cmd: pcs constraint location
   register: pacemaker_mail_stack_loc_verify
@@ -45,7 +45,7 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
-- name: Memverifikasi colocation dan order grup dengan Master DRBD
+- name: Verify the group colocation and order with the DRBD Master
   ansible.builtin.command:
     cmd: pcs constraint
   register: pacemaker_mail_stack_cstr_verify
@@ -59,14 +59,14 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
-- name: Memeriksa keberadaan skrip assert dual-primary
+- name: Check for the dual-primary assert script
   ansible.builtin.stat:
     path: "{{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}"
   register: pacemaker_mail_stack_assert_stat
   check_mode: false
   tags: [pacemaker, stack, verify]
 
-- name: Memverifikasi assert dual-primary mengembalikan OK
+- name: Verify the dual-primary assert returns OK
   ansible.builtin.command:
     cmd: "{{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}"
   register: pacemaker_mail_stack_assert
@@ -78,20 +78,20 @@
   when: pacemaker_mail_stack_assert_stat.stat.exists
   tags: [pacemaker, stack, verify]
 
-- name: Mencatat skrip assert belum ada di host ini
+- name: Note that the assert script is not present on this host
   ansible.builtin.debug:
     msg: >-
       {{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}
-      belum ada di {{ inventory_hostname }} — role pacemaker_agents akan memasang
-      pada apply; dry-run hanya melaporkan gap (terlihat di Host B lab saat ini).
+      does not exist on {{ inventory_hostname }} yet — role pacemaker_agents will
+      deploy it on apply; the dry-run only reports the gap (visible on lab Host B today).
   when: not pacemaker_mail_stack_assert_stat.stat.exists
   tags: [pacemaker, stack, verify]
 
-- name: Mencatat batas pembuktian dry-run Pacemaker
+- name: Note the Pacemaker dry-run proof limits
   ansible.builtin.debug:
     msg: >-
-      Dry-run memverifikasi CIB hidup (status/constraints/LDAP pada Primary).
-      pcs resource create / constraint add / zmlocalconfig -e TIDAK dijalankan.
-      Controlled promote/ban moves dari task 2.7 tidak diotomatisasi di slice ini.
+      The dry-run verifies the live CIB (status/constraints/LDAP on the Primary).
+      pcs resource create / constraint add / zmlocalconfig -e are NOT executed.
+      Controlled promote/ban moves from task 2.7 are not automated in this slice.
   run_once: true
   tags: [pacemaker, stack, verify]

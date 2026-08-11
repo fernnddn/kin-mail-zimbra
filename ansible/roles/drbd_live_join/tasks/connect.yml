@@ -19,7 +19,7 @@
 #   * Gate with `when: not ansible_check_mode`.
 # =============================================================================
 
-- name: Memeriksa status DRBD di node baru sebelum join
+- name: Check the DRBD status on the new node before joining
   ansible.builtin.command:
     cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
   register: drbd_live_join_status_pre
@@ -28,7 +28,7 @@
   check_mode: false
   tags: [drbd, livejoin, connect]
 
-- name: Membuat metadata DRBD baru pada meta-disk eksternal node baru
+- name: Create new DRBD metadata on the new node external meta-disk
   ansible.builtin.command:
     cmd: drbdadm create-md {{ cluster_add_host_drbd_resource }}
   # SAFETY: never check_mode: false.
@@ -37,7 +37,7 @@
     - drbd_live_join_status_pre.rc != 0
   tags: [drbd, livejoin, connect]
 
-- name: Mengaktifkan resource DRBD di node baru sebagai Secondary
+- name: Bring up the DRBD resource on the new node as Secondary
   ansible.builtin.command:
     cmd: drbdadm up {{ cluster_add_host_drbd_resource }}
   # SAFETY: never check_mode: false — connects toward live Primary.
@@ -46,14 +46,14 @@
     - drbd_live_join_status_pre.rc != 0
   tags: [drbd, livejoin, connect]
 
-- name: Memastikan tidak ada promote paksa di jalur live-join
+- name: Ensure no forced promotion happens on the live-join path
   ansible.builtin.debug:
     msg: >-
-      drbdadm primary --force SENGAJA tidak dipanggil di drbd_live_join.
-      Survivor tetap Primary; node baru menunggu full sync sebagai Secondary.
+      drbdadm primary --force is INTENTIONALLY not called in drbd_live_join.
+      The survivor stays Primary; the new node waits for full sync as Secondary.
   tags: [drbd, livejoin, connect]
 
-- name: Memeriksa kemajuan sync awal ke Primary live
+- name: Check the initial sync progress toward the live Primary
   ansible.builtin.command:
     cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
   register: drbd_live_join_status_sync
@@ -64,11 +64,11 @@
   when: not ansible_check_mode
   tags: [drbd, livejoin, connect]
 
-- name: Mencatat connect/full-sync di-skip saat dry-run
+- name: Note that connect/full-sync is skipped during a dry-run
   ansible.builtin.debug:
     msg: >-
-      Mode --check: create-md / up / connect TIDAK dijalankan. Logic ini
-      BELUM PERNAH diuji ke host mana pun — full sync ke Primary live masih
-      hipotesis berbasis dokumentasi resmi, bukan bukti lab KIN Mail.
+      --check mode: create-md / up / connect are NOT executed. This logic
+      has NEVER been tested against any host — full sync to a live Primary is
+      still a hypothesis based on official documentation, not KIN Mail lab proof.
   when: ansible_check_mode
   tags: [drbd, livejoin, connect]

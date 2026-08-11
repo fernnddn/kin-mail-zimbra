@@ -1,7 +1,7 @@
 ---
 # Read-only probes — check_mode: false so --check still reports live quorum.
 
-- name: Memverifikasi layanan qdevice aktif
+- name: Verify the qdevice service is active
   ansible.builtin.command:
     cmd: systemctl is-active {{ corosync_qdevice_service }}
   register: corosync_qdevice_is_active
@@ -10,7 +10,7 @@
   check_mode: false
   tags: [qdevice, verify]
 
-- name: Memverifikasi layanan qdevice di-enable saat boot
+- name: Verify the qdevice service is enabled at boot
   ansible.builtin.command:
     cmd: systemctl is-enabled {{ corosync_qdevice_service }}
   register: corosync_qdevice_is_enabled
@@ -19,7 +19,7 @@
   check_mode: false
   tags: [qdevice, verify]
 
-- name: Memverifikasi qdevice terhubung ke qnetd
+- name: Verify qdevice is connected to qnetd
   ansible.builtin.command:
     cmd: corosync-qdevice-tool -s
   register: corosync_qdevice_tool_status
@@ -31,7 +31,7 @@
   check_mode: false
   tags: [qdevice, verify]
 
-- name: Memverifikasi vote quorum terbaca tiga
+- name: Verify the quorum vote count reads three
   ansible.builtin.command:
     cmd: corosync-quorumtool -s
   register: corosync_qdevice_quorumtool

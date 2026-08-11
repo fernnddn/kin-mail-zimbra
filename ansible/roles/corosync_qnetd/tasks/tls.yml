@@ -3,13 +3,13 @@
 # noted corosync-qnetd-certutil -i was not needed when that file already existed.
 # This step only initializes when the DB is missing (idempotent for greenfield).
 
-- name: Memeriksa basis data sertifikat TLS qnetd
+- name: Check the qnetd TLS certificate database
   ansible.builtin.stat:
     path: "{{ corosync_qnetd_nssdb_cert9 }}"
   register: corosync_qnetd_nssdb
   tags: [qnetd, tls]
 
-- name: Membuat sertifikat TLS qnetd
+- name: Create the qnetd TLS certificate
   ansible.builtin.command:
     cmd: corosync-qnetd-certutil -i
   when: not corosync_qnetd_nssdb.stat.exists

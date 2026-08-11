@@ -3,7 +3,7 @@
 # behaviour (do not set check_mode: false). Under --check this task is skipped
 # via `when: not ansible_check_mode` so a dry-run never loads modules on the host.
 
-- name: Memuat modul kernel DRBD in-tree
+- name: Load the in-tree DRBD kernel module
   ansible.builtin.command:
     cmd: modprobe {{ drbd_install_module }}
   when: not ansible_check_mode

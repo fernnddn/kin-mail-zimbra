@@ -1,19 +1,19 @@
 ---
-# Entry point — one include per progress-friendly step (Indonesian labels).
-# Mapped from docs/progress/2.1-monitoring-vm-qnetd-sbd-target.md §2 only.
+# Entry point — one include per progress-friendly step.
+# Mapped from Phase 2 task 2.1 §2 (qnetd on Monitoring only).
 
-- name: Sertakan langkah instalasi paket qnetd
+- name: Include the qnetd package installation steps
   ansible.builtin.import_tasks: install.yml
   tags: [qnetd, install]
 
-- name: Sertakan langkah sertifikat TLS qnetd
+- name: Include the qnetd TLS certificate steps
   ansible.builtin.import_tasks: tls.yml
   tags: [qnetd, tls]
 
-- name: Sertakan langkah aktivasi layanan qnetd
+- name: Include the qnetd service activation steps
   ansible.builtin.import_tasks: service.yml
   tags: [qnetd, service]
 
-- name: Sertakan langkah verifikasi qnetd
+- name: Include the qnetd verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [qnetd, verify]

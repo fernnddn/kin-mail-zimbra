@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi layanan target iSCSI aktif
+- name: Verify the iSCSI target service is active
   ansible.builtin.command:
     cmd: systemctl is-active {{ iscsi_target_service }}
   register: iscsi_target_active
@@ -8,7 +8,7 @@
   check_mode: false
   tags: [iscsi, target, verify]
 
-- name: Memverifikasi portal iSCSI mendengarkan port 3260
+- name: Verify the iSCSI portal is listening on port 3260
   ansible.builtin.wait_for:
     port: "{{ iscsi_target_portal_port }}"
     host: 127.0.0.1
@@ -17,7 +17,7 @@
   check_mode: false
   tags: [iscsi, target, verify]
 
-- name: Memverifikasi image LUN SBD ada di disk
+- name: Verify the SBD LUN image exists on disk
   ansible.builtin.stat:
     path: "{{ iscsi_target_lun_img }}"
   register: iscsi_target_lun_verify
@@ -25,7 +25,7 @@
   check_mode: false
   tags: [iscsi, target, verify]
 
-- name: Memverifikasi targetcli menampilkan IQN SBD
+- name: Verify targetcli shows the SBD IQN
   ansible.builtin.command:
     cmd: targetcli ls /iscsi/{{ iscsi_target_iqn }}
   register: iscsi_target_ls_verify

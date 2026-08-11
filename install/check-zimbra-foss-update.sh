@@ -43,12 +43,12 @@ if [ -n "$ZCS_VERSION" ]; then
 elif [ -d /opt/zimbra ]; then
   echo "    installed hint:    $(su - zimbra -c 'zmcontrol -v' 2>/dev/null | head -1 || echo unknown)"
 else
-  echo "    configured build:  (none — /etc/kin-mail/config belum ada)"
+  echo "    configured build:  (none — /etc/kin-mail/config does not exist yet)"
 fi
 
 URL=$(latest_url)
 if [ -z "$URL" ]; then
-  echo "    ERROR: tidak bisa membaca rilis GitHub maldua/zimbra-foss (${PLAT})" >&2
+  echo "    ERROR: cannot read maldua/zimbra-foss GitHub releases (${PLAT})" >&2
   exit 2
 fi
 
@@ -67,5 +67,5 @@ if [ -n "$ZCS_VERSION" ]; then
   exit 1
 fi
 
-echo "    status: GitHub latest reported; bandingkan manual dengan build terpasang"
+echo "    status: GitHub latest reported; compare manually with installed build"
 exit 0

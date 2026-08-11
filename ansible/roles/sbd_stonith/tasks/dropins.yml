@@ -1,5 +1,5 @@
 ---
-- name: Menyiapkan direktori drop-in sbd.service
+- name: Prepare the sbd.service drop-in directory
   ansible.builtin.file:
     path: "{{ sbd_stonith_dropin_dir }}"
     state: directory
@@ -9,29 +9,29 @@
   when: not ansible_check_mode
   tags: [sbd, stonith, dropins]
 
-- name: Memasang drop-in urutan kin-softdog untuk SBD
+- name: Deploy the kin-softdog ordering drop-in for SBD
   ansible.builtin.template:
     src: kin-ordering.conf.j2
     dest: "{{ sbd_stonith_dropin_dir }}/kin-ordering.conf"
     owner: root
     group: root
     mode: "0644"
-  notify: Muat ulang systemd setelah perubahan sbd
+  notify: Reload systemd after sbd changes
   when: not ansible_check_mode
   tags: [sbd, stonith, dropins]
 
-- name: Memasang drop-in SBD_DELAY_START TimeoutStartSec
+- name: Deploy the SBD_DELAY_START TimeoutStartSec drop-in
   ansible.builtin.template:
     src: kin-delay-start.conf.j2
     dest: "{{ sbd_stonith_dropin_dir }}/kin-delay-start.conf"
     owner: root
     group: root
     mode: "0644"
-  notify: Muat ulang systemd setelah perubahan sbd
+  notify: Reload systemd after sbd changes
   when: not ansible_check_mode
   tags: [sbd, stonith, dropins]
 
-- name: Memeriksa drop-in ordering SBD sudah ada (dry-run)
+- name: Check the SBD ordering drop-in exists (dry-run)
   ansible.builtin.stat:
     path: "{{ sbd_stonith_dropin_dir }}/kin-ordering.conf"
   register: sbd_stonith_ordering_stat
@@ -39,7 +39,7 @@
   check_mode: false
   tags: [sbd, stonith, dropins]
 
-- name: Memeriksa drop-in delay-start SBD sudah ada (dry-run)
+- name: Check the SBD delay-start drop-in exists (dry-run)
   ansible.builtin.stat:
     path: "{{ sbd_stonith_dropin_dir }}/kin-delay-start.conf"
   register: sbd_stonith_delay_stat
@@ -47,7 +47,7 @@
   check_mode: false
   tags: [sbd, stonith, dropins]
 
-- name: Memverifikasi TimeoutStartSec delay-start berisi 180
+- name: Verify the delay-start TimeoutStartSec is set to 180
   ansible.builtin.command:
     cmd: grep -E 'TimeoutStartSec={{ sbd_stonith_timeout_start_sec }}' {{ sbd_stonith_dropin_dir }}/kin-delay-start.conf
   changed_when: false

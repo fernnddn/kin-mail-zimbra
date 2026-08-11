@@ -9,7 +9,7 @@
 # Do NOT run without --check against the live lab cluster unless you intend
 # to mutate that host — production qnetd/DRBD/Pacemaker already run there.
 
-- name: Siapkan arbitrator qnetd di VM Monitoring
+- name: Set up the qnetd arbitrator on the Monitoring VM
   hosts: monitoring
   gather_facts: true
   become: true

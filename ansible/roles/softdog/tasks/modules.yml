@@ -2,7 +2,7 @@
 # modules-load alone is deny-listed on Ubuntu (task 2.3). Still ship the files
 # for parity with 2.2; real boot path is kin-softdog.service (explicit modprobe).
 
-- name: Menyiapkan daftar modul softdog untuk modules-load
+- name: Prepare the softdog module list for modules-load
   ansible.builtin.template:
     src: softdog-modules-load.conf.j2
     dest: "{{ softdog_modules_load_path }}"
@@ -12,7 +12,7 @@
   when: not ansible_check_mode
   tags: [softdog, modules]
 
-- name: Menyiapkan opsi modprobe softdog
+- name: Prepare the softdog modprobe options
   ansible.builtin.template:
     src: softdog-modprobe.conf.j2
     dest: "{{ softdog_modprobe_path }}"
@@ -22,14 +22,14 @@
   when: not ansible_check_mode
   tags: [softdog, modules]
 
-- name: Memeriksa berkas modul softdog sudah ada (dry-run)
+- name: Check the softdog module file exists (dry-run)
   ansible.builtin.stat:
     path: "{{ softdog_modules_load_path }}"
   register: softdog_modules_stat
   check_mode: false
   tags: [softdog, modules]
 
-- name: Memeriksa opsi modprobe softdog sudah ada (dry-run)
+- name: Check the softdog modprobe options exist (dry-run)
   ansible.builtin.stat:
     path: "{{ softdog_modprobe_path }}"
   register: softdog_modprobe_stat

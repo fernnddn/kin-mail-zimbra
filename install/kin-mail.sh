@@ -23,7 +23,7 @@ fail() { printf '%s\n' "  ${RED}[FAIL]${RST}   $*"; }
 info() { printf '%s\n' "  ${DIM}       $*${RST}"; }
 
 need_root() {
-  [ "$(id -u)" -eq 0 ] || { fail "Jalankan sebagai root:  sudo $0"; exit 1; }
+  [ "$(id -u)" -eq 0 ] || { fail "Run as root:  sudo $0"; exit 1; }
 }
 
 REPO_URL="${KIN_MAIL_REPO_URL:-https://github.com/fernnddn/kin-mail-zimbra.git}"
@@ -94,40 +94,40 @@ ensure_scripts() {
   cd "$self_dir" || exit 1
 
   if scripts_present; then
-    ok "Script tahap ditemukan di ${self_dir}"
+    ok "Stage scripts found in ${self_dir}"
     return 0
   fi
 
-  say "Script tahap tidak lengkap di direktori ini; menyiapkan salinan deploy"
-  info "Sumber : ${REPO_URL}"
+  say "Stage scripts incomplete in this directory; preparing deploy copy"
+  info "Source : ${REPO_URL}"
   info "Target : ${DEPLOY_DIR}"
 
-  command -v git >/dev/null 2>&1 || { fail "git belum terpasang"; exit 1; }
+  command -v git >/dev/null 2>&1 || { fail "git is not installed"; exit 1; }
 
   if [ -d "$DEPLOY_DIR/.git" ] && scripts_dir=$(resolve_scripts_dir "$DEPLOY_DIR"); then
-    ok "Clone yang sudah ada dipakai ulang: ${scripts_dir}"
+    ok "Reusing existing clone: ${scripts_dir}"
   elif [ -e "$DEPLOY_DIR" ] && [ ! -d "$DEPLOY_DIR/.git" ]; then
-    fail "${DEPLOY_DIR} sudah ada tetapi bukan clone git KIN Mail"
-    info "Pindahkan/hapus folder itu, atau set KIN_MAIL_DEPLOY_DIR ke path lain."
+    fail "${DEPLOY_DIR} already exists but is not a KIN Mail git clone"
+    info "Move/remove that folder, or set KIN_MAIL_DEPLOY_DIR to another path."
     exit 1
   elif [ -d "$DEPLOY_DIR/.git" ]; then
-    warn "Clone ada tetapi script belum lengkap; mencoba git pull"
+    warn "Clone exists but scripts are incomplete; trying git pull"
     git -C "$DEPLOY_DIR" pull --ff-only || {
-      fail "git pull gagal di ${DEPLOY_DIR}"
+      fail "git pull failed in ${DEPLOY_DIR}"
       exit 1
     }
   else
     mkdir -p "$(dirname "$DEPLOY_DIR")"
     git clone --depth 1 "$REPO_URL" "$DEPLOY_DIR" || {
-      fail "Clone gagal dari ${REPO_URL}"
+      fail "Clone failed from ${REPO_URL}"
       exit 1
     }
-    ok "Repository di-clone ke ${DEPLOY_DIR}"
+    ok "Repository cloned to ${DEPLOY_DIR}"
   fi
 
   scripts_dir=$(resolve_scripts_dir "$DEPLOY_DIR") || {
-    fail "Setelah clone/pull, script tahap masih belum lengkap di ${DEPLOY_DIR}"
-    info "Diharapkan di ${DEPLOY_DIR}/install/ (atau layout lama di root clone)."
+    fail "After clone/pull, stage scripts are still incomplete in ${DEPLOY_DIR}"
+    info "Expected at ${DEPLOY_DIR}/install/ (or legacy layout at clone root)."
     exit 1
   }
 
@@ -135,7 +135,7 @@ ensure_scripts() {
 
   # Continue from the cloned bootstrap so relative paths stay correct.
   if [ "$(cd "$(dirname "$0")" && pwd)" != "$scripts_dir" ]; then
-    info "Melanjutkan dari ${scripts_dir}/kin-mail.sh"
+    info "Continuing from ${scripts_dir}/kin-mail.sh"
     exec "$scripts_dir/kin-mail.sh" "$@"
   fi
 }
@@ -144,7 +144,7 @@ run_stage() {
   local script="$1"
   echo
   hr
-  say "Menjalankan ${script}"
+  say "Running ${script}"
   hr
   echo
   if [ ! -x "./$script" ]; then
@@ -154,48 +154,48 @@ run_stage() {
   local rc=$?
   echo
   if [ "$rc" -eq 0 ]; then
-    ok "${script} selesai (exit 0)"
+    ok "${script} finished (exit 0)"
   else
-    fail "${script} gagal (exit ${rc})"
+    fail "${script} failed (exit ${rc})"
   fi
   return "$rc"
 }
 
 run_full_install() {
   local s rc
-  say "Install lengkap — urutan: ${FULL_PIPELINE[*]}"
-  info "Berhenti otomatis jika satu tahap exit non-zero."
+  say "Full install — order: ${FULL_PIPELINE[*]}"
+  info "Stops automatically if any stage exits non-zero."
   echo
   for s in "${FULL_PIPELINE[@]}"; do
     run_stage "$s" || {
       rc=$?
       echo
-      fail "Pipeline dihentikan pada ${s}"
-      info "Perbaiki masalah di atas, lalu jalankan ulang menu atau tahap itu saja."
+      fail "Pipeline stopped at ${s}"
+      info "Fix the issue above, then re-run the menu or that stage only."
       return "$rc"
     }
   done
   echo
-  say "Install lengkap selesai"
-  ok "Semua tahap dalam pipeline exit 0"
+  say "Full install complete"
+  ok "All pipeline stages exited 0"
 }
 
 pick_one_stage() {
   local choice
   while true; do
     echo
-    say "Pilih satu tahap"
+    say "Pick one stage"
     hr
-    printf '  %s%s%s  %s\n' "$BLD" "1)" "$RST" "01-preflight.sh          ${DIM}cek kelayakan host${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "02-prepare-os.sh         ${DIM}hostname, resolver, dependensi${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "03-install-zimbra.sh     ${DIM}unduh & install Zimbra FOSS${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "1)" "$RST" "01-preflight.sh          ${DIM}host readiness check${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "02-prepare-os.sh         ${DIM}hostname, resolver, dependencies${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "03-install-zimbra.sh     ${DIM}download & install Zimbra FOSS${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "4)" "$RST" "04-tls-dkim.sh           ${DIM}Let's Encrypt + DKIM${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "5)" "$RST" "06-hybrid-auth.sh        ${DIM}AD LDAP + fallback lokal${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "5)" "$RST" "06-hybrid-auth.sh        ${DIM}AD LDAP + local fallback${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "6)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "7)" "$RST" "00-config.sh --reset     ${DIM}ulang wizard konfigurasi${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Kembali"
+    printf '  %s%s%s  %s\n' "$BLD" "7)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Back"
     hr
-    printf '  %sPilihan%s [0-7]: ' "$BLD" "$RST"
+    printf '  %sChoice%s [0-7]: ' "$BLD" "$RST"
     read -r choice </dev/tty || return 0
     case "$choice" in
       1) run_stage 01-preflight.sh; return $? ;;
@@ -206,19 +206,19 @@ pick_one_stage() {
       6) run_stage 05-healthcheck.sh; return $? ;;
       7)
         echo
-        say "Menjalankan 00-config.sh --reset"
+        say "Running 00-config.sh --reset"
         ./00-config.sh --reset
         return $?
         ;;
       0) return 0 ;;
-      *) warn "Pilihan tidak dikenal: ${choice}" ;;
+      *) warn "Unknown choice: ${choice}" ;;
     esac
   done
 }
 
 pause_return() {
   echo
-  printf '  %sTekan Enter untuk kembali ke menu…%s ' "$DIM" "$RST"
+  printf '  %sPress Enter to return to the menu…%s ' "$DIM" "$RST"
   read -r _ </dev/tty || true
 }
 
@@ -227,26 +227,26 @@ main_menu() {
   workdir=$(pwd)
   while true; do
     banner
-    info "Direktori kerja : ${workdir}"
-    info "Jalankan sebagai: root"
+    info "Working directory : ${workdir}"
+    info "Run as            : root"
     echo
-    say "Menu utama"
+    say "Main menu"
     hr
-    printf '  %s%s%s  %s\n' "$BLD" "1)" "$RST" "Install lengkap dari awal"
-    printf '      %s%s\n' "$DIM" "01 → 02 → 03 → 04 → 06 → 05 (berhenti jika ada yang gagal)${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "1)" "$RST" "Full install from scratch"
+    printf '      %s%s\n' "$DIM" "01 → 02 → 03 → 04 → 06 → 05 (stops on failure)${RST}"
     echo
-    printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "Jalankan satu tahap tertentu"
+    printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "Run a specific stage"
     printf '      %s%s\n' "$DIM" "submenu: preflight, OS, install, TLS/DKIM, hybrid auth, healthcheck${RST}"
     echo
-    printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "Healthcheck saja"
+    printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "Healthcheck only"
     printf '      %s%s\n' "$DIM" "05-healthcheck.sh${RST}"
     echo
-    printf '  %s%s%s  %s\n' "$BLD" "4)" "$RST" "Cek update Zimbra FOSS"
+    printf '  %s%s%s  %s\n' "$BLD" "4)" "$RST" "Check Zimbra FOSS update"
     printf '      %s%s\n' "$DIM" "check-zimbra-foss-update.sh${RST}"
     echo
-    printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Keluar"
+    printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Exit"
     hr
-    printf '  %sPilihan%s [0-4]: ' "$BLD" "$RST"
+    printf '  %sChoice%s [0-4]: ' "$BLD" "$RST"
     read -r choice </dev/tty || exit 0
     case "$choice" in
       1) run_full_install; pause_return ;;
@@ -255,13 +255,13 @@ main_menu() {
       4) run_stage check-zimbra-foss-update.sh; pause_return ;;
       0)
         echo
-        say "Selesai"
-        info "Sampai jumpa."
+        say "Done"
+        info "Goodbye."
         echo
         exit 0
         ;;
       *)
-        warn "Pilihan tidak dikenal: ${choice}"
+        warn "Unknown choice: ${choice}"
         sleep 1
         ;;
     esac

@@ -10,8 +10,8 @@
 
 Repeatable Zimbra Collaboration 10 (FOSS) deployment for Ubuntu Server, plus an
 active-passive HA lab stack (Pacemaker / DRBD / SBD). Built by
-**PT Karya Informasi Nusantara** for its own customer work. Prompts and operator
-guidance in the scripts are Indonesian; this README is English by GitHub convention.
+**PT Karya Informasi Nusantara** for its own customer work. Installer prompts,
+Ansible task labels, and operator guidance are in English.
 
 <table>
 <tr><td><b>One-shot install</b></td><td>Menu-driven <code>install/kin-mail.sh</code> runs preflight through healthcheck, or any single stage.</td></tr>

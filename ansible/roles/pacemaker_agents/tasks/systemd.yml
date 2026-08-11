@@ -3,7 +3,7 @@
 # systemd module reports would-be changes without applying. Do not add
 # check_mode: false here — that would flip unit state on the live MX pair.
 
-- name: Menonaktifkan layanan systemd drbd agar Pacemaker yang menguasai
+- name: Disable the systemd drbd service so Pacemaker owns it
   ansible.builtin.systemd:
     name: drbd.service
     enabled: false
@@ -11,7 +11,7 @@
   when: pacemaker_agents_disable_drbd_service | bool
   tags: [pacemaker, agents, systemd]
 
-- name: Memverifikasi unit meta-loop DRBD tetap enabled
+- name: Verify the DRBD meta-loop unit stays enabled
   ansible.builtin.command:
     cmd: systemctl is-enabled {{ pacemaker_agents_keep_meta_loop_unit }}
   register: pacemaker_agents_meta_loop_enabled

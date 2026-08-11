@@ -20,20 +20,20 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 LE_DIR="/etc/letsencrypt/live/${MAIL_HOST}"
 ZS="/opt/zimbra/ssl/letsencrypt"
 
-[ -d /opt/zimbra ] || { fail "Zimbra belum terpasang. Jalankan 03 dulu."; exit 1; }
+[ -d /opt/zimbra ] || { fail "Zimbra is not installed yet. Run 03 first."; exit 1; }
 
 : "${TLS_METHOD:=cloudflare}"
 case "$TLS_METHOD" in
   cloudflare|manual|customer) ;;
-  *) fail "TLS_METHOD tidak dikenal: ${TLS_METHOD} (cloudflare|manual|customer)"; exit 1 ;;
+  *) fail "Unknown TLS_METHOD: ${TLS_METHOD} (cloudflare|manual|customer)"; exit 1 ;;
 esac
 
-say "Metode TLS: ${TLS_METHOD}"
+say "TLS method: ${TLS_METHOD}"
 
 install_isrg_root() {
   mkdir -p "$ZS" /etc/letsencrypt/renewal-hooks/deploy
   curl -s -m 30 -o "${ZS}/isrgrootx1.pem" https://letsencrypt.org/certs/isrgrootx1.pem
-  [ -s "${ZS}/isrgrootx1.pem" ] || { fail "Gagal mengunduh ISRG Root X1"; exit 1; }
+  [ -s "${ZS}/isrgrootx1.pem" ] || { fail "Failed to download ISRG Root X1"; exit 1; }
 }
 
 write_deploy_hook() {
@@ -65,21 +65,21 @@ su - zimbra -c "zmcontrol restart"
 logger -t kin-mail "Zimbra certificate redeployed after Let's Encrypt renewal"
 HOOK
   chmod +x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh
-  ok "Deploy hook terpasang"
+  ok "Deploy hook installed"
 }
 
 run_deploy_hook() {
-  say "Deploy sertifikat ke Zimbra (hook)"
+  say "Deploy certificate to Zimbra (hook)"
   if /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh; then
-    ok "Hook berhasil, sertifikat ter-deploy"
+    ok "Hook succeeded, certificate deployed"
   else
-    fail "Hook gagal - jalankan manual untuk melihat pesannya"
+    fail "Hook failed - run manually to see its message"
     exit 1
   fi
 }
 
 verify_tls_ports() {
-  say "Verifikasi TLS di port live"
+  say "Verify TLS on live ports"
   local spec S
   for spec in "443 https" "587 starttls-smtp" "993 imaps"; do
     # shellcheck disable=SC2086
@@ -91,36 +91,36 @@ verify_tls_ports() {
       S=$(echo | timeout 20 openssl s_client -connect 127.0.0.1:$1 -servername "$MAIL_HOST" 2>/dev/null \
           | openssl x509 -noout -subject 2>/dev/null)
     fi
-    [ -n "$S" ] && ok "port $1 : $S" || fail "port $1 : handshake gagal"
+    [ -n "$S" ] && ok "port $1 : $S" || fail "port $1 : handshake failed"
   done
 }
 
 # --- Cloudflare DNS-01 -------------------------------------------------------
 tls_cloudflare() {
-  say "1. certbot dan plugin Cloudflare"
+  say "1. certbot and Cloudflare plugin"
   apt-get -qq update
   apt-get -y install certbot python3-certbot-dns-cloudflare >/dev/null 2>&1
   certbot plugins 2>/dev/null | grep -qi cloudflare \
-    && ok "plugin dns-cloudflare terpasang" \
-    || { fail "plugin dns-cloudflare tidak tersedia"; exit 1; }
+    && ok "dns-cloudflare plugin installed" \
+    || { fail "dns-cloudflare plugin not available"; exit 1; }
 
-  say "2. Token API Cloudflare"
+  say "2. Cloudflare API token"
   if [ -s "$CF_CREDS" ] && ! grep -q "PASTE" "$CF_CREDS"; then
-    ok "Kredensial sudah ada di ${CF_CREDS}"
+    ok "Credentials already at ${CF_CREDS}"
   else
-    info "Buat di Cloudflare: My Profile -> API Tokens -> Create Token"
-    info "Template 'Edit zone DNS', batasi ke zona ${MAIL_DOMAIN} saja."
-    ask_secret CF_TOKEN "Tempel API token Cloudflare"
-    [ -z "$CF_TOKEN" ] && { fail "Token kosong."; exit 1; }
+    info "Create at Cloudflare: My Profile -> API Tokens -> Create Token"
+    info "Template 'Edit zone DNS', restrict to zone ${MAIL_DOMAIN} only."
+    ask_secret CF_TOKEN "Paste Cloudflare API token"
+    [ -z "$CF_TOKEN" ] && { fail "Token is empty."; exit 1; }
     mkdir -p /etc/letsencrypt
     printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
     chmod 600 "$CF_CREDS"; chown root:root "$CF_CREDS"
-    ok "Tersimpan mode 600"
+    ok "Saved with mode 600"
   fi
 
-  say "3. Menerbitkan sertifikat (DNS-01 Cloudflare)"
+  say "3. Issuing certificate (DNS-01 Cloudflare)"
   if [ -f "${LE_DIR}/cert.pem" ]; then
-    ok "Sertifikat sudah ada, penerbitan dilewati"
+    ok "Certificate already exists, issuance skipped"
   else
     certbot certonly \
       --dns-cloudflare \
@@ -130,44 +130,44 @@ tls_cloudflare() {
       --preferred-chain "ISRG Root X1" \
       --agree-tos --no-eff-email -m "$LE_EMAIL" \
       --non-interactive 2>&1 | tail -8
-    [ -f "${LE_DIR}/cert.pem" ] || { fail "Penerbitan gagal. Lihat /var/log/letsencrypt/"; exit 1; }
+    [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/"; exit 1; }
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
 
-  say "4. Memasang deploy hook"
+  say "4. Installing deploy hook"
   install_isrg_root
   write_deploy_hook
   run_deploy_hook
   verify_tls_ports
 
-  say "5. Uji perpanjangan otomatis"
+  say "5. Test automatic renewal"
   certbot renew --dry-run 2>&1 | grep -qi "simulated renewal" \
-    && ok "certbot renew --dry-run berhasil" \
-    || warn "dry-run tidak konklusif, periksa /var/log/letsencrypt/"
+    && ok "certbot renew --dry-run succeeded" \
+    || warn "dry-run inconclusive, check /var/log/letsencrypt/"
 }
 
 # --- Manual DNS-01 (any provider) --------------------------------------------
 tls_manual() {
-  warn "TLS_METHOD=manual — renewal TIDAK otomatis."
-  warn "certbot --manual butuh manusia di terminal tiap issue/renew,"
-  warn "kecuali nanti ditambahkan --manual-auth-hook khusus provider."
-  info "Jangan andalkan cron 'certbot renew' untuk mode ini."
+  warn "TLS_METHOD=manual — renewal is NOT automatic."
+  warn "certbot --manual requires a human at the terminal for each issue/renew,"
+  warn "unless a provider-specific --manual-auth-hook is added later."
+  info "Do not rely on cron 'certbot renew' for this mode."
 
   say "1. certbot"
   apt-get -qq update
   apt-get -y install certbot >/dev/null 2>&1
-  command -v certbot >/dev/null || { fail "certbot tidak terpasang"; exit 1; }
-  ok "certbot siap"
+  command -v certbot >/dev/null || { fail "certbot is not installed"; exit 1; }
+  ok "certbot ready"
 
-  say "2. Menerbitkan sertifikat (DNS-01 manual)"
+  say "2. Issuing certificate (DNS-01 manual)"
   if [ -f "${LE_DIR}/cert.pem" ]; then
-    ok "Sertifikat sudah ada, penerbitan dilewati"
+    ok "Certificate already exists, issuance skipped"
   else
     # Interactive TTY: classic certbot prompts.
     # Non-TTY / KIN_MAIL_DNS_POLL=1: print TXT + poll public DNS until the
     # operator creates the record (needed for remote/bootstrap deploys).
     if [ -t 0 ] && [ "${KIN_MAIL_DNS_POLL:-0}" != "1" ]; then
-      info "Mode interaktif: buat TXT di panel DNS saat diminta, lalu Enter."
+      info "Interactive mode: create TXT in the DNS panel when prompted, then press Enter."
       certbot certonly \
         --manual \
         --preferred-challenges dns \
@@ -176,8 +176,8 @@ tls_manual() {
         --agree-tos --no-eff-email -m "$LE_EMAIL" \
         --manual-public-ip-logging-ok
     else
-      info "Mode poll: challenge ditulis ke /tmp/kin-mail-acme-challenge.txt"
-      info "Buat TXT di panel DNS zona ${MAIL_DOMAIN}, lalu tunggu propagasi."
+      info "Poll mode: challenge written to /tmp/kin-mail-acme-challenge.txt"
+      info "Create TXT in the DNS panel for zone ${MAIL_DOMAIN}, then wait for propagation."
       AUTH_HOOK=$(mktemp /tmp/kin-mail-acme-auth.XXXXXX)
       CLEAN_HOOK=$(mktemp /tmp/kin-mail-acme-clean.XXXXXX)
       chmod 700 "$AUTH_HOOK" "$CLEAN_HOOK"
@@ -215,33 +215,33 @@ HOOK
         --non-interactive
       rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
     fi
-    [ -f "${LE_DIR}/cert.pem" ] || { fail "Penerbitan gagal. Lihat /var/log/letsencrypt/ dan /tmp/kin-mail-acme-challenge.txt"; exit 1; }
+    [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"; exit 1; }
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
 
-  say "3. Memasang deploy hook (untuk deploy sekarang; bukan auto-renew)"
+  say "3. Installing deploy hook (for current deploy; not auto-renew)"
   install_isrg_root
   write_deploy_hook
   run_deploy_hook
   verify_tls_ports
 
-  say "4. Perpanjangan otomatis"
-  warn "Dilewati / tidak diandalkan untuk TLS_METHOD=manual."
-  info "Sebelum expired: jalankan ulang 04 (atau certbot certonly --manual …) dengan operator hadir."
+  say "4. Automatic renewal"
+  warn "Skipped / not relied upon for TLS_METHOD=manual."
+  info "Before expiry: re-run 04 (or certbot certonly --manual …) with an operator present."
 }
 
 # --- Customer-provided certificate -------------------------------------------
 tls_customer() {
-  say "1. Sertifikat customer — certbot dilewati"
-  warn "Tidak ada otomasi penerbitan. Operator memasang file dari customer."
+  say "1. Customer certificate — certbot skipped"
+  warn "No automated issuance. Operator installs files from the customer."
   echo
-  printf '%s\n' "${BLD}  LANGKAH MANUAL (zmcertmgr)${RST}"
+  printf '%s\n' "${BLD}  MANUAL STEPS (zmcertmgr)${RST}"
   echo   "  ----------------------------------------------------------------"
-  info "1. Simpan file dari customer, contoh:"
-  info "     /root/customer-tls/${MAIL_HOST}.crt   (sertifikat + intermediate bila perlu)"
+  info "1. Save files from the customer, for example:"
+  info "     /root/customer-tls/${MAIL_HOST}.crt   (certificate + intermediate if needed)"
   info "     /root/customer-tls/${MAIL_HOST}.key   (private key)"
-  info "     /root/customer-tls/ca-chain.pem       (rantai CA sampai root, bila terpisah)"
-  info "2. Gabungkan chain bila perlu, lalu verifikasi:"
+  info "     /root/customer-tls/ca-chain.pem       (CA chain to root, if separate)"
+  info "2. Combine chain if needed, then verify:"
   info "     mkdir -p ${ZS} && cp … ${ZS}/"
   info "     su - zimbra -c '/opt/zimbra/bin/zmcertmgr verifycrt comm ${ZS}/privkey.pem ${ZS}/cert.pem ${ZS}/chain.pem'"
   info "3. Deploy:"
@@ -255,10 +255,10 @@ tls_customer() {
 
   if [ -f /opt/zimbra/ssl/zimbra/commercial/commercial.crt ] || \
      [ -f /opt/zimbra/ssl/zimbra/server/server.crt ]; then
-    ok "Ada sertifikat di tree Zimbra — lanjut verifikasi port (bila sudah di-deploy)"
+    ok "Certificate found in Zimbra tree — continuing with port verification (if already deployed)"
     verify_tls_ports || true
   else
-    warn "Belum terdeteksi cert commercial ter-deploy — selesaikan langkah di atas sebelum production."
+    warn "No deployed commercial cert detected — complete the steps above before production."
   fi
 }
 
@@ -271,10 +271,10 @@ esac
 # --- DKIM (independent of TLS method) ----------------------------------------
 say "DKIM"
 if su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" >/dev/null 2>&1; then
-  ok "Kunci DKIM sudah ada"
+  ok "DKIM key already exists"
 else
   su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -a -d ${MAIL_DOMAIN}" >/dev/null 2>&1
-  ok "Kunci DKIM dibuat"
+  ok "DKIM key created"
 fi
 
 Q=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>/dev/null)
@@ -282,7 +282,7 @@ SEL=$(printf '%s' "$Q" | awk '/DKIM Selector/{getline; while($0==""){getline}; p
 VAL=$(printf '%s' "$Q" | awk '/DKIM Public signature/,0' | grep -oE '"[^"]*"' | tr -d '"' | tr -d '\n')
 
 echo
-printf '%s\n' "${BLD}  TEMPEL RECORD DKIM DI PANEL DNS (zona ${MAIL_DOMAIN})${RST}"
+printf '%s\n' "${BLD}  PASTE DKIM RECORD IN DNS PANEL (zone ${MAIL_DOMAIN})${RST}"
 echo   "  ----------------------------------------------------------------"
 echo   "  Type    : TXT"
 echo   "  Name    : ${SEL}._domainkey"
@@ -290,10 +290,10 @@ echo   "  TTL     : Auto / 300"
 echo   "  Content :"
 echo   "$VAL" | fold -w 76 | sed 's/^/    /'
 echo   "  ----------------------------------------------------------------"
-info "Satu baris, tanpa tanda kutip atau kurung. Provider DNS memecahnya sendiri bila perlu."
-info "Yang ditempel adalah kunci PUBLIK. Private key tetap di LDAP Zimbra."
+info "One line, without quotes or parentheses. The DNS provider splits it as needed."
+info "Paste the PUBLIC key. The private key stays in Zimbra LDAP."
 echo
-warn "Setelah record dipublish, jalankan: ./05-healthcheck.sh (dari folder install/)"
-info "Proses yang sudah berjalan menyimpan hasil DNS negatif, jadi 05 akan"
-info "me-restart dnsmasq, amavis dan opendkim sebelum memverifikasi DKIM."
+warn "After the record is published, run: ./05-healthcheck.sh (from the install/ folder)"
+info "Running processes cache negative DNS results, so 05 will"
+info "restart dnsmasq, amavis, and opendkim before verifying DKIM."
 echo

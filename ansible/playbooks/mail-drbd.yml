@@ -8,7 +8,7 @@
 # (create-md, up, primary) must never use check_mode: false. See
 # roles/drbd_resource/tasks/activate.yml.
 
-- name: Siapkan DRBD kin-zimbra di Host A dan Host B
+- name: Set up DRBD kin-zimbra on Host A and Host B
   hosts: mail_nodes
   gather_facts: true
   become: true

@@ -16,7 +16,7 @@
 # live CIB and can bounce Zimbra / VIP / DRBD promotion. Do not "fix" dry-run.
 # =============================================================================
 
-- name: Memeriksa apakah resource promotable DRBD sudah ada
+- name: Check whether the promotable DRBD resource already exists
   ansible.builtin.command:
     cmd: pcs resource config {{ pacemaker_mail_stack_drbd_ra }}
   register: pacemaker_mail_stack_drbd_cfg
@@ -26,7 +26,7 @@
   run_once: true
   tags: [pacemaker, stack, drbd]
 
-- name: Membuat resource promotable DRBD kin-drbd
+- name: Create the kin-drbd promotable DRBD resource
   ansible.builtin.command:
     cmd: >-
       pcs resource create {{ pacemaker_mail_stack_drbd_ra }} ocf:linbit:drbd
@@ -42,7 +42,7 @@
     - not ansible_check_mode
   tags: [pacemaker, stack, drbd]
 
-- name: Memeriksa preferensi lokasi soft untuk Master DRBD
+- name: Check the soft location preference for the DRBD Master
   ansible.builtin.command:
     cmd: pcs constraint location
   register: pacemaker_mail_stack_location
@@ -52,7 +52,7 @@
   run_once: true
   tags: [pacemaker, stack, drbd]
 
-- name: Menambahkan preferensi lokasi soft Master di Host A
+- name: Add the soft Master location preference on Host A
   ansible.builtin.command:
     cmd: >-
       pcs constraint location {{ pacemaker_mail_stack_drbd_clone }}
@@ -68,11 +68,11 @@
       )
   tags: [pacemaker, stack, drbd]
 
-- name: Mencatat create DRBD clone di-skip saat dry-run atau sudah ada
+- name: Note that DRBD clone creation is skipped during a dry-run or already exists
   ansible.builtin.debug:
     msg: >-
-      Resource {{ pacemaker_mail_stack_drbd_ra }} sudah ada atau mode --check:
-      pcs resource create / location prefers TIDAK dijalankan terhadap CIB live.
+      Resource {{ pacemaker_mail_stack_drbd_ra }} already exists or this is --check mode:
+      pcs resource create / location prefers was NOT executed against the live CIB.
   when: ansible_check_mode or pacemaker_mail_stack_drbd_cfg.rc == 0
   run_once: true
   tags: [pacemaker, stack, drbd]

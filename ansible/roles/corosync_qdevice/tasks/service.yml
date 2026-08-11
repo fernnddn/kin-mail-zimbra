@@ -1,11 +1,11 @@
 ---
-- name: Mengaktifkan layanan qdevice agar ikut boot
+- name: Enable the qdevice service at boot
   ansible.builtin.systemd:
     name: "{{ corosync_qdevice_service }}"
     enabled: true
   tags: [qdevice, service]
 
-- name: Menjalankan layanan qdevice
+- name: Start the qdevice service
   ansible.builtin.systemd:
     name: "{{ corosync_qdevice_service }}"
     state: started

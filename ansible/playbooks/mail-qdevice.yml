@@ -8,7 +8,7 @@
 #
 # Do NOT full-apply on the production HA pair until a blank test cluster exists.
 
-- name: Siapkan klien qdevice di Host A dan Host B
+- name: Set up qdevice clients on Host A and Host B
   hosts: mail_nodes
   gather_facts: true
   become: true

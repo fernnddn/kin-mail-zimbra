@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi header perangkat SBD terbaca
+- name: Verify the SBD device header is readable
   ansible.builtin.command:
     cmd: sbd -d {{ sbd_stonith_device }} dump
   register: sbd_stonith_dump
@@ -8,14 +8,14 @@
   check_mode: false
   tags: [sbd, stonith, verify]
 
-- name: Memverifikasi SBD_DELAY_START=yes
+- name: Verify SBD_DELAY_START=yes
   ansible.builtin.command:
     cmd: grep -E '^SBD_DELAY_START=yes' {{ sbd_stonith_default_path }}
   changed_when: false
   check_mode: false
   tags: [sbd, stonith, verify]
 
-- name: Memverifikasi resource fence_sbd ada di cluster
+- name: Verify the fence_sbd resource exists in the cluster
   ansible.builtin.command:
     cmd: pcs stonith config {{ sbd_stonith_resource_name }}
   register: sbd_stonith_pcs_verify
@@ -28,7 +28,7 @@
   run_once: true
   tags: [sbd, stonith, verify]
 
-- name: Memverifikasi stonith-enabled dan timeout cluster
+- name: Verify the cluster stonith-enabled and timeout settings
   ansible.builtin.command:
     cmd: pcs property config
   register: sbd_stonith_props
@@ -41,11 +41,11 @@
   run_once: true
   tags: [sbd, stonith, verify]
 
-- name: Mencatat batas dry-run untuk SBD_DELAY_START dan fence sungguhan
+- name: Note the dry-run limits for SBD_DELAY_START and real fencing
   ansible.builtin.debug:
     msg: >-
-      Dry-run hanya memastikan file/config/STONITH resource ada.
-      Efektivitas SBD_DELAY_START (anti race rejoin) dan fence/partition
-      membutuhkan reboot/fence sungguhan seperti task 2.3/2.9 — tidak
-      dijalankan di lab live lewat playbook ini.
+      The dry-run only confirms the file/config/STONITH resource exists.
+      The effectiveness of SBD_DELAY_START (rejoin race protection) and
+      fence/partition behaviour requires a real reboot/fence like task 2.3/2.9 —
+      not run against the live lab through this playbook.
   tags: [sbd, stonith, verify]

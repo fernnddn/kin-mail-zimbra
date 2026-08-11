@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi cluster punya quorum sebelum mengubah membership
+- name: Verify the cluster has quorum before changing membership
   ansible.builtin.command:
     cmd: pcs status
   register: cluster_survivor_replace_pcs_pre
@@ -11,7 +11,7 @@
   check_mode: false
   tags: [cluster, survivor, preflight]
 
-- name: Memverifikasi survivor masih Primary DRBD UpToDate
+- name: Verify the survivor is still DRBD Primary and UpToDate
   ansible.builtin.command:
     cmd: drbdadm role {{ cluster_add_host_drbd_resource }}
   register: cluster_survivor_replace_drbd_role
@@ -22,10 +22,10 @@
   check_mode: false
   tags: [cluster, survivor, preflight]
 
-- name: Mencatat bahwa skenario add-host belum pernah diuji
+- name: Note that the add-host scenario has never been tested
   ansible.builtin.debug:
     msg: >-
-      Role cluster_survivor_replace adalah LOGIC BARU tanpa preseden task 2.x
-      dan BELUM PERNAH dijalankan ke host mana pun. Preflight hanya valid jika
-      play diarahkan ke survivor live — slice 3.7 sengaja tidak melakukan itu.
+      Role cluster_survivor_replace is NEW LOGIC with no task 2.x precedent
+      and has NEVER been run against any host. Preflight is only valid when the
+      play targets the live survivor — slice 3.7 intentionally does not do that.
   tags: [cluster, survivor, preflight]

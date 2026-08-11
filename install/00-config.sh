@@ -22,7 +22,7 @@ fail() { printf '%s\n' "  ${RED}[FAIL]${RST}   $*"; }
 info() { printf '%s\n' "  ${DIM}       $*${RST}"; }
 
 need_root() {
-  [ "$(id -u)" -eq 0 ] || { fail "Jalankan sebagai root:  sudo $0"; exit 1; }
+  [ "$(id -u)" -eq 0 ] || { fail "Run as root:  sudo $0"; exit 1; }
 }
 
 # An SMTP port is only usable if it returns a 220 banner. A bare TCP connect
@@ -142,8 +142,8 @@ dns_ns_provider_count() {
   printf '%s' "$brands" | sed '/^$/d' | sort -u | grep -c .
 }
 
-# ask VARNAME "Pertanyaan" "default"        -> normal input
-# ask_secret VARNAME "Pertanyaan"           -> hidden input, no default
+# ask VARNAME "Question" "default"        -> normal input
+# ask_secret VARNAME "Question"           -> hidden input, no default
 ask() {
   local __var="$1" __prompt="$2" __default="${3:-}" __reply=""
   if [ -n "$__default" ]; then
@@ -190,20 +190,20 @@ detect_defaults() {
 run_wizard() {
   detect_defaults
   echo
-  printf '%s\n' "${BLD}  KIN Mail - konfigurasi awal${RST}"
-  printf '%s\n' "${DIM}  Tekan Enter untuk memakai nilai dalam kurung.${RST}"
+  printf '%s\n' "${BLD}  KIN Mail - initial configuration${RST}"
+  printf '%s\n' "${DIM}  Press Enter to accept the value in brackets.${RST}"
   echo
 
-  say "Identitas mail server"
-  ask MAIL_DOMAIN "Domain email (bagian setelah @)" "${DEF_DOMAIN}"
+  say "Mail server identity"
+  ask MAIL_DOMAIN "Email domain (part after @)" "${DEF_DOMAIN}"
   while [ -z "$MAIL_DOMAIN" ]; do
-    warn "Domain wajib diisi. Contoh: example.co.id"
-    ask MAIL_DOMAIN "Domain email" ""
+    warn "Domain is required. Example: example.co.id"
+    ask MAIL_DOMAIN "Email domain" ""
   done
-  ask MAIL_HOST   "Hostname server mail (FQDN)" "mail.${MAIL_DOMAIN}"
-  ask SERVER_IP   "Alamat IP LAN server ini"    "${DEF_IP}"
-  ask NET_IFACE   "Nama interface jaringan"     "${DEF_IFACE}"
-  ask TIMEZONE    "Timezone sistem"             "${DEF_TZ}"
+  ask MAIL_HOST   "Mail server hostname (FQDN)" "mail.${MAIL_DOMAIN}"
+  ask SERVER_IP   "This server's LAN IP address"    "${DEF_IP}"
+  ask NET_IFACE   "Network interface name"     "${DEF_IFACE}"
+  ask TIMEZONE    "System timezone"             "${DEF_TZ}"
 
   # Zimbra's timezone list has no Asia/Jakarta entry. Asia/Bangkok is the same
   # UTC+7 with no DST, so it is the correct equivalent for WIB.
@@ -213,32 +213,32 @@ run_wizard() {
   esac
 
   echo; say "Resolver"
-  info "Server ini akan menjalankan dnsmasq lokal: domain mail dijawab sendiri,"
-  info "sisanya diteruskan ke resolver publik (split-horizon)."
-  ask DNS_UPSTREAM_1 "DNS upstream utama"   "1.1.1.1"
-  ask DNS_UPSTREAM_2 "DNS upstream cadangan" "8.8.8.8"
+  info "This server will run local dnsmasq: the mail domain is answered locally,"
+  info "everything else is forwarded to public resolvers (split-horizon)."
+  ask DNS_UPSTREAM_1 "Primary upstream DNS"   "1.1.1.1"
+  ask DNS_UPSTREAM_2 "Backup upstream DNS" "8.8.8.8"
   INTERNAL_ZONE=""; INTERNAL_DNS=""
-  if ask_yn "Ada zona internal customer yang perlu diteruskan khusus (AD dsb)?" n; then
-    ask INTERNAL_ZONE "Nama zona internal (contoh: corp.local)" ""
-    ask INTERNAL_DNS  "DNS server untuk zona itu"               ""
+  if ask_yn "Is there a customer internal zone that needs special forwarding (AD, etc.)?" n; then
+    ask INTERNAL_ZONE "Internal zone name (example: corp.local)" ""
+    ask INTERNAL_DNS  "DNS server for that zone"               ""
   fi
 
   echo; say "Build Zimbra FOSS"
-  info "Sumber: github.com/maldua/zimbra-foss (BTACTIC, GPL-2.0)"
-  info "Build komunitas dari source resmi Zimbra. Bukan binary resmi Zimbra,"
-  info "dan bisa tertinggal s/d 2 bulan dari security fix yang di-embargo."
+  info "Source: github.com/maldua/zimbra-foss (BTACTIC, GPL-2.0)"
+  info "Community build from official Zimbra source. Not an official Zimbra binary,"
+  info "and may lag up to 2 months behind embargoed security fixes."
   ZCS_VERSION=""; ZCS_FILE=""
-  if ask_yn "Deteksi otomatis rilis terbaru dari GitHub?" y; then
+  if ask_yn "Automatically detect the latest release from GitHub?" y; then
     detect_latest_zcs
   fi
   if [ -z "$ZCS_FILE" ]; then
-    ask ZCS_VERSION "Tag versi"  "10.1.18.p1"
+    ask ZCS_VERSION "Version tag"  "10.1.18.p1"
     . /etc/os-release 2>/dev/null || true
     case "${VERSION_ID:-22.04}" in
       24.04) _plat_hint="UBUNTU24_64" ;;
       *)     _plat_hint="UBUNTU22_64" ;;
     esac
-    ask ZCS_FILE    "Nama file"  "zcs-10.1.18_GA_4200001.${_plat_hint}.tgz"
+    ask ZCS_FILE    "File name"  "zcs-10.1.18_GA_4200001.${_plat_hint}.tgz"
   fi
   if [ -z "${ZCS_BASE:-}" ] && [ -n "${ZCS_VERSION:-}" ]; then
     . /etc/os-release 2>/dev/null || true
@@ -248,74 +248,74 @@ run_wizard() {
     esac
   fi
 
-  echo; say "Kredensial"
+  echo; say "Credentials"
   while :; do
-    ask_secret ADMIN_PASS "Password admin Zimbra (min 8 karakter)"
+    ask_secret ADMIN_PASS "Zimbra admin password (min 8 characters)"
     [ ${#ADMIN_PASS} -ge 8 ] && break
-    warn "Terlalu pendek."
+    warn "Too short."
   done
-  ask LE_EMAIL "Email untuk notifikasi Let's Encrypt" "admin@${MAIL_DOMAIN}"
+  ask LE_EMAIL "Email for Let's Encrypt notifications" "admin@${MAIL_DOMAIN}"
 
-  echo; say "Metode penerbitan TLS"
-  info "1) Cloudflare DNS-01  — otomatis (butuh API token Cloudflare)"
-  info "2) DNS-01 manual      — provider apa pun; operator buat TXT sekali di panel DNS"
-  info "3) Customer-provided  — skip certbot; install cert/key customer via zmcertmgr"
+  echo; say "TLS issuance method"
+  info "1) Cloudflare DNS-01  — automatic (requires Cloudflare API token)"
+  info "2) Manual DNS-01      — any provider; operator creates TXT once in DNS panel"
+  info "3) Customer-provided  — skip certbot; install customer cert/key via zmcertmgr"
   TLS_METHOD=""
   while [ -z "$TLS_METHOD" ]; do
-    printf '  Pilihan [1/2/3]: '
+    printf '  Choice [1/2/3]: '
     read -r __tls </dev/tty
     case "$__tls" in
       1) TLS_METHOD=cloudflare ;;
       2) TLS_METHOD=manual ;;
       3) TLS_METHOD=customer ;;
-      *) warn "Pilih 1, 2, atau 3." ;;
+      *) warn "Choose 1, 2, or 3." ;;
     esac
   done
   ok "TLS_METHOD=${TLS_METHOD}"
   if [ "$TLS_METHOD" = "manual" ]; then
-    warn "Mode manual TIDAK memperpanjang sertifikat otomatis lewat cron."
-    info "Setiap issue/renew butuh operator hadir di terminal (kecuali nanti ada auth-hook)."
+    warn "Manual mode does NOT auto-renew certificates via cron."
+    info "Each issue/renew requires an operator at the terminal (unless an auth-hook is added later)."
   fi
 
   # Hybrid auth is optional. Without AD values the domain stays on local
   # Zimbra auth only — single-node install must not hard-fail.
   echo; say "Hybrid authentication (Active Directory)"
-  info "Domain bisa bind ke AD customer, dengan fallback ke password lokal Zimbra"
-  info "(zimbraAuthFallbackToLocal). Lewati bila AD belum siap."
+  info "Domain can bind to customer AD, with fallback to local Zimbra password"
+  info "(zimbraAuthFallbackToLocal). Skip if AD is not ready yet."
   AD_AUTH_ENABLED=no
   AD_LDAP_URL=""; AD_SEARCH_BASE=""; AD_SEARCH_FILTER=""
   AD_SEARCH_BIND_DN=""; AD_SEARCH_BIND_PASSWORD=""; AD_BIND_DN_TEMPLATE=""
   AD_TEST_USER=""; AD_TEST_PASS=""
-  if ask_yn "Konfigurasi bind ke Active Directory sekarang?" n; then
-    ask AD_LDAP_URL "LDAP/AD URL (contoh: ldap://dc.corp.local:389)" ""
-    ask AD_SEARCH_BASE "Search base (contoh: DC=corp,DC=local)" ""
+  if ask_yn "Configure Active Directory bind now?" n; then
+    ask AD_LDAP_URL "LDAP/AD URL (example: ldap://dc.corp.local:389)" ""
+    ask AD_SEARCH_BASE "Search base (example: DC=corp,DC=local)" ""
     ask AD_SEARCH_FILTER "Search filter" "(sAMAccountName=%u)"
-    ask AD_SEARCH_BIND_DN "Bind DN untuk search (service account)" ""
-    ask_secret AD_SEARCH_BIND_PASSWORD "Password bind DN search"
-    ask AD_BIND_DN_TEMPLATE "Bind DN template opsional (contoh: %u@corp.local; kosong=pakai search)" ""
-    ask AD_TEST_USER "Akun uji AD (email penuh di domain mail, harus ada di AD)" ""
-    ask_secret AD_TEST_PASS "Password akun uji AD"
+    ask AD_SEARCH_BIND_DN "Bind DN for search (service account)" ""
+    ask_secret AD_SEARCH_BIND_PASSWORD "Search bind DN password"
+    ask AD_BIND_DN_TEMPLATE "Optional bind DN template (example: %u@corp.local; empty=use search)" ""
+    ask AD_TEST_USER "AD test account (full email on mail domain, must exist in AD)" ""
+    ask_secret AD_TEST_PASS "AD test account password"
     if [ -n "$AD_LDAP_URL" ] && [ -n "$AD_SEARCH_BASE" ] && \
        [ -n "$AD_SEARCH_BIND_DN" ] && [ -n "$AD_SEARCH_BIND_PASSWORD" ] && \
        [ -n "$AD_TEST_USER" ] && [ -n "$AD_TEST_PASS" ]; then
       AD_AUTH_ENABLED=yes
-      ok "Hybrid AD akan diaktifkan oleh 06-hybrid-auth.sh"
+      ok "Hybrid AD will be enabled by 06-hybrid-auth.sh"
     else
-      warn "Data AD tidak lengkap - hybrid auth di-skip (auth lokal saja)."
+      warn "Incomplete AD data - hybrid auth skipped (local auth only)."
       AD_AUTH_ENABLED=no
       AD_SEARCH_BIND_PASSWORD=""; AD_TEST_PASS=""
     fi
   else
-    info "Dilewati - auth lokal Zimbra saja."
+    info "Skipped - Zimbra local auth only."
   fi
 
-  echo; say "Pengujian"
-  ask EXTERNAL_TEST_ADDRESS "Alamat email luar untuk tes kirim (kosongkan bila belum)" ""
+  echo; say "Testing"
+  ask EXTERNAL_TEST_ADDRESS "External email address for send test (leave blank if not ready)" ""
 
   mkdir -p "$CONF_DIR"
   cat > "$CONF_FILE" <<EOF
-# KIN Mail - dibuat $(date -Is)
-# Ubah dengan: sudo ./00-config.sh --reset
+# KIN Mail - created $(date -Is)
+# Change with: sudo ./00-config.sh --reset
 MAIL_DOMAIN="${MAIL_DOMAIN}"
 MAIL_HOST="${MAIL_HOST}"
 SERVER_IP="${SERVER_IP}"
@@ -353,8 +353,8 @@ EOF
   chmod 600 "$CONF_FILE"
 
   echo
-  ok "Tersimpan di ${CONF_FILE} (mode 600)"
-  info "Berisi password admin, jadi jangan dibagikan."
+  ok "Saved to ${CONF_FILE} (mode 600)"
+  info "Contains admin password — do not share."
   echo
 }
 
@@ -383,10 +383,10 @@ detect_latest_zcs() {
     ZCS_FILE="${url##*/}"
     ZCS_VERSION=$(printf '%s' "$url" | awk -F/ '{print $(NF-1)}')
     ZCS_BASE="https://github.com/maldua/zimbra-foss/releases/download/${tag_prefix}/${ZCS_VERSION}"
-    ok "Rilis terbaru untuk Ubuntu ${VERSION_ID:-?} (${plat}): ${ZCS_VERSION}"
+    ok "Latest release for Ubuntu ${VERSION_ID:-?} (${plat}): ${ZCS_VERSION}"
     info "$ZCS_FILE"
   else
-    warn "Gagal mendeteksi otomatis (${plat}), akan ditanyakan manual."
+    warn "Automatic detection failed (${plat}); will ask manually."
   fi
 }
 

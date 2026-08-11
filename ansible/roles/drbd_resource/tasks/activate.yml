@@ -15,7 +15,7 @@
 # the wrong node against live mail data. Do not "fix" dry-run that way.
 # =============================================================================
 
-- name: Memeriksa apakah resource DRBD sudah aktif
+- name: Check whether the DRBD resource is already up
   ansible.builtin.command:
     cmd: drbdadm status {{ drbd_resource_name }}
   register: drbd_resource_status_pre
@@ -24,7 +24,7 @@
   check_mode: false
   tags: [drbd, resource, activate]
 
-- name: Membuat metadata DRBD pada meta-disk eksternal
+- name: Create the DRBD metadata on the external meta-disk
   ansible.builtin.command:
     cmd: drbdadm create-md {{ drbd_resource_name }}
   # SAFETY: never check_mode: false — create-md must not run during --check.
@@ -33,7 +33,7 @@
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
-- name: Mengaktifkan resource DRBD (drbdadm up)
+- name: Bring up the DRBD resource (drbdadm up)
   ansible.builtin.command:
     cmd: drbdadm up {{ drbd_resource_name }}
   # SAFETY: never check_mode: false — up must not run during --check.
@@ -42,7 +42,7 @@
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
-- name: Mempromosikan Primary paksa hanya saat bootstrap kosong
+- name: Force-promote to Primary only during an empty bootstrap
   ansible.builtin.command:
     cmd: drbdadm primary --force {{ drbd_resource_name }}
   # SAFETY: never check_mode: false — primary --force must not run during --check.
@@ -54,11 +54,11 @@
     - inventory_hostname == drbd_resource_node_a_name
   tags: [drbd, resource, activate]
 
-- name: Mencatat aktivasi DRBD di-skip saat dry-run
+- name: Note that DRBD activation is skipped during a dry-run
   ansible.builtin.debug:
     msg: >-
-      Resource {{ drbd_resource_name }} sudah aktif atau mode --check:
-      create-md / up / primary TIDAK dijalankan. Greenfield create-md di task
-      2.4 hanya diuji pada device test (kin-drbd-test), bukan disk produksi.
+      Resource {{ drbd_resource_name }} is already up or this is --check mode:
+      create-md / up / primary are NOT executed. Greenfield create-md in task
+      2.4 was only tested on a test device (kin-drbd-test), not the production disk.
   when: ansible_check_mode or drbd_resource_status_pre.rc == 0
   tags: [drbd, resource, activate]

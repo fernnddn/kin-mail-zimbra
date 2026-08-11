@@ -15,7 +15,7 @@
 #   * Gate with `when: not ansible_check_mode`.
 # =============================================================================
 
-- name: Memeriksa definisi peer DRBD saat ini di survivor
+- name: Check the current DRBD peer definition on the survivor
   ansible.builtin.command:
     cmd: grep -E '^\s*on |address' {{ cluster_add_host_drbd_res_path }}
   register: cluster_survivor_replace_res_pre
@@ -24,7 +24,7 @@
   check_mode: false
   tags: [cluster, survivor, drbd]
 
-- name: Memasang definisi resource DRBD dengan peer identitas baru
+- name: Deploy the DRBD resource definition with the new peer identity
   ansible.builtin.template:
     src: kin-zimbra.res.j2
     dest: "{{ cluster_add_host_drbd_res_path }}"
@@ -34,19 +34,19 @@
   # Native --check reports would-change; do not add check_mode: false.
   tags: [cluster, survivor, drbd]
 
-- name: Menyesuaikan resource DRBD survivor setelah ganti peer
+- name: Adjust the survivor DRBD resource after the peer change
   ansible.builtin.command:
     cmd: drbdadm adjust {{ cluster_add_host_drbd_resource }}
   # SAFETY: never check_mode: false — touches live replication sockets.
   when: not ansible_check_mode
   tags: [cluster, survivor, drbd]
 
-- name: Mencatat pembaruan peer DRBD di-skip saat dry-run
+- name: Note that the DRBD peer update is skipped during a dry-run
   ansible.builtin.debug:
     msg: >-
-      Mode --check: template/adjust DRBD TIDAK diterapkan. Peer lama terlihat
-      di file: {{ cluster_survivor_replace_res_pre.stdout | default('(unreadable)') }}.
-      Target peer baru: {{ cluster_add_host_new_name }} /
+      --check mode: the DRBD template/adjust is NOT applied. The old peer is visible
+      in the file: {{ cluster_survivor_replace_res_pre.stdout | default('(unreadable)') }}.
+      New target peer: {{ cluster_add_host_new_name }} /
       {{ cluster_add_host_new_address }}.
   when: ansible_check_mode
   tags: [cluster, survivor, drbd]

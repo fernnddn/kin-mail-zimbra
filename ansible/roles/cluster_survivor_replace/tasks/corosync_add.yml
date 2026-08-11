@@ -14,7 +14,7 @@
 #   * Gate with `when: not ansible_check_mode`.
 # =============================================================================
 
-- name: Memeriksa apakah node baru sudah anggota cluster
+- name: Check whether the new node is already a cluster member
   ansible.builtin.command:
     cmd: pcs status nodes corosync
   register: cluster_survivor_replace_nodes_add
@@ -23,7 +23,7 @@
   check_mode: false
   tags: [cluster, survivor, corosync]
 
-- name: Mengautentikasi host baru ke pcsd survivor
+- name: Authenticate the new host to the survivor pcsd
   ansible.builtin.command:
     cmd: >-
       pcs host auth {{ cluster_add_host_new_name }}
@@ -37,7 +37,7 @@
     - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
   tags: [cluster, survivor, corosync]
 
-- name: Menambahkan node baru ke membership Corosync
+- name: Add the new node to Corosync membership
   ansible.builtin.command:
     cmd: pcs cluster node add {{ cluster_add_host_new_name }}
   # SAFETY: never check_mode: false — rewrites live corosync.conf / authkeys.
@@ -46,7 +46,7 @@
     - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
   tags: [cluster, survivor, corosync]
 
-- name: Memulai layanan cluster di node baru dari survivor
+- name: Start the cluster services on the new node from the survivor
   ansible.builtin.command:
     cmd: pcs cluster start {{ cluster_add_host_new_name }}
   # SAFETY: never check_mode: false.
@@ -55,19 +55,19 @@
     - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
   tags: [cluster, survivor, corosync]
 
-- name: Mengaktifkan start cluster saat boot di node baru
+- name: Enable cluster start at boot on the new node
   ansible.builtin.command:
     cmd: pcs cluster enable {{ cluster_add_host_new_name }}
   # SAFETY: never check_mode: false.
   when: not ansible_check_mode
   tags: [cluster, survivor, corosync]
 
-- name: Mencatat pcs node add di-skip saat dry-run atau sudah anggota
+- name: Note that pcs node add is skipped during a dry-run or the node is already a member
   ansible.builtin.debug:
     msg: >-
-      pcs host auth / cluster node add {{ cluster_add_host_new_name }} TIDAK
-      dijalankan (mode --check atau node sudah di membership). Belum pernah
-      diuji ke host nyata di slice 3.7.
+      pcs host auth / cluster node add {{ cluster_add_host_new_name }} was NOT
+      executed (--check mode or the node is already in membership). It has never
+      been tested against a real host in slice 3.7.
   when: >-
     ansible_check_mode
     or (cluster_add_host_new_name in cluster_survivor_replace_nodes_add.stdout)

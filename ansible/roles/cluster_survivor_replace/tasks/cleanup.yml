@@ -9,7 +9,7 @@
 #   * Do NOT set check_mode: false on crm_node / pcs constraint remove.
 # =============================================================================
 
-- name: Menghapus entri CRM node lama jika masih tercatat lost
+- name: Remove the old node CRM entry if it is still recorded as lost
   ansible.builtin.command:
     cmd: crm_node -R {{ cluster_add_host_retired_name }} --force
   register: cluster_survivor_replace_crm_rm
@@ -19,7 +19,7 @@
   when: not ansible_check_mode
   tags: [cluster, survivor, cleanup]
 
-- name: Memeriksa constraint lokasi yang menyebut hostname lama
+- name: Check for location constraints that reference the old hostname
   ansible.builtin.command:
     cmd: pcs constraint location
   register: cluster_survivor_replace_loc
@@ -28,16 +28,16 @@
   check_mode: false
   tags: [cluster, survivor, cleanup]
 
-- name: Mencatat constraint lokasi yang masih menyebut node lama
+- name: Note location constraints that still reference the old node
   ansible.builtin.debug:
     msg: >-
-      Constraint location masih menyebut {{ cluster_add_host_retired_name }} —
-      tinjau manual (pcs constraint location remove …) sebelum apply otomatis.
+      A location constraint still references {{ cluster_add_host_retired_name }} —
+      review it manually (pcs constraint location remove …) before an automated apply.
       Output: {{ cluster_survivor_replace_loc.stdout }}
   when: cluster_add_host_retired_name in cluster_survivor_replace_loc.stdout
   tags: [cluster, survivor, cleanup]
 
-- name: Memastikan file resource DRBD tidak lagi memuat hostname lama
+- name: Ensure the DRBD resource file no longer contains the old hostname
   ansible.builtin.command:
     cmd: grep -F {{ cluster_add_host_retired_name }} {{ cluster_add_host_drbd_res_path }}
   register: cluster_survivor_replace_old_in_res
@@ -47,11 +47,11 @@
   when: not ansible_check_mode
   tags: [cluster, survivor, cleanup]
 
-- name: Mencatat pembersihan sertifikat qdevice lama di qnetd (manual follow-up)
+- name: Note the old qdevice certificate cleanup on qnetd (manual follow-up)
   ansible.builtin.debug:
     msg: >-
-      Sertifikat/client qdevice untuk {{ cluster_add_host_retired_name }} mungkin
-      masih ada di NSS qnetd di Monitoring. Hapus manual dengan
-      corosync-qnetd-certutil setelah node baru terbukti sehat — tidak
-      diotomatisasi di logic pertama ini (risiko salah hapus CA/cluster cert).
+      The qdevice certificate/client for {{ cluster_add_host_retired_name }} may
+      still exist in the qnetd NSS database on Monitoring. Remove it manually with
+      corosync-qnetd-certutil once the new node is proven healthy — this is not
+      automated in this first logic (risk of deleting the wrong CA/cluster cert).
   tags: [cluster, survivor, cleanup]

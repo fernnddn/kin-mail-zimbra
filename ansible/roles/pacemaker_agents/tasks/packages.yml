@@ -1,5 +1,5 @@
 ---
-- name: Menginstal paket resource-agents-extra untuk Filesystem dan IPaddr2
+- name: Install the resource-agents-extra package for Filesystem and IPaddr2
   ansible.builtin.apt:
     name: "{{ pacemaker_agents_packages }}"
     state: present

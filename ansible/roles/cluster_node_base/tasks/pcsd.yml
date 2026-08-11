@@ -5,7 +5,7 @@
 # this role is intended for mail_new_node inventory group only.
 # =============================================================================
 
-- name: Mengaktifkan dan menjalankan layanan pcsd di node baru
+- name: Enable and start the pcsd service on the new node
   ansible.builtin.systemd:
     name: "{{ cluster_node_base_pcsd_service }}"
     enabled: true
@@ -13,7 +13,7 @@
   when: not ansible_check_mode
   tags: [cluster, base, pcsd]
 
-- name: Memeriksa layanan pcsd (dry-run baca-saja)
+- name: Check the pcsd service (read-only dry-run)
   ansible.builtin.command:
     cmd: systemctl is-active {{ cluster_node_base_pcsd_service }}
   register: cluster_node_base_pcsd_active
@@ -23,7 +23,7 @@
   when: ansible_check_mode
   tags: [cluster, base, pcsd]
 
-- name: Menetapkan kata sandi akun hacluster untuk autentikasi pcs
+- name: Set the hacluster account password for pcs authentication
   ansible.builtin.user:
     name: "{{ cluster_node_base_hacluster_user }}"
     password: "{{ cluster_node_base_hacluster_password | password_hash('sha512') }}"
@@ -35,10 +35,10 @@
   no_log: true
   tags: [cluster, base, pcsd]
 
-- name: Mencatat kata sandi hacluster wajib diisi sebelum apply
+- name: Note that the hacluster password must be set before applying
   ansible.builtin.debug:
     msg: >-
-      cluster_node_base_hacluster_password kosong — isi via inventory/--extra-vars
-      sebelum apply sungguhan. pcs host auth dari survivor membutuhkan ini.
+      cluster_node_base_hacluster_password is empty — set it via inventory/--extra-vars
+      before a real apply. pcs host auth from the survivor requires it.
   when: cluster_node_base_hacluster_password | length == 0
   tags: [cluster, base, pcsd]

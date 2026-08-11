@@ -1,8 +1,8 @@
 ---
-- name: Sertakan langkah instalasi paket cluster dasar
+- name: Include the base cluster package installation steps
   ansible.builtin.import_tasks: packages.yml
   tags: [cluster, base, packages]
 
-- name: Sertakan langkah layanan pcsd dan akun hacluster
+- name: Include the pcsd service and hacluster account steps
   ansible.builtin.import_tasks: pcsd.yml
   tags: [cluster, base, pcsd]

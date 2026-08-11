@@ -8,7 +8,7 @@
 # Do NOT full-apply on the production HA pair. Soft-reboot / fence proofs
 # are intentionally absent from this playbook.
 
-- name: Siapkan fencing SBD di Host A dan Host B
+- name: Set up SBD fencing on Host A and Host B
   hosts: mail_nodes
   gather_facts: true
   become: true

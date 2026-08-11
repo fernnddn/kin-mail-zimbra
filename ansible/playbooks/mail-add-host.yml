@@ -18,13 +18,13 @@
 #   ansible-playbook -i inventory/add-host.yml playbooks/mail-add-host.yml --check
 # =============================================================================
 
-- name: Memvalidasi variabel identitas add-host
+- name: Validate add-host identity variables
   hosts: mail_survivor
   gather_facts: false
   become: false
   run_once: true
   tasks:
-    - name: Memastikan nama node baru berbeda dari node lama
+    - name: Ensure the new node name differs from the old node
       ansible.builtin.assert:
         that:
           - cluster_add_host_new_name is defined
@@ -35,21 +35,21 @@
           - cluster_add_host_new_address is defined
           - cluster_add_host_new_address != cluster_add_host_retired_address | default('')
         fail_msg: >-
-          Isi cluster_add_host_* di inventory add-host: identitas baru HARUS
-          berbeda dari survivor dan dari node yang diganti.
+          Fill in cluster_add_host_* in the add-host inventory: the new identity MUST
+          differ from the survivor and from the node being replaced.
       tags: [addhost, validate]
 
-    - name: Mencatat status pembuktian slice 3.7
+    - name: Record slice 3.7 proof status
       ansible.builtin.debug:
         msg: >-
-          Playbook mail-add-host: logic + syntax saja. BELUM PERNAH dijalankan
-          ke host mana pun (bukan sekadar 'belum full apply').
+          Playbook mail-add-host: logic + syntax only. It has NEVER been run
+          against any host (not merely 'not fully applied').
       tags: [addhost, validate]
 
 # -----------------------------------------------------------------------------
 # 1) NEW NODE — package / fencing / agents readiness (before pcs node add)
 # -----------------------------------------------------------------------------
-- name: Menyiapkan paket dan agen di node mail baru
+- name: Prepare packages and agents on the new mail node
   hosts: mail_new_node
   gather_facts: true
   become: true
@@ -70,7 +70,7 @@
 # -----------------------------------------------------------------------------
 # 2) SURVIVOR — remove retired, rewrite DRBD peer, pcs cluster node add
 # -----------------------------------------------------------------------------
-- name: Menyiapkan survivor dan menambahkan node baru ke cluster
+- name: Prepare the survivor and add the new node to the cluster
   hosts: mail_survivor
   gather_facts: true
   become: true
@@ -81,7 +81,7 @@
 # -----------------------------------------------------------------------------
 # 3) qdevice TLS — survivor first so PKCS12 can distribute to the new node
 # -----------------------------------------------------------------------------
-- name: Memasang TLS qdevice untuk pasangan survivor dan node baru
+- name: Deploy qdevice TLS for the survivor and new node pair
   hosts: mail_survivor,mail_new_node
   gather_facts: true
   become: true
@@ -92,7 +92,7 @@
 # -----------------------------------------------------------------------------
 # 4) NEW NODE — DRBD live join (full sync while survivor stays Primary)
 # -----------------------------------------------------------------------------
-- name: Menghubungkan DRBD node baru ke Primary live untuk full sync
+- name: Connect the new node DRBD to the live Primary for full sync
   hosts: mail_new_node
   gather_facts: true
   become: true

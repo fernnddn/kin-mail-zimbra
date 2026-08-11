@@ -1,20 +1,20 @@
 ---
-- name: Sertakan langkah instalasi paket resource-agents
+- name: Include the resource-agents package installation steps
   ansible.builtin.import_tasks: packages.yml
   tags: [pacemaker, agents, packages]
 
-- name: Sertakan langkah pemasangan OCF Zimbra
+- name: Include the Zimbra OCF deployment steps
   ansible.builtin.import_tasks: ocf.yml
   tags: [pacemaker, agents, ocf]
 
-- name: Sertakan langkah skrip assert dual-primary
+- name: Include the dual-primary assert script steps
   ansible.builtin.import_tasks: assert.yml
   tags: [pacemaker, agents, assert]
 
-- name: Sertakan langkah penyesuaian systemd DRBD
+- name: Include the DRBD systemd adjustment steps
   ansible.builtin.import_tasks: systemd.yml
   tags: [pacemaker, agents, systemd]
 
-- name: Sertakan langkah verifikasi agen Pacemaker
+- name: Include the Pacemaker agent verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [pacemaker, agents, verify]

@@ -1,5 +1,5 @@
 ---
-- name: Menginstal paket qdevice
+- name: Install the qdevice package
   ansible.builtin.apt:
     name: "{{ corosync_qdevice_package }}"
     state: present

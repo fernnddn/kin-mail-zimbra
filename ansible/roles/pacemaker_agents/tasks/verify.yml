@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi paket resource-agents-extra terpasang
+- name: Verify the resource-agents-extra package is installed
   ansible.builtin.command:
     cmd: dpkg-query -W -f='${Package} ${Version}\n' resource-agents-extra
   register: pacemaker_agents_pkg
@@ -8,7 +8,7 @@
   check_mode: false
   tags: [pacemaker, agents, verify]
 
-- name: Memverifikasi agen OCF Zimbra dapat dibaca
+- name: Verify the Zimbra OCF agent is readable
   ansible.builtin.stat:
     path: "{{ pacemaker_agents_ocf_path }}"
   register: pacemaker_agents_ocf_stat
@@ -18,7 +18,7 @@
     not pacemaker_agents_ocf_stat.stat.executable
   tags: [pacemaker, agents, verify]
 
-- name: Memverifikasi meta-data OCF Zimbra valid
+- name: Verify the Zimbra OCF meta-data is valid
   ansible.builtin.command:
     cmd: "{{ pacemaker_agents_ocf_path }} meta-data"
   register: pacemaker_agents_ocf_meta
@@ -31,7 +31,7 @@
   check_mode: false
   tags: [pacemaker, agents, verify]
 
-- name: Memverifikasi layanan systemd drbd dinonaktifkan
+- name: Verify the systemd drbd service is disabled
   ansible.builtin.command:
     cmd: systemctl is-enabled drbd.service
   register: pacemaker_agents_drbd_enabled

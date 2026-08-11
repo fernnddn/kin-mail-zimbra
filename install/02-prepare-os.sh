@@ -10,11 +10,11 @@ need_root
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
 echo
-say "Menyiapkan ${MAIL_HOST} (${SERVER_IP})"
+say "Preparing ${MAIL_HOST} (${SERVER_IP})"
 echo
 
 # --- 1. hostname and clock ---------------------------------------------------
-say "1. Hostname dan waktu"
+say "1. Hostname and time"
 hostnamectl set-hostname "$MAIL_HOST"
 timedatectl set-timezone "$TIMEZONE"
 timedatectl set-ntp true
@@ -36,10 +36,10 @@ ff00::0 ip6-mcastprefix
 ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 EOF
-ok "FQDN dipetakan ke ${SERVER_IP}, baris 127.0.1.1 dihapus"
+ok "FQDN mapped to ${SERVER_IP}, 127.0.1.1 line removed"
 
 # --- 3. remove conflicts, install dependencies -------------------------------
-say "3. Paket"
+say "3. Packages"
 apt-get -y purge postfix exim4-base sendmail apache2 nginx bind9 dovecot-core >/dev/null 2>&1
 apt-get -y autoremove >/dev/null 2>&1
 apt-get -qq update
@@ -52,7 +52,7 @@ apt-get -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
   dnsmasq tmux swaks tcpdump traceroute >/dev/null 2>&1
-ok "Dependencies Zimbra + alat uji terpasang (${PERL_LIB})"
+ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
 
 # --- 4. local resolver -------------------------------------------------------
 # Two traps live here:
@@ -60,7 +60,7 @@ ok "Dependencies Zimbra + alat uji terpasang (${PERL_LIB})"
 #  - zimbra-mta-components installs 'resolvconf', which reclaims the file
 #    mid-install and points it back at the systemd-resolved stub. Driving
 #    resolvconf's head file is what survives that.
-say "4. Resolver lokal (dnsmasq)"
+say "4. Local resolver (dnsmasq)"
 systemctl disable --now systemd-resolved >/dev/null 2>&1 || true
 
 cat > /etc/dnsmasq.d/kin-mail.conf <<EOF
@@ -95,22 +95,22 @@ systemctl restart dnsmasq
 sleep 2
 
 if [ "$(systemctl is-active dnsmasq)" = "active" ]; then
-  ok "dnsmasq aktif"
+  ok "dnsmasq active"
 else
-  fail "dnsmasq gagal start"; exit 1
+  fail "dnsmasq failed to start"; exit 1
 fi
 
 a=$(dig +short +time=4 A "$MAIL_HOST" 2>/dev/null | head -1)
 mx=$(dig +short +time=4 MX "$MAIL_DOMAIN" 2>/dev/null | head -1)
 up=$(dig +short +time=4 A google.com 2>/dev/null | head -1)
-[ "$a" = "$SERVER_IP" ] && ok "A  ${MAIL_HOST} -> ${a}"     || fail "A  ${MAIL_HOST} -> ${a:-kosong}"
-[ -n "$mx" ]            && ok "MX ${MAIL_DOMAIN} -> ${mx}"  || fail "MX ${MAIL_DOMAIN} -> kosong"
-[ -n "$up" ]            && ok "Forwarding upstream berjalan" || fail "Forwarding upstream gagal"
+[ "$a" = "$SERVER_IP" ] && ok "A  ${MAIL_HOST} -> ${a}"     || fail "A  ${MAIL_HOST} -> ${a:-empty}"
+[ -n "$mx" ]            && ok "MX ${MAIL_DOMAIN} -> ${mx}"  || fail "MX ${MAIL_DOMAIN} -> empty"
+[ -n "$up" ]            && ok "Upstream forwarding working" || fail "Upstream forwarding failed"
 
 # --- 5. verdict --------------------------------------------------------------
 echo
-say "SELESAI"
-ok "Host siap. Lanjut ke 03-install-zimbra.sh"
-info "Firewall host sengaja tidak diaktifkan - kontrol perimeter ada di FortiGate."
-info "Jika ufw diinginkan, jangan lupa allow 22 lebih dulu agar tidak terkunci."
+say "DONE"
+ok "Host ready. Continue to 03-install-zimbra.sh"
+info "Host firewall intentionally not enabled — perimeter control is on FortiGate."
+info "If ufw is desired, allow port 22 first so you do not get locked out."
 echo

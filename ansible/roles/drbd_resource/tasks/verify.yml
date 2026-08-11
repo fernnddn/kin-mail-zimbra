@@ -2,7 +2,7 @@
 # Read-only probes against the live resource. check_mode: false is intentional
 # and LIMITED to status/role queries — never extend that to create-md/up/primary.
 
-- name: Memverifikasi status resource DRBD kin-zimbra
+- name: Verify the kin-zimbra DRBD resource status
   ansible.builtin.command:
     cmd: drbdadm status {{ drbd_resource_name }}
   register: drbd_resource_status
@@ -13,7 +13,7 @@
   check_mode: false
   tags: [drbd, resource, verify]
 
-- name: Memverifikasi peran lokal DRBD
+- name: Verify the local DRBD role
   ansible.builtin.command:
     cmd: drbdadm role {{ drbd_resource_name }}
   register: drbd_resource_role
@@ -25,7 +25,7 @@
   check_mode: false
   tags: [drbd, resource, verify]
 
-- name: Memverifikasi meta-disk eksternal terpasang di loop
+- name: Verify the external meta-disk is attached to a loop device
   ansible.builtin.command:
     cmd: losetup -j {{ drbd_resource_meta_img }}
   register: drbd_resource_losetup
@@ -36,7 +36,7 @@
   check_mode: false
   tags: [drbd, resource, verify]
 
-- name: Memverifikasi layanan meta-loop DRBD aktif
+- name: Verify the DRBD meta-loop service is active
   ansible.builtin.command:
     cmd: systemctl is-active {{ drbd_resource_meta_loop_unit }}
   register: drbd_resource_meta_active
@@ -45,10 +45,10 @@
   check_mode: false
   tags: [drbd, resource, verify]
 
-- name: Mencatat batas pembuktian create-md produksi
+- name: Note the proof limits for create-md on production
   ansible.builtin.debug:
     msg: >-
-      Dry-run memverifikasi resource hidup (status/role/meta-loop).
-      create-md greenfield pada data produksi TIDAK diuji di sini; di task 2.4
-      create-md hanya dibuktikan pada device uji terpisah (bukan /dev/sdb1).
+      The dry-run verifies the live resource (status/role/meta-loop).
+      Greenfield create-md on production data is NOT tested here; in task 2.4
+      create-md was only proven on a separate test device (not /dev/sdb1).
   tags: [drbd, resource, verify]

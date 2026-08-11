@@ -1,5 +1,5 @@
 ---
-- name: Memeriksa nama initiator iSCSI saat ini
+- name: Check the current iSCSI initiator name
   ansible.builtin.slurp:
     src: "{{ iscsi_initiator_name_file }}"
   register: iscsi_initiator_name_slurp
@@ -7,7 +7,7 @@
   check_mode: false
   tags: [iscsi, initiator, name]
 
-- name: Menetapkan nama initiator iSCSI unik per host
+- name: Set a unique iSCSI initiator name per host
   ansible.builtin.copy:
     dest: "{{ iscsi_initiator_name_file }}"
     content: |

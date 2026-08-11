@@ -36,54 +36,54 @@ scrub_install_log() {
 }
 
 # --- 1. download and verify --------------------------------------------------
-say "1. Mengambil ${ZCS_FILE}"
+say "1. Downloading ${ZCS_FILE}"
 mkdir -p "$ZCS_SRC"; cd "$ZCS_SRC"
 
 [ -f "${ZCS_FILE}.sha256" ] || curl -sL -m 120 -o "${ZCS_FILE}.sha256" "${ZCS_BASE}/${ZCS_FILE}.sha256"
-if [ ! -s "${ZCS_FILE}.sha256" ]; then fail "Checksum tidak bisa diunduh"; exit 1; fi
+if [ ! -s "${ZCS_FILE}.sha256" ]; then fail "Could not download checksum"; exit 1; fi
 
 if [ ! -s "$ZCS_FILE" ]; then
-  info "Mengunduh (beberapa ratus MB, mohon tunggu)"
-  wget -q --show-progress -c -O "$ZCS_FILE" "${ZCS_BASE}/${ZCS_FILE}" || { fail "Unduhan gagal"; exit 1; }
+  info "Downloading (several hundred MB, please wait)"
+  wget -q --show-progress -c -O "$ZCS_FILE" "${ZCS_BASE}/${ZCS_FILE}" || { fail "Download failed"; exit 1; }
 fi
 
 # Never install an unverified tarball: this is a community rebuild, so the
 # checksum is the only integrity control available.
 if sha256sum -c "${ZCS_FILE}.sha256" >/dev/null 2>&1; then
-  ok "SHA-256 cocok"
+  ok "SHA-256 match"
 else
-  fail "SHA-256 TIDAK COCOK - berkas rusak atau dimodifikasi. Berhenti."
+  fail "SHA-256 MISMATCH - file corrupt or modified. Stopping."
   exit 1
 fi
 
 ZDIR="${ZCS_SRC}/${ZCS_FILE%.tgz}"
 [ -d "$ZDIR" ] || tar xzf "$ZCS_FILE"
-[ -x "$ZDIR/install.sh" ] || { fail "install.sh tidak ditemukan di $ZDIR"; exit 1; }
-ok "Diekstrak ke $ZDIR"
+[ -x "$ZDIR/install.sh" ] || { fail "install.sh not found in $ZDIR"; exit 1; }
+ok "Extracted to $ZDIR"
 
 # --- manual mode -------------------------------------------------------------
 if [ $MANUAL -eq 1 ]; then
-  echo; say "MODE MANUAL - jalankan sendiri:"
+  echo; say "MANUAL MODE - run yourself:"
   echo "    cd $ZDIR && ./install.sh --platform-override --skip-activation-check"
   echo
-  say "Urutan jawaban yang benar:"
+  say "Correct answer sequence:"
   cat <<EOF
     Do you agree with the terms ..............  Y
-    Use Zimbra's package repository ..........  Y   <- WAJIB Y. Paket *-components
-                                                     hanya ada di repo itu; kalau N
-                                                     instalasi berhenti.
+    Use Zimbra's package repository ..........  Y   <- MUST be Y. *-components packages
+                                                     exist only in that repo; if N
+                                                     installation stops.
     Install zimbra-ldap / logger / mta .......  Y
-    Install zimbra-dnscache ..................  N   <- hindari rebutan port 53
+    Install zimbra-dnscache ..................  N   <- avoid port 53 conflict
     Install zimbra-snmp / store / apache .....  Y
-    Install zimbra-spell / memcached / proxy ..  Y   <- memcached muncul sebagai
-                                                     prompt terpisah bila dari repo
+    Install zimbra-spell / memcached / proxy ..  Y   <- memcached appears as a
+                                                     separate prompt when from repo
     The system will be modified. Continue? ...  Y
     Change hostname ..........................  No
     Change domain name? ......................  Yes -> ${MAIL_DOMAIN}
     Menu 1 -> 7 TimeZone .....................  ${ZIMBRA_TZ_NAME}
-    Menu 6 -> 4 Admin Password ...............  (password anda)
+    Menu 6 -> 4 Admin Password ...............  (your password)
     a -> Yes -> Enter -> Yes .................  apply
-    Notify Zimbra of your installation? ......  No  <- mengirim email admin ke Zimbra
+    Notify Zimbra of your installation? ......  No  <- sends admin email to Zimbra
 EOF
   echo; exit 0
 fi
@@ -97,14 +97,14 @@ if [ -d /opt/zimbra ]; then
   STATUS_PRE=$(su - zimbra -c "zmcontrol status" 2>&1) || STATUS_PRE=""
   STOPPED_PRE=$(printf '%s' "$STATUS_PRE" | grep -v Running | grep -vE "^Host|^$" | wc -l | tr -d ' ')
   if [ -n "$STATUS_PRE" ] && [ "${STOPPED_PRE:-1}" -eq 0 ]; then
-    say "2. Installer dilewati — Zimbra sudah terpasang dan sehat"
-    ok "/opt/zimbra ada; zmcontrol status: semua service Running"
-    info "Re-run tidak menjalankan ulang install.sh (hindari alur upgrade/reconfigure)."
+    say "2. Installer skipped — Zimbra already installed and healthy"
+    ok "/opt/zimbra exists; zmcontrol status: all services Running"
+    info "Re-run does not re-run install.sh (avoids upgrade/reconfigure flow)."
     SKIP_INSTALLER=1
   else
-    fail "Zimbra ada di /opt/zimbra tetapi tidak semua service Running (atau status tidak terbaca)."
-    info "Script ini tidak akan menjalankan ulang installer pada instalasi parsial/rusak."
-    info "Tangani manual dulu: perbaiki service yang mati, atau uninstall bersih lalu jalankan 03 lagi."
+    fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
+    info "This script will not re-run the installer on a partial/broken installation."
+    info "Fix manually first: repair stopped services, or uninstall cleanly then run 03 again."
     if [ -n "$STATUS_PRE" ]; then
       printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
     fi
@@ -113,7 +113,7 @@ if [ -d /opt/zimbra ]; then
 fi
 
 if [ "$SKIP_INSTALLER" -eq 0 ]; then
-say "2. Menjalankan installer di tmux (attach: tmux attach -t ${SESS})"
+say "2. Running installer in tmux (attach: tmux attach -t ${SESS})"
 
 # Prepare a mode-0600 log and a redacting filter so ADMIN_PASS never lands in
 # $LOG even if the installer echoes it or dumps CREATEADMINPASS=... on apply.
@@ -176,17 +176,17 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     *"Use Zimbra's package repository"*)   info "repo Zimbra -> Y";       send Y 45 ;;
     *"Install zimbra-dnscache"*)           info "dnscache -> N";          send N 3 ;;
     *"Install zimbra-"*)                   send Y 3 ;;
-    *"system will be modified"*)           info "commit instalasi";       send Y 20 ;;
-    *"Change hostname"*)                   info "hostname dipertahankan"; send No 6 ;;
-    *"Change domain name"*)                info "ganti domain -> Yes";    send Yes 5 ;;
+    *"system will be modified"*)           info "commit install";       send Y 20 ;;
+    *"Change hostname"*)                   info "hostname kept"; send No 6 ;;
+    *"Change domain name"*)                info "change domain -> Yes";    send Yes 5 ;;
     *"Create domain:"*)                    info "domain -> ${MAIL_DOMAIN}"; send "$MAIL_DOMAIN" 12 ;;
     *"Notify Zimbra of your installation"*) info "telemetry -> No";       send No 10 ;;
-    *"press return to exit"*)              info "selesai";                send "" 5; break ;;
+    *"press return to exit"*)              info "done";                send "" 5; break ;;
 
     *"Address unconfigured"*|*"press 'a' to apply"*)
         if [ "$STAGE" = "packages" ]; then
           STAGE="menus"
-          info "Menu konfigurasi tercapai - mengatur timezone, domain, password"
+          info "Configuration menu reached - setting timezone, domain, password"
 
           # --- timezone (Common Configuration -> 7) ---
           send 1 4
@@ -194,9 +194,9 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           TZIDX=$(tmux capture-pane -p -S -400 -t "$SESS" \
                   | grep -E "^[0-9]+ ${ZIMBRA_TZ_NAME}$" | tail -1 | awk '{print $1}')
           if [ -n "$TZIDX" ]; then
-            info "timezone ${ZIMBRA_TZ_NAME} -> pilihan ${TZIDX}"; send "$TZIDX" 5
+            info "timezone ${ZIMBRA_TZ_NAME} -> option ${TZIDX}"; send "$TZIDX" 5
           else
-            warn "Timezone ${ZIMBRA_TZ_NAME} tidak ada di daftar, dilewati"; send "" 3
+            warn "Timezone ${ZIMBRA_TZ_NAME} not in list, skipped"; send "" 3
           fi
           send r 4
 
@@ -219,22 +219,22 @@ done
 fi
 
 # --- 3. verify ---------------------------------------------------------------
-echo; say "3. Verifikasi"
+echo; say "3. Verification"
 if [ "$SKIP_INSTALLER" -eq 0 ]; then
   sleep 5
 fi
 # Scrub even on failure paths so a broken install cannot leave a dirty log behind.
 scrub_install_log "$LOG"
-if [ ! -d /opt/zimbra ]; then fail "/opt/zimbra tidak ada - instalasi gagal. Lihat $LOG"; exit 1; fi
+if [ ! -d /opt/zimbra ]; then fail "/opt/zimbra missing - installation failed. See $LOG"; exit 1; fi
 
 STATUS=$(su - zimbra -c "zmcontrol status" 2>&1)
 STOPPED=$(printf '%s' "$STATUS" | grep -v Running | grep -vE "^Host|^$" | wc -l)
 printf '%s\n' "$STATUS" | sed 's/^/    /'
 
 if [ "$STOPPED" -eq 0 ]; then
-  ok "Semua service berjalan"
+  ok "All services running"
 else
-  fail "$STOPPED service tidak berjalan"
+  fail "$STOPPED service(s) not running"
 fi
 
 su - zimbra -c "zmcontrol -v" 2>/dev/null | sed 's/^/    /'
@@ -245,12 +245,12 @@ echo "    domain: $(su - zimbra -c 'zmprov gad' 2>/dev/null | tr '\n' ' ')"
 if [ -f "$LOG" ]; then
   scrub_install_log "$LOG"
   if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
-    fail "Password admin masih terdeteksi di $LOG setelah redact - periksa filter"
+    fail "Admin password still detected in $LOG after redact - check filter"
     exit 1
   fi
-  ok "Log instalasi bersih dari password admin (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
+  ok "Install log clean of admin password (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
 elif [ "$SKIP_INSTALLER" -eq 1 ]; then
-  info "Tidak ada log installer baru (driver dilewati)"
+  info "No new installer log (driver skipped)"
 fi
 
 # The installer "save config to file" step writes /opt/zimbra/config.<pid> with
@@ -262,15 +262,15 @@ secure_zimbra_install_config() {
 
   while IFS= read -r -d '' f; do
     mode=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
-    info "Menghapus config installer ${f} (mode ${mode})"
+    info "Removing installer config ${f} (mode ${mode})"
     rm -f -- "$f"
     removed=$((removed + 1))
   done < <(find /opt/zimbra -maxdepth 1 -type f -name 'config.*' -print0 2>/dev/null)
 
   if [ "$removed" -eq 0 ]; then
-    info "Tidak ada /opt/zimbra/config.* (tidak ada yang dibersihkan)"
+    info "No /opt/zimbra/config.* (nothing to clean)"
   else
-    ok "File config installer dihapus (${removed} berkas)"
+    ok "Installer config file(s) removed (${removed} file(s))"
   fi
 
   # Gate: nothing may remain world-readable or containing ADMIN_PASS.
@@ -278,19 +278,19 @@ secure_zimbra_install_config() {
     mode=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
     case "$mode" in
       *[4567])
-        fail "Tersisa ${f} yang masih world-readable (mode ${mode})"
+        fail "Remaining ${f} is still world-readable (mode ${mode})"
         return 1
         ;;
     esac
     if grep -Fq -- "$ADMIN_PASS" "$f" 2>/dev/null; then
-      fail "Tersisa ${f} yang masih berisi ADMIN_PASS plaintext"
+      fail "Remaining ${f} still contains plaintext ADMIN_PASS"
       return 1
     fi
-    fail "Tersisa ${f} setelah pembersihan (mode ${mode}) - harusnya sudah dihapus"
+    fail "Remaining ${f} after cleanup (mode ${mode}) - should have been deleted"
     return 1
   done < <(find /opt/zimbra -maxdepth 1 -type f -name 'config.*' -print0 2>/dev/null)
 
-  ok "Gate /opt/zimbra/config.*: tidak ada file tertinggal"
+  ok "Gate /opt/zimbra/config.*: no files left behind"
   return 0
 }
 
@@ -299,10 +299,10 @@ if ! secure_zimbra_install_config; then
 fi
 
 echo
-say "SELESAI"
+say "DONE"
 info "Webmail : https://${MAIL_HOST}"
 info "Admin   : https://${MAIL_HOST}:7071  (admin@${MAIL_DOMAIN})"
-info "Sertifikat masih self-signed. Lanjut ke 04-tls-dkim.sh"
+info "Certificate is still self-signed. Continue to 04-tls-dkim.sh"
 echo
 tmux kill-session -t "$SESS" 2>/dev/null
 if declare -F cleanup_redactor >/dev/null 2>&1; then

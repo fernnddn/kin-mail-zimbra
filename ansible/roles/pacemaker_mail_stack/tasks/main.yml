@@ -1,20 +1,20 @@
 ---
-- name: Sertakan langkah fix LDAP localhost untuk HA
+- name: Include the LDAP localhost fix steps for HA
   ansible.builtin.import_tasks: ldap.yml
   tags: [pacemaker, stack, ldap]
 
-- name: Sertakan langkah resource promotable DRBD
+- name: Include the promotable DRBD resource steps
   ansible.builtin.import_tasks: drbd_clone.yml
   tags: [pacemaker, stack, drbd]
 
-- name: Sertakan langkah grup layanan kin-mail-svc
+- name: Include the kin-mail-svc service group steps
   ansible.builtin.import_tasks: mail_svc.yml
   tags: [pacemaker, stack, group]
 
-- name: Sertakan langkah constraint colocation dan order
+- name: Include the colocation and order constraint steps
   ansible.builtin.import_tasks: constraints.yml
   tags: [pacemaker, stack, constraints]
 
-- name: Sertakan langkah verifikasi stack Pacemaker
+- name: Include the Pacemaker stack verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [pacemaker, stack, verify]

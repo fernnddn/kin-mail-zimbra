@@ -1,20 +1,20 @@
 ---
-- name: Sertakan langkah instalasi paket target iSCSI
+- name: Include the iSCSI target package installation steps
   ansible.builtin.import_tasks: install.yml
   tags: [iscsi, target, install]
 
-- name: Sertakan langkah penyediaan LUN SBD
+- name: Include the SBD LUN provisioning steps
   ansible.builtin.import_tasks: lun.yml
   tags: [iscsi, target, lun]
 
-- name: Sertakan langkah konfigurasi targetcli
+- name: Include the targetcli configuration steps
   ansible.builtin.import_tasks: targetcli.yml
   tags: [iscsi, target, targetcli]
 
-- name: Sertakan langkah aktivasi layanan target
+- name: Include the target service activation steps
   ansible.builtin.import_tasks: service.yml
   tags: [iscsi, target, service]
 
-- name: Sertakan langkah verifikasi target iSCSI
+- name: Include the iSCSI target verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [iscsi, target, verify]

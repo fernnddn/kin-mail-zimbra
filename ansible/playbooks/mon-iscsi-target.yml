@@ -3,7 +3,7 @@
 # Dry-run only against live lab:
 #   ansible-playbook playbooks/mon-iscsi-target.yml --check
 
-- name: Siapkan target iSCSI SBD di VM Monitoring
+- name: Set up the SBD iSCSI target on the Monitoring VM
   hosts: monitoring
   gather_facts: true
   become: true

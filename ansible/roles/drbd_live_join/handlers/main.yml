@@ -1,4 +1,4 @@
 ---
-- name: Muat ulang systemd setelah unit meta-loop DRBD
+- name: Reload systemd after DRBD meta-loop unit changes
   ansible.builtin.systemd:
     daemon_reload: true

@@ -8,7 +8,7 @@
 # live CIB and can bounce Zimbra/VIP. Mutating pcs tasks must never use
 # check_mode: false. See roles/pacemaker_mail_stack/tasks/drbd_clone.yml.
 
-- name: Siapkan agen OCF dan stack Pacemaker di Host A dan Host B
+- name: Set up OCF agents and the Pacemaker stack on Host A and Host B
   hosts: mail_nodes
   gather_facts: true
   become: true

@@ -1,5 +1,5 @@
 ---
-- name: Memeriksa sesi iSCSI SBD yang sudah aktif
+- name: Check for an already active SBD iSCSI session
   ansible.builtin.command:
     cmd: iscsiadm -m session
   register: iscsi_initiator_session
@@ -8,7 +8,7 @@
   check_mode: false
   tags: [iscsi, initiator, login]
 
-- name: Melakukan discovery target iSCSI di VM Monitoring
+- name: Discover the iSCSI target on the Monitoring VM
   ansible.builtin.command:
     cmd: >-
       iscsiadm -m discovery -t sendtargets -p {{ iscsi_initiator_portal }}
@@ -19,7 +19,7 @@
     - not ansible_check_mode
   tags: [iscsi, initiator, login]
 
-- name: Login ke target iSCSI SBD
+- name: Log in to the SBD iSCSI target
   ansible.builtin.command:
     cmd: >-
       iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}
@@ -34,7 +34,7 @@
     - not ansible_check_mode
   tags: [iscsi, initiator, login]
 
-- name: Mengatur login otomatis iSCSI saat boot
+- name: Configure automatic iSCSI login at boot
   ansible.builtin.command:
     cmd: >-
       iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}

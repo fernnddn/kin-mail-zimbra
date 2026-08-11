@@ -4,7 +4,7 @@
 # Colocation/order bind the app group to Promoted DRBD. Never check_mode: false.
 # =============================================================================
 
-- name: Memeriksa constraint colocation dan order yang ada
+- name: Check the existing colocation and order constraints
   ansible.builtin.command:
     cmd: pcs constraint
   register: pacemaker_mail_stack_constraints
@@ -14,7 +14,7 @@
   run_once: true
   tags: [pacemaker, stack, constraints]
 
-- name: Menambahkan colocation grup layanan dengan Master DRBD
+- name: Add the service group colocation with the DRBD Master
   ansible.builtin.command:
     cmd: >-
       pcs constraint colocation add {{ pacemaker_mail_stack_group }}
@@ -28,7 +28,7 @@
       or 'with Promoted' not in pacemaker_mail_stack_constraints.stdout
   tags: [pacemaker, stack, constraints]
 
-- name: Menambahkan order promote DRBD lalu start grup layanan
+- name: Add the order to promote DRBD then start the service group
   ansible.builtin.command:
     cmd: >-
       pcs constraint order promote {{ pacemaker_mail_stack_drbd_clone }}
@@ -42,12 +42,12 @@
       or (pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout)
   tags: [pacemaker, stack, constraints]
 
-- name: Mencatat constraint di-skip saat dry-run atau sudah ada
+- name: Note that constraints are skipped during a dry-run or already exist
   ansible.builtin.debug:
     msg: >-
-      Constraint colocation/order sudah ada atau mode --check: pcs constraint
-      add TIDAK dijalankan. Skema butuh with-rsc-role=Promoted (bukan role=
-      saja) seperti task 2.7.
+      The colocation/order constraints already exist or this is --check mode: pcs
+      constraint add was NOT executed. The schema needs with-rsc-role=Promoted
+      (not just role=) as in task 2.7.
   when: ansible_check_mode
   run_once: true
   tags: [pacemaker, stack, constraints]

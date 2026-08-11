@@ -1,23 +1,23 @@
 ---
-- name: Memasang unit systemd kin-softdog
+- name: Deploy the kin-softdog systemd unit
   ansible.builtin.template:
     src: kin-softdog.service.j2
     dest: /etc/systemd/system/{{ softdog_service_name }}.service
     owner: root
     group: root
     mode: "0644"
-  notify: Muat ulang systemd setelah perubahan kin-softdog
+  notify: Reload systemd after kin-softdog changes
   when: not ansible_check_mode
   tags: [softdog, service]
 
-- name: Memeriksa unit kin-softdog sudah terpasang (dry-run)
+- name: Check the kin-softdog unit is installed (dry-run)
   ansible.builtin.stat:
     path: /etc/systemd/system/{{ softdog_service_name }}.service
   register: softdog_unit_stat
   check_mode: false
   tags: [softdog, service]
 
-- name: Mengaktifkan layanan kin-softdog agar ikut boot
+- name: Enable the kin-softdog service at boot
   ansible.builtin.systemd:
     name: "{{ softdog_service_name }}"
     enabled: true
@@ -25,7 +25,7 @@
   when: not ansible_check_mode or softdog_unit_stat.stat.exists
   tags: [softdog, service]
 
-- name: Menjalankan layanan kin-softdog
+- name: Start the kin-softdog service
   ansible.builtin.systemd:
     name: "{{ softdog_service_name }}"
     state: started

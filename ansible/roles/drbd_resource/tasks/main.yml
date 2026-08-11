@@ -1,16 +1,16 @@
 ---
-- name: Sertakan langkah berkas meta eksternal DRBD
+- name: Include the DRBD external meta file steps
   ansible.builtin.import_tasks: meta_loop.yml
   tags: [drbd, resource, meta]
 
-- name: Sertakan langkah definisi resource kin-zimbra
+- name: Include the kin-zimbra resource definition steps
   ansible.builtin.import_tasks: resource_file.yml
   tags: [drbd, resource, config]
 
-- name: Sertakan langkah aktivasi DRBD (mutasi — hati-hati)
+- name: Include the DRBD activation steps (mutating — handle with care)
   ansible.builtin.import_tasks: activate.yml
   tags: [drbd, resource, activate]
 
-- name: Sertakan langkah verifikasi resource DRBD
+- name: Include the DRBD resource verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [drbd, resource, verify]

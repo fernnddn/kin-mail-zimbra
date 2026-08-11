@@ -1,4 +1,4 @@
 ---
-- name: Muat ulang systemd setelah perubahan kin-softdog
+- name: Reload systemd after kin-softdog changes
   ansible.builtin.systemd:
     daemon_reload: true

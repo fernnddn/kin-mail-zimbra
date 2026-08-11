@@ -2,7 +2,7 @@
 # Ensure quorum.device points at Monitoring (task 2.2 corosync.conf snippet).
 # Prefer pcs when device missing; never rewrite a live matching config.
 
-- name: Memeriksa konfigurasi perangkat quorum saat ini
+- name: Check the current quorum device configuration
   ansible.builtin.command:
     cmd: pcs quorum config
   register: corosync_qdevice_pcs_quorum
@@ -12,7 +12,7 @@
   run_once: true
   tags: [qdevice, configure]
 
-- name: Memeriksa host qnetd di corosync.conf
+- name: Check the qnetd host in corosync.conf
   ansible.builtin.command:
     cmd: >-
       grep -E 'host:\s*{{ corosync_qdevice_qnetd_ip }}'
@@ -23,7 +23,7 @@
   check_mode: false
   tags: [qdevice, configure]
 
-- name: Mendaftarkan perangkat quorum qdevice ke cluster
+- name: Register the qdevice quorum device with the cluster
   ansible.builtin.command:
     cmd: >-
       pcs quorum device add model net
@@ -38,16 +38,16 @@
     - not ansible_check_mode
   tags: [qdevice, configure]
 
-- name: Menandai konfigurasi quorum device sudah sesuai
+- name: Confirm the quorum device configuration matches
   ansible.builtin.assert:
     that:
       - corosync_qdevice_conf_host.rc == 0
       - "'host:' in corosync_qdevice_pcs_quorum.stdout"
       - corosync_qdevice_qnetd_ip in corosync_qdevice_pcs_quorum.stdout
     fail_msg: >-
-      Quorum device belum mengarah ke {{ corosync_qdevice_qnetd_ip }}.
-      Jalankan apply (bukan --check) pada lingkungan uji kosong setelah TLS siap.
+      The quorum device does not point at {{ corosync_qdevice_qnetd_ip }} yet.
+      Run a real apply (not --check) on an empty test environment once TLS is ready.
     success_msg: >-
-      Quorum device mengarah ke {{ corosync_qdevice_qnetd_ip }}:{{ corosync_qdevice_qnetd_port }}
+      The quorum device points at {{ corosync_qdevice_qnetd_ip }}:{{ corosync_qdevice_qnetd_port }}
   run_once: true
   tags: [qdevice, configure]

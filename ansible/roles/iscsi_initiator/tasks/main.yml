@@ -1,20 +1,20 @@
 ---
-- name: Sertakan langkah instalasi initiator iSCSI
+- name: Include the iSCSI initiator installation steps
   ansible.builtin.import_tasks: install.yml
   tags: [iscsi, initiator, install]
 
-- name: Sertakan langkah nama initiator unik
+- name: Include the unique initiator name steps
   ansible.builtin.import_tasks: initiatorname.yml
   tags: [iscsi, initiator, name]
 
-- name: Sertakan langkah discovery dan login iSCSI
+- name: Include the iSCSI discovery and login steps
   ansible.builtin.import_tasks: login.yml
   tags: [iscsi, initiator, login]
 
-- name: Sertakan langkah aktivasi layanan initiator
+- name: Include the initiator service activation steps
   ansible.builtin.import_tasks: service.yml
   tags: [iscsi, initiator, service]
 
-- name: Sertakan langkah verifikasi initiator iSCSI
+- name: Include the iSCSI initiator verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [iscsi, initiator, verify]

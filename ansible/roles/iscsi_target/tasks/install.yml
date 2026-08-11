@@ -1,5 +1,5 @@
 ---
-- name: Menginstal paket targetcli untuk iSCSI
+- name: Install the targetcli package for iSCSI
   ansible.builtin.apt:
     name: "{{ iscsi_target_packages }}"
     state: present

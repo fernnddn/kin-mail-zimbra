@@ -1,12 +1,12 @@
 ---
-- name: Sertakan langkah instalasi paket DRBD
+- name: Include the DRBD package installation steps
   ansible.builtin.import_tasks: packages.yml
   tags: [drbd, install, packages]
 
-- name: Sertakan langkah pemuatan modul DRBD
+- name: Include the DRBD module loading steps
   ansible.builtin.import_tasks: module.yml
   tags: [drbd, install, module]
 
-- name: Sertakan langkah verifikasi instalasi DRBD
+- name: Include the DRBD installation verification steps
   ansible.builtin.import_tasks: verify.yml
   tags: [drbd, install, verify]

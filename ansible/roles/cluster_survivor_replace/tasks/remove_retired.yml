@@ -13,7 +13,7 @@
 #   pcs cluster node remove <node> [--force]
 # =============================================================================
 
-- name: Memeriksa apakah node lama masih tercatat di Corosync
+- name: Check whether the old node is still recorded in Corosync
   ansible.builtin.command:
     cmd: pcs status nodes corosync
   register: cluster_survivor_replace_nodes
@@ -22,7 +22,7 @@
   check_mode: false
   tags: [cluster, survivor, remove]
 
-- name: Menghapus node lama yang hilang permanen dari membership
+- name: Remove the permanently lost old node from membership
   ansible.builtin.command:
     cmd: >-
       pcs cluster node remove {{ cluster_add_host_retired_name }} --force
@@ -32,11 +32,11 @@
     - cluster_add_host_retired_name in cluster_survivor_replace_nodes.stdout
   tags: [cluster, survivor, remove]
 
-- name: Mencatat remove node lama di-skip saat dry-run atau sudah bersih
+- name: Note that removing the old node is skipped during a dry-run or already done
   ansible.builtin.debug:
     msg: >-
-      pcs cluster node remove {{ cluster_add_host_retired_name }} TIDAK
-      dijalankan (mode --check atau node sudah tidak ada di status).
+      pcs cluster node remove {{ cluster_add_host_retired_name }} was NOT
+      executed (--check mode or the node is already absent from status).
   when: >-
     ansible_check_mode
     or (cluster_add_host_retired_name not in cluster_survivor_replace_nodes.stdout)

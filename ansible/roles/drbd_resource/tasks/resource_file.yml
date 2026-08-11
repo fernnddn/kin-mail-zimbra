@@ -1,5 +1,5 @@
 ---
-- name: Memasang definisi resource DRBD kin-zimbra
+- name: Deploy the kin-zimbra DRBD resource definition
   ansible.builtin.template:
     src: kin-zimbra.res.j2
     dest: "{{ drbd_resource_res_path }}"
@@ -9,14 +9,14 @@
   when: not ansible_check_mode
   tags: [drbd, resource, config]
 
-- name: Memeriksa definisi resource kin-zimbra memakai meta eksternal
+- name: Check the kin-zimbra resource definition uses external meta
   ansible.builtin.command:
     cmd: grep -E 'meta-disk\s+/dev/loop21' {{ drbd_resource_res_path }}
   changed_when: false
   check_mode: false
   tags: [drbd, resource, config]
 
-- name: Memastikan definisi tidak memakai meta internal pada disk data
+- name: Ensure the definition does not use internal meta on the data disk
   ansible.builtin.command:
     cmd: grep -E 'meta-disk\s+internal' {{ drbd_resource_res_path }}
   register: drbd_resource_internal_meta

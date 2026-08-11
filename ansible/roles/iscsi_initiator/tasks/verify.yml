@@ -1,5 +1,5 @@
 ---
-- name: Memverifikasi sesi iSCSI ke target SBD
+- name: Verify the iSCSI session to the SBD target
   ansible.builtin.command:
     cmd: iscsiadm -m session
   register: iscsi_initiator_session_verify
@@ -10,7 +10,7 @@
   check_mode: false
   tags: [iscsi, initiator, verify]
 
-- name: Memverifikasi perangkat SBD by-id tersedia
+- name: Verify the by-id SBD device is available
   ansible.builtin.stat:
     path: "{{ iscsi_initiator_sbd_by_id }}"
   register: iscsi_initiator_sbd_dev
@@ -18,7 +18,7 @@
   check_mode: false
   tags: [iscsi, initiator, verify]
 
-- name: Memverifikasi nama initiator sesuai inventory
+- name: Verify the initiator name matches the inventory
   ansible.builtin.command:
     cmd: grep -F 'InitiatorName={{ iscsi_initiator_name }}' {{ iscsi_initiator_name_file }}
   changed_when: false
