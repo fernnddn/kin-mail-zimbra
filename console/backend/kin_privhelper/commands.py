@@ -263,6 +263,47 @@ async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
         yield ev
 
 
+async def cmd_get_audit_log() -> AsyncIterator[dict[str, Any]]:
+    """Read-only tail of privhelper audit log (Super Admin only via RBAC)."""
+    log_path = Path(os.environ.get("PRIVHELPER_LOG", "/var/log/kin-mail/privhelper.log"))
+    lines_n = 200
+    try:
+        lines_n = max(1, min(1000, int(os.environ.get("PRIVHELPER_AUDIT_TAIL", "200"))))
+    except ValueError:
+        lines_n = 200
+
+    yield proto.event_stdout(f"=== privhelper audit (last {lines_n} lines): {log_path} ===\n")
+    if not log_path.is_file():
+        yield proto.event_stdout("(log file missing)\n")
+        yield proto.event_done(0)
+        return
+
+    def _tail() -> list[str]:
+        # Efficient-enough tail for typical audit logs.
+        with log_path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            block = 4096
+            data = b""
+            while size > 0 and data.count(b"\n") <= lines_n:
+                step = min(block, size)
+                size -= step
+                fh.seek(size)
+                data = fh.read(step) + data
+            text = data.decode("utf-8", errors="replace")
+            parts = text.splitlines()
+            return parts[-lines_n:]
+
+    try:
+        for line in await asyncio.to_thread(_tail):
+            yield proto.event_stdout(line + "\n")
+    except OSError as exc:
+        yield proto.event_stderr(f"cannot read audit log: {exc}\n")
+        yield proto.event_done(1)
+        return
+    yield proto.event_done(0)
+
+
 CommandHandler = Callable[[], AsyncIterator[dict[str, Any]]]
 
 HANDLERS: dict[str, CommandHandler] = {
@@ -272,6 +313,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_HARDENING: cmd_run_hardening,
     proto.CMD_RUN_FULL_INSTALL: cmd_run_full_install,
     proto.CMD_CANCEL_FIREWALL_DEADMAN: cmd_cancel_firewall_deadman,
+    proto.CMD_GET_AUDIT_LOG: cmd_get_audit_log,
 }
 
 

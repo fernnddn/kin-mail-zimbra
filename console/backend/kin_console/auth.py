@@ -87,5 +87,31 @@ def require_user(request: Request) -> str:
     return user
 
 
+def require_console_user(request: Request):
+    """Return ConsoleUser for the session (fresh role from disk)."""
+    from . import users as users_mod
+
+    username = require_user(request)
+    record = users_mod.get_user(username)
+    if record is None or record.disabled:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return record
+
+
+def require_roles(*allowed: str):
+    allowed_set = frozenset(allowed)
+
+    def _dep(request: Request):
+        user = require_console_user(request)
+        if user.role not in allowed_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of: {', '.join(sorted(allowed_set))} (your role: {user.role})",
+            )
+        return user
+
+    return _dep
+
+
 def generate_bootstrap_password() -> str:
     return secrets.token_urlsafe(18)

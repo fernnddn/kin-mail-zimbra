@@ -9,7 +9,13 @@ import {
 } from "react";
 import { api } from "./api";
 
-type User = { username: string };
+export type ConsoleRole = "kin_super_admin" | "kin_support_ops" | "customer_admin";
+
+type User = {
+  username: string;
+  role: ConsoleRole;
+  role_label: string;
+};
 
 type AuthCtx = {
   user: User | null;
@@ -45,7 +51,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
-    setUser({ username: me.username });
+    setUser({
+      username: me.username,
+      role: me.role,
+      role_label: me.role_label,
+    });
   }, []);
 
   const logout = useCallback(async () => {
@@ -65,4 +75,8 @@ export function useAuth(): AuthCtx {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error("useAuth outside AuthProvider");
   return ctx;
+}
+
+export function isOpsRole(role: string | undefined): boolean {
+  return role === "kin_super_admin" || role === "kin_support_ops";
 }

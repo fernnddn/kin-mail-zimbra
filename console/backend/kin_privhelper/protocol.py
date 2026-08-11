@@ -14,6 +14,7 @@ CMD_APPLY_WIZARD_DRAFT = "apply_wizard_draft"
 CMD_RUN_HARDENING = "run_hardening"
 CMD_RUN_FULL_INSTALL = "run_full_install"
 CMD_CANCEL_FIREWALL_DEADMAN = "cancel_firewall_deadman"
+CMD_GET_AUDIT_LOG = "get_audit_log"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -22,6 +23,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_RUN_HARDENING,
         CMD_RUN_FULL_INSTALL,
         CMD_CANCEL_FIREWALL_DEADMAN,
+        CMD_GET_AUDIT_LOG,
     }
 )
 

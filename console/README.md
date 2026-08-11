@@ -10,14 +10,26 @@ Isolated from Zimbra/DRBD/Pacemaker. Bootstrap installs:
 sudo ./console/bootstrap.sh
 ```
 
+## Local users + RBAC
+
+| Role | ID | Notes |
+|---|---|---|
+| KIN Super Admin | `kin_super_admin` | Full ops + user CRUD + audit log |
+| KIN Support-Ops | `kin_support_ops` | Privileged deploy/firewall ops; no audit/user admin |
+| Customer Admin | `customer_admin` | Wizard draft + read-only status; **cannot** apply draft / full install / cancel dead-man |
+
+Store: `/var/lib/kin-mail-console/users.json` (bcrypt hashes, mode 600). Legacy `admin.hash` migrates to Super Admin on first bootstrap after upgrade.
+
+Sensitive commands are denied in **both** the FastAPI stream endpoint and privhelperd (role resolved from `users.json` by username — client cannot claim a role).
+
 ## Privileged helper (Option B)
 
 | Item | Value |
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman` |
-| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman` bypasses busy** |
+| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log` |
+| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`** and **`get_audit_log`** bypass busy |
 
 SSE: `/api/wizard/deploy/stream?action=…`  
 `run_full_install` sets `KIN_CONSOLE_CONFIRMED=1` and runs `kin-mail.sh --full-install`.  
@@ -31,4 +43,5 @@ Stage 10 still arms the ufw dead-man; pipeline **waits** for `cancel_firewall_de
 | 9.2 Wizard UI + draft | Done |
 | 9.3 Privhelper plumbing | Done |
 | 9.4 Config apply + hardening | Done |
-| 9.5 Full install + dead-man cancel | This tree |
+| 9.5 Full install + dead-man cancel | Done |
+| 9.8 Local multi-user + RBAC | This tree |

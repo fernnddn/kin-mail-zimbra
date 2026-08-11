@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     tls_cert: Path = Path("/var/lib/kin-mail-console/tls/cert.pem")
     tls_key: Path = Path("/var/lib/kin-mail-console/tls/key.pem")
     password_hash_file: Path = Path("/var/lib/kin-mail-console/admin.hash")
+    users_file: Path = Path("/var/lib/kin-mail-console/users.json")
     session_secret_file: Path = Path("/var/lib/kin-mail-console/session.secret")
 
     static_dir: Path = Path("/opt/kin-mail-console/frontend/dist")

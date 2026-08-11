@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { isOpsRole, useAuth } from "../../auth";
 import { Button, Hint, Lede, LogPane, NavRow, Title, WarnBox } from "../../ui";
 import { useWizard } from "../WizardContext";
 
@@ -20,11 +21,18 @@ type ActionId =
   | "full_install"
   | "cancel_firewall_deadman";
 
-const ACTIONS: { id: ActionId; label: string; cmd: string; danger?: boolean }[] = [
+const ACTIONS: {
+  id: ActionId;
+  label: string;
+  cmd: string;
+  danger?: boolean;
+  opsOnly?: boolean;
+}[] = [
   {
     id: "apply_draft",
     label: "Apply wizard draft",
     cmd: "apply_wizard_draft",
+    opsOnly: true,
   },
   {
     id: "run_hardening",
@@ -41,18 +49,23 @@ const ACTIONS: { id: ActionId; label: string; cmd: string; danger?: boolean }[] 
     label: "Full install pipeline",
     cmd: "run_full_install",
     danger: true,
+    opsOnly: true,
   },
   {
     id: "cancel_firewall_deadman",
     label: "Confirm firewall OK — cancel dead-man",
     cmd: "cancel_firewall_deadman",
     danger: true,
+    opsOnly: true,
   },
 ];
 
 export default function DeployStep() {
   const { draft, save } = useWizard();
+  const { user } = useAuth();
   const navigate = useNavigate();
+  const canOps = isOpsRole(user?.role);
+  const visibleActions = ACTIONS.filter((a) => !a.opsOnly || canOps);
   const [log, setLog] = useState(
     "# Privileged helper log viewer\n# Pick an action below (whitelist only)\n",
   );
@@ -129,6 +142,14 @@ export default function DeployStep() {
   }
 
   async function start(action: ActionId) {
+    const meta = ACTIONS.find((a) => a.id === action);
+    if (meta?.opsOnly && !canOps) {
+      setMessage(
+        "Denied: this action requires KIN Super Admin or KIN Support-Ops (enforced server-side).",
+      );
+      return;
+    }
+
     const isCancel = action === "cancel_firewall_deadman";
 
     // Dead-man cancel must work while full install is still streaming (daemon bypasses busy).
@@ -142,7 +163,6 @@ export default function DeployStep() {
       setMessage("Tick the confirmation box before starting full install.");
       return;
     }
-    const meta = ACTIONS.find((a) => a.id === action);
     setMessage("");
 
     if (action === "apply_draft") {
@@ -205,13 +225,23 @@ export default function DeployStep() {
         Whitelisted privileged actions only. Full install streams{" "}
         <code>kin-mail.sh --full-install</code> with <code>KIN_CONSOLE_CONFIRMED=1</code> (replaces
         TTY y/n). The ufw dead-man switch is independent and is never auto-cancelled.
+        {!canOps && (
+          <>
+            {" "}
+            Your role (<strong>{user?.role_label || "Customer Admin"}</strong>) cannot apply draft,
+            run full install, or cancel the firewall dead-man — those require KIN Super Admin or KIN
+            Support-Ops (enforced in API + privhelperd).
+          </>
+        )}
       </Lede>
-      <WarnBox>
-        <strong>Full install / firewall:</strong> stage 10 re-applies ufw and arms a ~300s dead-man.
-        The pipeline <em>pauses</em> until you verify SSH/cluster/mail and click{" "}
-        <em>Confirm firewall OK — cancel dead-man</em>. That cancel is never automatic.
-      </WarnBox>
-      {deadmanHint && (
+      {canOps && (
+        <WarnBox>
+          <strong>Full install / firewall:</strong> stage 10 re-applies ufw and arms a ~300s dead-man.
+          The pipeline <em>pauses</em> until you verify SSH/cluster/mail and click{" "}
+          <em>Confirm firewall OK — cancel dead-man</em>. That cancel is never automatic.
+        </WarnBox>
+      )}
+      {deadmanHint && canOps && (
         <WarnBox>
           <strong>Dead-man may be armed.</strong> After verification, cancel it explicitly — ufw
           will auto-disable when the timer expires if you do not. The cancel button stays available
@@ -220,34 +250,36 @@ export default function DeployStep() {
       )}
       <LogPane aria-label="Deployment log">{log}</LogPane>
       {message && <Hint>{message}</Hint>}
-      <label
-        style={{
-          display: "flex",
-          gap: "0.55rem",
-          alignItems: "flex-start",
-          margin: "0.75rem 0 0.35rem",
-          fontSize: "0.88rem",
-          lineHeight: 1.4,
-          cursor: "pointer",
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={confirmFull}
-          onChange={(e) => setConfirmFull(e.target.checked)}
-          style={{ marginTop: "0.2rem" }}
-        />
-        <span>
-          I confirm running the full install pipeline on this host (console confirm replaces CLI
-          y/n; dead-man on firewall still requires a separate cancel after verify).
-        </span>
-      </label>
+      {canOps && (
+        <label
+          style={{
+            display: "flex",
+            gap: "0.55rem",
+            alignItems: "flex-start",
+            margin: "0.75rem 0 0.35rem",
+            fontSize: "0.88rem",
+            lineHeight: 1.4,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={confirmFull}
+            onChange={(e) => setConfirmFull(e.target.checked)}
+            style={{ marginTop: "0.2rem" }}
+          />
+          <span>
+            I confirm running the full install pipeline on this host (console confirm replaces CLI
+            y/n; dead-man on firewall still requires a separate cancel after verify).
+          </span>
+        </label>
+      )}
       <NavRow>
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/review")}>
           Back
         </Button>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "flex-end" }}>
-          {ACTIONS.map((a) => {
+          {visibleActions.map((a) => {
             const isCancel = a.id === "cancel_firewall_deadman";
             const disabled = isCancel
               ? cancelBusy

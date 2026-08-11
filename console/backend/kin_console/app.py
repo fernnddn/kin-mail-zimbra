@@ -11,10 +11,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from kin_privhelper import protocol as proto
+from kin_privhelper.rbac import (
+    ROLE_LABELS,
+    ROLE_SUPER_ADMIN,
+    ALL_ROLES,
+    command_allowed,
+    deny_message,
+    role_label,
+)
 
-from . import auth, draft
+from . import auth, draft, users
 from .privhelper_client import run_command
 from .settings import settings
+from .users import ConsoleUser
 
 app = FastAPI(title="KIN Mail Console", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -27,15 +36,16 @@ class LoginBody(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class CreateUserBody(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=256)
+    role: str = Field(min_length=1, max_length=64)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     auth.ensure_session_secret()
-    if not auth.password_hash_exists():
-        # Bootstrap must create the hash before start; refuse anonymous first-boot in-process.
-        raise RuntimeError(
-            f"Missing admin password hash at {settings.password_hash_file}. "
-            "Run console/bootstrap.sh first."
-        )
+    users.ensure_users_store()
 
 
 @app.get("/api/health")
@@ -84,16 +94,22 @@ def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, obj
 
 @app.post("/api/login")
 def login(body: LoginBody, response: Response) -> dict[str, str]:
-    if body.username != settings.console_user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     try:
-        stored = auth.load_password_hash()
-    except OSError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth store unavailable") from exc
-    if not auth.verify_password(body.password, stored):
+        user = users.authenticate(body.username, body.password)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth store unavailable",
+        ) from exc
+    if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    auth.set_session_cookie(response, body.username)
-    return {"status": "ok", "username": body.username}
+    auth.set_session_cookie(response, user.username)
+    return {
+        "status": "ok",
+        "username": user.username,
+        "role": user.role,
+        "role_label": role_label(user.role),
+    }
 
 
 @app.post("/api/logout")
@@ -103,22 +119,72 @@ def logout(response: Response) -> dict[str, str]:
 
 
 @app.get("/api/me")
-def me(username: str = Depends(auth.require_user)) -> dict[str, str]:
-    return {"username": username}
+def me(user: ConsoleUser = Depends(auth.require_console_user)) -> dict[str, str]:
+    return {
+        "username": user.username,
+        "role": user.role,
+        "role_label": role_label(user.role),
+    }
+
+
+@app.get("/api/roles")
+def list_roles(_user: ConsoleUser = Depends(auth.require_console_user)) -> dict[str, object]:
+    return {
+        "roles": [
+            {"id": rid, "label": ROLE_LABELS[rid]}
+            for rid in sorted(ALL_ROLES)
+        ]
+    }
+
+
+# --- Local users (KIN Super Admin only) -------------------------------------
+
+
+@app.get("/api/users")
+def api_list_users(
+    _user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    return {"users": users.list_public_users()}
+
+
+@app.post("/api/users")
+def api_create_user(
+    body: CreateUserBody,
+    _user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    try:
+        created = users.create_user(body.username, body.password, body.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"user": created.public()}
+
+
+@app.delete("/api/users/{username}")
+def api_delete_user(
+    username: str,
+    actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, str]:
+    try:
+        users.delete_user(username, actor=actor.username)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"status": "ok"}
 
 
 # --- Wizard draft (auth required; never applies to the live installer) ------
 
 
 @app.get("/api/wizard/draft")
-def get_wizard_draft(_user: str = Depends(auth.require_user)) -> dict:
+def get_wizard_draft(_user: ConsoleUser = Depends(auth.require_console_user)) -> dict:
     return draft.public_draft(draft.load_draft())
 
 
 @app.put("/api/wizard/draft")
 def put_wizard_draft(
     body: draft.DraftPatch,
-    _user: str = Depends(auth.require_user),
+    _user: ConsoleUser = Depends(auth.require_console_user),
 ) -> dict:
     current = draft.load_draft()
     updated = draft.apply_patch(current, body)
@@ -141,17 +207,19 @@ _STREAM_ACTIONS: dict[str, str] = {
     "get_status": proto.CMD_GET_STATUS,
     "full_install": proto.CMD_RUN_FULL_INSTALL,
     "cancel_firewall_deadman": proto.CMD_CANCEL_FIREWALL_DEADMAN,
+    "audit_log": proto.CMD_GET_AUDIT_LOG,
 }
 
 
 @app.get("/api/wizard/deploy/stream")
 async def wizard_deploy_stream(
     request: Request,
-    username: str = Depends(auth.require_user),
+    user: ConsoleUser = Depends(auth.require_console_user),
 ) -> StreamingResponse:
     """Stream a whitelisted privhelper command into the log viewer.
 
     Query `action` is an enum of safe aliases — never a free-form shell/command string.
+    RBAC is enforced here and again inside privhelperd (server-side role from users.json).
     """
     action = (request.query_params.get("action") or "hardening_status").strip()
     cmd = _STREAM_ACTIONS.get(action)
@@ -161,11 +229,17 @@ async def wizard_deploy_stream(
             detail=f"unknown action {action!r}; allowed: {', '.join(sorted(_STREAM_ACTIONS))}",
         )
 
+    if not command_allowed(user.role, cmd):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, cmd),
+        )
+
     async def event_gen():
         yield f"data: {json.dumps({'type': 'meta', 'cmd': cmd, 'action': action})}\n\n"
         async for ev in run_command(
             cmd,
-            username,
+            user.username,
             socket_path=settings.privhelper_socket,
         ):
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -182,7 +256,9 @@ async def wizard_deploy_stream(
 
 
 @app.post("/api/wizard/deploy")
-async def wizard_deploy_hint(_user: str = Depends(auth.require_user)) -> dict[str, object]:
+async def wizard_deploy_hint(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
     """Compat: prefer SSE /api/wizard/deploy/stream?action=… for live output."""
     return {
         "status": "use_stream",

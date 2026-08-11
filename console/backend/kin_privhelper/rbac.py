@@ -1,0 +1,66 @@
+"""RBAC matrix for privhelper whitelist commands (shared with console API)."""
+
+from __future__ import annotations
+
+ROLE_SUPER_ADMIN = "kin_super_admin"
+ROLE_SUPPORT_OPS = "kin_support_ops"
+ROLE_CUSTOMER_ADMIN = "customer_admin"
+
+ALL_ROLES = frozenset(
+    {
+        ROLE_SUPER_ADMIN,
+        ROLE_SUPPORT_OPS,
+        ROLE_CUSTOMER_ADMIN,
+    }
+)
+
+ROLE_LABELS: dict[str, str] = {
+    ROLE_SUPER_ADMIN: "KIN Super Admin",
+    ROLE_SUPPORT_OPS: "KIN Support-Ops",
+    ROLE_CUSTOMER_ADMIN: "Customer Admin",
+}
+
+OPS_ROLES = frozenset({ROLE_SUPER_ADMIN, ROLE_SUPPORT_OPS})
+
+SENSITIVE_OPS_COMMANDS = frozenset(
+    {
+        "apply_wizard_draft",
+        "run_full_install",
+        "cancel_firewall_deadman",
+    }
+)
+
+SUPER_ONLY_COMMANDS = frozenset(
+    {
+        "get_audit_log",
+    }
+)
+
+
+def role_label(role: str) -> str:
+    return ROLE_LABELS.get(role, role)
+
+
+def command_allowed(role: str, cmd: str) -> bool:
+    if role not in ALL_ROLES:
+        return False
+    if cmd in SUPER_ONLY_COMMANDS:
+        return role == ROLE_SUPER_ADMIN
+    if cmd in SENSITIVE_OPS_COMMANDS:
+        return role in OPS_ROLES
+    return True
+
+
+def deny_message(role: str, cmd: str) -> str:
+    label = role_label(role) if role in ALL_ROLES else "unknown role"
+    if cmd in SUPER_ONLY_COMMANDS:
+        return (
+            f"Denied: {cmd} requires {ROLE_LABELS[ROLE_SUPER_ADMIN]} "
+            f"(your role: {label})"
+        )
+    if cmd in SENSITIVE_OPS_COMMANDS:
+        return (
+            f"Denied: {cmd} requires KIN Super Admin or KIN Support-Ops "
+            f"(your role: {label})"
+        )
+    return f"Denied: {cmd} not allowed for {label}"

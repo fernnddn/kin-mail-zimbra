@@ -163,30 +163,74 @@ else
   ok "Generated self-signed cert (browser warning expected)"
 fi
 
-say "8. Admin password hash (first boot only)"
+say "8. Local users store (first boot / migrate legacy admin.hash)"
 HASH_FILE="${DATA_ROOT}/admin.hash"
+USERS_FILE="${DATA_ROOT}/users.json"
 SECRET_FILE="${DATA_ROOT}/session.secret"
 BOOT_PASS=""
-if [ -f "$HASH_FILE" ]; then
-  ok "admin.hash already present — password NOT re-printed"
+CONSOLE_USER="${KIN_CONSOLE_USER:-admin}"
+if [ -f "$USERS_FILE" ]; then
+  ok "users.json already present — password NOT re-printed"
+elif [ -f "$HASH_FILE" ]; then
+  KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" KIN_CONSOLE_USER="$CONSOLE_USER" \
+    "${OPT_ROOT}/venv/bin/python" - <<'PY'
+import json, os
+from pathlib import Path
+users_path = Path(os.environ["KIN_USERS_FILE"])
+legacy = Path(os.environ["KIN_HASH_FILE"]).read_text(encoding="utf-8").strip()
+username = (os.environ.get("KIN_CONSOLE_USER") or "admin").strip() or "admin"
+payload = {
+    "version": 1,
+    "users": [
+        {
+            "username": username,
+            "password_hash": legacy,
+            "role": "kin_super_admin",
+            "disabled": False,
+        }
+    ],
+}
+users_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+users_path.chmod(0o600)
+PY
+  chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE"
+  ok "Migrated admin.hash → users.json (KIN Super Admin)"
 else
   BOOT_PASS=$("${OPT_ROOT}/venv/bin/python" - <<'PY'
 import secrets
 print(secrets.token_urlsafe(18), end="")
 PY
 )
-  KIN_BOOT_PASS="$BOOT_PASS" KIN_HASH_FILE="$HASH_FILE" "${OPT_ROOT}/venv/bin/python" - <<'PY'
-import os
+  KIN_BOOT_PASS="$BOOT_PASS" KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" \
+    KIN_CONSOLE_USER="$CONSOLE_USER" "${OPT_ROOT}/venv/bin/python" - <<'PY'
+import json, os
 from pathlib import Path
 import bcrypt
 pwd = os.environ["KIN_BOOT_PASS"].encode("utf-8")
-path = Path(os.environ["KIN_HASH_FILE"])
-path.write_text(bcrypt.hashpw(pwd, bcrypt.gensalt(rounds=12)).decode("ascii") + "\n", encoding="utf-8")
-path.chmod(0o600)
+ph = bcrypt.hashpw(pwd, bcrypt.gensalt(rounds=12)).decode("ascii")
+username = (os.environ.get("KIN_CONSOLE_USER") or "admin").strip() or "admin"
+users_path = Path(os.environ["KIN_USERS_FILE"])
+payload = {
+    "version": 1,
+    "users": [
+        {
+            "username": username,
+            "password_hash": ph,
+            "role": "kin_super_admin",
+            "disabled": False,
+        }
+    ],
+}
+users_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+users_path.chmod(0o600)
+# Keep legacy admin.hash in sync for older tooling / rollback reads.
+legacy = Path(os.environ["KIN_HASH_FILE"])
+legacy.write_text(ph + "\n", encoding="utf-8")
+legacy.chmod(0o600)
 PY
   unset KIN_BOOT_PASS
-  chown "${SVC_USER}:${SVC_USER}" "$HASH_FILE"
-  ok "Wrote password hash (plaintext not stored)"
+  chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE" "$HASH_FILE"
+  ok "Wrote users.json + admin.hash (plaintext not stored)"
 fi
 
 if [ ! -f "$SECRET_FILE" ]; then

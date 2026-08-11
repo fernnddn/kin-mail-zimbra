@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import grp
+import json
 import logging
 import os
 import stat
@@ -12,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from . import commands, protocol as proto
+from . import rbac
 
 SOCKET_PATH = Path(os.environ.get("PRIVHELPER_SOCKET", "/run/kin-mail/privhelper.sock"))
 LOG_PATH = Path(os.environ.get("PRIVHELPER_LOG", "/var/log/kin-mail/privhelper.log"))
+USERS_FILE = Path(os.environ.get("PRIVHELPER_USERS_FILE", "/var/lib/kin-mail-console/users.json"))
 SOCKET_GROUP = os.environ.get("PRIVHELPER_SOCKET_GROUP", "kin-console")
 
 _gate = asyncio.Lock()
@@ -76,6 +79,26 @@ async def _send(writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
     await writer.drain()
 
 
+def _role_for_username(username: str) -> str | None:
+    """Resolve role from the console users store (ignore client-claimed role)."""
+    try:
+        if not USERS_FILE.is_file():
+            return None
+        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+        for item in data.get("users") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("username") or "") != username:
+                continue
+            if bool(item.get("disabled", False)):
+                return None
+            role = str(item.get("role") or "")
+            return role if role in rbac.ALL_ROLES else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return None
+
+
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     global _running
     peer = writer.get_extra_info("peername")
@@ -101,6 +124,23 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
+        role = _role_for_username(username)
+        if role is None:
+            await _send(
+                writer,
+                proto.event_error(
+                    "denied",
+                    f"unknown or disabled user {username!r} — cannot authorize {cmd}",
+                ),
+            )
+            _audit_line(username, cmd, "denied_no_user")
+            return
+        if not rbac.command_allowed(role, cmd):
+            msg = rbac.deny_message(role, cmd)
+            await _send(writer, proto.event_error("denied", msg))
+            _audit_line(username, cmd, "denied_rbac")
+            return
+
         handler = commands.get_handler(cmd)
         if handler is None:
             await _send(writer, proto.event_error("denied", f"no handler for {cmd!r}"))
@@ -109,7 +149,11 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
-        bypass_busy = cmd == proto.CMD_CANCEL_FIREWALL_DEADMAN
+        # Audit log is read-only and should remain available during busy work.
+        bypass_busy = cmd in (
+            proto.CMD_CANCEL_FIREWALL_DEADMAN,
+            proto.CMD_GET_AUDIT_LOG,
+        )
 
         if not bypass_busy:
             async with _gate:

@@ -1,45 +1,9 @@
 import styled from "@emotion/styled";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "../auth";
+import { Link, Outlet, useLocation } from "react-router-dom";
+import { ConsoleChrome } from "../ConsoleChrome";
 import { theme } from "../styles/theme";
-import { Button, Mono } from "../ui";
 import { useWizard } from "./WizardContext";
 import { WIZARD_STEPS, stepIndex, type StepId } from "./types";
-
-const Frame = styled.div`
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: ${theme.bg};
-  color: ${theme.ink};
-  font-family: ${theme.font};
-`;
-
-const Top = styled.header`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1.25rem;
-  border-bottom: 1px solid ${theme.line};
-  background: color-mix(in srgb, ${theme.bgElev} 88%, transparent);
-`;
-
-const BrandMark = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-
-  strong {
-    letter-spacing: -0.02em;
-    font-size: 1rem;
-  }
-
-  span {
-    color: ${theme.muted};
-    font-size: 0.75rem;
-  }
-`;
 
 const Body = styled.div`
   flex: 1;
@@ -150,34 +114,17 @@ function currentStepId(pathname: string): StepId {
 }
 
 export default function WizardLayout() {
-  const { user, logout } = useAuth();
   const { saving, draft } = useWizard();
   const location = useLocation();
-  const navigate = useNavigate();
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
 
   return (
-    <Frame>
-      <Top>
-        <BrandMark>
-          <strong>KIN Mail Console</strong>
-          <span>Setup wizard · draft only (not applied)</span>
-        </BrandMark>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-          <SaveHint>{saving ? "Saving draft…" : draft.updated_at ? "Draft saved" : ""}</SaveHint>
-          <Mono style={{ color: theme.muted }}>{user?.username}</Mono>
-          <Button
-            type="button"
-            variant="ghost"
-            style={{ padding: "0.4rem 0.75rem", fontSize: "0.85rem" }}
-            onClick={() => void logout().then(() => navigate("/login"))}
-          >
-            Sign out
-          </Button>
-        </div>
-      </Top>
+    <ConsoleChrome
+      subtitle="Setup wizard · draft only (not applied)"
+      hint={<SaveHint>{saving ? "Saving draft…" : draft.updated_at ? "Draft saved" : ""}</SaveHint>}
+    >
       <Body>
         <Sidebar>
           <SideTitle>Deployment steps</SideTitle>
@@ -210,6 +157,6 @@ export default function WizardLayout() {
           </Content>
         </Main>
       </Body>
-    </Frame>
+    </ConsoleChrome>
   );
 }

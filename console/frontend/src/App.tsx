@@ -2,8 +2,10 @@ import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
+import AuditLogPage from "./pages/AuditLog";
 import EulaPage from "./pages/Eula";
 import LoginPage from "./pages/Login";
+import UsersPage from "./pages/Users";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
 import DeployStep from "./wizard/steps/DeployStep";
@@ -51,6 +53,26 @@ export default function App() {
             element={
               <RequireEula>
                 <LoginPage />
+              </RequireEula>
+            }
+          />
+          <Route
+            path="/users"
+            element={
+              <RequireEula>
+                <RequireAuth>
+                  <UsersPage />
+                </RequireAuth>
+              </RequireEula>
+            }
+          />
+          <Route
+            path="/audit"
+            element={
+              <RequireEula>
+                <RequireAuth>
+                  <AuditLogPage />
+                </RequireAuth>
               </RequireEula>
             }
           />
