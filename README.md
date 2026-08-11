@@ -36,8 +36,11 @@ If stage scripts are missing next to the bootstrap, it clones
 and continues from `install/` inside that clone. A full local clone uses the
 files already on disk.
 
-The menu runs the full pipeline (`01 → 02 → 03 → 04 → 06 → 05`, stop on first
-failure) or one stage at a time.
+The menu runs the full pipeline
+(`01 → 02 → 03 → 04 → 06 → [07?] → 09 → [10 prompted] → 11 → 05`, stop on first
+failure) or one stage at a time. Z-Push (`07`) follows `ZPUSH_ENABLED` from the
+wizard. Host firewall (`10`) always asks before applying and keeps the
+dead-man's switch.
 
 ### Manual stage-by-stage
 
@@ -52,7 +55,9 @@ sudo ./04-tls-dkim.sh         # TLS + DKIM (publish the DKIM record it prints)
 sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback
 sudo ./07-zpush.sh            # ActiveSync (Z-Push + Zimbra backend); optional
 sudo ./08-create-mailbox.sh   # create mailbox (shared quota gate); optional
-sudo ./09-hardening.sh        # Part A hardening (fail2ban / lockout / TLS / …); optional
+sudo ./09-hardening.sh        # Part A + SMTP rate limits (fail2ban / lockout / TLS / …)
+sudo ./10-host-firewall.sh apply   # ufw — needs KIN_ADMIN_IPS; dead-man armed
+sudo ./11-admin-path-lockdown.sh   # block /zimbraAdmin on public :443
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
@@ -85,10 +90,14 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/06-hybrid-auth.sh` | Optional AD LDAP + local fallback; no-op if AD was skipped | yes |
 | `install/07-zpush.sh` | Z-Push ActiveSync + Autodiscover (Zimbra backend); skips wipe/proxy restart when unchanged | yes |
 | `install/08-create-mailbox.sh` | Manual mailbox create; calls shared quota gate **before** `zmprov ca` | yes |
-| `install/09-hardening.sh` | Part A hardening only (fail2ban, COS lockout, cleartext off, unattended-upgrades, TLS); Part B not applied | yes |
+| `install/09-hardening.sh` | Part A hardening (fail2ban, COS lockout, cleartext off, unattended-upgrades, TLS, SMTP client rate limits) | yes |
+| `install/10-host-firewall.sh` | ufw allowlist + mandatory dead-man's switch (`apply` / `cancel-deadman`) | yes* |
+| `install/11-admin-path-lockdown.sh` | Block `/zimbraAdmin` + `/service/admin` on public :443 (admin stays on :7071) | yes |
 | `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08 + future console) | — |
 | `install/05-healthcheck.sh` | Services, listeners, cert, DNS, DKIM, SMTP egress, **both auth paths**, mail flow, open-relay | yes |
 | `install/check-zimbra-foss-update.sh` | Compare configured FOSS build vs newest GitHub release | yes |
+
+\* Re-`apply` resets ufw rules and re-arms the dead-man; prefer skip when already verified active.
 
 `01` is safe on any host; it changes nothing.
 
@@ -114,6 +123,8 @@ Asked once on first run:
 | TLS method | `1` Cloudflare / `2` manual DNS-01 / `3` customer-provided |
 | External test mailbox | empty |
 | Contracted mailbox seats | `PLACEHOLDER_UNSET` until operator confirms |
+| Admin source IPs/CIDRs (`KIN_ADMIN_IPS`) | empty until set — required for stage 10 |
+| Install Z-Push in full install (`ZPUSH_ENABLED`) | `yes` |
 
 Cloudflare API token is requested by `04` only when `TLS_METHOD=cloudflare`, and is
 never written to a log or echoed to the terminal.

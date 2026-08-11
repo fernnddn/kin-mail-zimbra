@@ -18,6 +18,7 @@ cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
 DEADMAN_SEC="${KIN_UFW_DEADMAN_SEC:-300}"
+# Prefer env override, else value from /etc/kin-mail/config (via 00-config.sh).
 ADMIN_IPS="${KIN_ADMIN_IPS:-}"
 CLUSTER_NET=""
 PEER_A=""
@@ -117,7 +118,7 @@ start_deadman() {
 
 apply_rules() {
   if [ -z "$ADMIN_IPS" ]; then
-    fail "KIN_ADMIN_IPS is required (space-separated admin public IPs for SSH/7071)"
+    fail "KIN_ADMIN_IPS is required (set in /etc/kin-mail/config via 00-config wizard, or export KIN_ADMIN_IPS=…)"
     exit 2
   fi
   if [ -z "$CLUSTER_NET" ]; then

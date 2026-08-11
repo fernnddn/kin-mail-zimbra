@@ -9,8 +9,8 @@
 #   4) unattended-upgrades security-only, no auto-reboot
 #   5) TLS: ensure TLSv1.2/1.3; tighten reverse-proxy ciphers
 #
-# Part B is INTENTIONALLY NOT implemented here (SSH key-only / root disable,
-# host firewall, cluster port changes). See progress log 7.1.
+# Host firewall / SSH key-only / admin-path lockdown live in 10 + 11 (and
+# Stage 1 SSH ops), not here. See progress logs 7.1–7.4.
 #
 #   sudo ./09-hardening.sh              # full Part A on this host
 #   sudo ./09-hardening.sh --os-only    # fail2ban + unattended only (Host B)
@@ -86,6 +86,10 @@ show_status() {
   fi
   grep -E 'Automatic-Reboot|Allowed-Origins|Unattended-Upgrade "' /etc/apt/apt.conf.d/50unattended-upgrades /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null \
     | sed 's/^/    /' | head -20 || true
+  if [ -d /opt/zimbra ]; then
+    su - zimbra -c "postconf -h smtpd_client_auth_rate_limit smtpd_client_connection_rate_limit smtpd_client_message_rate_limit" 2>/dev/null \
+      | sed 's/^/    smtp rates: /' || true
+  fi
   if cluster_ok; then ok "https://127.0.0.1/ → 200"; else warn "https check failed"; fi
 }
 
@@ -325,8 +329,82 @@ configure_tls() {
   fi
 }
 
+configure_smtp_rates() {
+  say "6. SMTP client rate limits (Postfix / Zimbra MTA)"
+  # Auth limit is a first-class LDAP attr (zmconfigd → main.cf). Connection/message
+  # rates are not mapped in stock zmconfigd.cf — set via postconf after rewrite and
+  # re-assert on each run so upgrades that rewrite main.cf get corrected.
+  local auth="${KIN_SMTP_AUTH_RATE_LIMIT:-30}"
+  local conn="${KIN_SMTP_CONN_RATE_LIMIT:-30}"
+  local msg="${KIN_SMTP_MSG_RATE_LIMIT:-120}"
+  local cur_auth cur_conn cur_msg ldap_auth need_rewrite=0
+
+  ldap_auth=$(zimbra_cmd zmprov gs "$(zimbra_cmd zmhostname)" zimbraMtaSmtpdClientAuthRateLimit 2>/dev/null \
+    | awk '/zimbraMtaSmtpdClientAuthRateLimit:/{print $2; exit}')
+  cur_auth=$(zimbra_cmd postconf -h smtpd_client_auth_rate_limit 2>/dev/null || echo "")
+  cur_conn=$(zimbra_cmd postconf -h smtpd_client_connection_rate_limit 2>/dev/null || echo "")
+  cur_msg=$(zimbra_cmd postconf -h smtpd_client_message_rate_limit 2>/dev/null || echo "")
+
+  if [ "${ldap_auth:-}" = "$auth" ] && [ "$cur_auth" = "$auth" ] \
+    && [ "$cur_conn" = "$conn" ] && [ "$cur_msg" = "$msg" ]; then
+    ok "SMTP rate limits already auth=${auth} conn=${conn} msg=${msg}"
+    return 0
+  fi
+
+  if [ "${ldap_auth:-}" != "$auth" ]; then
+    zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" zimbraMtaSmtpdClientAuthRateLimit "$auth"
+    need_rewrite=1
+    ok "Set zimbraMtaSmtpdClientAuthRateLimit=${auth}"
+  else
+    ok "zimbraMtaSmtpdClientAuthRateLimit already ${auth}"
+  fi
+
+  # Keep localconfig in sync for operators reading zmlocalconfig (auth also mirrored).
+  zimbra_cmd zmlocalconfig -e "postfix_smtpd_client_auth_rate_limit=${auth}"
+  zimbra_cmd zmlocalconfig -e "postfix_smtpd_client_connection_rate_limit=${conn}"
+  zimbra_cmd zmlocalconfig -e "postfix_smtpd_client_message_rate_limit=${msg}"
+
+  if [ "${KIN_HARDENING_SKIP_MTA_RELOAD:-0}" = "1" ]; then
+    warn "Rates updated in LDAP/localconfig but KIN_HARDENING_SKIP_MTA_RELOAD=1 — not rewriting MTA"
+    return 0
+  fi
+
+  # Prefer configrewrite + postfix reload. Avoid zmmtactl reload — it can stop MTA
+  # mid-flight on some FOSS builds without a clean restart.
+  if [ "$need_rewrite" -eq 1 ] || [ "$cur_auth" != "$auth" ]; then
+    if ! zimbra_cmd /opt/zimbra/libexec/configrewrite mta >/tmp/kin-hardening-mta-rewrite.out 2>&1; then
+      fail "configrewrite mta failed — see /tmp/kin-hardening-mta-rewrite.out"
+      exit 1
+    fi
+    ok "Rewrote MTA config (auth rate via zmconfigd)"
+  fi
+
+  # Connection/message: not in stock zmconfigd mapping — apply directly.
+  if ! zimbra_cmd postconf -e \
+    "smtpd_client_connection_rate_limit=${conn}" \
+    "smtpd_client_message_rate_limit=${msg}" >/tmp/kin-hardening-postconf.out 2>&1; then
+    fail "postconf -e failed — see /tmp/kin-hardening-postconf.out"
+    exit 1
+  fi
+
+  if ! zimbra_cmd postfix reload >/tmp/kin-hardening-postfix-reload.out 2>&1; then
+    fail "postfix reload failed — see /tmp/kin-hardening-postfix-reload.out"
+    exit 1
+  fi
+
+  cur_auth=$(zimbra_cmd postconf -h smtpd_client_auth_rate_limit 2>/dev/null || echo "")
+  cur_conn=$(zimbra_cmd postconf -h smtpd_client_connection_rate_limit 2>/dev/null || echo "")
+  cur_msg=$(zimbra_cmd postconf -h smtpd_client_message_rate_limit 2>/dev/null || echo "")
+  info "Effective postconf: auth=${cur_auth} conn=${cur_conn} msg=${cur_msg}"
+  if [ "$cur_auth" != "$auth" ] || [ "$cur_conn" != "$conn" ] || [ "$cur_msg" != "$msg" ]; then
+    fail "postconf values did not match desired limits after reload"
+    exit 1
+  fi
+  ok "MTA reloaded; SMTP client rate limits active"
+}
+
 test_fail2ban_ban_unban() {
-  say "6. fail2ban ban/unban smoke test (TEST-NET IP only)"
+  say "7. fail2ban ban/unban smoke test (TEST-NET IP only)"
   local test_ip="203.0.113.77"
   if ! fail2ban-client status zpush-auth >/dev/null 2>&1; then
     warn "zpush-auth jail not running — skip ban smoke test"
@@ -355,7 +433,7 @@ fi
 
 echo
 say "KIN Mail hardening Part A"
-info "Part B (SSH key-only, host firewall, cluster ports) is NOT applied by this script."
+info "Host firewall (10) and admin-path lockdown (11) are separate stages."
 
 configure_fail2ban
 configure_unattended
@@ -374,6 +452,7 @@ fi
 configure_lockout
 configure_cleartext
 configure_tls
+configure_smtp_rates
 test_fail2ban_ban_unban
 
 echo

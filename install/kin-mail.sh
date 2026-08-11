@@ -10,6 +10,7 @@
 #
 # Override defaults when needed:
 #   KIN_MAIL_REPO_URL=…  KIN_MAIL_DEPLOY_DIR=…  sudo -E ./install/kin-mail.sh
+#   KIN_MAIL_DRY_RUN=1   — print the planned pipeline without executing stages
 # =============================================================================
 set -u
 
@@ -28,6 +29,7 @@ need_root() {
 
 REPO_URL="${KIN_MAIL_REPO_URL:-https://github.com/fernnddn/kin-mail-zimbra.git}"
 DEPLOY_DIR="${KIN_MAIL_DEPLOY_DIR:-/opt/kin-mail-deploy}"
+DRY_RUN="${KIN_MAIL_DRY_RUN:-0}"
 
 REQUIRED_SCRIPTS=(
   00-config.sh
@@ -40,17 +42,19 @@ REQUIRED_SCRIPTS=(
   07-zpush.sh
   08-create-mailbox.sh
   09-hardening.sh
+  10-host-firewall.sh
+  11-admin-path-lockdown.sh
   check-zimbra-foss-update.sh
   kin-mail.sh
 )
 
-FULL_PIPELINE=(
+# Core stages always in full install (07 / 10 are conditional; see run_full_install).
+FULL_PIPELINE_CORE=(
   01-preflight.sh
   02-prepare-os.sh
   03-install-zimbra.sh
   04-tls-dkim.sh
   06-hybrid-auth.sh
-  05-healthcheck.sh
 )
 
 hr() {
@@ -143,17 +147,28 @@ ensure_scripts() {
   fi
 }
 
+load_install_config() {
+  # shellcheck disable=SC1091
+  . ./00-config.sh
+}
+
 run_stage() {
   local script="$1"
+  shift || true
   echo
   hr
-  say "Running ${script}"
+  say "Running ${script}${*:+ ($*)}"
   hr
   echo
+  if [ "$DRY_RUN" = "1" ]; then
+    info "DRY_RUN=1 — would execute: ./${script} $*"
+    ok "${script} skipped (dry-run)"
+    return 0
+  fi
   if [ ! -x "./$script" ]; then
     chmod +x "./$script" 2>/dev/null || true
   fi
-  "./$script"
+  "./$script" "$@"
   local rc=$?
   echo
   if [ "$rc" -eq 0 ]; then
@@ -164,12 +179,104 @@ run_stage() {
   return "$rc"
 }
 
+ufw_is_active() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | grep -q '^Status: active'
+}
+
+ensure_admin_ips_for_firewall() {
+  if [ -n "${KIN_ADMIN_IPS:-}" ]; then
+    return 0
+  fi
+  say "KIN_ADMIN_IPS is empty — required for host firewall"
+  info "Set once in the wizard, or enter sources now (also written to ${CONF_FILE})."
+  ask KIN_ADMIN_IPS "Admin source IPs/CIDRs (space-separated)" ""
+  KIN_ADMIN_IPS=$(printf '%s' "$KIN_ADMIN_IPS" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
+  if [ -z "$KIN_ADMIN_IPS" ]; then
+    fail "Cannot apply firewall without KIN_ADMIN_IPS"
+    return 1
+  fi
+  if [ -f "$CONF_FILE" ]; then
+    if grep -q '^KIN_ADMIN_IPS=' "$CONF_FILE" 2>/dev/null; then
+      # Replace existing assignment (simple line rewrite).
+      local tmp
+      tmp=$(mktemp)
+      awk -v v="$KIN_ADMIN_IPS" '
+        BEGIN { done=0 }
+        /^KIN_ADMIN_IPS=/ { print "KIN_ADMIN_IPS=\"" v "\""; done=1; next }
+        { print }
+        END { if (!done) print "KIN_ADMIN_IPS=\"" v "\"" }
+      ' "$CONF_FILE" >"$tmp" && mv "$tmp" "$CONF_FILE"
+      chmod 600 "$CONF_FILE"
+    else
+      printf '\nKIN_ADMIN_IPS="%s"\n' "$KIN_ADMIN_IPS" >>"$CONF_FILE"
+      chmod 600 "$CONF_FILE"
+    fi
+    ok "Persisted KIN_ADMIN_IPS into ${CONF_FILE}"
+  fi
+  export KIN_ADMIN_IPS
+}
+
+run_firewall_stage_interactive() {
+  echo
+  hr
+  say "Host firewall (stage 10) — HIGH RISK"
+  hr
+  info "Applies ufw on THIS host only (dead-man's switch always armed)."
+  info "For HA: finish + verify this host before running full install / stage 10 on the peer."
+  info "Do NOT apply Host A and Host B in parallel."
+  echo
+
+  local default_ans=y
+  if ufw_is_active; then
+    warn "ufw is already active on this host."
+    info "Re-apply resets rules and re-arms the dead-man switch."
+    default_ans=n
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    info "DRY_RUN=1 — would prompt: apply firewall now? (default ${default_ans})"
+    ok "10-host-firewall.sh skipped (dry-run)"
+    return 0
+  fi
+
+  if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
+    warn "Skipped 10-host-firewall.sh — host perimeter unchanged"
+    info "Run later: sudo ./10-host-firewall.sh apply"
+    return 0
+  fi
+
+  ensure_admin_ips_for_firewall || return 1
+  export KIN_ADMIN_IPS
+  run_stage 10-host-firewall.sh apply || return $?
+
+  echo
+  say "Dead-man is armed — verify SSH + cluster, then cancel"
+  info "sudo ./10-host-firewall.sh cancel-deadman"
+  if ask_yn "Cancel dead-man now (keep ufw enabled after your checks)?" y; then
+    ./10-host-firewall.sh cancel-deadman || {
+      fail "cancel-deadman failed — ufw may auto-disable when the timer ends"
+      return 1
+    }
+  else
+    warn "Dead-man still armed — cancel manually before the timer fires"
+  fi
+  return 0
+}
+
 run_full_install() {
   local s rc
-  say "Full install — order: ${FULL_PIPELINE[*]}"
+  load_install_config
+
+  say "Full install"
   info "Stops automatically if any stage exits non-zero."
+  info "This host only — for HA, install/verify one node before the peer."
+  if [ "$DRY_RUN" = "1" ]; then
+    warn "KIN_MAIL_DRY_RUN=1 — no stage will modify the system"
+  fi
   echo
-  for s in "${FULL_PIPELINE[@]}"; do
+
+  for s in "${FULL_PIPELINE_CORE[@]}"; do
     run_stage "$s" || {
       rc=$?
       echo
@@ -178,9 +285,63 @@ run_full_install() {
       return "$rc"
     }
   done
+
+  # 07 — optional (wizard ZPUSH_ENABLED); needs /opt/zimbra
+  if [ "${ZPUSH_ENABLED:-yes}" != "yes" ]; then
+    warn "ZPUSH_ENABLED=${ZPUSH_ENABLED:-} — skipping 07-zpush.sh"
+  elif [ ! -d /opt/zimbra ]; then
+    warn "/opt/zimbra missing — skipping 07-zpush.sh (expected on Secondary without mount)"
+  else
+    run_stage 07-zpush.sh || {
+      rc=$?
+      fail "Pipeline stopped at 07-zpush.sh"
+      return "$rc"
+    }
+  fi
+
+  # 09 — default on; Secondary without Zimbra tree uses --os-only
+  if [ -d /opt/zimbra ]; then
+    run_stage 09-hardening.sh || {
+      rc=$?
+      fail "Pipeline stopped at 09-hardening.sh"
+      return "$rc"
+    }
+  else
+    warn "/opt/zimbra missing — running 09-hardening.sh --os-only"
+    run_stage 09-hardening.sh --os-only || {
+      rc=$?
+      fail "Pipeline stopped at 09-hardening.sh --os-only"
+      return "$rc"
+    }
+  fi
+
+  # 10 — always interactive + dead-man (never silent auto-apply)
+  run_firewall_stage_interactive || {
+    rc=$?
+    fail "Pipeline stopped at 10-host-firewall.sh"
+    return "$rc"
+  }
+
+  # 11 — admin path lockdown on public 443 (Primary / mounted Zimbra only)
+  if [ -d /opt/zimbra ]; then
+    run_stage 11-admin-path-lockdown.sh || {
+      rc=$?
+      fail "Pipeline stopped at 11-admin-path-lockdown.sh"
+      return "$rc"
+    }
+  else
+    warn "/opt/zimbra missing — skipping 11-admin-path-lockdown.sh"
+  fi
+
+  run_stage 05-healthcheck.sh || {
+    rc=$?
+    fail "Pipeline stopped at 05-healthcheck.sh"
+    return "$rc"
+  }
+
   echo
   say "Full install complete"
-  ok "All pipeline stages exited 0"
+  ok "All selected pipeline stages exited 0"
 }
 
 pick_one_stage() {
@@ -196,12 +357,14 @@ pick_one_stage() {
     printf '  %s%s%s  %s\n' "$BLD" "5)" "$RST" "06-hybrid-auth.sh        ${DIM}AD LDAP + local fallback${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "6)" "$RST" "07-zpush.sh              ${DIM}ActiveSync (Z-Push + Zimbra backend)${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "7)" "$RST" "08-create-mailbox.sh     ${DIM}create mailbox (quota-gated)${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "8)" "$RST" "09-hardening.sh          ${DIM}Part A hardening (fail2ban/TLS/…)${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "9)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "10)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "8)" "$RST" "09-hardening.sh          ${DIM}Part A + SMTP rate limits${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "9)" "$RST" "10-host-firewall.sh      ${DIM}ufw (dead-man; THIS host only)${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "10)" "$RST" "11-admin-path-lockdown.sh ${DIM}block /zimbraAdmin on :443${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "11)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "12)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Back"
     hr
-    printf '  %sChoice%s [0-10]: ' "$BLD" "$RST"
+    printf '  %sChoice%s [0-12]: ' "$BLD" "$RST"
     read -r choice </dev/tty || return 0
     case "$choice" in
       1) run_stage 01-preflight.sh; return $? ;;
@@ -212,8 +375,14 @@ pick_one_stage() {
       6) run_stage 07-zpush.sh; return $? ;;
       7) run_stage 08-create-mailbox.sh; return $? ;;
       8) run_stage 09-hardening.sh; return $? ;;
-      9) run_stage 05-healthcheck.sh; return $? ;;
-      10)
+      9)
+        load_install_config
+        run_firewall_stage_interactive
+        return $?
+        ;;
+      10) run_stage 11-admin-path-lockdown.sh; return $? ;;
+      11) run_stage 05-healthcheck.sh; return $? ;;
+      12)
         echo
         say "Running 00-config.sh --reset"
         ./00-config.sh --reset
@@ -238,14 +407,15 @@ main_menu() {
     banner
     info "Working directory : ${workdir}"
     info "Run as            : root"
+    [ "$DRY_RUN" = "1" ] && warn "DRY_RUN mode is ON (KIN_MAIL_DRY_RUN=1)"
     echo
     say "Main menu"
     hr
     printf '  %s%s%s  %s\n' "$BLD" "1)" "$RST" "Full install from scratch"
-    printf '      %s%s\n' "$DIM" "01 → 02 → 03 → 04 → 06 → 05 (stops on failure)${RST}"
+    printf '      %s%s\n' "$DIM" "01→02→03→04→06→[07?]→09→[10?]→11→05  (firewall always prompted)${RST}"
     echo
     printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "Run a specific stage"
-    printf '      %s%s\n' "$DIM" "submenu: preflight, OS, install, TLS/DKIM, hybrid auth, healthcheck${RST}"
+    printf '      %s%s\n' "$DIM" "submenu includes Z-Push, hardening, firewall, admin lockdown${RST}"
     echo
     printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "Healthcheck only"
     printf '      %s%s\n' "$DIM" "05-healthcheck.sh${RST}"

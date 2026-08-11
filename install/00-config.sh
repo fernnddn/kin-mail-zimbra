@@ -328,6 +328,23 @@ run_wizard() {
       ;;
   esac
 
+  echo; say "Host firewall — admin sources"
+  info "Space-separated IPs/CIDRs allowed for SSH:22 and Zimbra Admin:7071"
+  info "(cluster LAN /24 from SERVER_IP is always added by 10-host-firewall.sh)."
+  info "Example: 203.0.113.10 198.51.100.0/24"
+  info "Required before stage 10 (ufw). Leave empty only if you will set KIN_ADMIN_IPS later."
+  ask KIN_ADMIN_IPS "Admin source IPs/CIDRs" "${KIN_ADMIN_IPS:-}"
+  # Trim and reject obviously broken tokens; empty is allowed for deferred firewall.
+  KIN_ADMIN_IPS=$(printf '%s' "$KIN_ADMIN_IPS" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
+
+  echo; say "Z-Push ActiveSync (mobile)"
+  info "Not every deployment needs ActiveSync. Full install skips 07 when disabled."
+  if ask_yn "Install Z-Push (mobile ActiveSync) during full install?" y; then
+    ZPUSH_ENABLED=yes
+  else
+    ZPUSH_ENABLED=no
+  fi
+
   mkdir -p "$CONF_DIR"
   cat > "$CONF_FILE" <<EOF
 # KIN Mail - created $(date -Is)
@@ -368,6 +385,10 @@ AD_TEST_PASS='${AD_TEST_PASS}'
 # PLACEHOLDER until operator confirms the real contracted seat count.
 # Quota gate blocks NEW mailbox creates only when at/over this limit (or unset).
 CONTRACTED_SEATS="${CONTRACTED_SEATS}"
+# Admin sources for ufw SSH/7071 (stage 10). Cluster LAN is added automatically.
+KIN_ADMIN_IPS="${KIN_ADMIN_IPS}"
+# yes = run 07-zpush.sh in full install; no = skip
+ZPUSH_ENABLED="${ZPUSH_ENABLED}"
 EOF
   chmod 600 "$CONF_FILE"
 
@@ -444,3 +465,9 @@ fi
 if [ -z "$CONTRACTED_SEATS" ]; then
   CONTRACTED_SEATS=PLACEHOLDER_UNSET
 fi
+: "${KIN_ADMIN_IPS:=}"
+: "${ZPUSH_ENABLED:=yes}"
+case "${ZPUSH_ENABLED}" in
+  yes|no) ;;
+  *) ZPUSH_ENABLED=yes ;;
+esac
