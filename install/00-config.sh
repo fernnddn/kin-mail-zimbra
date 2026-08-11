@@ -60,6 +60,59 @@ zimbra_cmd() {
   su - zimbra -c "${args[*]}"
 }
 
+# --- Pacemaker / kin-zimbra (shared; used by 04 hook pattern, 05, 07, …) -------
+# OCF monitor runs `zmcontrol status` every ~30s. Any zm*ctl / zmcontrol restart
+# that leaves a service not Running will mark kin-zimbra FAILED and drop kin-vip
+# unless we unmanage with --monitor first (see 1.7b).
+
+pcs_has_kin_zimbra() {
+  command -v pcs >/dev/null 2>&1 || return 1
+  # pcs 0.11 replaced `resource status <id>`; prefer config, fall back to status.
+  pcs resource config kin-zimbra >/dev/null 2>&1 \
+    || pcs resource status kin-zimbra >/dev/null 2>&1
+}
+
+# Set PCS_KIN_ZIMBRA_UNMANAGED=1 when we successfully unmanaged (for trap/remanage).
+PCS_KIN_ZIMBRA_UNMANAGED="${PCS_KIN_ZIMBRA_UNMANAGED:-0}"
+
+kin_zimbra_unmanage() {
+  PCS_KIN_ZIMBRA_UNMANAGED=0
+  if pcs_has_kin_zimbra; then
+    warn "kin-zimbra is Pacemaker-managed — unmanage --monitor before service restart"
+    pcs resource unmanage kin-zimbra --monitor
+    PCS_KIN_ZIMBRA_UNMANAGED=1
+  fi
+}
+
+kin_zimbra_remanage() {
+  if [ "${PCS_KIN_ZIMBRA_UNMANAGED:-0}" = "1" ]; then
+    # manage alone leaves monitors enabled=0 after unmanage --monitor (pcs 0.11).
+    pcs resource manage kin-zimbra --monitor 2>/dev/null \
+      || pcs resource manage kin-zimbra 2>/dev/null \
+      || true
+    PCS_KIN_ZIMBRA_UNMANAGED=0
+    ok "kin-zimbra re-managed (--monitor)"
+  fi
+}
+
+# After intentional restarts: wait until https responds and zmcontrol is healthy.
+kin_zimbra_wait_healthy() {
+  local i=0 code status_out
+  while [ "$i" -lt 90 ]; do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 https://127.0.0.1/ || true)
+    if [ "$code" = "200" ]; then
+      status_out=$(su - zimbra -c "zmcontrol status" 2>/dev/null || true)
+      if ! printf '%s\n' "$status_out" | grep -vE '^Host|^$' | grep -v 'Connect:' | grep -qv Running; then
+        return 0
+      fi
+    fi
+    i=$((i + 1))
+    sleep 2
+  done
+  fail "Zimbra not healthy after restart (https/zmcontrol)"
+  return 1
+}
+
 # Verify an account password the way clients do. `zmprov auth` is NOT a command
 # on Zimbra 10 FOSS (it prints usage and can exit 0) — use zmmailbox instead.
 zimbra_user_auth_ok() {

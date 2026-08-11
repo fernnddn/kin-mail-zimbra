@@ -60,11 +60,22 @@ fi
 # --- flush caches before DNS assertions --------------------------------------
 # Long-lived processes cache negative DNS answers. A record added after they
 # started looks missing until they are restarted.
+# amavis/opendkim appear in zmcontrol status — on HA Primary that trips the
+# Pacemaker kin-zimbra monitor unless we unmanage --monitor first (1.7b/1.7c).
 echo; say "Flushing DNS cache"
+kin_zimbra_unmanage
+trap kin_zimbra_remanage EXIT
 systemctl restart dnsmasq >/dev/null 2>&1 && info "dnsmasq restarted"
 su - zimbra -c "zmamavisdctl restart" >/dev/null 2>&1 && info "amavis restarted"
 su - zimbra -c "zmopendkimctl restart" >/dev/null 2>&1 && info "opendkim restarted"
-sleep 8
+if ! kin_zimbra_wait_healthy; then
+  f "Zimbra not healthy after DNS-cache flush restarts"
+else
+  info "Zimbra healthy after cache flush"
+fi
+kin_zimbra_remanage
+trap - EXIT
+sleep 2
 
 # --- public DNS --------------------------------------------------------------
 echo; say "Public DNS"
@@ -303,3 +314,5 @@ else
   fail "There are failures that need to be fixed on the server."
 fi
 echo
+# Non-zero when any server-side check failed (BLOCKED/network alone stays 0).
+[ "$FAILED" -eq 0 ] || exit 1

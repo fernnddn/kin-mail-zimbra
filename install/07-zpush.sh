@@ -364,21 +364,31 @@ reload_proxy_if_needed() {
   fi
 
   warn "Nginx wiring changed — regenerating config and restarting zmproxy"
+  kin_zimbra_unmanage
+  trap kin_zimbra_remanage EXIT
   if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-zpush-confgen.out 2>&1; then
     fail "zmproxyconfgen failed — see /tmp/kin-zpush-confgen.out"
+    kin_zimbra_remanage
+    trap - EXIT
     exit 1
   fi
   if ! zimbra_cmd zmproxyctl restart >/tmp/kin-zpush-proxy.out 2>&1; then
     fail "zmproxyctl restart failed — see /tmp/kin-zpush-proxy.out"
+    kin_zimbra_remanage
+    trap - EXIT
     exit 1
   fi
   sleep 2
-  local code
-  code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ || true)
-  if [ "$code" != "200" ]; then
-    fail "Webmail HTTPS returned ${code} after proxy restart"
+  if ! kin_zimbra_wait_healthy; then
+    fail "Webmail/Zimbra not healthy after proxy restart"
+    kin_zimbra_remanage
+    trap - EXIT
     exit 1
   fi
+  kin_zimbra_remanage
+  trap - EXIT
+  local code
+  code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ || true)
   ok "Proxy restarted; https://127.0.0.1/ → ${code}"
 }
 
