@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+# =============================================================================
+# KIN Mail - 09 HARDENING (Part A — low risk / reversible)
+#
+# Applies ONLY Part A from the Phase 7 hardening brief:
+#   1) fail2ban (SSH + Zimbra auth + Z-Push ActiveSync 401s)
+#   2) COS password lockout
+#   3) Disable IMAP/POP cleartext login (server attrs)
+#   4) unattended-upgrades security-only, no auto-reboot
+#   5) TLS: ensure TLSv1.2/1.3; tighten reverse-proxy ciphers
+#
+# Part B is INTENTIONALLY NOT implemented here (SSH key-only / root disable,
+# host firewall, cluster port changes). See progress log 7.1.
+#
+#   sudo ./09-hardening.sh              # full Part A on this host
+#   sudo ./09-hardening.sh --os-only    # fail2ban + unattended only (Host B)
+#   sudo ./09-hardening.sh --status     # print current hardening signals
+#
+# Idempotent. Proxy restart (if needed) temporarily unmanages kin-zimbra so
+# Pacemaker does not tear down the VIP on a brief zmproxy blip.
+# =============================================================================
+set -u
+cd "$(dirname "$0")" && . ./00-config.sh
+need_root
+
+FAIL2BAN_IGNORE_IP="${KIN_FAIL2BAN_IGNORE_IP:-127.0.0.1/8 ::1 10.10.40.0/24}"
+LOCKOUT_MAX="${KIN_LOCKOUT_MAX_FAILURES:-8}"
+LOCKOUT_DURATION="${KIN_LOCKOUT_DURATION:-30m}"
+LOCKOUT_WINDOW="${KIN_LOCKOUT_FAILURE_LIFETIME:-1h}"
+OS_ONLY=0
+STATUS_ONLY=0
+
+case "${1:-}" in
+  --os-only) OS_ONLY=1 ;;
+  --status)  STATUS_ONLY=1 ;;
+  -h|--help)
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  "") ;;
+  *)
+    fail "Unknown option: $1"
+    exit 2
+    ;;
+esac
+
+cluster_ok() {
+  local code
+  code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ 2>/dev/null || true)
+  [ "$code" = "200" ]
+}
+
+show_status() {
+  echo
+  say "Hardening status (Part A signals)"
+  if command -v fail2ban-client >/dev/null 2>&1 && systemctl is-active --quiet fail2ban; then
+    ok "fail2ban active"
+    fail2ban-client status 2>/dev/null | sed 's/^/    /' || true
+  else
+    warn "fail2ban not active"
+  fi
+  if [ -d /opt/zimbra ]; then
+    su - zimbra -c "zmprov gc default zimbraPasswordLockoutEnabled zimbraPasswordLockoutMaxFailures zimbraPasswordLockoutDuration zimbraPasswordLockoutFailureLifetime" 2>/dev/null \
+      | sed 's/^/    /' || true
+    su - zimbra -c "zmprov gs \$(zmhostname) zimbraImapCleartextLoginEnabled zimbraPop3CleartextLoginEnabled" 2>/dev/null \
+      | sed 's/^/    /' || true
+    su - zimbra -c "zmprov gacf" 2>/dev/null | grep -E 'zimbraReverseProxySSLProtocols|zimbraReverseProxySSLCiphers' \
+      | sed 's/^/    /' | head -20 || true
+  else
+    info "/opt/zimbra not mounted — skip Zimbra attrs (expected on Secondary)"
+  fi
+  grep -E 'Automatic-Reboot|Allowed-Origins|Unattended-Upgrade "' /etc/apt/apt.conf.d/50unattended-upgrades /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null \
+    | sed 's/^/    /' | head -20 || true
+  if cluster_ok; then ok "https://127.0.0.1/ → 200"; else warn "https check failed"; fi
+}
+
+# -----------------------------------------------------------------------------
+configure_fail2ban() {
+  say "1. fail2ban (SSH + Zimbra + Z-Push)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get -qq update
+  apt-get -y install fail2ban >/dev/null
+
+  mkdir -p /etc/fail2ban/filter.d /etc/fail2ban/jail.d
+
+  cat > /etc/fail2ban/filter.d/zimbra-auth.conf <<'EOF'
+# KIN Mail — Zimbra web/SOAP auth failures (mailbox.log carries oip=<client>)
+[Definition]
+failregex = ^.*oip=<HOST>;.*authentication failed
+            ^.*oip=<HOST>;.*invalid password
+            ^.*oip=<HOST>;.*Auth failed
+ignoreregex =
+EOF
+
+  cat > /etc/fail2ban/filter.d/zpush-auth.conf <<'EOF'
+# KIN Mail — ActiveSync / Autodiscover HTTP 401 via Zimbra nginx access log
+[Definition]
+failregex = ^<HOST>:\d+ .* "(?:OPTIONS|POST|GET) https?://[^"]*/(?:Microsoft-Server-ActiveSync|Autodiscover[^"]*)[^"]*" 401
+ignoreregex =
+EOF
+
+  JAIL_SSHD='
+[sshd]
+enabled = true
+port    = ssh
+mode    = normal
+'
+
+  JAIL_ZIMBRA=""
+  JAIL_ZPUSH=""
+  if [ -f /opt/zimbra/log/mailbox.log ]; then
+    JAIL_ZIMBRA='
+[zimbra-auth]
+enabled  = true
+filter   = zimbra-auth
+port     = http,https
+logpath  = /opt/zimbra/log/mailbox.log
+maxretry = 8
+findtime = 10m
+bantime  = 1h
+'
+  else
+    warn "mailbox.log missing — zimbra-auth jail not enabled on this node"
+  fi
+  if [ -f /opt/zimbra/log/nginx.access.log ]; then
+    JAIL_ZPUSH='
+[zpush-auth]
+enabled  = true
+filter   = zpush-auth
+port     = https
+logpath  = /opt/zimbra/log/nginx.access.log
+maxretry = 10
+findtime = 10m
+bantime  = 1h
+'
+  else
+    warn "nginx.access.log missing — zpush-auth jail not enabled on this node"
+  fi
+
+  cat > /etc/fail2ban/jail.d/kin-mail.conf <<EOF
+# KIN Mail Part A — managed by install/09-hardening.sh
+[DEFAULT]
+ignoreip = ${FAIL2BAN_IGNORE_IP}
+bantime  = 1h
+findtime = 10m
+maxretry = 8
+backend  = auto
+${JAIL_SSHD}
+${JAIL_ZIMBRA}
+${JAIL_ZPUSH}
+EOF
+
+  systemctl enable --now fail2ban >/dev/null
+  systemctl reload fail2ban 2>/dev/null || systemctl restart fail2ban
+  if ! systemctl is-active --quiet fail2ban; then
+    fail "fail2ban failed to start"
+    exit 1
+  fi
+  ok "fail2ban active (ignoreip: ${FAIL2BAN_IGNORE_IP})"
+  info "Quick unban: fail2ban-client set <jail> unbanip <ip>  OR  fail2ban-client unban --all"
+}
+
+# -----------------------------------------------------------------------------
+configure_unattended() {
+  say "2. unattended-upgrades (security-only, no auto-reboot)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get -y install unattended-upgrades >/dev/null
+
+  cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+
+  # Drop-in that always wins over commented defaults in 50unattended-upgrades.
+  cat > /etc/apt/apt.conf.d/52kin-mail-unattended <<'EOF'
+// KIN Mail — security origins only; never auto-reboot (HA / VIP safety).
+Unattended-Upgrade::Allowed-Origins {
+        "${distro_id}:${distro_codename}-security";
+        "${distro_id}ESMApps:${distro_codename}-apps-security";
+        "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
+EOF
+
+  systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
+  ok "unattended-upgrades configured (Automatic-Reboot=false)"
+}
+
+# -----------------------------------------------------------------------------
+configure_lockout() {
+  say "3. COS password lockout (default COS)"
+  if [ ! -d /opt/zimbra ]; then
+    warn "Skipping COS lockout — /opt/zimbra not present"
+    return 0
+  fi
+  zimbra_cmd zmprov mc default \
+    zimbraPasswordLockoutEnabled TRUE \
+    zimbraPasswordLockoutMaxFailures "$LOCKOUT_MAX" \
+    zimbraPasswordLockoutDuration "$LOCKOUT_DURATION" \
+    zimbraPasswordLockoutFailureLifetime "$LOCKOUT_WINDOW"
+  ok "default COS lockout: enabled max=${LOCKOUT_MAX} duration=${LOCKOUT_DURATION} window=${LOCKOUT_WINDOW}"
+}
+
+configure_cleartext() {
+  say "4. Disable IMAP/POP cleartext login (server attrs)"
+  if [ ! -d /opt/zimbra ]; then
+    warn "Skipping cleartext attrs — /opt/zimbra not present"
+    return 0
+  fi
+  # Proxy already uses starttls=only (LOGINDISABLED). Align mailbox server attrs.
+  local host
+  host=$(zimbra_cmd zmhostname)
+  local cur_imap cur_pop
+  cur_imap=$(zimbra_cmd zmprov gs "$host" zimbraImapCleartextLoginEnabled 2>/dev/null | awk '/zimbraImapCleartextLoginEnabled:/{print $2}')
+  cur_pop=$(zimbra_cmd zmprov gs "$host" zimbraPop3CleartextLoginEnabled 2>/dev/null | awk '/zimbraPop3CleartextLoginEnabled:/{print $2}')
+  info "Before: IMAP cleartext=${cur_imap:-?} POP cleartext=${cur_pop:-?}"
+  info "Proxy StartTLS mode already 'only' (cleartext LOGIN rejected at nginx)."
+  zimbra_cmd zmprov ms "$host" \
+    zimbraImapCleartextLoginEnabled FALSE \
+    zimbraPop3CleartextLoginEnabled FALSE
+  ok "zimbraImap/Pop3CleartextLoginEnabled=FALSE on ${host}"
+}
+
+configure_tls() {
+  say "5. TLS protocols + proxy ciphers"
+  if [ ! -d /opt/zimbra ]; then
+    warn "Skipping TLS — /opt/zimbra not present"
+    return 0
+  fi
+
+  # Modern AEAD-focused suite (TLS1.2 GCM + TLS1.3). No RC4/3DES/MD5; no bare AES128 CBC.
+  local desired_ciphers="ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:!aNULL:!eNULL:!EXPORT:!DES:!MD5:!PSK:!RC4"
+  local need_proxy_reload=0
+  local protos ciphers
+  protos=$(zimbra_cmd zmprov gacf 2>/dev/null | awk '/zimbraReverseProxySSLProtocols:/{print $2}' | tr '\n' ' ')
+  ciphers=$(zimbra_cmd zmprov gacf 2>/dev/null | awk '/^zimbraReverseProxySSLCiphers:/{print substr($0,index($0,$2))}')
+
+  info "Current SSLProtocols: ${protos:-unset}"
+  if ! printf '%s' "$protos" | grep -q 'TLSv1.2' || ! printf '%s' "$protos" | grep -q 'TLSv1.3'; then
+    zimbra_cmd zmprov mcf zimbraReverseProxySSLProtocols TLSv1.2
+    zimbra_cmd zmprov mcf +zimbraReverseProxySSLProtocols TLSv1.3
+    need_proxy_reload=1
+    ok "Set zimbraReverseProxySSLProtocols=TLSv1.2+TLSv1.3"
+  else
+    ok "Proxy SSL protocols already TLSv1.2 + TLSv1.3"
+  fi
+
+  if [ "$ciphers" = "$desired_ciphers" ]; then
+    ok "zimbraReverseProxySSLCiphers already modern AEAD suite"
+  else
+    zimbra_cmd zmprov mcf zimbraReverseProxySSLCiphers "$desired_ciphers"
+    need_proxy_reload=1
+    ok "Set modern zimbraReverseProxySSLCiphers (AEAD / no legacy CBC suite)"
+  fi
+
+  # Ensure mailboxd advertises TLSv1.3 alongside 1.2 (java options already set in this lab).
+  local mbproto
+  mbproto=$(zimbra_cmd zmprov gs "$(zimbra_cmd zmhostname)" zimbraMailboxdSSLProtocols 2>/dev/null | awk '/zimbraMailboxdSSLProtocols:/{print $2}' | tr '\n' ' ')
+  if ! printf '%s' "$mbproto" | grep -q 'TLSv1.3'; then
+    zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" +zimbraMailboxdSSLProtocols TLSv1.3 || true
+    info "Added TLSv1.3 to zimbraMailboxdSSLProtocols (takes full effect on next mailboxd restart — not forced here)"
+  else
+    ok "mailboxd SSL protocols include TLSv1.3"
+  fi
+
+  if [ "$need_proxy_reload" -eq 1 ]; then
+    if [ "${KIN_HARDENING_SKIP_PROXY_RESTART:-0}" = "1" ]; then
+      warn "TLS LDAP changed but KIN_HARDENING_SKIP_PROXY_RESTART=1 — not restarting zmproxy"
+      return 0
+    fi
+    warn "Regenerating nginx + restarting zmproxy (kin-zimbra temporarily unmanaged)"
+    if command -v pcs >/dev/null 2>&1 && pcs resource status kin-zimbra >/dev/null 2>&1; then
+      pcs resource unmanage kin-zimbra || true
+    fi
+    if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-hardening-confgen.out 2>&1; then
+      fail "zmproxyconfgen failed — see /tmp/kin-hardening-confgen.out"
+      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      exit 1
+    fi
+    if ! zimbra_cmd zmproxyctl restart >/tmp/kin-hardening-proxy.out 2>&1; then
+      fail "zmproxyctl restart failed — see /tmp/kin-hardening-proxy.out"
+      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      exit 1
+    fi
+    sleep 3
+    if ! cluster_ok; then
+      fail "https://127.0.0.1/ not 200 after proxy restart"
+      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      exit 1
+    fi
+    if command -v pcs >/dev/null 2>&1; then
+      pcs resource manage kin-zimbra || true
+      sleep 2
+    fi
+    ok "Proxy restarted; https=200; kin-zimbra managed again"
+  else
+    ok "No proxy restart required"
+  fi
+
+  # Prove TLS1.2 works (TLS1.0/1.1 already rejected by proxy ssl_protocols).
+  if echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -tls1_2 2>/dev/null | grep -q 'Protocol  : TLSv1.2'; then
+    ok "openssl s_client -tls1_2 succeeds"
+  else
+    warn "Could not confirm TLS1.2 handshake via openssl s_client"
+  fi
+}
+
+test_fail2ban_ban_unban() {
+  say "6. fail2ban ban/unban smoke test (TEST-NET IP only)"
+  local test_ip="203.0.113.77"
+  if ! fail2ban-client status zpush-auth >/dev/null 2>&1; then
+    warn "zpush-auth jail not running — skip ban smoke test"
+    return 0
+  fi
+  fail2ban-client set zpush-auth banip "$test_ip" >/dev/null
+  if fail2ban-client status zpush-auth 2>/dev/null | grep -q "$test_ip"; then
+    ok "Banned test IP ${test_ip} in zpush-auth"
+  else
+    warn "Ban of ${test_ip} not visible in jail status"
+  fi
+  fail2ban-client set zpush-auth unbanip "$test_ip" >/dev/null
+  if fail2ban-client status zpush-auth 2>/dev/null | grep -q "$test_ip"; then
+    fail "Unban failed for ${test_ip}"
+    exit 1
+  fi
+  ok "Unbanned ${test_ip} — recovery path verified"
+  info "Operator unban: fail2ban-client set zpush-auth unbanip <ip>"
+}
+
+# -----------------------------------------------------------------------------
+if [ "$STATUS_ONLY" -eq 1 ]; then
+  show_status
+  exit 0
+fi
+
+echo
+say "KIN Mail hardening Part A"
+info "Part B (SSH key-only, host firewall, cluster ports) is NOT applied by this script."
+
+configure_fail2ban
+configure_unattended
+
+if [ "$OS_ONLY" -eq 1 ]; then
+  ok "OS-only mode complete (fail2ban + unattended-upgrades)"
+  show_status
+  exit 0
+fi
+
+if [ ! -d /opt/zimbra ]; then
+  fail "Zimbra tree missing — use --os-only on Secondary, or run on Primary with /opt/zimbra mounted"
+  exit 1
+fi
+
+configure_lockout
+configure_cleartext
+configure_tls
+test_fail2ban_ban_unban
+
+echo
+say "Part A complete"
+if command -v pcs >/dev/null 2>&1; then
+  pcs status 2>/dev/null | grep -E 'kin-zimbra|kin-vip|FAILED|Promoted' | sed 's/^/    /' || true
+fi
+if cluster_ok; then ok "Cluster web health https=200"; else warn "https check failed — investigate"; fi
+exit 0
