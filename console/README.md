@@ -16,10 +16,12 @@ sudo ./console/bootstrap.sh
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist (slice 9.3) | `get_status`, `run_script:05-healthcheck.sh` only |
+| Whitelist (slice 9.3) | `get_status`, `run_script:09-hardening.sh --status` only |
 | Concurrency | Second request while busy → `busy` (no silent queue) |
 
-`Perform deployment` streams `get_status` via SSE (`/api/wizard/deploy/stream`).
+`Perform deployment` streams `run_script:09-hardening.sh --status` via SSE
+(`/api/wizard/deploy/stream`) — exercises `_stream_subprocess` (not `get_status`'s
+`_run_capture` path). `09-hardening.sh --status` is STATUS_ONLY read-only.
 
 ## Slices
 

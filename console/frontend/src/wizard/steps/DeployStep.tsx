@@ -12,11 +12,13 @@ type StreamEvent = {
   exit_code?: number;
 };
 
+const DEPLOY_CMD = "run_script:09-hardening.sh --status";
+
 export default function DeployStep() {
   const { draft } = useWizard();
   const navigate = useNavigate();
   const [log, setLog] = useState(
-    "# Privileged helper log viewer\n# Start deployment runs whitelist command: get_status\n",
+    `# Privileged helper log viewer\n# Start deployment runs: ${DEPLOY_CMD}\n`,
   );
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,7 +33,7 @@ export default function DeployStep() {
     setBusy(true);
     setMessage("");
     append(
-      `\n[${new Date().toISOString()}] Start deployment → privhelper get_status\n` +
+      `\n[${new Date().toISOString()}] Start deployment → privhelper ${DEPLOY_CMD}\n` +
         `# Draft topology=${draft.topology || "unset"} domain=${draft.mail_domain || "unset"}\n`,
     );
 
@@ -99,12 +101,13 @@ export default function DeployStep() {
     <>
       <Title>Perform deployment</Title>
       <Lede>
-        Slice 9.3 connects the log viewer to <code>kin-mail-privhelperd</code>. Start deployment
-        runs the read-only whitelist command <code>get_status</code> (not a full install).
+        Start deployment runs the read-only whitelist command{" "}
+        <code>{DEPLOY_CMD}</code> via <code>kin-mail-privhelperd</code>, streaming subprocess
+        output live into this log viewer.
       </Lede>
       <WarnBox>
-        <strong>Plumbing only.</strong> Firewall apply, installer stages that mutate config, and
-        Ansible are intentionally not on the whitelist yet.
+        <strong>Plumbing only.</strong> This uses <code>09-hardening.sh --status</code> (STATUS_ONLY)
+        — no firewall apply, no install stages that mutate config.
       </WarnBox>
       <LogPane aria-label="Deployment log">{log}</LogPane>
       {message && <Hint>{message}</Hint>}

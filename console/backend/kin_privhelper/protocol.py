@@ -9,8 +9,9 @@ PROTOCOL_VERSION = 1
 
 # Exact whitelist — nothing else is accepted (no free-form shell).
 CMD_GET_STATUS = "get_status"
-CMD_RUN_HEALTHCHECK = "run_script:05-healthcheck.sh"
-ALLOWED_COMMANDS = frozenset({CMD_GET_STATUS, CMD_RUN_HEALTHCHECK})
+# Fixed script + fixed --status flag (read-only path in 09-hardening.sh).
+CMD_RUN_HARDENING_STATUS = "run_script:09-hardening.sh --status"
+ALLOWED_COMMANDS = frozenset({CMD_GET_STATUS, CMD_RUN_HARDENING_STATUS})
 
 
 def encode_line(obj: dict[str, Any]) -> bytes:

@@ -136,16 +136,17 @@ def put_wizard_draft(
 
 @app.get("/api/wizard/deploy/stream")
 async def wizard_deploy_stream(username: str = Depends(auth.require_user)) -> StreamingResponse:
-    """Stream get_status through privhelperd into the Perform deployment log viewer.
+    """Stream hardening --status through privhelperd (_stream_subprocess path).
 
-    Slice 9.3 wires plumbing only — Start deployment runs the read-only get_status
-    whitelist command (not full install / firewall apply).
+    Start deployment uses whitelist `run_script:09-hardening.sh --status` so the
+    live log viewer exercises real subprocess line streaming (not get_status's
+    _run_capture path).
     """
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'meta', 'cmd': proto.CMD_GET_STATUS})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'cmd': proto.CMD_RUN_HARDENING_STATUS})}\n\n"
         async for ev in run_command(
-            proto.CMD_GET_STATUS,
+            proto.CMD_RUN_HARDENING_STATUS,
             username,
             socket_path=settings.privhelper_socket,
         ):
@@ -167,8 +168,11 @@ async def wizard_deploy_hint(_user: str = Depends(auth.require_user)) -> dict[st
     """Compat: prefer SSE /api/wizard/deploy/stream for live output."""
     return {
         "status": "use_stream",
-        "message": "Use GET /api/wizard/deploy/stream (SSE) — runs whitelist get_status via privhelper.",
-        "command": proto.CMD_GET_STATUS,
+        "message": (
+            "Use GET /api/wizard/deploy/stream (SSE) — runs "
+            "run_script:09-hardening.sh --status via privhelper."
+        ),
+        "command": proto.CMD_RUN_HARDENING_STATUS,
     }
 
 

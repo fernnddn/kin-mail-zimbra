@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -14,14 +15,15 @@ from . import protocol as proto
 DEPLOY_DIR = Path(os.environ.get("KIN_MAIL_DEPLOY_DIR", "/opt/kin-mail-deploy"))
 
 # Basename only — resolved under DEPLOY_DIR; never take a path from the client.
-HEALTHCHECK_CANDIDATES = (
-    "install/05-healthcheck.sh",
-    "05-healthcheck.sh",
+HARDENING_CANDIDATES = (
+    "install/09-hardening.sh",
+    "09-hardening.sh",
 )
 
 
-def resolve_healthcheck() -> Path:
-    for rel in HEALTHCHECK_CANDIDATES:
+def resolve_under_deploy(candidates: tuple[str, ...], label: str) -> Path:
+    """Resolve a script under DEPLOY_DIR; reject path escape (same pattern as former healthcheck)."""
+    for rel in candidates:
         candidate = (DEPLOY_DIR / rel).resolve()
         try:
             candidate.relative_to(DEPLOY_DIR.resolve())
@@ -30,9 +32,12 @@ def resolve_healthcheck() -> Path:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
     raise FileNotFoundError(
-        f"05-healthcheck.sh not found under {DEPLOY_DIR} "
-        f"(tried {', '.join(HEALTHCHECK_CANDIDATES)})"
+        f"{label} not found under {DEPLOY_DIR} (tried {', '.join(candidates)})"
     )
+
+
+def resolve_hardening() -> Path:
+    return resolve_under_deploy(HARDENING_CANDIDATES, "09-hardening.sh")
 
 
 async def _stream_subprocess(
@@ -45,7 +50,7 @@ async def _stream_subprocess(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd) if cwd else None,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"},
     )
     assert proc.stdout is not None and proc.stderr is not None
 
@@ -166,11 +171,16 @@ async def cmd_get_status() -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(0 if overall_ok else 1)
 
 
-async def cmd_run_healthcheck() -> AsyncIterator[dict[str, Any]]:
-    script = resolve_healthcheck()
-    yield proto.event_stdout(f"Running fixed script: {script}\n")
-    # Fixed argv only — no client-supplied arguments.
-    async for ev in _stream_subprocess([str(script)], cwd=script.parent):
+async def cmd_run_hardening_status() -> AsyncIterator[dict[str, Any]]:
+    """Stream `09-hardening.sh --status` (STATUS_ONLY=1 — read-only show_status + exit)."""
+    script = resolve_hardening()
+    yield proto.event_stdout(f"Running fixed script: {script} --status\n")
+    # Fixed argv only — --status is not client-supplied. stdbuf -oL for true line streaming
+    # through the pipe (bash would otherwise block-buffer when stdout is not a TTY).
+    argv = [str(script), "--status"]
+    if shutil.which("stdbuf"):
+        argv = ["stdbuf", "-oL", "-eL", *argv]
+    async for ev in _stream_subprocess(argv, cwd=script.parent):
         yield ev
 
 
@@ -178,7 +188,7 @@ CommandHandler = Callable[[], AsyncIterator[dict[str, Any]]]
 
 HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_GET_STATUS: cmd_get_status,
-    proto.CMD_RUN_HEALTHCHECK: cmd_run_healthcheck,
+    proto.CMD_RUN_HARDENING_STATUS: cmd_run_hardening_status,
 }
 
 
