@@ -16,6 +16,7 @@ async def run_command(
     username: str,
     *,
     socket_path: Path,
+    args: dict[str, Any] | None = None,
     connect_timeout: float = 5.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """Connect to the helper socket and yield NDJSON events."""
@@ -32,7 +33,7 @@ async def run_command(
         return
 
     try:
-        writer.write(encode_line(make_request(cmd, username)))
+        writer.write(encode_line(make_request(cmd, username, args=args)))
         await writer.drain()
         while True:
             raw = await reader.readline()

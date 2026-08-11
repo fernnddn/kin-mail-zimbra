@@ -230,6 +230,100 @@ _STREAM_ACTIONS: dict[str, str] = {
 }
 
 
+class CreateMailboxBody(BaseModel):
+    local_part: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=256)
+    display_name: str = Field(default="", max_length=128)
+
+
+async def _collect_privhelper(
+    cmd: str,
+    username: str,
+    *,
+    args: dict | None = None,
+) -> dict[str, object]:
+    lines: list[str] = []
+    exit_code = 1
+    error: str | None = None
+    async for ev in run_command(
+        cmd,
+        username,
+        socket_path=settings.privhelper_socket,
+        args=args,
+    ):
+        et = ev.get("type")
+        if et == "stdout" and ev.get("data"):
+            lines.append(str(ev["data"]))
+        elif et == "stderr" and ev.get("data"):
+            lines.append(str(ev["data"]))
+        elif et == "error":
+            error = str(ev.get("message") or ev.get("code") or "error")
+            lines.append(f"[error] {ev.get('code')}: {error}\n")
+        elif et == "done":
+            exit_code = int(ev.get("exit_code", 1))
+    return {
+        "exit_code": exit_code,
+        "ok": exit_code == 0 and error is None,
+        "error": error,
+        "log": "".join(lines),
+    }
+
+
+@app.get("/api/mailbox/status")
+async def mailbox_status(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Seat / quota status via 08-create-mailbox.sh --status (all authenticated roles)."""
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={"op": "status"},
+    )
+    return result
+
+
+@app.post("/api/mailbox")
+async def mailbox_create(
+    body: CreateMailboxBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Self-service mailbox create — Customer Admin allowed; quota gate enforced in 08."""
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    local_part = body.local_part.strip().lower()
+    if "@" in local_part:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter the local part only — domain is fixed to the configured mail domain",
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={
+            "op": "create",
+            "local_part": local_part,
+            "password": body.password,
+            "display_name": body.display_name.strip(),
+        },
+    )
+    # Never echo the submitted password back.
+    return {
+        "exit_code": result["exit_code"],
+        "ok": result["ok"],
+        "error": result["error"],
+        "log": result["log"],
+        "local_part": local_part,
+    }
+
+
 @app.get("/api/wizard/deploy/stream")
 async def wizard_deploy_stream(
     request: Request,

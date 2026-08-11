@@ -147,12 +147,25 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
+        raw_args = req.get("args")
+        args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
+        # Audit hint for mailbox create — never include password.
+        audit_cmd = cmd
+        if cmd == proto.CMD_CREATE_MAILBOX:
+            op = str(args.get("op") or "create")
+            lp = str(args.get("local_part") or "")[:64]
+            audit_cmd = f"{cmd}:{op}" + (f":{lp}" if lp else "")
+
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
         # Audit log is read-only and should remain available during busy work.
+        # Mailbox status is a short read-only probe (same script --status).
         bypass_busy = cmd in (
             proto.CMD_CANCEL_FIREWALL_DEADMAN,
             proto.CMD_GET_AUDIT_LOG,
+        ) or (
+            cmd == proto.CMD_CREATE_MAILBOX
+            and str(args.get("op") or "").strip().lower() == "status"
         )
 
         if not bypass_busy:
@@ -162,7 +175,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                         writer,
                         proto.event_error("busy", "another privileged execution is in progress"),
                     )
-                    _audit_line(username, cmd, "busy")
+                    _audit_line(username, audit_cmd, "busy")
                     return
                 _running = True
 
@@ -171,18 +184,20 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             exit_code = 1
             saw_done = False
             try:
-                async for ev in handler():
+                async for ev in handler(args):
                     await _send(writer, ev)
                     if ev.get("type") == "done":
                         exit_code = int(ev.get("exit_code", 1))
                         saw_done = True
                 if not saw_done:
                     await _send(writer, proto.event_done(exit_code))
-                _audit_line(username, cmd, "ok", exit_code)
+                _audit_line(username, audit_cmd, "ok", exit_code)
             except Exception as exc:  # noqa: BLE001 — keep daemon alive
-                await _send(writer, proto.event_error("exec_failed", str(exc)))
+                # Never echo exception text that might include a password from argv.
+                msg = "execution failed"
+                await _send(writer, proto.event_error("exec_failed", msg))
                 await _send(writer, proto.event_done(1))
-                _audit_line(username, cmd, f"exec_failed:{exc}", 1)
+                _audit_line(username, audit_cmd, "exec_failed", 1)
         finally:
             if not bypass_busy:
                 async with _gate:
@@ -195,7 +210,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             await _send(writer, proto.event_error("bad_request", str(exc)))
         except Exception:  # noqa: BLE001
             pass
-        _audit_line(username, cmd, f"bad_request:{exc}")
+        _audit_line(username, cmd, "bad_request")
     finally:
         try:
             writer.close()

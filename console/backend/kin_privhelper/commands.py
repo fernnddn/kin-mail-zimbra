@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -26,6 +27,10 @@ KIN_MAIL_CANDIDATES = (
 FIREWALL_CANDIDATES = (
     "install/10-host-firewall.sh",
     "10-host-firewall.sh",
+)
+CREATE_MAILBOX_CANDIDATES = (
+    "install/08-create-mailbox.sh",
+    "08-create-mailbox.sh",
 )
 
 
@@ -62,6 +67,63 @@ def resolve_kin_mail() -> Path:
 
 def resolve_firewall() -> Path:
     return resolve_under_deploy(FIREWALL_CANDIDATES, "10-host-firewall.sh")
+
+
+def resolve_create_mailbox() -> Path:
+    return resolve_under_deploy(CREATE_MAILBOX_CANDIDATES, "08-create-mailbox.sh")
+
+
+def _mail_domain_from_config() -> str:
+    """Read MAIL_DOMAIN from appliance config (root-only; same source as 08)."""
+    conf = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    if not conf.is_file():
+        raise RuntimeError(f"missing {conf}")
+    from kin_privhelper.apply_config import parse_config
+
+    values = parse_config(conf.read_text(encoding="utf-8"))
+    domain = str(values.get("MAIL_DOMAIN") or "").strip()
+    if not domain:
+        raise RuntimeError("MAIL_DOMAIN is empty in /etc/kin-mail/config")
+    return domain
+
+
+_LOCAL_PART_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._+-]{0,62})$")
+
+
+def validate_create_mailbox_args(args: dict[str, Any]) -> tuple[str, list[str]]:
+    """Return (op, argv_tail for 08-create-mailbox.sh). Password never logged here."""
+    op = str(args.get("op") or "create").strip().lower()
+    if op == "status":
+        return "status", ["--status"]
+    if op != "create":
+        raise ValueError("create_mailbox op must be 'create' or 'status'")
+
+    local_part = str(args.get("local_part") or "").strip().lower()
+    password = str(args.get("password") or "")
+    display_name = str(args.get("display_name") or "").strip()
+
+    if not local_part or "@" in local_part:
+        raise ValueError("local_part is required (mailbox name only — domain is fixed)")
+    if not _LOCAL_PART_RE.match(local_part):
+        raise ValueError(
+            "local_part must start with alphanumeric and use only letters, digits, . _ + -"
+        )
+    if len(password) < 8:
+        raise ValueError("password must be at least 8 characters")
+    if len(password) > 256:
+        raise ValueError("password too long")
+    if len(display_name) > 128:
+        raise ValueError("display_name too long")
+    if any(ord(c) < 32 for c in display_name):
+        raise ValueError("display_name contains invalid characters")
+
+    domain = _mail_domain_from_config()
+    email = f"{local_part}@{domain}"
+    argv = [email, password]
+    if display_name:
+        argv.append(display_name)
+    return "create", argv
+
 
 
 async def _stream_subprocess(
@@ -263,7 +325,7 @@ async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
         yield ev
 
 
-async def cmd_get_audit_log() -> AsyncIterator[dict[str, Any]]:
+async def cmd_get_audit_log(_args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     """Read-only tail of privhelper audit log (Super Admin only via RBAC)."""
     log_path = Path(os.environ.get("PRIVHELPER_LOG", "/var/log/kin-mail/privhelper.log"))
     lines_n = 200
@@ -304,16 +366,69 @@ async def cmd_get_audit_log() -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(0)
 
 
-CommandHandler = Callable[[], AsyncIterator[dict[str, Any]]]
+async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    """Quota-gated mailbox create via install/08-create-mailbox.sh (same gate as CLI)."""
+    args = args or {}
+    try:
+        op, argv_tail = validate_create_mailbox_args(args)
+    except ValueError as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(2)
+        return
+    except RuntimeError as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(1)
+        return
+
+    script = resolve_create_mailbox()
+    if op == "status":
+        yield proto.event_stdout(f"Running fixed script: {script} --status\n")
+    else:
+        # Never print password. Email is argv_tail[0].
+        email = argv_tail[0]
+        dname = argv_tail[2] if len(argv_tail) > 2 else ""
+        yield proto.event_stdout(
+            f"Running fixed script: {script} {email} <password-redacted>"
+            + (f" {dname!r}" if dname else "")
+            + "\n"
+        )
+        yield proto.event_stdout(
+            "# Uses kin_quota_gate_allow_new_mailbox before zmprov ca (same as CLI).\n"
+        )
+
+    argv = [str(script), *argv_tail]
+    if shutil.which("stdbuf"):
+        argv = ["stdbuf", "-oL", "-eL", *argv]
+    async for ev in _stream_subprocess(argv, cwd=script.parent):
+        yield ev
+
+
+CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]
+
+
+def _adapt(fn: Callable[..., AsyncIterator[dict[str, Any]]]) -> CommandHandler:
+    """Allow legacy zero-arg handlers and new args-aware handlers."""
+
+    async def _wrapped(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        try:
+            agen = fn(args)
+        except TypeError:
+            agen = fn()
+        async for ev in agen:
+            yield ev
+
+    return _wrapped
+
 
 HANDLERS: dict[str, CommandHandler] = {
-    proto.CMD_GET_STATUS: cmd_get_status,
-    proto.CMD_RUN_HARDENING_STATUS: cmd_run_hardening_status,
-    proto.CMD_APPLY_WIZARD_DRAFT: cmd_apply_wizard_draft,
-    proto.CMD_RUN_HARDENING: cmd_run_hardening,
-    proto.CMD_RUN_FULL_INSTALL: cmd_run_full_install,
-    proto.CMD_CANCEL_FIREWALL_DEADMAN: cmd_cancel_firewall_deadman,
-    proto.CMD_GET_AUDIT_LOG: cmd_get_audit_log,
+    proto.CMD_GET_STATUS: _adapt(cmd_get_status),
+    proto.CMD_RUN_HARDENING_STATUS: _adapt(cmd_run_hardening_status),
+    proto.CMD_APPLY_WIZARD_DRAFT: _adapt(cmd_apply_wizard_draft),
+    proto.CMD_RUN_HARDENING: _adapt(cmd_run_hardening),
+    proto.CMD_RUN_FULL_INSTALL: _adapt(cmd_run_full_install),
+    proto.CMD_CANCEL_FIREWALL_DEADMAN: _adapt(cmd_cancel_firewall_deadman),
+    proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
+    proto.CMD_CREATE_MAILBOX: _adapt(cmd_create_mailbox),
 }
 
 

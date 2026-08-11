@@ -35,9 +35,10 @@ Sensitive commands are denied in **both** the FastAPI stream endpoint and privhe
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log` |
-| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`** and **`get_audit_log`** bypass busy |
+| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log`, `create_mailbox` |
+| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`**, **`get_audit_log`**, and mailbox **`--status`** bypass busy |
 
+Self-service: `POST /api/mailbox` (Customer Admin allowed) wraps `install/08-create-mailbox.sh` so the shared `kin_quota_gate_allow_new_mailbox` runs before any `zmprov ca`. Seat limit (`CONTRACTED_SEATS`) remains ops-only via draft apply.
 SSE: `/api/wizard/deploy/stream?action=…`  
 `run_full_install` sets `KIN_CONSOLE_CONFIRMED=1` and runs `kin-mail.sh --full-install`.  
 Stage 10 still arms the ufw dead-man; pipeline **waits** for `cancel_firewall_deadman` (never auto-cancel).
@@ -52,4 +53,5 @@ Stage 10 still arms the ufw dead-man; pipeline **waits** for `cancel_firewall_de
 | 9.4 Config apply + hardening | Done |
 | 9.5 Full install + dead-man cancel | Done |
 | 9.8 Local multi-user + RBAC | Done |
-| 9.9 AD/LDAP console login | This tree |
+| 9.9 AD/LDAP console login | Done |
+| 9.10 Self-service mailbox create | This tree |

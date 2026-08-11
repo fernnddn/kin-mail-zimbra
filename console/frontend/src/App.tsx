@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
 import AuditLogPage from "./pages/AuditLog";
+import CreateMailboxPage from "./pages/CreateMailbox";
 import EulaPage from "./pages/Eula";
 import LoginPage from "./pages/Login";
 import UsersPage from "./pages/Users";
@@ -53,6 +54,16 @@ export default function App() {
             element={
               <RequireEula>
                 <LoginPage />
+              </RequireEula>
+            }
+          />
+          <Route
+            path="/mailboxes"
+            element={
+              <RequireEula>
+                <RequireAuth>
+                  <CreateMailboxPage />
+                </RequireAuth>
               </RequireEula>
             }
           />

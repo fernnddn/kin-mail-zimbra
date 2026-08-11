@@ -81,6 +81,7 @@ export function ConsoleChrome({
           {hint}
           <NavLinks>
             <Link to="/wizard">Wizard</Link>
+            <Link to="/mailboxes">Mailboxes</Link>
             {isSuper && <Link to="/users">Users</Link>}
             {isSuper && <Link to="/audit">Audit log</Link>}
           </NavLinks>

@@ -15,6 +15,7 @@ CMD_RUN_HARDENING = "run_hardening"
 CMD_RUN_FULL_INSTALL = "run_full_install"
 CMD_CANCEL_FIREWALL_DEADMAN = "cancel_firewall_deadman"
 CMD_GET_AUDIT_LOG = "get_audit_log"
+CMD_CREATE_MAILBOX = "create_mailbox"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -24,6 +25,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_RUN_FULL_INSTALL,
         CMD_CANCEL_FIREWALL_DEADMAN,
         CMD_GET_AUDIT_LOG,
+        CMD_CREATE_MAILBOX,
     }
 )
 
@@ -42,8 +44,11 @@ def decode_line(raw: bytes) -> dict[str, Any]:
     return data
 
 
-def make_request(cmd: str, username: str) -> dict[str, Any]:
-    return {"v": PROTOCOL_VERSION, "cmd": cmd, "username": username}
+def make_request(cmd: str, username: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    req: dict[str, Any] = {"v": PROTOCOL_VERSION, "cmd": cmd, "username": username}
+    if args:
+        req["args"] = args
+    return req
 
 
 def event_accepted(cmd: str) -> dict[str, Any]:
