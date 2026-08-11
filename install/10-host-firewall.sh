@@ -51,24 +51,65 @@ ufw_status() {
 }
 
 cancel_deadman() {
+  # Prefer cancel flag (survives failed signals) + hard-kill + verify process gone.
+  touch /run/kin-ufw-deadman.cancel
+  local pid=""
   if [ -f /run/kin-ufw-deadman.pid ]; then
-    local pid
-    pid=$(cat /run/kin-ufw-deadman.pid 2>/dev/null || true)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      ok "Cancelled dead-man PID ${pid}"
-    fi
-    rm -f /run/kin-ufw-deadman.pid
-  else
-    info "No dead-man pid file"
+    pid=$(tr -d ' \n' < /run/kin-ufw-deadman.pid 2>/dev/null || true)
   fi
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    # Kill whole process group if started with setsid; also try direct PID.
+    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      sleep 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "Dead-man PID ${pid} still alive after SIGKILL — NOT safe to assume ufw stays on"
+      exit 1
+    fi
+    ok "Cancelled dead-man PID ${pid} (process confirmed dead)"
+  else
+    info "No live dead-man process (cancel flag set)"
+  fi
+  rm -f /run/kin-ufw-deadman.pid
+  # Keep cancel flag so a racing sleep loop still sees it before disable.
 }
 
 start_deadman() {
   cancel_deadman
-  # shellcheck disable=SC2086
-  nohup bash -c "sleep ${DEADMAN_SEC}; ufw --force disable; logger -t kin-ufw 'dead-man disabled ufw after ${DEADMAN_SEC}s'" \
-    >/var/log/kin-ufw-deadman.log 2>&1 &
+  rm -f /run/kin-ufw-deadman.cancel
+  : >/var/log/kin-ufw-deadman.log
+  # Flag-polled loop (not one long sleep): cancel file stops disable even if kill races.
+  # setsid → dedicated process group for reliable kill.
+  setsid bash -c "
+    marker=/run/kin-ufw-deadman.cancel
+    log=/var/log/kin-ufw-deadman.log
+    sec=${DEADMAN_SEC}
+    i=0
+    while [ \"\$i\" -lt \"\$sec\" ]; do
+      if [ -f \"\$marker\" ]; then
+        echo \"dead-man cancelled at \${i}s/\${sec}s (\$(date -Is))\" | tee -a \"\$log\"
+        logger -t kin-ufw \"dead-man cancelled at \${i}s\"
+        exit 0
+      fi
+      sleep 1
+      i=\$((i + 1))
+    done
+    if [ -f \"\$marker\" ]; then
+      echo \"dead-man cancelled at deadline (\$(date -Is))\" | tee -a \"\$log\"
+      logger -t kin-ufw 'dead-man cancelled at deadline'
+      exit 0
+    fi
+    echo \"dead-man disabling ufw after \${sec}s (\$(date -Is))\" | tee -a \"\$log\"
+    logger -t kin-ufw \"dead-man disabled ufw after \${sec}s\"
+    ufw --force disable
+  " >>/var/log/kin-ufw-deadman.log 2>&1 &
   echo $! > /run/kin-ufw-deadman.pid
   ok "Dead-man armed: ufw will auto-disable in ${DEADMAN_SEC}s (pid $(cat /run/kin-ufw-deadman.pid))"
   warn "After verification: $0 cancel-deadman   (keeps ufw enabled)"
