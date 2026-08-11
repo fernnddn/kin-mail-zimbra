@@ -23,12 +23,27 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
-FAIL2BAN_IGNORE_IP="${KIN_FAIL2BAN_IGNORE_IP:-127.0.0.1/8 ::1 10.10.40.0/24}"
+FAIL2BAN_IGNORE_IP="${KIN_FAIL2BAN_IGNORE_IP:-}"
 LOCKOUT_MAX="${KIN_LOCKOUT_MAX_FAILURES:-8}"
 LOCKOUT_DURATION="${KIN_LOCKOUT_DURATION:-30m}"
 LOCKOUT_WINDOW="${KIN_LOCKOUT_FAILURE_LIFETIME:-1h}"
 OS_ONLY=0
 STATUS_ONLY=0
+
+# Default ignore list: loopback + this host's LAN /24 from SERVER_IP (no hardcoded lab CIDR in git).
+kin_fail2ban_default_ignoreip() {
+  local out="127.0.0.1/8 ::1" ip="${SERVER_IP:-}" a b c
+  case "$ip" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+      IFS=. read -r a b c _ <<EOF
+${ip}
+EOF
+      out="${out} ${a}.${b}.${c}.0/24"
+      ;;
+  esac
+  printf '%s' "$out"
+}
+[ -n "$FAIL2BAN_IGNORE_IP" ] || FAIL2BAN_IGNORE_IP="$(kin_fail2ban_default_ignoreip)"
 
 case "${1:-}" in
   --os-only) OS_ONLY=1 ;;
