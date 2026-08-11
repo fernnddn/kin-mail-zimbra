@@ -30,7 +30,23 @@ LOCKOUT_WINDOW="${KIN_LOCKOUT_FAILURE_LIFETIME:-1h}"
 OS_ONLY=0
 STATUS_ONLY=0
 
-# Default ignore list: loopback + this host's LAN /24 from SERVER_IP (no hardcoded lab CIDR in git).
+# Append space-separated tokens to an ignoreip string (dedupe exact tokens).
+kin_fail2ban_append_ignore() {
+  local out="$1"
+  shift
+  local tok
+  for tok in "$@"; do
+    [ -n "$tok" ] || continue
+    case " ${out} " in
+      *" ${tok} "*) ;;
+      *) out="${out}${out:+ }${tok}" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# Default ignore list: loopback + cluster LAN /24 from SERVER_IP + KIN_ADMIN_IPS
+# (same trust as ufw SSH/7071/9443). No hardcoded lab CIDR in git.
 kin_fail2ban_default_ignoreip() {
   local out="127.0.0.1/8 ::1" ip="${SERVER_IP:-}" a b c
   case "$ip" in
@@ -41,9 +57,13 @@ EOF
       out="${out} ${a}.${b}.${c}.0/24"
       ;;
   esac
-  printf '%s' "$out"
+  # shellcheck disable=SC2086
+  kin_fail2ban_append_ignore "$out" ${KIN_ADMIN_IPS:-}
 }
 [ -n "$FAIL2BAN_IGNORE_IP" ] || FAIL2BAN_IGNORE_IP="$(kin_fail2ban_default_ignoreip)"
+# Even with KIN_FAIL2BAN_IGNORE_IP override, always union KIN_ADMIN_IPS (ufw-aligned).
+# shellcheck disable=SC2086
+FAIL2BAN_IGNORE_IP="$(kin_fail2ban_append_ignore "$FAIL2BAN_IGNORE_IP" ${KIN_ADMIN_IPS:-})"
 
 case "${1:-}" in
   --os-only) OS_ONLY=1 ;;
@@ -404,14 +424,27 @@ configure_smtp_rates() {
 
 test_fail2ban_ban_unban() {
   say "7. fail2ban ban/unban smoke test (TEST-NET IP only)"
-  local test_ip="203.0.113.77"
+  local test_ip="203.0.113.77" admin_tok ignore_cfg
   if ! fail2ban-client status zpush-auth >/dev/null 2>&1; then
     warn "zpush-auth jail not running — skip ban smoke test"
     return 0
   fi
+  ignore_cfg=$(grep -E '^ignoreip[[:space:]]*=' /etc/fail2ban/jail.d/kin-mail.conf 2>/dev/null || true)
+  for admin_tok in ${KIN_ADMIN_IPS:-}; do
+    [ -n "$admin_tok" ] || continue
+    case " ${ignore_cfg#ignoreip=} " in
+      *" ${admin_tok} "*) ok "ignoreip includes KIN_ADMIN_IPS token ${admin_tok}" ;;
+      *)
+        fail "ignoreip missing KIN_ADMIN_IPS token ${admin_tok}: ${ignore_cfg}"
+        exit 1
+        ;;
+    esac
+  done
+  # Note: fail2ban-client banip bypasses ignoreip (operator override). Protection is
+  # log-driven Ban actions — verified live with injected auth fails in progress logs.
   fail2ban-client set zpush-auth banip "$test_ip" >/dev/null
   if fail2ban-client status zpush-auth 2>/dev/null | grep -q "$test_ip"; then
-    ok "Banned test IP ${test_ip} in zpush-auth"
+    ok "Banned test IP ${test_ip} in zpush-auth (non-admin still protected)"
   else
     warn "Ban of ${test_ip} not visible in jail status"
   fi
