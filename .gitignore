@@ -4,6 +4,12 @@ docs/
 # Local Cursor / Claude tooling
 .claude/
 
+# Ansible local inventory / secrets (keep example committed)
+ansible/inventory/lab.yml
+ansible/inventory/*.local.yml
+ansible/**/*.retry
+*.retry
+
 # --- never commit deployment state or credentials ---------------------------
 config
 *.conf.local

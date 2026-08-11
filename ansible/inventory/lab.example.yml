@@ -1,0 +1,18 @@
+---
+# Example inventory for the Monitoring / qnetd host.
+# Copy to lab.yml (gitignored) and fill in auth — never commit passwords.
+#
+#   cp inventory/lab.example.yml inventory/lab.yml
+#
+# Or pass credentials via environment / --extra-vars without writing them to disk.
+
+all:
+  children:
+    monitoring:
+      hosts:
+        mon.gits-it.site:
+          ansible_host: 10.10.40.14
+          ansible_user: cursor
+          # ansible_password: "..."
+          # ansible_become_password: "..."
+          # Prefer SSH keys in real use; password auth is lab-only.

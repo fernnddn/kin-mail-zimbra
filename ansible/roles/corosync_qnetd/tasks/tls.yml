@@ -1,0 +1,18 @@
+---
+# On Ubuntu, package postinst usually creates the NSS DB (cert9.db). Task 2.1
+# noted corosync-qnetd-certutil -i was not needed when that file already existed.
+# This step only initializes when the DB is missing (idempotent for greenfield).
+
+- name: Memeriksa basis data sertifikat TLS qnetd
+  ansible.builtin.stat:
+    path: "{{ corosync_qnetd_nssdb_cert9 }}"
+  register: corosync_qnetd_nssdb
+  tags: [qnetd, tls]
+
+- name: Membuat sertifikat TLS qnetd
+  ansible.builtin.command:
+    cmd: corosync-qnetd-certutil -i
+  when: not corosync_qnetd_nssdb.stat.exists
+  register: corosync_qnetd_certutil_init
+  changed_when: corosync_qnetd_certutil_init.rc == 0
+  tags: [qnetd, tls]

@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket qnetd
+  ansible.builtin.apt:
+    name: "{{ corosync_qnetd_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [qnetd, install]

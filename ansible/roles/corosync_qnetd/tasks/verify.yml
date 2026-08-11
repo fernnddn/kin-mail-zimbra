@@ -1,0 +1,42 @@
+---
+# Read-only probes. check_mode: false so --check still reports live status on
+# an already-configured host without mutating it. On a blank VM these asserts
+# would fail until a real (non-check) apply has been run — that is expected.
+
+- name: Memverifikasi layanan qnetd aktif
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ corosync_qnetd_service }}
+  register: corosync_qnetd_is_active
+  changed_when: false
+  failed_when: corosync_qnetd_is_active.stdout | trim != "active"
+  check_mode: false
+  tags: [qnetd, verify]
+
+- name: Memverifikasi layanan qnetd di-enable saat boot
+  ansible.builtin.command:
+    cmd: systemctl is-enabled {{ corosync_qnetd_service }}
+  register: corosync_qnetd_is_enabled
+  changed_when: false
+  failed_when: corosync_qnetd_is_enabled.stdout | trim != "enabled"
+  check_mode: false
+  tags: [qnetd, verify]
+
+- name: Memverifikasi qnetd mendengarkan port 5403
+  ansible.builtin.wait_for:
+    port: "{{ corosync_qnetd_port }}"
+    host: 127.0.0.1
+    timeout: 10
+    state: started
+  check_mode: false
+  tags: [qnetd, verify]
+
+- name: Memverifikasi status internal qnetd
+  ansible.builtin.command:
+    cmd: corosync-qnetd-tool -s
+  register: corosync_qnetd_tool_status
+  changed_when: false
+  failed_when: >
+    (corosync_qnetd_tool_status.rc != 0) or
+    ('5403' not in corosync_qnetd_tool_status.stdout)
+  check_mode: false
+  tags: [qnetd, verify]

@@ -1,0 +1,10 @@
+---
+# Defaults for role corosync_qnetd (task 2.1 Monitoring VM slice).
+# Package name and listen port match Ubuntu 24.04 corosync-qnetd(8).
+
+corosync_qnetd_package: corosync-qnetd
+corosync_qnetd_service: corosync-qnetd
+corosync_qnetd_port: 5403
+# NSS DB path used by corosync-qnetd-certutil / package postinst (Ubuntu).
+corosync_qnetd_nssdb_dir: /etc/corosync/qnetd/nssdb
+corosync_qnetd_nssdb_cert9: /etc/corosync/qnetd/nssdb/cert9.db

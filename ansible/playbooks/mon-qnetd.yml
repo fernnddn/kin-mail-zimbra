@@ -1,0 +1,18 @@
+---
+# Port of Phase 2 task 2.1 — corosync-qnetd on the Monitoring VM only.
+# Scope: install + TLS NSS init (if needed) + enable/start + verify listen :5403.
+# Out of scope: OS prep, iSCSI SBD target, qdevice clients on Host A/B.
+#
+# Dry-run (preferred until a blank test VM exists):
+#   ansible-playbook playbooks/mon-qnetd.yml --check
+#
+# Do NOT run without --check against the live lab cluster unless you intend
+# to mutate that host — production qnetd/DRBD/Pacemaker already run there.
+
+- name: Siapkan arbitrator qnetd di VM Monitoring
+  hosts: monitoring
+  gather_facts: true
+  become: true
+  roles:
+    - role: corosync_qnetd
+      tags: [qnetd, monitoring]

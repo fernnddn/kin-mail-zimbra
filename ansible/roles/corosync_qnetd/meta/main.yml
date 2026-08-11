@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: corosync_qnetd
+  description: >
+    Install and enable corosync-qnetd on a dedicated Monitoring / witness host
+    (KIN Mail Phase 2 task 2.1 slice — qnetd only, no qdevice clients).
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["22.04", "24.04"]
+dependencies: []

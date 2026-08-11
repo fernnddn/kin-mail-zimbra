@@ -1,0 +1,12 @@
+---
+- name: Mengaktifkan layanan qnetd agar ikut boot
+  ansible.builtin.systemd:
+    name: "{{ corosync_qnetd_service }}"
+    enabled: true
+  tags: [qnetd, service]
+
+- name: Menjalankan layanan qnetd
+  ansible.builtin.systemd:
+    name: "{{ corosync_qnetd_service }}"
+    state: started
+  tags: [qnetd, service]
