@@ -40,32 +40,99 @@ write_deploy_hook() {
   # Zimbra will not verify a chain that does not reach the root, so ISRG Root X1
   # is appended. The hook exists because certbot renewing the file while Zimbra
   # keeps serving the old certificate is a silent outage 90 days later.
-  cat > /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh <<HOOK
+  #
+  # zmcertmgr deploycrt + zmcontrol restart stop services briefly. On HA Primary,
+  # Pacemaker must unmanage kin-zimbra first (same idea as 09-hardening /
+  # 11-admin-path-lockdown) or the monitor races into FAILED and drops the VIP.
+  cat > /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh <<'HOOK'
 #!/bin/bash
 # KIN Mail - redeploy the renewed certificate into Zimbra.
-set -e
-LE="${LE_DIR}"
-ZS="${ZS}"
+# Pacemaker-aware: unmanage kin-zimbra around deploy/restart when HA-managed.
+set -eu
 
-[ "\${RENEWED_LINEAGE:-\$LE}" = "\$LE" ] || exit 0
+LE="/etc/letsencrypt/live/MAIL_HOST_PLACEHOLDER"
+ZS="/opt/zimbra/ssl/letsencrypt"
 
-cp "\$LE/privkey.pem" "\$LE/cert.pem" "\$LE/chain.pem" "\$LE/fullchain.pem" "\$ZS/"
-cat "\$ZS/isrgrootx1.pem" >> "\$ZS/chain.pem"
-chown -R zimbra:zimbra "\$ZS"; chmod 640 "\$ZS"/*
+[ "${RENEWED_LINEAGE:-$LE}" = "$LE" ] || exit 0
 
-su - zimbra -c "/opt/zimbra/bin/zmcertmgr verifycrt comm \$ZS/privkey.pem \$ZS/cert.pem \$ZS/chain.pem"
+pcs_has_kin_zimbra() {
+  command -v pcs >/dev/null 2>&1 || return 1
+  # pcs 0.11 replaced `resource status <id>`; prefer config, fall back to status.
+  pcs resource config kin-zimbra >/dev/null 2>&1 \
+    || pcs resource status kin-zimbra >/dev/null 2>&1
+}
 
-cp "\$ZS/privkey.pem" /opt/zimbra/ssl/zimbra/commercial/commercial.key
+PCS_UNMANAGED=0
+remanage_kin_zimbra() {
+  if [ "$PCS_UNMANAGED" = "1" ]; then
+    # manage alone leaves monitors enabled=0 after unmanage --monitor
+    pcs resource manage kin-zimbra --monitor 2>/dev/null \
+      || pcs resource manage kin-zimbra 2>/dev/null \
+      || true
+    PCS_UNMANAGED=0
+    logger -t kin-mail "kin-zimbra re-managed (--monitor) after cert deploy"
+  fi
+}
+trap remanage_kin_zimbra EXIT
+
+cp "$LE/privkey.pem" "$LE/cert.pem" "$LE/chain.pem" "$LE/fullchain.pem" "$ZS/"
+cat "$ZS/isrgrootx1.pem" >> "$ZS/chain.pem"
+chown -R zimbra:zimbra "$ZS"
+chmod 640 "$ZS"/*
+
+su - zimbra -c "/opt/zimbra/bin/zmcertmgr verifycrt comm $ZS/privkey.pem $ZS/cert.pem $ZS/chain.pem"
+
+cp "$ZS/privkey.pem" /opt/zimbra/ssl/zimbra/commercial/commercial.key
 chown zimbra:zimbra /opt/zimbra/ssl/zimbra/commercial/commercial.key
 chmod 640 /opt/zimbra/ssl/zimbra/commercial/commercial.key
 
-su - zimbra -c "/opt/zimbra/bin/zmcertmgr deploycrt comm \$ZS/cert.pem \$ZS/chain.pem"
+if pcs_has_kin_zimbra; then
+  logger -t kin-mail "kin-zimbra is Pacemaker-managed — unmanage --monitor before cert deploy/restart"
+  # Without --monitor, the 30s OCF probe still fires during zmcontrol restart,
+  # marks FAILED, and Pacemaker stops later group members (kin-vip). Proxy-only
+  # restarts in 09/11 are short enough to often dodge that window; full restart is not.
+  pcs resource unmanage kin-zimbra --monitor
+  PCS_UNMANAGED=1
+fi
+
+su - zimbra -c "/opt/zimbra/bin/zmcertmgr deploycrt comm $ZS/cert.pem $ZS/chain.pem"
 su - zimbra -c "zmcontrol restart"
+
+# Wait for mailboxd/proxy to come back (restart can take minutes).
+ok_https=0
+i=0
+while [ "$i" -lt 90 ]; do
+  code=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 https://127.0.0.1/ || true)
+  if [ "$code" = "200" ]; then
+    ok_https=1
+    break
+  fi
+  i=$((i + 1))
+  sleep 2
+done
+[ "$ok_https" = "1" ] || {
+  echo "kin-mail deploy hook: https://127.0.0.1/ not 200 after restart" >&2
+  exit 1
+}
+
+# All zmcontrol services must report Running (exclude blank/Host lines).
+status_out=$(su - zimbra -c "zmcontrol status" 2>/dev/null || true)
+if printf '%s\n' "$status_out" | grep -vE '^Host|^$' | grep -qv Running; then
+  echo "kin-mail deploy hook: zmcontrol status not all Running:" >&2
+  printf '%s\n' "$status_out" >&2
+  exit 1
+fi
+
+remanage_kin_zimbra
+trap - EXIT
 
 logger -t kin-mail "Zimbra certificate redeployed after Let's Encrypt renewal"
 HOOK
+  # Bake MAIL_HOST into the installed hook (quoted heredoc above keeps runtime logic intact).
+  sed -i "s|MAIL_HOST_PLACEHOLDER|${MAIL_HOST}|g" \
+    /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh
   chmod +x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh
-  ok "Deploy hook installed"
+  ok "Deploy hook installed (Pacemaker-aware)"
 }
 
 run_deploy_hook() {
