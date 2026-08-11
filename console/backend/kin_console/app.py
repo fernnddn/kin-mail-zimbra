@@ -139,6 +139,8 @@ _STREAM_ACTIONS: dict[str, str] = {
     "apply_draft": proto.CMD_APPLY_WIZARD_DRAFT,
     "run_hardening": proto.CMD_RUN_HARDENING,
     "get_status": proto.CMD_GET_STATUS,
+    "full_install": proto.CMD_RUN_FULL_INSTALL,
+    "cancel_firewall_deadman": proto.CMD_CANCEL_FIREWALL_DEADMAN,
 }
 
 

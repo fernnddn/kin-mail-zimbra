@@ -107,15 +107,20 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
-        async with _gate:
-            if _running:
-                await _send(
-                    writer,
-                    proto.event_error("busy", "another privileged execution is in progress"),
-                )
-                _audit_line(username, cmd, "busy")
-                return
-            _running = True
+        # Safety override: canceling the ufw dead-man must work while full install
+        # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
+        bypass_busy = cmd == proto.CMD_CANCEL_FIREWALL_DEADMAN
+
+        if not bypass_busy:
+            async with _gate:
+                if _running:
+                    await _send(
+                        writer,
+                        proto.event_error("busy", "another privileged execution is in progress"),
+                    )
+                    _audit_line(username, cmd, "busy")
+                    return
+                _running = True
 
         try:
             await _send(writer, proto.event_accepted(cmd))
@@ -135,8 +140,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                 await _send(writer, proto.event_done(1))
                 _audit_line(username, cmd, f"exec_failed:{exc}", 1)
         finally:
-            async with _gate:
-                _running = False
+            if not bypass_busy:
+                async with _gate:
+                    _running = False
     except asyncio.TimeoutError:
         await _send(writer, proto.event_error("timeout", "request timed out"))
         _audit_line(username, cmd, "timeout")

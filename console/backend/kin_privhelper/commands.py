@@ -19,10 +19,19 @@ HARDENING_CANDIDATES = (
     "install/09-hardening.sh",
     "09-hardening.sh",
 )
+KIN_MAIL_CANDIDATES = (
+    "install/kin-mail.sh",
+    "kin-mail.sh",
+)
+FIREWALL_CANDIDATES = (
+    "install/10-host-firewall.sh",
+    "10-host-firewall.sh",
+)
 
 
 def resolve_under_deploy(candidates: tuple[str, ...], label: str) -> Path:
     """Resolve a script under DEPLOY_DIR; reject path escape (same pattern as former healthcheck)."""
+    found: list[Path] = []
     for rel in candidates:
         candidate = (DEPLOY_DIR / rel).resolve()
         try:
@@ -30,7 +39,14 @@ def resolve_under_deploy(candidates: tuple[str, ...], label: str) -> Path:
         except ValueError as exc:
             raise RuntimeError("script path escapes deploy dir") from exc
         if candidate.is_file() and os.access(candidate, os.X_OK):
+            found.append(candidate)
+    # Prefer a directory that also has sibling pipeline stages (complete tree).
+    for candidate in found:
+        parent = candidate.parent
+        if (parent / "01-preflight.sh").is_file() and (parent / "10-host-firewall.sh").is_file():
             return candidate
+    if found:
+        return found[0]
     raise FileNotFoundError(
         f"{label} not found under {DEPLOY_DIR} (tried {', '.join(candidates)})"
     )
@@ -40,17 +56,29 @@ def resolve_hardening() -> Path:
     return resolve_under_deploy(HARDENING_CANDIDATES, "09-hardening.sh")
 
 
+def resolve_kin_mail() -> Path:
+    return resolve_under_deploy(KIN_MAIL_CANDIDATES, "kin-mail.sh")
+
+
+def resolve_firewall() -> Path:
+    return resolve_under_deploy(FIREWALL_CANDIDATES, "10-host-firewall.sh")
+
+
 async def _stream_subprocess(
     argv: list[str],
     *,
     cwd: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
+    if extra_env:
+        env.update(extra_env)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd) if cwd else None,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"},
+        env=env,
     )
     assert proc.stdout is not None and proc.stderr is not None
 
@@ -206,6 +234,35 @@ async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(int(code))
 
 
+async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
+    """Stream kin-mail.sh --full-install with KIN_CONSOLE_CONFIRMED=1 (dead-man still armed)."""
+    script = resolve_kin_mail()
+    yield proto.event_stdout(
+        f"Running fixed script: {script} --full-install "
+        f"(KIN_CONSOLE_CONFIRMED=1; dead-man NOT auto-cancelled)\n"
+    )
+    argv = [str(script), "--full-install"]
+    if shutil.which("stdbuf"):
+        argv = ["stdbuf", "-oL", "-eL", *argv]
+    async for ev in _stream_subprocess(
+        argv,
+        cwd=script.parent,
+        extra_env={"KIN_CONSOLE_CONFIRMED": "1"},
+    ):
+        yield ev
+
+
+async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
+    """Explicit operator step: cancel ufw dead-man after verification (keeps ufw on)."""
+    script = resolve_firewall()
+    yield proto.event_stdout(f"Running fixed script: {script} cancel-deadman\n")
+    argv = [str(script), "cancel-deadman"]
+    if shutil.which("stdbuf"):
+        argv = ["stdbuf", "-oL", "-eL", *argv]
+    async for ev in _stream_subprocess(argv, cwd=script.parent):
+        yield ev
+
+
 CommandHandler = Callable[[], AsyncIterator[dict[str, Any]]]
 
 HANDLERS: dict[str, CommandHandler] = {
@@ -213,6 +270,8 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_HARDENING_STATUS: cmd_run_hardening_status,
     proto.CMD_APPLY_WIZARD_DRAFT: cmd_apply_wizard_draft,
     proto.CMD_RUN_HARDENING: cmd_run_hardening,
+    proto.CMD_RUN_FULL_INSTALL: cmd_run_full_install,
+    proto.CMD_CANCEL_FIREWALL_DEADMAN: cmd_cancel_firewall_deadman,
 }
 
 

@@ -11,6 +11,11 @@
 # Override defaults when needed:
 #   KIN_MAIL_REPO_URL=…  KIN_MAIL_DEPLOY_DIR=…  sudo -E ./install/kin-mail.sh
 #   KIN_MAIL_DRY_RUN=1   — print the planned pipeline without executing stages
+#
+# Console (non-interactive) full install — ONLY with explicit operator confirm:
+#   sudo KIN_CONSOLE_CONFIRMED=1 ./install/kin-mail.sh --full-install
+# Skips /dev/tty y/n prompts; does NOT skip the ufw dead-man's switch.
+# Dead-man cancel is a separate operator step (CLI or console action).
 # =============================================================================
 set -u
 
@@ -30,6 +35,8 @@ need_root() {
 REPO_URL="${KIN_MAIL_REPO_URL:-https://github.com/fernnddn/kin-mail-zimbra.git}"
 DEPLOY_DIR="${KIN_MAIL_DEPLOY_DIR:-/opt/kin-mail-deploy}"
 DRY_RUN="${KIN_MAIL_DRY_RUN:-0}"
+# Set only by admin console after an explicit UI confirm — never invent a default-yes.
+CONSOLE_CONFIRMED="${KIN_CONSOLE_CONFIRMED:-0}"
 
 REQUIRED_SCRIPTS=(
   00-config.sh
@@ -188,6 +195,11 @@ ensure_admin_ips_for_firewall() {
   if [ -n "${KIN_ADMIN_IPS:-}" ]; then
     return 0
   fi
+  if [ "$CONSOLE_CONFIRMED" = "1" ]; then
+    fail "KIN_ADMIN_IPS is empty — cannot apply firewall from console"
+    info "Set KIN_ADMIN_IPS via wizard (apply_wizard_draft) before run_full_install."
+    return 1
+  fi
   say "KIN_ADMIN_IPS is empty — required for host firewall"
   info "Set once in the wizard, or enter sources now (also written to ${CONF_FILE})."
   ask KIN_ADMIN_IPS "Admin source IPs/CIDRs (space-separated)" ""
@@ -240,10 +252,19 @@ run_firewall_stage_interactive() {
     return 0
   fi
 
-  if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
-    warn "Skipped 10-host-firewall.sh — host perimeter unchanged"
-    info "Run later: sudo ./10-host-firewall.sh apply"
-    return 0
+  if [ "$CONSOLE_CONFIRMED" = "1" ]; then
+    # Console UI button is the operator confirm — never invent a silent default-yes
+    # for bare non-TTY runs without this flag.
+    say "KIN_CONSOLE_CONFIRMED=1 — applying firewall (console operator confirmed)"
+    warn "Dead-man will be armed. Console will NOT auto-cancel it."
+    info "After verifying SSH + cluster + mail, cancel via console or:"
+    info "  sudo ./10-host-firewall.sh cancel-deadman"
+  else
+    if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
+      warn "Skipped 10-host-firewall.sh — host perimeter unchanged"
+      info "Run later: sudo ./10-host-firewall.sh apply"
+      return 0
+    fi
   fi
 
   ensure_admin_ips_for_firewall || return 1
@@ -253,6 +274,32 @@ run_firewall_stage_interactive() {
   echo
   say "Dead-man is armed — verify SSH + cluster, then cancel"
   info "sudo ./10-host-firewall.sh cancel-deadman"
+
+  if [ "$CONSOLE_CONFIRMED" = "1" ]; then
+    # Independent safety net — never cancelled as a side-effect of full-install confirm.
+    # Wait for the operator's explicit cancel_firewall_deadman before later stages
+    # (05-healthcheck can run longer than the dead-man window).
+    local deadman_sec="${KIN_UFW_DEADMAN_SEC:-300}"
+    local waited=0
+    warn "Leaving dead-man ARMED — waiting for explicit cancel before continuing"
+    info "Verify SSH + cluster + mail, then console action: cancel_firewall_deadman"
+    info "Or: sudo ./10-host-firewall.sh cancel-deadman"
+    while [ ! -f /run/kin-ufw-deadman.cancel ]; do
+      if [ "$waited" -ge "$deadman_sec" ]; then
+        fail "Dead-man window (${deadman_sec}s) elapsed without cancel — stopping pipeline"
+        info "Check: ufw status; sudo ./10-host-firewall.sh status"
+        return 1
+      fi
+      if [ $((waited % 30)) -eq 0 ]; then
+        warn "Dead-man still armed (${waited}s / ${deadman_sec}s) — cancel from console after verify"
+      fi
+      sleep 5
+      waited=$((waited + 5))
+    done
+    ok "Dead-man cancel detected — continuing pipeline"
+    return 0
+  fi
+
   if ask_yn "Cancel dead-man now (keep ufw enabled after your checks)?" y; then
     ./10-host-firewall.sh cancel-deadman || {
       fail "cancel-deadman failed — ufw may auto-disable when the timer ends"
@@ -449,6 +496,24 @@ main_menu() {
 
 # --- entry -------------------------------------------------------------------
 need_root
+
+# Non-interactive full install for admin console only.
+# Require confirm BEFORE ensure_scripts so a rejected call cannot trigger git pull.
+if [ "${1:-}" = "--full-install" ]; then
+  if [ "$CONSOLE_CONFIRMED" != "1" ]; then
+    fail "--full-install requires KIN_CONSOLE_CONFIRMED=1"
+    info "That flag is set by the admin console after an explicit UI confirm."
+    info "For interactive CLI use, run without --full-install and pick menu option 1."
+    exit 2
+  fi
+  ensure_scripts "$@"
+  chmod +x ./*.sh 2>/dev/null || true
+  say "Console full install (KIN_CONSOLE_CONFIRMED=1)"
+  info "TTY prompts skipped; ufw dead-man's switch still applies on stage 10."
+  run_full_install
+  exit $?
+fi
+
 ensure_scripts "$@"
 chmod +x ./*.sh 2>/dev/null || true
 main_menu

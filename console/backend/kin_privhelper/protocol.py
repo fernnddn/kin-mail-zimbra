@@ -12,12 +12,16 @@ CMD_GET_STATUS = "get_status"
 CMD_RUN_HARDENING_STATUS = "run_script:09-hardening.sh --status"
 CMD_APPLY_WIZARD_DRAFT = "apply_wizard_draft"
 CMD_RUN_HARDENING = "run_hardening"
+CMD_RUN_FULL_INSTALL = "run_full_install"
+CMD_CANCEL_FIREWALL_DEADMAN = "cancel_firewall_deadman"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
         CMD_RUN_HARDENING_STATUS,
         CMD_APPLY_WIZARD_DRAFT,
         CMD_RUN_HARDENING,
+        CMD_RUN_FULL_INSTALL,
+        CMD_CANCEL_FIREWALL_DEADMAN,
     }
 )
 

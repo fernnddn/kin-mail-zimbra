@@ -16,14 +16,12 @@ sudo ./console/bootstrap.sh
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist (slice 9.4) | `get_status`, `run_script:09-hardening.sh --status`, `apply_wizard_draft`, `run_hardening` |
-| Concurrency | Second request while busy → `busy` (no silent queue) |
+| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman` |
+| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman` bypasses busy** |
 
-SSE: `/api/wizard/deploy/stream?action=apply_draft|run_hardening|hardening_status|get_status`
-(`action` is a fixed alias map — never a free-form command string).
-
-`apply_wizard_draft` merges the console draft into `/etc/kin-mail/config` after a
-timestamped `config.bak.<epoch>` backup; it does **not** restart services.
+SSE: `/api/wizard/deploy/stream?action=…`  
+`run_full_install` sets `KIN_CONSOLE_CONFIRMED=1` and runs `kin-mail.sh --full-install`.  
+Stage 10 still arms the ufw dead-man; pipeline **waits** for `cancel_firewall_deadman` (never auto-cancel).
 
 ## Slices
 
@@ -31,5 +29,6 @@ timestamped `config.bak.<epoch>` backup; it does **not** restart services.
 |---|---|
 | 9.1 Skeleton | Done |
 | 9.2 Wizard UI + draft | Done |
-| 9.3 Privhelper plumbing | This tree |
-| Later — firewall apply / full install | Not started |
+| 9.3 Privhelper plumbing | Done |
+| 9.4 Config apply + hardening | Done |
+| 9.5 Full install + dead-man cancel | This tree |
