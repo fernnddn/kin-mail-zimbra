@@ -1,0 +1,14 @@
+---
+- name: Menginstal paket utilitas DRBD dari arsip Ubuntu
+  ansible.builtin.apt:
+    name: "{{ drbd_install_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [drbd, install, packages]
+
+- name: Memastikan paket DKMS DRBD tidak terpasang
+  ansible.builtin.apt:
+    name: "{{ drbd_install_forbid_packages }}"
+    state: absent
+  tags: [drbd, install, packages]

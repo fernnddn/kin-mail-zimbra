@@ -1,0 +1,8 @@
+---
+# Distro packages only (task 2.4): Ubuntu in-tree DRBD 8.4 + drbd-utils.
+# Do NOT install linbit PPA / drbd-dkms on the live MX path unless re-evaluated.
+drbd_install_packages:
+  - drbd-utils
+drbd_install_forbid_packages:
+  - drbd-dkms
+drbd_install_module: drbd

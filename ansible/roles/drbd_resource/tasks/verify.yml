@@ -1,0 +1,54 @@
+---
+# Read-only probes against the live resource. check_mode: false is intentional
+# and LIMITED to status/role queries — never extend that to create-md/up/primary.
+
+- name: Memverifikasi status resource DRBD kin-zimbra
+  ansible.builtin.command:
+    cmd: drbdadm status {{ drbd_resource_name }}
+  register: drbd_resource_status
+  changed_when: false
+  failed_when: >-
+    drbd_resource_status.rc != 0 or
+    ('UpToDate' not in drbd_resource_status.stdout)
+  check_mode: false
+  tags: [drbd, resource, verify]
+
+- name: Memverifikasi peran lokal DRBD
+  ansible.builtin.command:
+    cmd: drbdadm role {{ drbd_resource_name }}
+  register: drbd_resource_role
+  changed_when: false
+  failed_when: >-
+    drbd_resource_role.rc != 0 or
+    ('Primary' not in drbd_resource_role.stdout and
+     'Secondary' not in drbd_resource_role.stdout)
+  check_mode: false
+  tags: [drbd, resource, verify]
+
+- name: Memverifikasi meta-disk eksternal terpasang di loop
+  ansible.builtin.command:
+    cmd: losetup -j {{ drbd_resource_meta_img }}
+  register: drbd_resource_losetup
+  changed_when: false
+  failed_when: >-
+    drbd_resource_losetup.rc != 0 or
+    (drbd_resource_meta_disk not in drbd_resource_losetup.stdout)
+  check_mode: false
+  tags: [drbd, resource, verify]
+
+- name: Memverifikasi layanan meta-loop DRBD aktif
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ drbd_resource_meta_loop_unit }}
+  register: drbd_resource_meta_active
+  changed_when: false
+  failed_when: drbd_resource_meta_active.stdout | trim != "active"
+  check_mode: false
+  tags: [drbd, resource, verify]
+
+- name: Mencatat batas pembuktian create-md produksi
+  ansible.builtin.debug:
+    msg: >-
+      Dry-run memverifikasi resource hidup (status/role/meta-loop).
+      create-md greenfield pada data produksi TIDAK diuji di sini; di task 2.4
+      create-md hanya dibuktikan pada device uji terpisah (bukan /dev/sdb1).
+  tags: [drbd, resource, verify]

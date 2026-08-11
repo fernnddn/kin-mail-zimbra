@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  role_name: drbd_resource
+  description: >-
+    kin-zimbra DRBD resource with EXTERNAL meta-disk + meta loop unit (task 2.5).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

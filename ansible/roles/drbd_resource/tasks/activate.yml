@@ -1,0 +1,64 @@
+---
+# =============================================================================
+# MUTATING DRBD COMMANDS — PRODUCTION DATA ON /dev/sdb1 VIA kin-zimbra
+# =============================================================================
+# kin-zimbra is the LIVE production replication resource. Under ansible-playbook
+# --check these tasks must remain PURE dry-run:
+#
+#   * Do NOT set check_mode: false on create-md / up / primary.
+#   * Gate with `when: not ansible_check_mode` so --check never executes them.
+#   * command/shell modules already skip unsupported check-mode by default;
+#     the explicit `when` makes intent obvious to future editors.
+#
+# ONLY verify.yml may use check_mode: false (read-only status/role probes).
+# Adding check_mode: false here would risk rewriting metadata or promoting
+# the wrong node against live mail data. Do not "fix" dry-run that way.
+# =============================================================================
+
+- name: Memeriksa apakah resource DRBD sudah aktif
+  ansible.builtin.command:
+    cmd: drbdadm status {{ drbd_resource_name }}
+  register: drbd_resource_status_pre
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [drbd, resource, activate]
+
+- name: Membuat metadata DRBD pada meta-disk eksternal
+  ansible.builtin.command:
+    cmd: drbdadm create-md {{ drbd_resource_name }}
+  # SAFETY: never check_mode: false — create-md must not run during --check.
+  when:
+    - drbd_resource_status_pre.rc != 0
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Mengaktifkan resource DRBD (drbdadm up)
+  ansible.builtin.command:
+    cmd: drbdadm up {{ drbd_resource_name }}
+  # SAFETY: never check_mode: false — up must not run during --check.
+  when:
+    - drbd_resource_status_pre.rc != 0
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Mempromosikan Primary paksa hanya saat bootstrap kosong
+  ansible.builtin.command:
+    cmd: drbdadm primary --force {{ drbd_resource_name }}
+  # SAFETY: never check_mode: false — primary --force must not run during --check.
+  # On production migration this was Host A only after create-md; Pacemaker now
+  # owns promotion. This task is for greenfield/bootstrap labs only.
+  when:
+    - drbd_resource_status_pre.rc != 0
+    - not ansible_check_mode
+    - inventory_hostname == drbd_resource_node_a_name
+  tags: [drbd, resource, activate]
+
+- name: Mencatat aktivasi DRBD di-skip saat dry-run
+  ansible.builtin.debug:
+    msg: >-
+      Resource {{ drbd_resource_name }} sudah aktif atau mode --check:
+      create-md / up / primary TIDAK dijalankan. Greenfield create-md di task
+      2.4 hanya diuji pada device test (kin-drbd-test), bukan disk produksi.
+  when: ansible_check_mode or drbd_resource_status_pre.rc == 0
+  tags: [drbd, resource, activate]

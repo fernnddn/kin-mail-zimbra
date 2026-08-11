@@ -1,0 +1,40 @@
+---
+- name: Memverifikasi paket drbd-utils terpasang
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f='${Package} ${Version}\n' drbd-utils
+  register: drbd_install_pkg
+  changed_when: false
+  failed_when: drbd_install_pkg.rc != 0
+  check_mode: false
+  tags: [drbd, install, verify]
+
+- name: Memverifikasi modul DRBD berasal dari in-tree kernel
+  ansible.builtin.command:
+    cmd: modinfo -F filename {{ drbd_install_module }}
+  register: drbd_install_modinfo
+  changed_when: false
+  failed_when: >-
+    drbd_install_modinfo.rc != 0 or
+    ('/kernel/drivers/block/drbd/' not in drbd_install_modinfo.stdout) or
+    ('dkms' in drbd_install_modinfo.stdout | lower)
+  check_mode: false
+  tags: [drbd, install, verify]
+
+- name: Memverifikasi versi modul DRBD 8.4 in-tree
+  ansible.builtin.command:
+    cmd: modinfo -F version {{ drbd_install_module }}
+  register: drbd_install_modver
+  changed_when: false
+  failed_when: >-
+    drbd_install_modver.rc != 0 or
+    (drbd_install_modver.stdout | trim is not search('^8\\.4\\.'))
+  check_mode: false
+  tags: [drbd, install, verify]
+
+- name: Mencatat alasan memilih in-tree bukan DKMS
+  ansible.builtin.debug:
+    msg: >-
+      Task 2.4 memakai drbd-utils arsip + modul in-tree 8.4.x (bukan PPA/DKMS)
+      agar tidak ada rebuild DKMS di host MX hidup. Path modul:
+      {{ drbd_install_modinfo.stdout | trim }}
+  tags: [drbd, install, verify]

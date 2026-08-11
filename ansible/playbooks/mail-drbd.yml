@@ -1,0 +1,19 @@
+---
+# DRBD install + kin-zimbra resource (tasks 2.4 / 2.5).
+#
+# Dry-run only against live lab:
+#   ansible-playbook playbooks/mail-drbd.yml --check
+#
+# PRODUCTION WARNING: kin-zimbra backs live /opt/zimbra data. Mutating tasks
+# (create-md, up, primary) must never use check_mode: false. See
+# roles/drbd_resource/tasks/activate.yml.
+
+- name: Siapkan DRBD kin-zimbra di Host A dan Host B
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: drbd_install
+      tags: [drbd, install]
+    - role: drbd_resource
+      tags: [drbd, resource]
