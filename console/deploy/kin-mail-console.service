@@ -1,0 +1,33 @@
+[Unit]
+Description=KIN Mail Admin Console (skeleton)
+Documentation=file:/opt/kin-mail-console/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kin-console
+Group=kin-console
+WorkingDirectory=/opt/kin-mail-console/backend
+EnvironmentFile=-/etc/kin-mail-console/console.env
+Environment=PYTHONPATH=/opt/kin-mail-console/backend
+ExecStart=/opt/kin-mail-console/venv/bin/python -m kin_console
+Restart=on-failure
+RestartSec=3
+
+# Hardening — unprivileged; no extra caps
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kin-mail-console
+ReadOnlyPaths=/etc/kin-mail-console /opt/kin-mail-console
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

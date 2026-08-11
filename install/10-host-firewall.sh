@@ -151,11 +151,16 @@ apply_rules() {
     ufw allow "$p"/tcp comment "mail public ${p}"
   done
 
-  # Admin console — NOT any
+  # Admin console — NOT any (Zimbra :7071 + KIN console :CONSOLE_PORT)
+  CONSOLE_PORT="${CONSOLE_PORT:-${KIN_CONSOLE_PORT:-9443}}"
   for ip in $ADMIN_IPS; do
     ufw allow from "$ip" to any port 7071 proto tcp comment 'Zimbra admin admin-IP'
   done
   ufw allow from "$CLUSTER_NET" to any port 7071 proto tcp comment 'Zimbra admin LAN'
+  for ip in $ADMIN_IPS; do
+    ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP'
+  done
+  ufw allow from "$CLUSTER_NET" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN'
 
   # Cluster / HA — peers + mon only (never any)
   # Corosync kronosnet

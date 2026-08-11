@@ -70,6 +70,7 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | Path | Role |
 |---|---|
 | `install/` | Single-node Zimbra FOSS stages + `kin-mail.sh` bootstrap |
+| `console/` | Admin console skeleton (FastAPI + React); `console/bootstrap.sh` |
 | `ansible/` | Phase 2 HA port (qnetd / qdevice first; dry-run only on live lab) |
 | `HA-RUNBOOK.md` | Pacemaker / DRBD / SBD operator runbook |
 | `.github/workflows/` | Shell syntax, ShellCheck, hygiene gates |

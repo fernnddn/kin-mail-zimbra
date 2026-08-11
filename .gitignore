@@ -28,6 +28,13 @@ cloudflare.ini
 *.md5
 zcs-*/
 
+# --- admin console build deps (dist is committed for appliance bootstrap) ----
+console/frontend/node_modules/
+console/backend/.venv/
+console/**/__pycache__/
+console/**/*.pyc
+
+
 # --- logs and scratch --------------------------------------------------------
 *.log
 *.bak
