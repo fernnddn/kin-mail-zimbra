@@ -1,0 +1,92 @@
+---
+# Prefer live values from /etc/kin-mail/config when inventory does not override.
+- name: Read TIMEZONE from /etc/kin-mail/config when present
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if [ -f /etc/kin-mail/config ]; then
+      # shellcheck disable=SC1091
+      . /etc/kin-mail/config
+      printf '%s' "${TIMEZONE:-}"
+    fi
+  args:
+    executable: /bin/bash
+  register: zpush_cfg_timezone
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [zpush, configure]
+
+- name: Read MAIL_HOST from /etc/kin-mail/config when present
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if [ -f /etc/kin-mail/config ]; then
+      # shellcheck disable=SC1091
+      . /etc/kin-mail/config
+      printf '%s' "${MAIL_HOST:-}"
+    fi
+  args:
+    executable: /bin/bash
+  register: zpush_cfg_mail_host
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [zpush, configure]
+
+- name: Apply TIMEZONE / MAIL_HOST from host config when set
+  ansible.builtin.set_fact:
+    zpush_timezone: "{{ zpush_cfg_timezone.stdout | trim if (zpush_cfg_timezone.stdout | default('') | trim | length) > 0 else zpush_timezone }}"
+    zpush_mail_host: "{{ zpush_cfg_mail_host.stdout | trim if (zpush_cfg_mail_host.stdout | default('') | trim | length) > 0 else zpush_mail_host }}"
+  tags: [zpush, configure]
+
+- name: Ensure Z-Push main config defines
+  ansible.builtin.shell: |
+    set -euo pipefail
+    set_def() {
+      local file="$1" key="$2" value="$3" mode="${4:-quote}"
+      local val desired
+      if [ "$mode" = "raw" ]; then val="$value"; else val="'${value}'"; fi
+      desired="define('${key}', ${val});"
+      if grep -Fq "$desired" "$file"; then
+        return 0
+      fi
+      if grep -qE "^[[:space:]]*define\(\s*'${key}'" "$file"; then
+        sed -i -E "s|^[[:space:]]*define\(\s*'${key}'\s*,\s*[^)]+\)\s*;|${desired}|" "$file"
+      elif grep -qE "^[[:space:]]*//[[:space:]]*define\(\s*'${key}'" "$file"; then
+        sed -i -E "s|^[[:space:]]*//[[:space:]]*define\(\s*'${key}'\s*,\s*[^)]+\)\s*;|${desired}|" "$file"
+      else
+        printf '\n%s\n' "$desired" >>"$file"
+      fi
+    }
+    CFG="{{ zpush_root }}/config.php"
+    test -f "$CFG"
+    set_def "$CFG" TIMEZONE "{{ zpush_timezone }}"
+    set_def "$CFG" STATE_DIR "{{ zpush_state_dir }}/"
+    set_def "$CFG" LOGFILEDIR "{{ zpush_log_dir }}/"
+    set_def "$CFG" BACKEND_PROVIDER BackendZimbra
+    BCFG="{{ zpush_root }}/backend/zimbra/config.php"
+    test -f "$BCFG"
+    if [ ! -f "${BCFG}.orig" ]; then cp -a "$BCFG" "${BCFG}.orig"; fi
+    set_def "$BCFG" ZIMBRA_URL "{{ zpush_zimbra_url }}"
+    set_def "$BCFG" ZIMBRA_SSL_VERIFYPEER false raw
+    set_def "$BCFG" ZIMBRA_SSL_VERIFYHOST false raw
+    set_def "$BCFG" ZIMBRA_DISABLE_URL_OVERRIDE true raw
+    set_def "$BCFG" ZIMBRA_USER_DIR zimbra
+    set_def "$BCFG" ZIMBRA_LOCAL_CACHE true raw
+    if [ -f "{{ zpush_root }}/autodiscover/config.php" ]; then
+      ACFG="{{ zpush_root }}/autodiscover/config.php"
+      set_def "$ACFG" TIMEZONE "{{ zpush_timezone }}"
+      set_def "$ACFG" BACKEND_PROVIDER BackendZimbra
+      set_def "$ACFG" ZPUSH_HOST "{{ zpush_mail_host }}"
+      set_def "$ACFG" USE_FULLEMAIL_FOR_LOGIN true raw
+    fi
+    chown -R www-data:www-data "{{ zpush_root }}"
+  args:
+    executable: /bin/bash
+  when: not ansible_check_mode
+  tags: [zpush, configure]
+
+- name: Note configure skipped under check mode
+  ansible.builtin.debug:
+    msg: "--check: would tune config.php / backend / autodiscover (skipped)."
+  when: ansible_check_mode
+  tags: [zpush, configure]

@@ -1,0 +1,121 @@
+---
+# SAFETY: download / wipe / extract must never run under --check.
+# Gate with `when: not ansible_check_mode`. Do not set check_mode: false.
+
+- name: Check whether the expected Z-Push tree is already present
+  ansible.builtin.stat:
+    path: "{{ zpush_root }}/VERSION"
+  register: zpush_version_file
+  check_mode: false
+  tags: [zpush, install]
+
+- name: Read the installed Z-Push VERSION when present
+  ansible.builtin.slurp:
+    src: "{{ zpush_root }}/VERSION"
+  register: zpush_version_slurp
+  when: zpush_version_file.stat.exists | default(false)
+  check_mode: false
+  tags: [zpush, install]
+
+- name: Check for the Zimbra backend entrypoint
+  ansible.builtin.stat:
+    path: "{{ zpush_root }}/backend/zimbra/zimbra.php"
+  register: zpush_backend_php
+  check_mode: false
+  tags: [zpush, install]
+
+- name: Decide whether a fresh Z-Push extract is required
+  ansible.builtin.set_fact:
+    zpush_needs_extract: >-
+      {{
+        not (zpush_version_file.stat.exists | default(false))
+        or not (zpush_backend_php.stat.exists | default(false))
+        or (
+          (zpush_version_slurp.content | default('') | b64decode | trim)
+          != (zpush_version | string)
+        )
+      }}
+  tags: [zpush, install]
+
+- name: Note that Z-Push is already at the expected version
+  ansible.builtin.debug:
+    msg: >-
+      Z-Push {{ zpush_version }} + Zimbra backend already present at
+      {{ zpush_root }} — configure-only (no wipe).
+  when: not (zpush_needs_extract | bool)
+  tags: [zpush, install]
+
+- name: Create the Z-Push work directory
+  ansible.builtin.file:
+    path: "{{ zpush_workdir }}"
+    state: directory
+    mode: "0755"
+  when:
+    - zpush_needs_extract | bool
+    - not ansible_check_mode
+  tags: [zpush, install]
+
+- name: Download the Z-Push release zip
+  ansible.builtin.get_url:
+    url: "{{ zpush_zip_url }}"
+    dest: "{{ zpush_workdir }}/z-push-{{ zpush_version }}.zip"
+    mode: "0644"
+  when:
+    - zpush_needs_extract | bool
+    - not ansible_check_mode
+  tags: [zpush, install]
+
+- name: Download the Zimbra backend tarball (Release 75)
+  ansible.builtin.get_url:
+    url: "{{ zpush_backend_tgz_url }}"
+    dest: "{{ zpush_workdir }}/zimbra75.tgz"
+    mode: "0644"
+  when:
+    - zpush_needs_extract | bool
+    - not ansible_check_mode
+  tags: [zpush, install]
+
+- name: Extract Z-Push and the Zimbra backend into place
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -rf "{{ zpush_workdir }}/src" "{{ zpush_workdir }}/backend"
+    mkdir -p "{{ zpush_workdir }}/src" "{{ zpush_workdir }}/backend"
+    unzip -q -o "{{ zpush_workdir }}/z-push-{{ zpush_version }}.zip" -d "{{ zpush_workdir }}/src"
+    SRC=$(dirname "$(find "{{ zpush_workdir }}/src" -type f -name index.php | head -1)")
+    tar -xzf "{{ zpush_workdir }}/zimbra75.tgz" -C "{{ zpush_workdir }}/backend"
+    ZSRC=$(dirname "$(find "{{ zpush_workdir }}/backend" -type f -name zimbra.php | head -1)")
+    rm -rf "{{ zpush_root }}"
+    mkdir -p "{{ zpush_root }}"
+    cp -a "${SRC}/." "{{ zpush_root }}/"
+    printf '%s\n' "{{ zpush_version }}" > "{{ zpush_root }}/VERSION"
+    mkdir -p "{{ zpush_root }}/backend/zimbra"
+    cp -a "${ZSRC}/." "{{ zpush_root }}/backend/zimbra/"
+    chown -R www-data:www-data "{{ zpush_root }}"
+  args:
+    executable: /bin/bash
+  when:
+    - zpush_needs_extract | bool
+    - not ansible_check_mode
+  tags: [zpush, install]
+
+- name: Note extract skipped under check mode
+  ansible.builtin.debug:
+    msg: >-
+      --check: would download/extract Z-Push {{ zpush_version }} into
+      {{ zpush_root }} (skipped; not ansible_check_mode gate).
+  when:
+    - zpush_needs_extract | bool
+    - ansible_check_mode
+  tags: [zpush, install]
+
+- name: Ensure Z-Push state and log directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop:
+    - "{{ zpush_state_dir }}"
+    - "{{ zpush_log_dir }}"
+  tags: [zpush, install]

@@ -1,0 +1,41 @@
+---
+# Z-Push ActiveSync on a mail node (Phase 4). Not a Pacemaker resource yet.
+zpush_install_enabled: true
+
+zpush_version: "2.7.6"
+zpush_root: /opt/z-push
+zpush_state_dir: /var/lib/z-push
+zpush_log_dir: /var/log/z-push
+zpush_workdir: /var/tmp/kin-zpush
+
+zpush_zip_url: "https://github.com/Z-Hub/Z-Push/archive/refs/tags/{{ zpush_version }}.zip"
+zpush_backend_tgz_url: "https://downloads.sourceforge.net/project/zimbrabackend/Release75/zimbra75.tgz"
+
+# Mailbox HTTPS directly — avoid looping ActiveSync via nginx:443.
+zpush_zimbra_url: "https://127.0.0.1:8443"
+
+zpush_php_packages:
+  - php8.3-fpm
+  - php8.3-cli
+  - php8.3-curl
+  - php8.3-xml
+  - php8.3-mbstring
+  - php8.3-intl
+  - php8.3-soap
+  - php8.3-zip
+  - unzip
+  - curl
+  - ca-certificates
+
+zpush_php_fpm_service: php8.3-fpm
+zpush_php_fpm_pool: /etc/php/8.3/fpm/pool.d/www.conf
+zpush_php_fpm_listen: "127.0.0.1:9000"
+
+zpush_nginx_template: /opt/zimbra/conf/nginx/templates/nginx.conf.web.https.default.template
+
+# From /etc/kin-mail/config on the host when unset in inventory.
+zpush_timezone: "{{ timezone | default('Asia/Jakarta') }}"
+zpush_mail_host: "{{ mail_host | default(inventory_hostname) }}"
+
+# Live MX: never restart zmproxy during ansible --check; and only when wiring changes.
+zpush_skip_proxy_restart: false

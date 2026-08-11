@@ -1,0 +1,20 @@
+---
+# Z-Push ActiveSync + Autodiscover (Phase 4) on mail nodes.
+#
+# Until the Pacemaker HA question is decided, enable only on the current
+# Primary (Host A). Host B stays zpush_install_enabled: false in inventory.
+#
+# Dry-run against live lab:
+#   ansible-playbook playbooks/mail-zpush.yml --limit mail.gits-it.site --check
+#
+# PRODUCTION WARNING: nginx template edits + zmproxyctl restart are gated with
+# `when: not ansible_check_mode` and only run when snippets/template change.
+# Do not add check_mode: false on those mutating tasks.
+
+- name: Install Z-Push with Zimbra backend on enabled mail nodes
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: zpush_install
+      tags: [zpush]

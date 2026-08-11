@@ -1,0 +1,7 @@
+---
+# php-fpm reload only — never touch Zimbra nginx from a handler (proxy restart
+# is an explicit, gated task in nginx.yml).
+- name: Reload PHP-FPM after pool listen change
+  ansible.builtin.service:
+    name: "{{ zpush_php_fpm_service }}"
+    state: reloaded

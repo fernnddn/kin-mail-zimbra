@@ -19,11 +19,15 @@ all:
           ansible_host: 10.10.40.13
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
+          # Host A / current Primary — Z-Push until HA placement is decided.
+          zpush_install_enabled: true
           # ansible_password: "..."
           # ansible_become_password: "..."
         mail2.gits-it.site:
           ansible_host: 10.10.40.12
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail2"
+          # Host B — leave false until Pacemaker / dual-node Z-Push design lands.
+          zpush_install_enabled: false
           # ansible_password: "..."
           # ansible_become_password: "..."

@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: zpush_install
+  description: >-
+    Install Z-Push 2.7.x with Zimbra backend (ActiveSync + Autodiscover) on a
+    mail node. Not part of Pacemaker kin-mail-svc yet.
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

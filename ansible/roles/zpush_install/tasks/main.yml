@@ -1,0 +1,37 @@
+---
+- name: End host when Z-Push install is disabled
+  ansible.builtin.meta: end_host
+  when: not (zpush_install_enabled | bool)
+  tags: [zpush]
+
+- name: Include Z-Push preflight asserts
+  ansible.builtin.import_tasks: assert.yml
+  tags: [zpush, assert]
+
+- name: Include Z-Push package installation
+  ansible.builtin.import_tasks: packages.yml
+  tags: [zpush, packages]
+
+- name: Include PHP-FPM listen configuration
+  ansible.builtin.import_tasks: php_fpm.yml
+  tags: [zpush, php]
+
+- name: Include Z-Push tree install
+  ansible.builtin.import_tasks: install.yml
+  tags: [zpush, install]
+
+- name: Include Z-Push configuration
+  ansible.builtin.import_tasks: configure.yml
+  tags: [zpush, configure]
+
+- name: Include Zimbra nginx wiring
+  ansible.builtin.import_tasks: nginx.yml
+  tags: [zpush, nginx]
+
+- name: Include Zimbra throttle safe-IP
+  ansible.builtin.import_tasks: zimbra_attrs.yml
+  tags: [zpush, zimbra]
+
+- name: Include Z-Push verification
+  ansible.builtin.import_tasks: verify.yml
+  tags: [zpush, verify]

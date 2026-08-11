@@ -37,6 +37,7 @@ REQUIRED_SCRIPTS=(
   04-tls-dkim.sh
   05-healthcheck.sh
   06-hybrid-auth.sh
+  07-zpush.sh
   check-zimbra-foss-update.sh
   kin-mail.sh
 )
@@ -191,11 +192,12 @@ pick_one_stage() {
     printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "03-install-zimbra.sh     ${DIM}download & install Zimbra FOSS${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "4)" "$RST" "04-tls-dkim.sh           ${DIM}Let's Encrypt + DKIM${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "5)" "$RST" "06-hybrid-auth.sh        ${DIM}AD LDAP + local fallback${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "6)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "7)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "6)" "$RST" "07-zpush.sh              ${DIM}ActiveSync (Z-Push + Zimbra backend)${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "7)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "8)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Back"
     hr
-    printf '  %sChoice%s [0-7]: ' "$BLD" "$RST"
+    printf '  %sChoice%s [0-8]: ' "$BLD" "$RST"
     read -r choice </dev/tty || return 0
     case "$choice" in
       1) run_stage 01-preflight.sh; return $? ;;
@@ -203,8 +205,9 @@ pick_one_stage() {
       3) run_stage 03-install-zimbra.sh; return $? ;;
       4) run_stage 04-tls-dkim.sh; return $? ;;
       5) run_stage 06-hybrid-auth.sh; return $? ;;
-      6) run_stage 05-healthcheck.sh; return $? ;;
-      7)
+      6) run_stage 07-zpush.sh; return $? ;;
+      7) run_stage 05-healthcheck.sh; return $? ;;
+      8)
         echo
         say "Running 00-config.sh --reset"
         ./00-config.sh --reset

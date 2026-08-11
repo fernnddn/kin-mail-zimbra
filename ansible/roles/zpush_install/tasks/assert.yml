@@ -1,0 +1,30 @@
+---
+- name: Assert Zimbra is present on this host
+  ansible.builtin.stat:
+    path: /opt/zimbra
+  register: zpush_zimbra_root
+  tags: [zpush, assert]
+
+- name: Fail when Zimbra is missing
+  ansible.builtin.assert:
+    that:
+      - zpush_zimbra_root.stat.exists
+      - zpush_zimbra_root.stat.isdir
+    fail_msg: >-
+      Zimbra is not installed at /opt/zimbra — run the install stages first,
+      or limit this play to the Primary with /opt/zimbra mounted.
+  tags: [zpush, assert]
+
+- name: Assert the Zimbra nginx HTTPS template exists
+  ansible.builtin.stat:
+    path: "{{ zpush_nginx_template }}"
+  register: zpush_nginx_tpl
+  tags: [zpush, assert]
+
+- name: Fail when the nginx HTTPS template is missing
+  ansible.builtin.assert:
+    that:
+      - zpush_nginx_tpl.stat.exists
+    fail_msg: >-
+      Missing {{ zpush_nginx_template }} — is /opt/zimbra mounted on this node?
+  tags: [zpush, assert]

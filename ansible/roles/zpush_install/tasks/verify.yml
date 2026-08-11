@@ -1,0 +1,70 @@
+---
+# Read-only probes — check_mode: false so --check still reports live state.
+
+- name: Verify Z-Push VERSION file
+  ansible.builtin.slurp:
+    src: "{{ zpush_root }}/VERSION"
+  register: zpush_verify_version
+  check_mode: false
+  tags: [zpush, verify]
+
+- name: Assert installed VERSION matches expected
+  ansible.builtin.assert:
+    that:
+      - (zpush_verify_version.content | b64decode | trim) == (zpush_version | string)
+    fail_msg: >-
+      Expected Z-Push {{ zpush_version }}, found
+      {{ zpush_verify_version.content | b64decode | trim | default('missing') }}
+  when: zpush_verify_version.content is defined
+  tags: [zpush, verify]
+
+- name: Verify Zimbra backend entrypoint exists
+  ansible.builtin.stat:
+    path: "{{ zpush_root }}/backend/zimbra/zimbra.php"
+  register: zpush_verify_backend
+  check_mode: false
+  tags: [zpush, verify]
+
+- name: Assert Zimbra backend is present
+  ansible.builtin.assert:
+    that:
+      - zpush_verify_backend.stat.exists
+  tags: [zpush, verify]
+
+- name: Verify PHP-FPM is active
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ zpush_php_fpm_service }}
+  register: zpush_verify_fpm
+  changed_when: false
+  failed_when: zpush_verify_fpm.stdout | trim != "active"
+  check_mode: false
+  tags: [zpush, verify]
+
+- name: Verify nginx template includes Z-Push snippets
+  ansible.builtin.command:
+    cmd: grep -E 'nginx-zpush(-autodiscover)?\.conf' {{ zpush_nginx_template }}
+  register: zpush_verify_tpl
+  changed_when: false
+  failed_when: zpush_verify_tpl.rc != 0
+  check_mode: false
+  tags: [zpush, verify]
+
+- name: Probe ActiveSync OPTIONS headers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sk -D- -o /dev/null -X OPTIONS \
+      "https://127.0.0.1/Microsoft-Server-ActiveSync" \
+      | tr -d '\r' | head -20
+  args:
+    executable: /bin/bash
+  register: zpush_verify_options
+  changed_when: false
+  failed_when: >-
+    ('MS-Server-ActiveSync' not in zpush_verify_options.stdout)
+    and ('x-z-push-version' not in zpush_verify_options.stdout | lower)
+    and ('realm="ZPush"' not in zpush_verify_options.stdout)
+    and ('HTTP/2 401' not in zpush_verify_options.stdout)
+    and ('HTTP/1.1 401' not in zpush_verify_options.stdout)
+    and ('HTTP/2 200' not in zpush_verify_options.stdout)
+  check_mode: false
+  tags: [zpush, verify]

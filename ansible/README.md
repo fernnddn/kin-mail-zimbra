@@ -13,6 +13,7 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | `playbooks/mail-drbd.yml` | `drbd_install`, `drbd_resource` | 2.4, 2.5 | dry-run (3.5) |
 | `playbooks/mail-pacemaker.yml` | `pacemaker_agents`, `pacemaker_mail_stack` | 2.7 | dry-run (3.6) |
 | `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_survivor_replace`, `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |
+| `playbooks/mail-zpush.yml` | `zpush_install` | 4.1 / 4.2 | dry-run / Host A only (B disabled in inventory) |
 
 **Add-host scope:** replace a permanently lost peer with a **new** hostname/IP;
 survivor membership + DRBD peer rewrite; new-node live full sync to Primary.  

@@ -1,0 +1,33 @@
+---
+# SAFETY: zmprov mutates live LDAP. Gate with not ansible_check_mode.
+
+- name: Read current zimbraHttpThrottleSafeIPs
+  ansible.builtin.shell: |
+    set -euo pipefail
+    su - zimbra -c 'zmprov gs $(zmhostname) zimbraHttpThrottleSafeIPs' \
+      | awk '/zimbraHttpThrottleSafeIPs:/{print $2}'
+  args:
+    executable: /bin/bash
+  register: zpush_throttle_ips
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  tags: [zpush, zimbra]
+
+- name: Ensure loopback is in zimbraHttpThrottleSafeIPs
+  ansible.builtin.shell: |
+    set -euo pipefail
+    su - zimbra -c 'zmprov ms $(zmhostname) +zimbraHttpThrottleSafeIPs 127.0.0.1' \
+      || su - zimbra -c 'zmprov ms $(zmhostname) zimbraHttpThrottleSafeIPs 127.0.0.1'
+  args:
+    executable: /bin/bash
+  when:
+    - not ansible_check_mode
+    - "'127.0.0.1' not in (zpush_throttle_ips.stdout_lines | default([]))"
+  tags: [zpush, zimbra]
+
+- name: Note throttle IP already present
+  ansible.builtin.debug:
+    msg: "127.0.0.1 already listed in zimbraHttpThrottleSafeIPs"
+  when: "'127.0.0.1' in (zpush_throttle_ips.stdout_lines | default([]))"
+  tags: [zpush, zimbra]

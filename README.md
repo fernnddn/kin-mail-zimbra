@@ -50,6 +50,7 @@ sudo ./02-prepare-os.sh       # hostname, hosts, resolver, dependencies
 sudo ./03-install-zimbra.sh   # download, verify checksum, drive the installer
 sudo ./04-tls-dkim.sh         # TLS + DKIM (publish the DKIM record it prints)
 sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback
+sudo ./07-zpush.sh            # ActiveSync (Z-Push + Zimbra backend); optional
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
@@ -80,6 +81,7 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/03-install-zimbra.sh` | Fetch FOSS build, SHA-256, drive installer in tmux. Skips if healthy; refuses to re-drive a partial install | yes |
 | `install/04-tls-dkim.sh` | TLS by `TLS_METHOD` + DKIM | yes |
 | `install/06-hybrid-auth.sh` | Optional AD LDAP + local fallback; no-op if AD was skipped | yes |
+| `install/07-zpush.sh` | Z-Push ActiveSync + Autodiscover (Zimbra backend); skips wipe/proxy restart when unchanged | yes |
 | `install/05-healthcheck.sh` | Services, listeners, cert, DNS, DKIM, SMTP egress, **both auth paths**, mail flow, open-relay | yes |
 | `install/check-zimbra-foss-update.sh` | Compare configured FOSS build vs newest GitHub release | yes |
 

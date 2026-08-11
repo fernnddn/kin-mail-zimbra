@@ -1,0 +1,167 @@
+---
+# SAFETY: template edits + zmproxyctl restart are live-impacting.
+# Gate mutations with `when: not ansible_check_mode`.
+# Do NOT set check_mode: false on those tasks.
+
+- name: Write the ActiveSync nginx snippet
+  ansible.builtin.copy:
+    dest: "{{ zpush_root }}/nginx-zpush.conf"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    content: |
+      fastcgi_pass {{ zpush_php_fpm_listen }};
+      include /etc/nginx/fastcgi_params;
+      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/index.php;
+      fastcgi_param SCRIPT_NAME /Microsoft-Server-ActiveSync;
+      fastcgi_param HTTPS on;
+      fastcgi_param PHP_VALUE "post_max_size=128M \n upload_max_filesize=128M \n max_execution_time=3660";
+      fastcgi_read_timeout 910;
+      client_max_body_size 128m;
+  register: zpush_snippet_as
+  when: not ansible_check_mode
+  tags: [zpush, nginx]
+
+- name: Write the Autodiscover nginx snippet
+  ansible.builtin.copy:
+    dest: "{{ zpush_root }}/nginx-zpush-autodiscover.conf"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    content: |
+      fastcgi_pass {{ zpush_php_fpm_listen }};
+      include /etc/nginx/fastcgi_params;
+      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/autodiscover/autodiscover.php;
+      fastcgi_param SCRIPT_NAME /Autodiscover/Autodiscover.xml;
+      fastcgi_param HTTPS on;
+      fastcgi_read_timeout 60;
+  register: zpush_snippet_ad
+  when: not ansible_check_mode
+  tags: [zpush, nginx]
+
+- name: Patch the Zimbra HTTPS template for ActiveSync and Autodiscover
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - "{{ zpush_nginx_template }}" "{{ zpush_root }}" <<'PY'
+    from pathlib import Path
+    import datetime
+    import sys
+
+    tpl = Path(sys.argv[1])
+    zroot = Path(sys.argv[2])
+    text = tpl.read_text()
+    as_inc = f"include {zroot}/nginx-zpush.conf;"
+    ad_inc = f"include {zroot}/nginx-zpush-autodiscover.conf;"
+    if (
+        as_inc in text
+        and ad_inc in text
+        and "location ^~ /Microsoft-Server-ActiveSync" in text
+        and "location ^~ /autodiscover" in text
+        and "location ^~ /Autodiscover" in text
+    ):
+        print("unchanged")
+        raise SystemExit(0)
+    changed = False
+
+    def replace_location(text, needles, replacement):
+        idxs = [(text.find(n), n) for n in needles if text.find(n) >= 0]
+        if not idxs:
+            raise SystemExit(f"none of {needles} found")
+        idx, _needle = min(idxs, key=lambda x: x[0])
+        line_start = text.rfind("\n", 0, idx) + 1
+        prev_nl = text.rfind("\n", 0, line_start - 1) if line_start > 0 else -1
+        if prev_nl >= 0:
+            candidate = text[prev_nl + 1:line_start]
+            if any(k in candidate for k in ("ActiveSync", "autodiscover", "Autodiscover", "Microsoft")):
+                line_start = prev_nl + 1
+        brace_open = text.find("{", idx)
+        depth = 0
+        end = None
+        for i in range(brace_open, len(text)):
+            c = text[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    if end < len(text) and text[end] == "\n":
+                        end += 1
+                    break
+        if end is None:
+            raise SystemExit("unbalanced brace")
+        old = text[line_start:end]
+        if old == replacement:
+            return text, False
+        return text[:line_start] + replacement + text[end:], True
+
+    as_repl = (
+        "    # For Microsoft ActiveSync — KIN Mail Z-Push\n"
+        "    location ^~ /Microsoft-Server-ActiveSync\n"
+        "    {\n"
+        f"        include {zroot}/nginx-zpush.conf;\n"
+        "    }\n"
+    )
+    ad_repl = (
+        "    # Autodiscover — KIN Mail Z-Push\n"
+        "    location ^~ /autodiscover\n"
+        "    {\n"
+        f"        include {zroot}/nginx-zpush-autodiscover.conf;\n"
+        "    }\n"
+        "\n"
+        "    location ^~ /Autodiscover\n"
+        "    {\n"
+        f"        include {zroot}/nginx-zpush-autodiscover.conf;\n"
+        "    }\n"
+    )
+
+    if as_inc not in text:
+        text, c1 = replace_location(text, ["location ^~ /Microsoft-Server-ActiveSync"], as_repl)
+        changed = changed or c1
+    if ad_inc not in text or "location ^~ /Autodiscover" not in text:
+        text, c2 = replace_location(
+            text,
+            ["location ^~ /autodiscover", "location /autodiscover", "location ^~ /Autodiscover"],
+            ad_repl,
+        )
+        changed = changed or c2
+    if not changed:
+        print("unchanged")
+        raise SystemExit(0)
+    bak = Path(str(tpl) + ".bak.pre-zpush." + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+    bak.write_text(tpl.read_text())
+    tpl.write_text(text)
+    print("changed")
+    PY
+  args:
+    executable: /bin/bash
+  register: zpush_tpl_patch
+  changed_when: "'changed' in (zpush_tpl_patch.stdout | default(''))"
+  when: not ansible_check_mode
+  tags: [zpush, nginx]
+
+- name: Regenerate and restart zmproxy when nginx wiring changed
+  ansible.builtin.shell: |
+    set -euo pipefail
+    su - zimbra -c '/opt/zimbra/libexec/zmproxyconfgen'
+    su - zimbra -c 'zmproxyctl restart'
+    sleep 2
+    code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ || true)
+    test "$code" = "200"
+  args:
+    executable: /bin/bash
+  when:
+    - not ansible_check_mode
+    - not (zpush_skip_proxy_restart | bool)
+    - (zpush_snippet_as.changed | default(false))
+      or (zpush_snippet_ad.changed | default(false))
+      or (zpush_tpl_patch.changed | default(false))
+  tags: [zpush, nginx]
+
+- name: Note nginx mutations skipped under check mode
+  ansible.builtin.debug:
+    msg: >-
+      --check: would write snippets and brace-patch {{ zpush_nginx_template }}
+      (proxy restart gated; not executed).
+  when: ansible_check_mode
+  tags: [zpush, nginx]
