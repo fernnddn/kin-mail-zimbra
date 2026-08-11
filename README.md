@@ -255,9 +255,10 @@ These scripts cannot resolve anything that lives outside the server:
 connect to port 25; there is no mechanism to direct them elsewhere. Other
 services may share the same public address as long as the port numbers differ.
 
-Later phases, not covered here: backup repository automation, DRBD replication,
-and clustering. Hybrid AD authentication is covered by `06-hybrid-auth.sh`
-(optional at config time).
+Hybrid AD authentication is covered by `06-hybrid-auth.sh` (optional at config
+time). For the active–passive Pacemaker / DRBD / SBD cluster (Phase 2 lab), see
+the operational runbook [`HA-RUNBOOK.md`](HA-RUNBOOK.md). Backup repository
+automation remains out of scope here.
 
 ---
 
