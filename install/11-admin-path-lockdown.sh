@@ -97,19 +97,28 @@ fi
 
 if [ "$NEED_RELOAD" -eq 1 ]; then
   warn "Regenerating nginx + restarting zmproxy (kin-zimbra temporarily unmanaged)"
-  pcs resource unmanage kin-zimbra 2>/dev/null || true
+  kin_zimbra_unmanage
+  trap kin_zimbra_remanage EXIT
   if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-admin-lock-confgen.out 2>&1; then
-    pcs resource manage kin-zimbra 2>/dev/null || true
     fail "zmproxyconfgen failed — see /tmp/kin-admin-lock-confgen.out"
+    kin_zimbra_remanage
+    trap - EXIT
     exit 1
   fi
   if ! zimbra_cmd zmproxyctl restart >/tmp/kin-admin-lock-proxy.out 2>&1; then
-    pcs resource manage kin-zimbra 2>/dev/null || true
     fail "zmproxyctl restart failed — see /tmp/kin-admin-lock-proxy.out"
+    kin_zimbra_remanage
+    trap - EXIT
     exit 1
   fi
-  sleep 2
-  pcs resource manage kin-zimbra 2>/dev/null || true
+  if ! kin_zimbra_wait_healthy; then
+    fail "Zimbra not healthy after proxy restart"
+    kin_zimbra_remanage
+    trap - EXIT
+    exit 1
+  fi
+  kin_zimbra_remanage
+  trap - EXIT
 fi
 
 say "Verify"

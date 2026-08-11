@@ -293,29 +293,28 @@ configure_tls() {
       return 0
     fi
     warn "Regenerating nginx + restarting zmproxy (kin-zimbra temporarily unmanaged)"
-    if command -v pcs >/dev/null 2>&1 && pcs resource status kin-zimbra >/dev/null 2>&1; then
-      pcs resource unmanage kin-zimbra || true
-    fi
+    kin_zimbra_unmanage
+    trap kin_zimbra_remanage EXIT
     if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-hardening-confgen.out 2>&1; then
       fail "zmproxyconfgen failed — see /tmp/kin-hardening-confgen.out"
-      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      kin_zimbra_remanage
+      trap - EXIT
       exit 1
     fi
     if ! zimbra_cmd zmproxyctl restart >/tmp/kin-hardening-proxy.out 2>&1; then
       fail "zmproxyctl restart failed — see /tmp/kin-hardening-proxy.out"
-      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      kin_zimbra_remanage
+      trap - EXIT
       exit 1
     fi
-    sleep 3
-    if ! cluster_ok; then
+    if ! kin_zimbra_wait_healthy; then
       fail "https://127.0.0.1/ not 200 after proxy restart"
-      command -v pcs >/dev/null 2>&1 && pcs resource manage kin-zimbra || true
+      kin_zimbra_remanage
+      trap - EXIT
       exit 1
     fi
-    if command -v pcs >/dev/null 2>&1; then
-      pcs resource manage kin-zimbra || true
-      sleep 2
-    fi
+    kin_zimbra_remanage
+    trap - EXIT
     ok "Proxy restarted; https=200; kin-zimbra managed again"
   else
     ok "No proxy restart required"
