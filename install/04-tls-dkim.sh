@@ -293,7 +293,7 @@ echo   "  ----------------------------------------------------------------"
 info "Satu baris, tanpa tanda kutip atau kurung. Provider DNS memecahnya sendiri bila perlu."
 info "Yang ditempel adalah kunci PUBLIK. Private key tetap di LDAP Zimbra."
 echo
-warn "Setelah record dipublish, jalankan: ./05-healthcheck.sh"
+warn "Setelah record dipublish, jalankan: ./05-healthcheck.sh (dari folder install/)"
 info "Proses yang sudah berjalan menyimpan hasil DNS negatif, jadi 05 akan"
 info "me-restart dnsmasq, amavis dan opendkim sebelum memverifikasi DKIM."
 echo

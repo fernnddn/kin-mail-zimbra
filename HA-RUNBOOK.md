@@ -11,7 +11,7 @@ Witness: Monitoring VM (`mon.gits-it.site` / `10.10.40.14`) — qnetd + iSCSI SB
 Cluster VIP: `10.10.40.15/24` on `ens33` (Pacemaker `kin-vip`)
 
 > **Audience:** anyone operating a KIN Mail HA pair.  
-> **Not covered here:** Zimbra first install (`kin-mail.sh` / stage scripts) — see `README.md`.
+> **Not covered here:** Zimbra first install (`install/kin-mail.sh` / stage scripts) — see `README.md`.
 
 ### Expectation: measured downtime, not zero-downtime
 

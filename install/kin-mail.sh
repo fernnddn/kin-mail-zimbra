@@ -2,15 +2,14 @@
 # =============================================================================
 # KIN Mail — bootstrap installer
 #
-# Single entry point for deploying KIN Mail. Ensures the stage scripts are
-# present (clone if needed), then offers a menu to run a full install or one
-# stage at a time.
+# Single entry point for deploying KIN Mail. Lives under install/ with the
+# stage scripts. Ensures stages are present (clone if needed), then offers a
+# menu to run a full install or one stage at a time.
 #
-#   sudo ./kin-mail.sh
-#   curl -fsSL … | sudo bash          # only after the file is on the host
+#   sudo ./install/kin-mail.sh
 #
 # Override defaults when needed:
-#   KIN_MAIL_REPO_URL=…  KIN_MAIL_DEPLOY_DIR=…  sudo -E ./kin-mail.sh
+#   KIN_MAIL_REPO_URL=…  KIN_MAIL_DEPLOY_DIR=…  sudo -E ./install/kin-mail.sh
 # =============================================================================
 set -u
 
@@ -39,6 +38,7 @@ REQUIRED_SCRIPTS=(
   05-healthcheck.sh
   06-hybrid-auth.sh
   check-zimbra-foss-update.sh
+  kin-mail.sh
 )
 
 FULL_PIPELINE=(
@@ -60,7 +60,7 @@ banner() {
   printf '  %s%s┌──────────────────────────────────────────────────────────┐%s\n' "$BLD" "$BLU" "$RST"
   printf '  %s%s│%-58s│%s\n' "$BLD" "$BLU" "" "$RST"
   printf '  %s%s│  %-54s  │%s\n' "$BLD" "$BLU" "KIN Mail" "$RST"
-  printf '  %s%s│  %-54s  │%s\n' "$DIM" "$BLU" "Managed email platform — PT Karya Informasi Nusantara" "$RST"
+  printf '  %s%s│  %-54s  │%s\n' "$DIM" "$BLU" "Managed email — PT Karya Informasi Nusantara" "$RST"
   printf '  %s%s│%-58s│%s\n' "$BLD" "$BLU" "" "$RST"
   printf '  %s%s└──────────────────────────────────────────────────────────┘%s\n' "$BLD" "$BLU" "$RST"
   printf '\n'
@@ -74,8 +74,22 @@ scripts_present() {
   return 0
 }
 
+# Resolve where stage scripts live inside a clone (install/ layout, or legacy root).
+resolve_scripts_dir() {
+  local base="$1"
+  if [ -d "$base/install" ] && ( cd "$base/install" && scripts_present ); then
+    printf '%s\n' "$base/install"
+    return 0
+  fi
+  if ( cd "$base" && scripts_present ); then
+    printf '%s\n' "$base"
+    return 0
+  fi
+  return 1
+}
+
 ensure_scripts() {
-  local self_dir
+  local self_dir scripts_dir
   self_dir=$(cd "$(dirname "$0")" && pwd)
   cd "$self_dir" || exit 1
 
@@ -84,20 +98,20 @@ ensure_scripts() {
     return 0
   fi
 
-  say "Script tahap tidak lengkap di direktori ini — menyiapkan salinan deploy"
+  say "Script tahap tidak lengkap di direktori ini; menyiapkan salinan deploy"
   info "Sumber : ${REPO_URL}"
   info "Target : ${DEPLOY_DIR}"
 
   command -v git >/dev/null 2>&1 || { fail "git belum terpasang"; exit 1; }
 
-  if [ -d "$DEPLOY_DIR/.git" ] && ( cd "$DEPLOY_DIR" && scripts_present ); then
-    ok "Clone yang sudah ada dipakai ulang: ${DEPLOY_DIR}"
+  if [ -d "$DEPLOY_DIR/.git" ] && scripts_dir=$(resolve_scripts_dir "$DEPLOY_DIR"); then
+    ok "Clone yang sudah ada dipakai ulang: ${scripts_dir}"
   elif [ -e "$DEPLOY_DIR" ] && [ ! -d "$DEPLOY_DIR/.git" ]; then
     fail "${DEPLOY_DIR} sudah ada tetapi bukan clone git KIN Mail"
     info "Pindahkan/hapus folder itu, atau set KIN_MAIL_DEPLOY_DIR ke path lain."
     exit 1
   elif [ -d "$DEPLOY_DIR/.git" ]; then
-    warn "Clone ada tetapi script belum lengkap — mencoba git pull"
+    warn "Clone ada tetapi script belum lengkap; mencoba git pull"
     git -C "$DEPLOY_DIR" pull --ff-only || {
       fail "git pull gagal di ${DEPLOY_DIR}"
       exit 1
@@ -111,16 +125,18 @@ ensure_scripts() {
     ok "Repository di-clone ke ${DEPLOY_DIR}"
   fi
 
-  cd "$DEPLOY_DIR" || exit 1
-  if ! scripts_present; then
-    fail "Setelah clone, script tahap masih belum lengkap di ${DEPLOY_DIR}"
+  scripts_dir=$(resolve_scripts_dir "$DEPLOY_DIR") || {
+    fail "Setelah clone/pull, script tahap masih belum lengkap di ${DEPLOY_DIR}"
+    info "Diharapkan di ${DEPLOY_DIR}/install/ (atau layout lama di root clone)."
     exit 1
-  fi
+  }
+
+  cd "$scripts_dir" || exit 1
 
   # Continue from the cloned bootstrap so relative paths stay correct.
-  if [ "$(cd "$(dirname "$0")" && pwd)" != "$DEPLOY_DIR" ]; then
-    info "Melanjutkan dari ${DEPLOY_DIR}/kin-mail.sh"
-    exec "$DEPLOY_DIR/kin-mail.sh" "$@"
+  if [ "$(cd "$(dirname "$0")" && pwd)" != "$scripts_dir" ]; then
+    info "Melanjutkan dari ${scripts_dir}/kin-mail.sh"
+    exec "$scripts_dir/kin-mail.sh" "$@"
   fi
 }
 

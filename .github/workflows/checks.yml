@@ -20,8 +20,15 @@ jobs:
       # gate runs before anything else.
       - name: Syntax (bash -n)
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(install/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "ERROR: no install/*.sh found — refusing silent pass"
+            exit 1
+          fi
           fail=0
-          for f in *.sh; do
+          for f in "${scripts[@]}"; do
             if bash -n "$f"; then
               echo "ok      $f"
             else
@@ -37,8 +44,15 @@ jobs:
       # scripts intentionally source a config file that shellcheck cannot see.
       - name: ShellCheck (errors fail)
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(install/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "ERROR: no install/*.sh found — refusing silent pass"
+            exit 1
+          fi
           fail=0
-          for f in *.sh; do
+          for f in "${scripts[@]}"; do
             echo "--- $f"
             shellcheck -S error -e SC1090,SC1091 "$f" || fail=1
           done
@@ -47,7 +61,8 @@ jobs:
       - name: ShellCheck (warnings, informational)
         continue-on-error: true
         run: |
-          for f in *.sh; do
+          shopt -s nullglob
+          for f in install/*.sh; do
             shellcheck -S warning -e SC1090,SC1091 "$f" || true
           done
 
@@ -61,15 +76,29 @@ jobs:
       # which is a confusing failure on the target host.
       - name: Reject CRLF line endings
         run: |
-          bad=$(file *.sh | grep -i CRLF || true)
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(install/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "ERROR: no install/*.sh found — refusing silent pass"
+            exit 1
+          fi
+          bad=$(file "${scripts[@]}" | grep -i CRLF || true)
           if [ -n "$bad" ]; then echo "CRLF found:"; echo "$bad"; exit 1; fi
-          echo "All scripts use LF"
+          echo "All scripts use LF (${#scripts[@]} files)"
 
-      # Without the executable bit a fresh clone cannot run ./01-preflight.sh.
+      # Without the executable bit a fresh clone cannot run ./install/01-preflight.sh.
       - name: Require executable bit on scripts
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(install/*.sh)
+          if [ ${#scripts[@]} -eq 0 ]; then
+            echo "ERROR: no install/*.sh found — refusing silent pass"
+            exit 1
+          fi
           fail=0
-          for f in *.sh; do
+          for f in "${scripts[@]}"; do
             mode=$(git ls-files -s "$f" | cut -d' ' -f1)
             if [ "$mode" != "100755" ]; then
               echo "not executable ($mode): $f"; fail=1
