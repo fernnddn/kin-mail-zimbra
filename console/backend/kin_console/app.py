@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from kin_privhelper import protocol as proto
+
 from . import auth, draft
+from .privhelper_client import run_command
 from .settings import settings
 
 app = FastAPI(title="KIN Mail Console", docs_url=None, redoc_url=None, openapi_url=None)
@@ -54,8 +58,7 @@ def eula_status(request: Request) -> dict[str, object]:
             "The operator will replace this with the final legal language.\n\n"
             "By continuing you acknowledge that this console configures mail infrastructure "
             "and that incorrect settings may affect availability or security. "
-            "No deployment actions run until you explicitly start them in a later step "
-            "(execution is not enabled in the UI-only wizard slice)."
+            "Privileged actions run only through the local privhelper whitelist."
         ),
     }
 
@@ -128,14 +131,44 @@ def put_wizard_draft(
     return draft.public_draft(saved)
 
 
+# --- Privileged execution via local privhelper (SSE) -------------------------
+
+
+@app.get("/api/wizard/deploy/stream")
+async def wizard_deploy_stream(username: str = Depends(auth.require_user)) -> StreamingResponse:
+    """Stream get_status through privhelperd into the Perform deployment log viewer.
+
+    Slice 9.3 wires plumbing only — Start deployment runs the read-only get_status
+    whitelist command (not full install / firewall apply).
+    """
+
+    async def event_gen():
+        yield f"data: {json.dumps({'type': 'meta', 'cmd': proto.CMD_GET_STATUS})}\n\n"
+        async for ev in run_command(
+            proto.CMD_GET_STATUS,
+            username,
+            socket_path=settings.privhelper_socket,
+        ):
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.post("/api/wizard/deploy")
-def wizard_deploy_stub(_user: str = Depends(auth.require_user)) -> dict[str, str]:
-    """UI stub only — no installer execution in this slice."""
+async def wizard_deploy_hint(_user: str = Depends(auth.require_user)) -> dict[str, str]:
+    """Compat: prefer SSE /api/wizard/deploy/stream for live output."""
     return {
-        "status": "not_connected",
-        "message": (
-            "Execution engine belum terhubung - datang di slice berikutnya"
-        ),
+        "status": "use_stream",
+        "message": "Use GET /api/wizard/deploy/stream (SSE) — runs whitelist get_status via privhelper.",
+        "command": proto.CMD_GET_STATUS,
     }
 
 

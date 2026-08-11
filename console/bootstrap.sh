@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail Admin Console — bootstrap (slice 9.1 skeleton)
+# KIN Mail Admin Console — bootstrap
 #
-# Installs ONLY the admin console service (FastAPI + React static UI).
-# Does not touch Zimbra, DRBD, Pacemaker, or install/01–11 stages.
+# Installs the admin console (unprivileged) and kin-mail-privhelperd (root,
+# local Unix socket only — Option B). Does not touch Zimbra/DRBD/Pacemaker
+# config and does not run install stages.
 #
 #   sudo ./console/bootstrap.sh
 #
@@ -28,10 +29,13 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 OPT_ROOT="/opt/kin-mail-console"
 ETC_ROOT="/etc/kin-mail-console"
 DATA_ROOT="/var/lib/kin-mail-console"
+LOG_ROOT="/var/log/kin-mail"
 SVC_USER="kin-console"
 ENV_FILE="${ETC_ROOT}/console.env"
 UNIT_SRC="${SCRIPT_DIR}/deploy/kin-mail-console.service"
 UNIT_DST="/etc/systemd/system/kin-mail-console.service"
+PRIV_UNIT_SRC="${SCRIPT_DIR}/deploy/kin-mail-privhelperd.service"
+PRIV_UNIT_DST="/etc/systemd/system/kin-mail-privhelperd.service"
 
 need_root
 
@@ -76,6 +80,11 @@ install -d -o root -g root -m 755 "$OPT_ROOT"
 install -d -o root -g root -m 755 "$ETC_ROOT"
 install -d -o "$SVC_USER" -g "$SVC_USER" -m 750 "$DATA_ROOT"
 install -d -o "$SVC_USER" -g "$SVC_USER" -m 750 "${DATA_ROOT}/tls"
+install -d -o root -g root -m 755 "$LOG_ROOT"
+# Root-owned audit log — kin-console must not be able to modify it.
+touch "${LOG_ROOT}/privhelper.log"
+chown root:root "${LOG_ROOT}/privhelper.log"
+chmod 640 "${LOG_ROOT}/privhelper.log"
 ok "Layout ready"
 
 say "4. Install application files"
@@ -196,7 +205,34 @@ else
 fi
 chown -R "${SVC_USER}:${SVC_USER}" "$DATA_ROOT"
 
-say "9. systemd unit"
+say "9. systemd — privhelperd (root, Unix socket only)"
+install -m 644 "$PRIV_UNIT_SRC" "$PRIV_UNIT_DST"
+systemctl daemon-reload
+systemctl enable kin-mail-privhelperd.service >/dev/null
+systemctl restart kin-mail-privhelperd.service
+sleep 1
+if systemctl is-active --quiet kin-mail-privhelperd.service; then
+  ok "kin-mail-privhelperd.service active"
+else
+  fail "privhelperd failed — journalctl -u kin-mail-privhelperd -n 80"
+  journalctl -u kin-mail-privhelperd -n 40 --no-pager | sed 's/^/    /' || true
+  exit 1
+fi
+if [ -S /run/kin-mail/privhelper.sock ]; then
+  sock_mode=$(stat -c '%a %U:%G' /run/kin-mail/privhelper.sock)
+  ok "Socket /run/kin-mail/privhelper.sock (${sock_mode})"
+else
+  fail "privhelper.sock missing"
+  exit 1
+fi
+# Confirm audit log not writable by kin-console
+if su -s /bin/bash -c "test -w ${LOG_ROOT}/privhelper.log" "$SVC_USER" 2>/dev/null; then
+  fail "privhelper.log is writable by ${SVC_USER} — abort"
+  exit 1
+fi
+ok "privhelper.log not writable by ${SVC_USER}"
+
+say "10. systemd — console (unprivileged)"
 install -m 644 "$UNIT_SRC" "$UNIT_DST"
 systemctl daemon-reload
 systemctl enable kin-mail-console.service >/dev/null
@@ -214,13 +250,13 @@ main_pid=$(systemctl show -p MainPID --value kin-mail-console.service)
 if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
   proc_user=$(ps -o user= -p "$main_pid" | tr -d ' ')
   if [ "$proc_user" = "root" ]; then
-    fail "Process runs as root — abort"
+    fail "Console process runs as root — abort"
     exit 1
   fi
-  ok "Process user: ${proc_user} (pid ${main_pid})"
+  ok "Console process user: ${proc_user} (pid ${main_pid})"
 fi
 
-say "10. Local HTTPS smoke"
+say "11. Local HTTPS smoke"
 code=$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:${CONSOLE_PORT}/api/health" || true)
 if [ "$code" != "200" ]; then
   fail "health returned ${code}"
@@ -247,4 +283,5 @@ if [ -n "$BOOT_PASS" ]; then
 else
   info "Password unchanged (existing install)."
 fi
+info "privhelperd: unix:/run/kin-mail/privhelper.sock (never a network port)"
 info "Open ufw for ${CONSOLE_PORT} via install/10-host-firewall.sh (admin IPs + LAN only)."

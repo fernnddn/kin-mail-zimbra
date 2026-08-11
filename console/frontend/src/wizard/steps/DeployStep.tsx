@@ -1,52 +1,110 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../../api";
 import { Button, Hint, Lede, LogPane, NavRow, Title, WarnBox } from "../../ui";
 import { useWizard } from "../WizardContext";
+
+type StreamEvent = {
+  type: string;
+  cmd?: string;
+  data?: string;
+  code?: string;
+  message?: string;
+  exit_code?: number;
+};
 
 export default function DeployStep() {
   const { draft } = useWizard();
   const navigate = useNavigate();
   const [log, setLog] = useState(
-    "# Deployment log viewer (stub)\n# Waiting for operator to start…\n",
+    "# Privileged helper log viewer\n# Start deployment runs whitelist command: get_status\n",
   );
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
 
-  async function start() {
+  function append(chunk: string) {
+    setLog((prev) => prev + chunk);
+  }
+
+  function start() {
+    if (busy) return;
     setBusy(true);
     setMessage("");
-    try {
-      const res = await api<{ status: string; message: string }>("/api/wizard/deploy", {
-        method: "POST",
-        body: "{}",
-      });
-      setMessage(res.message);
-      setLog(
-        (prev) =>
-          prev +
-          `\n[${new Date().toISOString()}] Start deployment requested\n` +
-          `[${new Date().toISOString()}] ${res.message}\n` +
-          `# Draft topology=${draft.topology || "unset"} domain=${draft.mail_domain || "unset"}\n` +
-          `# No installer scripts were executed.\n`,
-      );
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setBusy(false);
+    append(
+      `\n[${new Date().toISOString()}] Start deployment → privhelper get_status\n` +
+        `# Draft topology=${draft.topology || "unset"} domain=${draft.mail_domain || "unset"}\n`,
+    );
+
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
     }
+
+    const es = new EventSource("/api/wizard/deploy/stream");
+    esRef.current = es;
+
+    es.onmessage = (ev) => {
+      let parsed: StreamEvent;
+      try {
+        parsed = JSON.parse(ev.data) as StreamEvent;
+      } catch {
+        append(ev.data + "\n");
+        return;
+      }
+      if (parsed.type === "meta") {
+        append(`[meta] cmd=${parsed.cmd || "?"}\n`);
+        return;
+      }
+      if (parsed.type === "accepted") {
+        append(`[accepted] ${parsed.cmd || ""}\n`);
+        return;
+      }
+      if (parsed.type === "stdout" && parsed.data) {
+        append(parsed.data);
+        return;
+      }
+      if (parsed.type === "stderr" && parsed.data) {
+        append(`[stderr] ${parsed.data}`);
+        return;
+      }
+      if (parsed.type === "error") {
+        const msg = parsed.message || parsed.code || "error";
+        append(`[error] ${parsed.code || "error"}: ${msg}\n`);
+        setMessage(msg);
+        if (parsed.code === "busy") {
+          setBusy(false);
+          es.close();
+          esRef.current = null;
+        }
+        return;
+      }
+      if (parsed.type === "done") {
+        append(`[done] exit_code=${parsed.exit_code ?? "?"}\n`);
+        setBusy(false);
+        es.close();
+        esRef.current = null;
+      }
+    };
+
+    es.onerror = () => {
+      append(`[stream] connection error or closed\n`);
+      setMessage((m) => m || "Stream closed");
+      setBusy(false);
+      es.close();
+      esRef.current = null;
+    };
   }
 
   return (
     <>
       <Title>Perform deployment</Title>
       <Lede>
-        Ready to deploy — this page is a UI shell only for slice 9.2. The execution engine that
-        would invoke install stages is intentionally not connected yet.
+        Slice 9.3 connects the log viewer to <code>kin-mail-privhelperd</code>. Start deployment
+        runs the read-only whitelist command <code>get_status</code> (not a full install).
       </Lede>
       <WarnBox>
-        <strong>Stub.</strong> Clicking Start deployment will not run install/01–11, Ansible, or
-        any privileged helper. It only returns a not-connected message.
+        <strong>Plumbing only.</strong> Firewall apply, installer stages that mutate config, and
+        Ansible are intentionally not on the whitelist yet.
       </WarnBox>
       <LogPane aria-label="Deployment log">{log}</LogPane>
       {message && <Hint>{message}</Hint>}
@@ -54,8 +112,8 @@ export default function DeployStep() {
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/review")}>
           Back
         </Button>
-        <Button type="button" disabled={busy} onClick={() => void start()}>
-          {busy ? "Starting…" : "Start deployment"}
+        <Button type="button" disabled={busy} onClick={() => start()}>
+          {busy ? "Running…" : "Start deployment"}
         </Button>
       </NavRow>
     </>

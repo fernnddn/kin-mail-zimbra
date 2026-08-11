@@ -1,19 +1,31 @@
 # KIN Mail Admin Console
 
-Isolated from Zimbra/DRBD/Pacemaker. Bootstrap only installs this service.
+Isolated from Zimbra/DRBD/Pacemaker. Bootstrap installs:
+
+1. `kin-mail-console` — unprivileged FastAPI + React UI (HTTPS, default `:9443`)
+2. `kin-mail-privhelperd` — root helper on **local Unix socket only**
+   (`/run/kin-mail/privhelper.sock`, mode 660, group `kin-console`)
 
 ```bash
 sudo ./console/bootstrap.sh
 ```
 
-Default listen: `https://<host>:9443/` (override `CONSOLE_PORT`).
+## Privileged helper (Option B)
+
+| Item | Value |
+|---|---|
+| Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
+| Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
+| Whitelist (slice 9.3) | `get_status`, `run_script:05-healthcheck.sh` only |
+| Concurrency | Second request while busy → `busy` (no silent queue) |
+
+`Perform deployment` streams `get_status` via SSE (`/api/wizard/deploy/stream`).
 
 ## Slices
 
 | Slice | Status |
 |---|---|
-| 9.1 Skeleton — TLS, unprivileged user, login | Done |
-| 9.2 Wizard UI — EULA → login → draft steps → deploy stub | This tree |
-| Later — execution engine / privileged apply | Not started |
-
-Draft wizard state lives in `/var/lib/kin-mail-console/wizard-draft.json` and never writes `/etc/kin-mail/config`.
+| 9.1 Skeleton | Done |
+| 9.2 Wizard UI + draft | Done |
+| 9.3 Privhelper plumbing | This tree |
+| Later — firewall apply / full install | Not started |

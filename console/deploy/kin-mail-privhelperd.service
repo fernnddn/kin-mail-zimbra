@@ -1,0 +1,32 @@
+[Unit]
+Description=KIN Mail privileged helper daemon (local Unix socket only)
+Documentation=file:/opt/kin-mail-console/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/kin-mail-console/backend
+EnvironmentFile=-/etc/kin-mail-console/console.env
+Environment=PYTHONPATH=/opt/kin-mail-console/backend
+Environment=PRIVHELPER_SOCKET=/run/kin-mail/privhelper.sock
+Environment=PRIVHELPER_LOG=/var/log/kin-mail/privhelper.log
+Environment=KIN_MAIL_DEPLOY_DIR=/opt/kin-mail-deploy
+RuntimeDirectory=kin-mail
+RuntimeDirectoryMode=0750
+ExecStart=/opt/kin-mail-console/venv/bin/python -m kin_privhelper
+Restart=on-failure
+RestartSec=3
+
+# Network isolation — this service must never listen on a TCP/UDP port.
+# (It binds a Unix socket under /run/kin-mail only.)
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=false
+# Root by design (Option B); capabilities left unrestricted for install scripts later.
+# Do not add a network ListenStream here.
+
+[Install]
+WantedBy=multi-user.target
