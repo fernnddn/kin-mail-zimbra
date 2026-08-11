@@ -6,6 +6,7 @@ docs/
 
 # Ansible local inventory / secrets (keep example committed)
 ansible/inventory/lab.yml
+ansible/inventory/add-host.yml
 ansible/inventory/*.local.yml
 ansible/**/*.retry
 *.retry

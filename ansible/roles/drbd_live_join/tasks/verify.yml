@@ -1,0 +1,36 @@
+---
+- name: Memverifikasi node baru Secondary dan tidak Primary
+  ansible.builtin.command:
+    cmd: drbdadm role {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_role
+  changed_when: false
+  failed_when: >-
+    drbd_live_join_role.rc != 0
+    or (drbd_live_join_role.stdout | trim is search('^Primary'))
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, verify]
+
+- name: Memverifikasi status Connected atau SyncTarget
+  ansible.builtin.command:
+    cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_status
+  changed_when: false
+  failed_when: >-
+    drbd_live_join_status.rc != 0
+    or (
+      'UpToDate' not in drbd_live_join_status.stdout
+      and 'Inconsistent' not in drbd_live_join_status.stdout
+      and 'SyncTarget' not in drbd_live_join_status.stdout
+    )
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, verify]
+
+- name: Mencatat batas verifikasi live-join belum teruji
+  ansible.builtin.debug:
+    msg: >-
+      Verify live-join hanya bermakna setelah apply ke VM kosong. Di
+      syntax-check/--check tanpa host, assert di atas di-skip.
+  when: ansible_check_mode
+  tags: [drbd, livejoin, verify]

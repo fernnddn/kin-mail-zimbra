@@ -1,0 +1,57 @@
+---
+# =============================================================================
+# MUTATING cleanup of RETIRED identity leftovers on the survivor / CIB
+# =============================================================================
+# Keep mail running on survivor; only remove dangling references that would
+# confuse future failovers (lost-node CRM entries, host-specific constraints,
+# stale DRBD "on <old>" if any file copy remains).
+#
+#   * Do NOT set check_mode: false on crm_node / pcs constraint remove.
+# =============================================================================
+
+- name: Menghapus entri CRM node lama jika masih tercatat lost
+  ansible.builtin.command:
+    cmd: crm_node -R {{ cluster_add_host_retired_name }} --force
+  register: cluster_survivor_replace_crm_rm
+  changed_when: cluster_survivor_replace_crm_rm.rc == 0
+  failed_when: false
+  # SAFETY: never check_mode: false.
+  when: not ansible_check_mode
+  tags: [cluster, survivor, cleanup]
+
+- name: Memeriksa constraint lokasi yang menyebut hostname lama
+  ansible.builtin.command:
+    cmd: pcs constraint location
+  register: cluster_survivor_replace_loc
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, survivor, cleanup]
+
+- name: Mencatat constraint lokasi yang masih menyebut node lama
+  ansible.builtin.debug:
+    msg: >-
+      Constraint location masih menyebut {{ cluster_add_host_retired_name }} —
+      tinjau manual (pcs constraint location remove …) sebelum apply otomatis.
+      Output: {{ cluster_survivor_replace_loc.stdout }}
+  when: cluster_add_host_retired_name in cluster_survivor_replace_loc.stdout
+  tags: [cluster, survivor, cleanup]
+
+- name: Memastikan file resource DRBD tidak lagi memuat hostname lama
+  ansible.builtin.command:
+    cmd: grep -F {{ cluster_add_host_retired_name }} {{ cluster_add_host_drbd_res_path }}
+  register: cluster_survivor_replace_old_in_res
+  changed_when: false
+  failed_when: cluster_survivor_replace_old_in_res.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, survivor, cleanup]
+
+- name: Mencatat pembersihan sertifikat qdevice lama di qnetd (manual follow-up)
+  ansible.builtin.debug:
+    msg: >-
+      Sertifikat/client qdevice untuk {{ cluster_add_host_retired_name }} mungkin
+      masih ada di NSS qnetd di Monitoring. Hapus manual dengan
+      corosync-qnetd-certutil setelah node baru terbukti sehat — tidak
+      diotomatisasi di logic pertama ini (risiko salah hapus CA/cluster cert).
+  tags: [cluster, survivor, cleanup]

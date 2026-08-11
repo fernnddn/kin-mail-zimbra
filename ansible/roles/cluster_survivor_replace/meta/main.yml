@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: cluster_survivor_replace
+  description: >-
+    Survivor-side membership + DRBD peer rewrite + retired-node cleanup for
+    add-host (no Phase-2 precedent).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

@@ -12,31 +12,36 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2–2.3, 2.9 | dry-run (3.4) |
 | `playbooks/mail-drbd.yml` | `drbd_install`, `drbd_resource` | 2.4, 2.5 | dry-run (3.5) |
 | `playbooks/mail-pacemaker.yml` | `pacemaker_agents`, `pacemaker_mail_stack` | 2.7 | dry-run (3.6) |
+| `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_survivor_replace`, `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |
 
-**Pacemaker scope:** `ocf:kin:zimbra`, promotable `kin-drbd-clone`, group
-`kin-mail-svc` (fs → zimbra → vip), constraints, LDAP localhost HA fix.  
-**Out of scope here:** controlled `pcs ban/clear` moves, fence injection, DNS/NAT → VIP.
+**Add-host scope:** replace a permanently lost peer with a **new** hostname/IP;
+survivor membership + DRBD peer rewrite; new-node live full sync to Primary.  
+**Never tested against any host** — see `docs/progress/3.7-ansible-add-host-design.md`.
 
 ## Layout
 
 ```
 ansible/
   playbooks/
-    mail-pacemaker.yml
+    mail-add-host.yml
     …
+  inventory/
+    add-host.example.yml
   roles/
-    pacemaker_agents/
-    pacemaker_mail_stack/
+    cluster_node_base/
+    cluster_survivor_replace/
+    drbd_live_join/
     …
 ```
 
-## Dry-run only against the live lab
+## Syntax-check only (no target VM yet)
 
 ```bash
 cd ansible
-ansible-playbook playbooks/mail-pacemaker.yml --check
+ansible-playbook -i inventory/add-host.example.yml \
+  playbooks/mail-add-host.yml --syntax-check
 ```
 
-Mutating `pcs` commands stay pure dry-run under `--check` (never
-`check_mode: false` on create/constraint). See
-`docs/progress/3.6-ansible-pacemaker-port.md`.
+Do **not** run this against the live A/B pair as an add-host rehearsal.
+Mutating survivor/`pcs`/`drbdadm` tasks stay gated (`not ansible_check_mode`,
+never `check_mode: false` on those paths).

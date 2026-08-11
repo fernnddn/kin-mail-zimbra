@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: cluster_node_base
+  description: >-
+    Install pacemaker/corosync/pcs + pcsd for a new mail node before
+    pcs cluster node add (add-host scenario).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

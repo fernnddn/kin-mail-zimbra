@@ -1,0 +1,50 @@
+---
+# Meta-loop setup mirrors drbd_resource (external meta required for empty new
+# data disk as well — same layout as production). Mutating steps gated.
+
+- name: Menyiapkan direktori image meta DRBD di node baru
+  ansible.builtin.file:
+    path: "{{ drbd_resource_meta_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, meta]
+
+- name: Membuat image meta eksternal DRBD di node baru
+  ansible.builtin.command:
+    cmd: truncate -s {{ drbd_resource_meta_img_size }} {{ drbd_resource_meta_img }}
+    creates: "{{ drbd_resource_meta_img }}"
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, meta]
+
+- name: Memasang skrip attach loop meta DRBD di node baru
+  ansible.builtin.template:
+    src: kin-drbd-meta-loop.sh.j2
+    dest: "{{ drbd_resource_meta_loop_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, meta]
+
+- name: Memasang unit systemd meta-loop DRBD di node baru
+  ansible.builtin.template:
+    src: kin-drbd-meta-loop.service.j2
+    dest: /etc/systemd/system/{{ drbd_resource_meta_loop_unit }}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Muat ulang systemd setelah unit meta-loop DRBD
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, meta]
+
+- name: Mengaktifkan dan menjalankan meta-loop DRBD di node baru
+  ansible.builtin.systemd:
+    name: "{{ drbd_resource_meta_loop_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, meta]

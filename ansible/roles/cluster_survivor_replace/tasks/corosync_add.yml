@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# MUTATING pcs — add NEW identity to live cluster
+# =============================================================================
+# Official pattern (RHEL "Managing cluster nodes"):
+#   pcs host auth <newnode>
+#   pcs cluster node add <newnode>
+# This syncs corosync.conf to all members including the new node.
+#
+# Prerequisites (playbook order): new node already has pcs/pcsd + hacluster
+# password matching cluster_add_host_hacluster_password.
+#
+#   * Do NOT set check_mode: false on auth / node add / cluster start.
+#   * Gate with `when: not ansible_check_mode`.
+# =============================================================================
+
+- name: Memeriksa apakah node baru sudah anggota cluster
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_survivor_replace_nodes_add
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, survivor, corosync]
+
+- name: Mengautentikasi host baru ke pcsd survivor
+  ansible.builtin.command:
+    cmd: >-
+      pcs host auth {{ cluster_add_host_new_name }}
+      -u {{ cluster_add_host_hacluster_user }}
+      -p {{ cluster_add_host_hacluster_password }}
+  # SAFETY: never check_mode: false.
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - cluster_add_host_hacluster_password | length > 0
+    - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
+  tags: [cluster, survivor, corosync]
+
+- name: Menambahkan node baru ke membership Corosync
+  ansible.builtin.command:
+    cmd: pcs cluster node add {{ cluster_add_host_new_name }}
+  # SAFETY: never check_mode: false — rewrites live corosync.conf / authkeys.
+  when:
+    - not ansible_check_mode
+    - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
+  tags: [cluster, survivor, corosync]
+
+- name: Memulai layanan cluster di node baru dari survivor
+  ansible.builtin.command:
+    cmd: pcs cluster start {{ cluster_add_host_new_name }}
+  # SAFETY: never check_mode: false.
+  when:
+    - not ansible_check_mode
+    - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout
+  tags: [cluster, survivor, corosync]
+
+- name: Mengaktifkan start cluster saat boot di node baru
+  ansible.builtin.command:
+    cmd: pcs cluster enable {{ cluster_add_host_new_name }}
+  # SAFETY: never check_mode: false.
+  when: not ansible_check_mode
+  tags: [cluster, survivor, corosync]
+
+- name: Mencatat pcs node add di-skip saat dry-run atau sudah anggota
+  ansible.builtin.debug:
+    msg: >-
+      pcs host auth / cluster node add {{ cluster_add_host_new_name }} TIDAK
+      dijalankan (mode --check atau node sudah di membership). Belum pernah
+      diuji ke host nyata di slice 3.7.
+  when: >-
+    ansible_check_mode
+    or (cluster_add_host_new_name in cluster_survivor_replace_nodes_add.stdout)
+  tags: [cluster, survivor, corosync]

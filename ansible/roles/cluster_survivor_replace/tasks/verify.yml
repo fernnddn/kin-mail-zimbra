@@ -1,0 +1,30 @@
+---
+- name: Memverifikasi node baru muncul di membership Corosync
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_survivor_replace_nodes_v
+  changed_when: false
+  failed_when: >-
+    cluster_survivor_replace_nodes_v.rc != 0
+    or (cluster_add_host_new_name not in cluster_survivor_replace_nodes_v.stdout)
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, survivor, verify]
+
+- name: Memverifikasi node lama tidak lagi di membership
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_survivor_replace_nodes_gone
+  changed_when: false
+  failed_when: cluster_add_host_retired_name in cluster_survivor_replace_nodes_gone.stdout
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, survivor, verify]
+
+- name: Mencatat verifikasi membership di-skip pada dry-run / syntax-only
+  ansible.builtin.debug:
+    msg: >-
+      Verify membership di-skip saat --check/syntax-only — slice 3.7 tidak
+      punya VM target. Setelah ada host kosong, assert new in / retired out.
+  when: ansible_check_mode
+  tags: [cluster, survivor, verify]

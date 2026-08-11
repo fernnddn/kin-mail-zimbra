@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: drbd_live_join
+  description: >-
+    Connect empty new-node DRBD disk to live UpToDate Primary (full resync);
+    not cold dual-bootstrap from tasks 2.4/2.5.
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

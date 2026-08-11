@@ -1,0 +1,16 @@
+[Unit]
+Description=KIN Mail - attach DRBD zimbra external meta loop ({{ drbd_resource_meta_disk }})
+Documentation=file://{{ drbd_resource_meta_img }}
+DefaultDependencies=no
+Requires=local-fs.target
+After=local-fs.target systemd-udevd.service
+Before=drbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ drbd_resource_meta_loop_script }}
+ExecStop=/sbin/losetup -d {{ drbd_resource_meta_disk }}
+
+[Install]
+WantedBy=drbd.service multi-user.target

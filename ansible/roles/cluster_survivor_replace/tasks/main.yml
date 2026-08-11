@@ -1,0 +1,24 @@
+---
+- name: Sertakan pemeriksaan awal survivor
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [cluster, survivor, preflight]
+
+- name: Sertakan pembersihan node lama dari membership
+  ansible.builtin.import_tasks: remove_retired.yml
+  tags: [cluster, survivor, remove]
+
+- name: Sertakan pembaruan peer DRBD ke identitas baru
+  ansible.builtin.import_tasks: drbd_peer.yml
+  tags: [cluster, survivor, drbd]
+
+- name: Sertakan penambahan node baru ke Corosync
+  ansible.builtin.import_tasks: corosync_add.yml
+  tags: [cluster, survivor, corosync]
+
+- name: Sertakan pembersihan sisa referensi node lama
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cluster, survivor, cleanup]
+
+- name: Sertakan verifikasi survivor setelah replace
+  ansible.builtin.import_tasks: verify.yml
+  tags: [cluster, survivor, verify]

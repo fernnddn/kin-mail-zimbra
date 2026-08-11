@@ -1,0 +1,42 @@
+---
+# Join an empty new-node disk to a LIVE UpToDate Primary (add-host).
+# Shares cluster_add_host_* with cluster_survivor_replace.
+
+cluster_add_host_survivor_name: mail.gits-it.site
+cluster_add_host_survivor_address: 10.10.40.13
+cluster_add_host_new_name: mail3.gits-it.site
+cluster_add_host_new_address: 10.10.40.16
+cluster_add_host_drbd_resource: kin-zimbra
+cluster_add_host_drbd_res_path: /etc/drbd.d/kin-zimbra.res
+cluster_add_host_drbd_device: /dev/drbd0
+cluster_add_host_drbd_disk: /dev/sdb1
+cluster_add_host_drbd_meta_disk: /dev/loop21
+cluster_add_host_drbd_meta_img: /var/lib/kin-mail/drbd-zimbra-meta.img
+cluster_add_host_drbd_meta_img_size: 256M
+cluster_add_host_drbd_meta_dir: /var/lib/kin-mail
+cluster_add_host_drbd_port: 7788
+cluster_add_host_drbd_protocol: C
+cluster_add_host_drbd_sync_rate: 100M
+cluster_add_host_drbd_meta_loop_script: /usr/local/sbin/kin-drbd-meta-loop.sh
+cluster_add_host_drbd_meta_loop_unit: kin-drbd-meta-loop.service
+# Wait polls for initial sync progress (logic only — untested).
+cluster_add_host_drbd_sync_retries: 3
+cluster_add_host_drbd_sync_delay: 30
+
+# Template compatibility (same names as drbd_resource / survivor_replace).
+drbd_resource_name: "{{ cluster_add_host_drbd_resource }}"
+drbd_resource_device: "{{ cluster_add_host_drbd_device }}"
+drbd_resource_disk: "{{ cluster_add_host_drbd_disk }}"
+drbd_resource_meta_disk: "{{ cluster_add_host_drbd_meta_disk }}"
+drbd_resource_meta_img: "{{ cluster_add_host_drbd_meta_img }}"
+drbd_resource_meta_img_size: "{{ cluster_add_host_drbd_meta_img_size }}"
+drbd_resource_meta_dir: "{{ cluster_add_host_drbd_meta_dir }}"
+drbd_resource_port: "{{ cluster_add_host_drbd_port }}"
+drbd_resource_protocol: "{{ cluster_add_host_drbd_protocol }}"
+drbd_resource_sync_rate: "{{ cluster_add_host_drbd_sync_rate }}"
+drbd_resource_meta_loop_script: "{{ cluster_add_host_drbd_meta_loop_script }}"
+drbd_resource_meta_loop_unit: "{{ cluster_add_host_drbd_meta_loop_unit }}"
+drbd_resource_node_a_name: "{{ cluster_add_host_survivor_name }}"
+drbd_resource_node_a_address: "{{ cluster_add_host_survivor_address }}"
+drbd_resource_node_b_name: "{{ cluster_add_host_new_name }}"
+drbd_resource_node_b_address: "{{ cluster_add_host_new_address }}"

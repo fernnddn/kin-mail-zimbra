@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket Pacemaker Corosync dan pcs di node baru
+  ansible.builtin.apt:
+    name: "{{ cluster_node_base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [cluster, base, packages]

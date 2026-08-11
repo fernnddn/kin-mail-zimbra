@@ -1,0 +1,16 @@
+---
+- name: Sertakan langkah meta eksternal di node baru
+  ansible.builtin.import_tasks: meta_loop.yml
+  tags: [drbd, livejoin, meta]
+
+- name: Sertakan langkah definisi resource di node baru
+  ansible.builtin.import_tasks: resource_file.yml
+  tags: [drbd, livejoin, config]
+
+- name: Sertakan langkah connect dan full sync ke Primary live
+  ansible.builtin.import_tasks: connect.yml
+  tags: [drbd, livejoin, connect]
+
+- name: Sertakan verifikasi status sync DRBD
+  ansible.builtin.import_tasks: verify.yml
+  tags: [drbd, livejoin, verify]

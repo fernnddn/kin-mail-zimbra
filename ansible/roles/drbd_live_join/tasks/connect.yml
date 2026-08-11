@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# MUTATING DRBD — LIVE JOIN (full sync to UpToDate Primary)
+# =============================================================================
+# Scenario differs from tasks 2.4/2.5:
+#   * Survivor already Primary/UpToDate and serving production mail.
+#   * New node has empty (or untrusted) backing disk + fresh EXTERNAL meta.
+#   * create-md + up on the NEW node only → Secondary/Inconsistent.
+#   * Connect to live Primary → DRBD starts SyncSource→SyncTarget full resync
+#     while Primary keeps serving (native DRBD behaviour; see drbdsetup(8)
+#     connection/resync model and LINBIT user guide resync chapters).
+#
+# Explicitly NOT used here:
+#   * drbdadm primary --force (Pacemaker owns promotion; would fight live stack)
+#   * new-current-uuid --clear-bitmap / skip-sync (that assumes identical shipped
+#     data; empty replacement disk MUST full-sync)
+#
+#   * Do NOT set check_mode: false on create-md / up / connect / wait.
+#   * Gate with `when: not ansible_check_mode`.
+# =============================================================================
+
+- name: Memeriksa status DRBD di node baru sebelum join
+  ansible.builtin.command:
+    cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_status_pre
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [drbd, livejoin, connect]
+
+- name: Membuat metadata DRBD baru pada meta-disk eksternal node baru
+  ansible.builtin.command:
+    cmd: drbdadm create-md {{ cluster_add_host_drbd_resource }}
+  # SAFETY: never check_mode: false.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+  tags: [drbd, livejoin, connect]
+
+- name: Mengaktifkan resource DRBD di node baru sebagai Secondary
+  ansible.builtin.command:
+    cmd: drbdadm up {{ cluster_add_host_drbd_resource }}
+  # SAFETY: never check_mode: false — connects toward live Primary.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+  tags: [drbd, livejoin, connect]
+
+- name: Memastikan tidak ada promote paksa di jalur live-join
+  ansible.builtin.debug:
+    msg: >-
+      drbdadm primary --force SENGAJA tidak dipanggil di drbd_live_join.
+      Survivor tetap Primary; node baru menunggu full sync sebagai Secondary.
+  tags: [drbd, livejoin, connect]
+
+- name: Memeriksa kemajuan sync awal ke Primary live
+  ansible.builtin.command:
+    cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_status_sync
+  changed_when: false
+  failed_when: false
+  # SAFETY: read-only probe may run; do not force mutating retries under --check.
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [drbd, livejoin, connect]
+
+- name: Mencatat connect/full-sync di-skip saat dry-run
+  ansible.builtin.debug:
+    msg: >-
+      Mode --check: create-md / up / connect TIDAK dijalankan. Logic ini
+      BELUM PERNAH diuji ke host mana pun — full sync ke Primary live masih
+      hipotesis berbasis dokumentasi resmi, bukan bukti lab KIN Mail.
+  when: ansible_check_mode
+  tags: [drbd, livejoin, connect]

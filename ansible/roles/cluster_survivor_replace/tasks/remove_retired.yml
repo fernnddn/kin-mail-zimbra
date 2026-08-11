@@ -1,0 +1,43 @@
+---
+# =============================================================================
+# MUTATING pcs — LIVE SURVIVOR CLUSTER MEMBERSHIP
+# =============================================================================
+# Removing a permanently lost peer rewrites corosync.conf on the survivor and
+# reloads Corosync. Under ansible-playbook --check these tasks must remain
+# PURE dry-run:
+#
+#   * Do NOT set check_mode: false on pcs cluster node remove / crm_node -R.
+#   * Gate with `when: not ansible_check_mode`.
+#
+# Official pattern (RHEL HA docs ch. Managing cluster nodes):
+#   pcs cluster node remove <node> [--force]
+# =============================================================================
+
+- name: Memeriksa apakah node lama masih tercatat di Corosync
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_survivor_replace_nodes
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, survivor, remove]
+
+- name: Menghapus node lama yang hilang permanen dari membership
+  ansible.builtin.command:
+    cmd: >-
+      pcs cluster node remove {{ cluster_add_host_retired_name }} --force
+  # SAFETY: never check_mode: false — rewrites live corosync.conf.
+  when:
+    - not ansible_check_mode
+    - cluster_add_host_retired_name in cluster_survivor_replace_nodes.stdout
+  tags: [cluster, survivor, remove]
+
+- name: Mencatat remove node lama di-skip saat dry-run atau sudah bersih
+  ansible.builtin.debug:
+    msg: >-
+      pcs cluster node remove {{ cluster_add_host_retired_name }} TIDAK
+      dijalankan (mode --check atau node sudah tidak ada di status).
+  when: >-
+    ansible_check_mode
+    or (cluster_add_host_retired_name not in cluster_survivor_replace_nodes.stdout)
+  tags: [cluster, survivor, remove]

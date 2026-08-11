@@ -1,0 +1,49 @@
+---
+# Example inventory for the add-host scenario (slice 3.7).
+# Copy to add-host.yml (gitignored if you add passwords) and edit identities.
+#
+#   cp inventory/add-host.example.yml inventory/add-host.yml
+#
+# IMPORTANT: placeholder new-node addresses below are NOT a live lab VM.
+# syntax-check only — do not expect --check against these names to work until
+# a real blank VM exists.
+
+all:
+  vars:
+    cluster_add_host_survivor_name: mail.gits-it.site
+    cluster_add_host_survivor_address: 10.10.40.13
+    cluster_add_host_retired_name: mail2.gits-it.site
+    cluster_add_host_retired_address: 10.10.40.12
+    # NEW identity — must differ from retired Host B.
+    cluster_add_host_new_name: mail3.gits-it.site
+    cluster_add_host_new_address: 10.10.40.16
+    cluster_add_host_hacluster_password: ""
+    cluster_node_base_hacluster_password: "{{ cluster_add_host_hacluster_password }}"
+    # Reuse fencing defaults; override initiator name for the new host.
+    iscsi_initiator_portal: "10.10.40.14:3260"
+  children:
+    monitoring:
+      hosts:
+        mon.gits-it.site:
+          ansible_host: 10.10.40.14
+          ansible_user: cursor
+          # ansible_password: "..."
+    mail_survivor:
+      hosts:
+        mail.gits-it.site:
+          ansible_host: 10.10.40.13
+          ansible_user: cursor
+          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
+          # ansible_password: "..."
+    mail_new_node:
+      hosts:
+        mail3.gits-it.site:
+          ansible_host: 10.10.40.16
+          ansible_user: cursor
+          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail3"
+          # ansible_password: "..."
+    # Convenience parent for roles that historically expect mail_nodes.
+    mail_nodes:
+      children:
+        mail_survivor:
+        mail_new_node:

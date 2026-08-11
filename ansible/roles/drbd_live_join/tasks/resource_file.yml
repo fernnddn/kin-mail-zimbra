@@ -1,0 +1,10 @@
+---
+- name: Memasang definisi resource DRBD peer survivor plus node baru
+  ansible.builtin.template:
+    src: kin-zimbra.res.j2
+    dest: "{{ cluster_add_host_drbd_res_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  # Native --check reports would-change; never check_mode: false.
+  tags: [drbd, livejoin, config]

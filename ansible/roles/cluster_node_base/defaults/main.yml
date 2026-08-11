@@ -1,0 +1,12 @@
+---
+# Base Pacemaker/Corosync stack for a brand-new mail node (add-host path).
+# Not covered by earlier Phase-2 slices (those assumed an already-clustered pair).
+cluster_node_base_packages:
+  - pacemaker
+  - corosync
+  - pcs
+  - fence-agents-base
+cluster_node_base_pcsd_service: pcsd
+cluster_node_base_hacluster_user: hacluster
+# Set via inventory / --extra-vars — never commit real passwords.
+cluster_node_base_hacluster_password: ""
