@@ -1,0 +1,4 @@
+[Unit]
+After=kin-softdog.service open-iscsi.service iscsid.service
+Requires=kin-softdog.service
+Wants=open-iscsi.service

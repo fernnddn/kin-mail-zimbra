@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket open-iscsi
+  ansible.builtin.apt:
+    name: "{{ iscsi_initiator_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [iscsi, initiator, install]

@@ -1,0 +1,25 @@
+---
+- name: Memasang konfigurasi /etc/default/sbd
+  ansible.builtin.template:
+    src: sbd.default.j2
+    dest: "{{ sbd_stonith_default_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+  tags: [sbd, stonith, config]
+
+- name: Memeriksa SBD_DELAY_START aktif di konfigurasi
+  ansible.builtin.command:
+    cmd: grep -E '^SBD_DELAY_START=yes' {{ sbd_stonith_default_path }}
+  register: sbd_stonith_delay_grep
+  changed_when: false
+  check_mode: false
+  tags: [sbd, stonith, config]
+
+- name: Memeriksa perangkat SBD di konfigurasi
+  ansible.builtin.command:
+    cmd: grep -F 'SBD_DEVICE="{{ sbd_stonith_device }}"' {{ sbd_stonith_default_path }}
+  changed_when: false
+  check_mode: false
+  tags: [sbd, stonith, config]

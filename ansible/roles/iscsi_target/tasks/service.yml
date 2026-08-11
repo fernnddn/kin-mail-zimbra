@@ -1,0 +1,12 @@
+---
+- name: Mengaktifkan layanan target iSCSI agar ikut boot
+  ansible.builtin.systemd:
+    name: "{{ iscsi_target_service }}"
+    enabled: true
+  tags: [iscsi, target, service]
+
+- name: Menjalankan layanan target iSCSI
+  ansible.builtin.systemd:
+    name: "{{ iscsi_target_service }}"
+    state: started
+  tags: [iscsi, target, service]

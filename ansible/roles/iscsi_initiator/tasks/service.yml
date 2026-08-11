@@ -1,0 +1,12 @@
+---
+- name: Mengaktifkan layanan open-iscsi agar ikut boot
+  ansible.builtin.systemd:
+    name: open-iscsi
+    enabled: true
+  tags: [iscsi, initiator, service]
+
+- name: Menjalankan layanan open-iscsi
+  ansible.builtin.systemd:
+    name: open-iscsi
+    state: started
+  tags: [iscsi, initiator, service]

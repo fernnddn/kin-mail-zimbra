@@ -1,0 +1,16 @@
+---
+sbd_stonith_packages:
+  - sbd
+  - fence-agents-sbd
+sbd_stonith_device: /dev/disk/by-id/scsi-36001405837abac113064e6da60264d82
+sbd_stonith_watchdog_timeout: 35
+sbd_stonith_msgwait: 70
+sbd_stonith_delay_start: "yes"
+sbd_stonith_timeout_start_sec: 180
+sbd_stonith_pcmk_delay_max: 5s
+sbd_stonith_pcmk_reboot_timeout: 120
+sbd_stonith_pcmk_off_timeout: 120
+sbd_stonith_cluster_timeout: 150s
+sbd_stonith_resource_name: sbd
+sbd_stonith_default_path: /etc/default/sbd
+sbd_stonith_dropin_dir: /etc/systemd/system/sbd.service.d

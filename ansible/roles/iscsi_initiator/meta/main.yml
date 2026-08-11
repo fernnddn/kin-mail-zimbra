@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  role_name: iscsi_initiator
+  description: open-iscsi login to Monitoring SBD LUN (task 2.2 §2).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

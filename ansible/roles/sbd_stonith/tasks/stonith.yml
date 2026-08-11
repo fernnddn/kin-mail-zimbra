@@ -1,0 +1,40 @@
+---
+- name: Memeriksa resource STONITH SBD di cluster
+  ansible.builtin.command:
+    cmd: pcs stonith config {{ sbd_stonith_resource_name }}
+  register: sbd_stonith_pcs_config
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [sbd, stonith, pcs]
+
+- name: Membuat resource fence_sbd di Pacemaker
+  ansible.builtin.command:
+    cmd: >-
+      pcs stonith create {{ sbd_stonith_resource_name }} fence_sbd
+      devices={{ sbd_stonith_device }}
+      pcmk_delay_max={{ sbd_stonith_pcmk_delay_max }}
+      pcmk_reboot_timeout={{ sbd_stonith_pcmk_reboot_timeout }}
+      pcmk_off_timeout={{ sbd_stonith_pcmk_off_timeout }}
+  run_once: true
+  when:
+    - sbd_stonith_pcs_config.rc != 0
+    - not ansible_check_mode
+  tags: [sbd, stonith, pcs]
+
+- name: Mengaktifkan stonith-enabled di cluster
+  ansible.builtin.command:
+    cmd: pcs property set stonith-enabled=true
+  run_once: true
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [sbd, stonith, pcs]
+
+- name: Mengatur stonith-timeout di atas msgwait
+  ansible.builtin.command:
+    cmd: pcs property set stonith-timeout={{ sbd_stonith_cluster_timeout }}
+  run_once: true
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [sbd, stonith, pcs]

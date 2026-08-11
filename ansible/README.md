@@ -4,47 +4,42 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 
 ## Slices
 
-| Playbook | Role | Source | Status |
+| Playbook | Roles | Source | Status |
 |---|---|---|---|
-| `playbooks/mon-qnetd.yml` | `corosync_qnetd` | task 2.1 §2 | dry-run checked (3.1) |
-| `playbooks/mail-qdevice.yml` | `corosync_qdevice` | task 2.2 §1 | dry-run checked (3.2) |
+| `playbooks/mon-qnetd.yml` | `corosync_qnetd` | 2.1 §2 | dry-run (3.1) |
+| `playbooks/mail-qdevice.yml` | `corosync_qdevice` | 2.2 §1 | dry-run (3.2) |
+| `playbooks/mon-iscsi-target.yml` | `iscsi_target` | 2.1 §3 | dry-run (3.4) |
+| `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2 §2–4, 2.3, 2.9 | dry-run (3.4) |
 
-**mail-qdevice scope:** install `corosync-qdevice`, TLS (certutil request/sign/import),
-quorum.device → Monitoring, verify Connected + Expected votes 3.  
-**Out of scope:** iSCSI SBD, softdog, Pacemaker STONITH, DRBD.
+**Fencing scope:** LIO target on Monitoring; initiator login; `kin-softdog.service`;
+`/etc/default/sbd` with **`SBD_DELAY_START=yes`** + `TimeoutStartSec=180`; `fence_sbd` STONITH.
+**Out of scope here:** DRBD, Zimbra Pacemaker resources, real fence/partition tests.
 
 ## Layout
 
 ```
 ansible/
-  ansible.cfg
-  inventory/lab.example.yml   # committed template
-  inventory/lab.yml           # local secrets — gitignored
-  playbooks/mon-qnetd.yml
-  playbooks/mail-qdevice.yml
-  roles/corosync_qnetd/
-  roles/corosync_qdevice/
-```
-
-Task names are Indonesian, user-facing progress labels.
-
-## Inventory
-
-```bash
-cd ansible
-cp inventory/lab.example.yml inventory/lab.yml
-# edit ansible_password / ansible_become_password or use SSH keys
+  playbooks/
+    mon-qnetd.yml
+    mail-qdevice.yml
+    mon-iscsi-target.yml
+    mail-fencing.yml
+  roles/
+    corosync_qnetd/
+    corosync_qdevice/
+    iscsi_target/
+    iscsi_initiator/
+    softdog/
+    sbd_stonith/
 ```
 
 ## Dry-run only against the live lab
 
-Hosts already run production qnetd/qdevice + HA. **Do not** apply for real until a blank
-test environment exists.
-
 ```bash
 cd ansible
-ansible-playbook playbooks/mon-qnetd.yml --check
-ansible-playbook playbooks/mail-qdevice.yml --check
+ansible-playbook playbooks/mon-iscsi-target.yml --check
+ansible-playbook playbooks/mail-fencing.yml --check
 ```
 
-`--check` is not an end-to-end greenfield proof. See `docs/progress/3.1-…` and `3.2-…`.
+`--check` is not greenfield proof and cannot prove softdog reboot or SBD_DELAY_START
+race mitigation. See `docs/progress/3.4-ansible-sbd-fencing-port.md`.

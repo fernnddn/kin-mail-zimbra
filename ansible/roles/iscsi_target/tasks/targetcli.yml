@@ -1,0 +1,53 @@
+---
+# Greenfield targetcli wiring from task 2.1 §3. Skipped under --check and when
+# the IQN already exists (idempotent on the live Monitoring VM).
+
+- name: Memeriksa apakah target IQN SBD sudah ada
+  ansible.builtin.command:
+    cmd: targetcli ls /iscsi/{{ iscsi_target_iqn }}
+  register: iscsi_target_iqn_ls
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [iscsi, target, targetcli]
+
+- name: Mengonfigurasi backstore fileio untuk LUN SBD
+  ansible.builtin.shell: |
+    set -euo pipefail
+    targetcli /backstores/fileio create {{ iscsi_target_backstore_name }} {{ iscsi_target_lun_img }}
+  args:
+    executable: /bin/bash
+  when:
+    - iscsi_target_iqn_ls.rc != 0
+    - not ansible_check_mode
+  register: iscsi_target_backstore_create
+  failed_when: >-
+    iscsi_target_backstore_create.rc != 0 and
+    ('exists' not in (iscsi_target_backstore_create.stderr | default('')) | lower) and
+    ('exists' not in (iscsi_target_backstore_create.stdout | default('')) | lower)
+  tags: [iscsi, target, targetcli]
+
+- name: Membuat target iSCSI SBD dan memetakan LUN
+  ansible.builtin.shell: |
+    set -euo pipefail
+    targetcli /iscsi create {{ iscsi_target_iqn }}
+    targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1/luns create /backstores/fileio/{{ iscsi_target_backstore_name }}
+    targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1 set attribute generate_node_acls=1 demo_mode_write_protect=0 authentication=0
+    targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1/portals create 0.0.0.0 {{ iscsi_target_portal_port }}
+    targetcli saveconfig
+  args:
+    executable: /bin/bash
+  when:
+    - iscsi_target_iqn_ls.rc != 0
+    - not ansible_check_mode
+  tags: [iscsi, target, targetcli]
+
+- name: Mencatat targetcli belum diuji dari nol saat dry-run
+  ansible.builtin.debug:
+    msg: >-
+      Target {{ iscsi_target_iqn }} belum terdeteksi. Di --check, langkah
+      targetcli di-skip (bukan bukti greenfield).
+  when:
+    - iscsi_target_iqn_ls.rc != 0
+    - ansible_check_mode
+  tags: [iscsi, target, targetcli]

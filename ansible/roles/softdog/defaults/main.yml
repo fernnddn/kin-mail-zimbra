@@ -1,0 +1,7 @@
+---
+softdog_soft_margin: 35
+softdog_service_name: kin-softdog
+softdog_modules_load_path: /etc/modules-load.d/softdog.conf
+softdog_modprobe_path: /etc/modprobe.d/softdog.conf
+# Note: Ubuntu blacklists softdog for modules-load; kin-softdog.service is required
+# (task 2.3). modules-load/modprobe.d are kept for documentation parity with 2.2.

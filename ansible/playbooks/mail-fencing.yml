@@ -1,0 +1,21 @@
+---
+# iSCSI initiator + softdog + SBD/STONITH on Host A/B
+# (tasks 2.2 §2–§4, 2.3 kin-softdog, 2.9 SBD_DELAY_START).
+#
+# Dry-run only against live lab:
+#   ansible-playbook playbooks/mail-fencing.yml --check
+#
+# Do NOT full-apply on the production HA pair. Soft-reboot / fence proofs
+# are intentionally absent from this playbook.
+
+- name: Siapkan fencing SBD di Host A dan Host B
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: iscsi_initiator
+      tags: [iscsi, initiator]
+    - role: softdog
+      tags: [softdog]
+    - role: sbd_stonith
+      tags: [sbd, stonith]

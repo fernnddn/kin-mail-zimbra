@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket targetcli untuk iSCSI
+  ansible.builtin.apt:
+    name: "{{ iscsi_target_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [iscsi, target, install]

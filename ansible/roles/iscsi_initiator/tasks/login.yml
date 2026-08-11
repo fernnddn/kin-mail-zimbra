@@ -1,0 +1,46 @@
+---
+- name: Memeriksa sesi iSCSI SBD yang sudah aktif
+  ansible.builtin.command:
+    cmd: iscsiadm -m session
+  register: iscsi_initiator_session
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [iscsi, initiator, login]
+
+- name: Melakukan discovery target iSCSI di VM Monitoring
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m discovery -t sendtargets -p {{ iscsi_initiator_portal }}
+  register: iscsi_initiator_discovery
+  changed_when: false
+  when:
+    - iscsi_initiator_target_iqn not in (iscsi_initiator_session.stdout | default(''))
+    - not ansible_check_mode
+  tags: [iscsi, initiator, login]
+
+- name: Login ke target iSCSI SBD
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}
+      -p {{ iscsi_initiator_portal }} --login
+  register: iscsi_initiator_login
+  failed_when: >-
+    iscsi_initiator_login.rc != 0 and
+    ('already' not in (iscsi_initiator_login.stderr | default('')) | lower) and
+    ('already' not in (iscsi_initiator_login.stdout | default('')) | lower)
+  when:
+    - iscsi_initiator_target_iqn not in (iscsi_initiator_session.stdout | default(''))
+    - not ansible_check_mode
+  tags: [iscsi, initiator, login]
+
+- name: Mengatur login otomatis iSCSI saat boot
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}
+      -p {{ iscsi_initiator_portal }}
+      --op update -n node.startup -v automatic
+  when:
+    - not ansible_check_mode
+  changed_when: false
+  tags: [iscsi, initiator, login]

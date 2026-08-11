@@ -1,0 +1,51 @@
+---
+- name: Memverifikasi header perangkat SBD terbaca
+  ansible.builtin.command:
+    cmd: sbd -d {{ sbd_stonith_device }} dump
+  register: sbd_stonith_dump
+  changed_when: false
+  failed_when: sbd_stonith_dump.rc != 0
+  check_mode: false
+  tags: [sbd, stonith, verify]
+
+- name: Memverifikasi SBD_DELAY_START=yes
+  ansible.builtin.command:
+    cmd: grep -E '^SBD_DELAY_START=yes' {{ sbd_stonith_default_path }}
+  changed_when: false
+  check_mode: false
+  tags: [sbd, stonith, verify]
+
+- name: Memverifikasi resource fence_sbd ada di cluster
+  ansible.builtin.command:
+    cmd: pcs stonith config {{ sbd_stonith_resource_name }}
+  register: sbd_stonith_pcs_verify
+  changed_when: false
+  failed_when: >-
+    sbd_stonith_pcs_verify.rc != 0 or
+    ('fence_sbd' not in sbd_stonith_pcs_verify.stdout) or
+    (sbd_stonith_device not in sbd_stonith_pcs_verify.stdout)
+  check_mode: false
+  run_once: true
+  tags: [sbd, stonith, verify]
+
+- name: Memverifikasi stonith-enabled dan timeout cluster
+  ansible.builtin.command:
+    cmd: pcs property config
+  register: sbd_stonith_props
+  changed_when: false
+  failed_when: >-
+    ('stonith-enabled=true' not in sbd_stonith_props.stdout) or
+    ('stonith-timeout=150s' not in sbd_stonith_props.stdout and
+     'stonith-timeout=150' not in sbd_stonith_props.stdout)
+  check_mode: false
+  run_once: true
+  tags: [sbd, stonith, verify]
+
+- name: Mencatat batas dry-run untuk SBD_DELAY_START dan fence sungguhan
+  ansible.builtin.debug:
+    msg: >-
+      Dry-run hanya memastikan file/config/STONITH resource ada.
+      Efektivitas SBD_DELAY_START (anti race rejoin) dan fence/partition
+      membutuhkan reboot/fence sungguhan seperti task 2.3/2.9 — tidak
+      dijalankan di lab live lewat playbook ini.
+  tags: [sbd, stonith, verify]

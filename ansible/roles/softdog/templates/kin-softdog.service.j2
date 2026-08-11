@@ -1,0 +1,16 @@
+[Unit]
+Description=KIN Mail - load softdog watchdog for SBD fencing
+Documentation=man:sbd(8)
+DefaultDependencies=no
+After=systemd-modules-load.service systemd-udevd.service
+Before=sbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe softdog soft_margin={{ softdog_soft_margin }}
+ExecStart=/bin/sleep 1
+ExecStart=/usr/bin/test -e /dev/watchdog
+
+[Install]
+WantedBy=sbd.service multi-user.target

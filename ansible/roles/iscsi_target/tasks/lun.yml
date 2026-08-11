@@ -1,0 +1,27 @@
+---
+- name: Memeriksa berkas image LUN SBD
+  ansible.builtin.stat:
+    path: "{{ iscsi_target_lun_img }}"
+  register: iscsi_target_lun_stat
+  tags: [iscsi, target, lun]
+
+- name: Menyiapkan direktori penyimpanan LUN SBD
+  ansible.builtin.file:
+    path: "{{ iscsi_target_lun_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - not iscsi_target_lun_stat.stat.exists
+    - not ansible_check_mode
+  tags: [iscsi, target, lun]
+
+- name: Membuat image LUN SBD berukuran kecil
+  ansible.builtin.command:
+    cmd: truncate -s {{ iscsi_target_lun_size }} {{ iscsi_target_lun_img }}
+    creates: "{{ iscsi_target_lun_img }}"
+  when:
+    - not iscsi_target_lun_stat.stat.exists
+    - not ansible_check_mode
+  tags: [iscsi, target, lun]

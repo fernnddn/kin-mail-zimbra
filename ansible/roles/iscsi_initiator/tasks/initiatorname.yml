@@ -1,0 +1,22 @@
+---
+- name: Memeriksa nama initiator iSCSI saat ini
+  ansible.builtin.slurp:
+    src: "{{ iscsi_initiator_name_file }}"
+  register: iscsi_initiator_name_slurp
+  failed_when: false
+  check_mode: false
+  tags: [iscsi, initiator, name]
+
+- name: Menetapkan nama initiator iSCSI unik per host
+  ansible.builtin.copy:
+    dest: "{{ iscsi_initiator_name_file }}"
+    content: |
+      InitiatorName={{ iscsi_initiator_name }}
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - iscsi_initiator_name_slurp.content is not defined
+      or ((iscsi_initiator_name_slurp.content | b64decode | trim) != ('InitiatorName=' ~ iscsi_initiator_name))
+    - not ansible_check_mode
+  tags: [iscsi, initiator, name]

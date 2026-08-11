@@ -1,0 +1,10 @@
+# Managed by Ansible role sbd_stonith (KIN Mail Phase 2).
+# SBD_DELAY_START=yes ≈ msgwait — required for safe auto-rejoin (task 2.9).
+SBD_DEVICE="{{ sbd_stonith_device }}"
+SBD_PACEMAKER=yes
+SBD_STARTMODE=always
+SBD_DELAY_START={{ sbd_stonith_delay_start }}
+SBD_WATCHDOG_DEV=/dev/watchdog
+SBD_WATCHDOG_TIMEOUT={{ sbd_stonith_watchdog_timeout }}
+SBD_TIMEOUT_ACTION=flush,reboot
+SBD_SYNC_RESOURCE_STARTUP=yes

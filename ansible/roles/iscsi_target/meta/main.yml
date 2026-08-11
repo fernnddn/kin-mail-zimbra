@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  role_name: iscsi_target
+  description: LIO iSCSI target for KIN Mail SBD LUN on Monitoring VM (task 2.1 §3).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

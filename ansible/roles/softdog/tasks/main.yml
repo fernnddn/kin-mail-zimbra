@@ -1,0 +1,12 @@
+---
+- name: Sertakan langkah berkas modul softdog
+  ansible.builtin.import_tasks: modules.yml
+  tags: [softdog, modules]
+
+- name: Sertakan langkah unit kin-softdog
+  ansible.builtin.import_tasks: service.yml
+  tags: [softdog, service]
+
+- name: Sertakan langkah verifikasi softdog
+  ansible.builtin.import_tasks: verify.yml
+  tags: [softdog, verify]

@@ -1,0 +1,9 @@
+---
+iscsi_initiator_packages:
+  - open-iscsi
+iscsi_initiator_portal: "10.10.40.14:3260"
+iscsi_initiator_target_iqn: "iqn.2026-08.site.gits-it:kin-mail-sbd"
+# Override per host in inventory (mail vs mail2).
+iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
+iscsi_initiator_name_file: /etc/iscsi/initiatorname.iscsi
+iscsi_initiator_sbd_by_id: /dev/disk/by-id/scsi-36001405837abac113064e6da60264d82

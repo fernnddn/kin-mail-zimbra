@@ -1,0 +1,4 @@
+---
+- name: Muat ulang systemd setelah perubahan sbd
+  ansible.builtin.systemd:
+    daemon_reload: true

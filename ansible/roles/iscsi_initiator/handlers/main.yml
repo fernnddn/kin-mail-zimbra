@@ -1,0 +1,4 @@
+---
+- name: Muat ulang systemd setelah perubahan open-iscsi
+  ansible.builtin.systemd:
+    daemon_reload: true

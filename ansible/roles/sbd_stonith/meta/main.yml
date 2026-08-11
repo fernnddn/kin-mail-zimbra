@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: sbd_stonith
+  description: >-
+    SBD config, kin-softdog ordering, SBD_DELAY_START, fence_sbd STONITH
+    (tasks 2.2 §4, 2.3, 2.9).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []
