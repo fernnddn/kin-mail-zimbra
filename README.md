@@ -51,6 +51,7 @@ sudo ./03-install-zimbra.sh   # download, verify checksum, drive the installer
 sudo ./04-tls-dkim.sh         # TLS + DKIM (publish the DKIM record it prints)
 sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback
 sudo ./07-zpush.sh            # ActiveSync (Z-Push + Zimbra backend); optional
+sudo ./08-create-mailbox.sh   # create mailbox (shared quota gate); optional
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
@@ -82,6 +83,8 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/04-tls-dkim.sh` | TLS by `TLS_METHOD` + DKIM | yes |
 | `install/06-hybrid-auth.sh` | Optional AD LDAP + local fallback; no-op if AD was skipped | yes |
 | `install/07-zpush.sh` | Z-Push ActiveSync + Autodiscover (Zimbra backend); skips wipe/proxy restart when unchanged | yes |
+| `install/08-create-mailbox.sh` | Manual mailbox create; calls shared quota gate **before** `zmprov ca` | yes |
+| `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08 + future console) | — |
 | `install/05-healthcheck.sh` | Services, listeners, cert, DNS, DKIM, SMTP egress, **both auth paths**, mail flow, open-relay | yes |
 | `install/check-zimbra-foss-update.sh` | Compare configured FOSS build vs newest GitHub release | yes |
 
@@ -108,6 +111,7 @@ Asked once on first run:
 | Let's Encrypt contact | `admin@<domain>` |
 | TLS method | `1` Cloudflare / `2` manual DNS-01 / `3` customer-provided |
 | External test mailbox | empty |
+| Contracted mailbox seats | `PLACEHOLDER_UNSET` until operator confirms |
 
 Cloudflare API token is requested by `04` only when `TLS_METHOD=cloudflare`, and is
 never written to a log or echoed to the terminal.

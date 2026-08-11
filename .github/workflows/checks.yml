@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          scripts=(install/*.sh)
+          scripts=(install/*.sh install/lib/*.sh)
           if [ ${#scripts[@]} -eq 0 ]; then
             echo "ERROR: no install/*.sh found — refusing silent pass"
             exit 1
@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          scripts=(install/*.sh)
+          scripts=(install/*.sh install/lib/*.sh)
           if [ ${#scripts[@]} -eq 0 ]; then
             echo "ERROR: no install/*.sh found — refusing silent pass"
             exit 1
@@ -62,7 +62,7 @@ jobs:
         continue-on-error: true
         run: |
           shopt -s nullglob
-          for f in install/*.sh; do
+          for f in install/*.sh install/lib/*.sh; do
             shellcheck -S warning -e SC1090,SC1091 "$f" || true
           done
 
@@ -79,13 +79,14 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           scripts=(install/*.sh)
+          libscripts=(install/lib/*.sh)
           if [ ${#scripts[@]} -eq 0 ]; then
             echo "ERROR: no install/*.sh found — refusing silent pass"
             exit 1
           fi
-          bad=$(file "${scripts[@]}" | grep -i CRLF || true)
+          bad=$(file "${scripts[@]}" ${libscripts[@]+"${libscripts[@]}"} | grep -i CRLF || true)
           if [ -n "$bad" ]; then echo "CRLF found:"; echo "$bad"; exit 1; fi
-          echo "All scripts use LF (${#scripts[@]} files)"
+          echo "All scripts use LF (${#scripts[@]} + ${#libscripts[@]} lib files)"
 
       # Without the executable bit a fresh clone cannot run ./install/01-preflight.sh.
       - name: Require executable bit on scripts
@@ -104,6 +105,16 @@ jobs:
               echo "not executable ($mode): $f"; fail=1
             else
               echo "ok  $f"
+            fi
+          done
+          # Sourced libraries need not be executable.
+          for f in install/lib/*.sh; do
+            [ -f "$f" ] || continue
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            if [ -n "$mode" ] && [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; then
+              echo "unexpected mode ($mode): $f"; fail=1
+            else
+              echo "ok  $f (lib mode ${mode:-untracked})"
             fi
           done
           exit $fail

@@ -312,6 +312,22 @@ run_wizard() {
   echo; say "Testing"
   ask EXTERNAL_TEST_ADDRESS "External email address for send test (leave blank if not ready)" ""
 
+  echo; say "Licensing / mailbox seats"
+  info "CONTRACTED_SEATS limits NEW mailbox creation only (quota gate)."
+  info "Password reset and other modify operations are never gated by this value."
+  info "Use PLACEHOLDER_UNSET until the operator confirms the real contracted count."
+  info "Do not invent a production number here."
+  ask CONTRACTED_SEATS "Contracted mailbox seats" "PLACEHOLDER_UNSET"
+  case "$CONTRACTED_SEATS" in
+    ''|PLACEHOLDER_UNSET)
+      CONTRACTED_SEATS=PLACEHOLDER_UNSET
+      ;;
+    *[!0-9]*)
+      warn "Not a non-negative integer — storing PLACEHOLDER_UNSET"
+      CONTRACTED_SEATS=PLACEHOLDER_UNSET
+      ;;
+  esac
+
   mkdir -p "$CONF_DIR"
   cat > "$CONF_FILE" <<EOF
 # KIN Mail - created $(date -Is)
@@ -349,6 +365,9 @@ AD_SEARCH_BIND_PASSWORD='${AD_SEARCH_BIND_PASSWORD}'
 AD_BIND_DN_TEMPLATE="${AD_BIND_DN_TEMPLATE}"
 AD_TEST_USER="${AD_TEST_USER}"
 AD_TEST_PASS='${AD_TEST_PASS}'
+# PLACEHOLDER until operator confirms the real contracted seat count.
+# Quota gate blocks NEW mailbox creates only when at/over this limit (or unset).
+CONTRACTED_SEATS="${CONTRACTED_SEATS}"
 EOF
   chmod 600 "$CONF_FILE"
 
@@ -419,3 +438,9 @@ fi
 : "${AD_TEST_USER:=}"
 : "${AD_TEST_PASS:=}"
 : "${TLS_METHOD:=cloudflare}"
+# PLACEHOLDER_UNSET until the operator confirms the real contracted seat count.
+# Empty legacy configs behave the same as PLACEHOLDER_UNSET (gate denies creates).
+: "${CONTRACTED_SEATS:=PLACEHOLDER_UNSET}"
+if [ -z "$CONTRACTED_SEATS" ]; then
+  CONTRACTED_SEATS=PLACEHOLDER_UNSET
+fi
