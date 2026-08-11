@@ -1,23 +1,19 @@
 ---
-- name: Include the survivor preflight checks
-  ansible.builtin.import_tasks: preflight.yml
-  tags: [cluster, survivor, preflight]
+# Add-host survivor path: remove retired (shared role) → add new → rewrite DRBD
+# peer to new identity → verify. Removal logic lives in cluster_remove_host.
 
-- name: Include the old node cleanup from membership
-  ansible.builtin.import_tasks: remove_retired.yml
+- name: Remove the permanently lost peer (shared cluster_remove_host role)
+  ansible.builtin.include_role:
+    name: cluster_remove_host
   tags: [cluster, survivor, remove]
-
-- name: Include the DRBD peer update to the new identity
-  ansible.builtin.import_tasks: drbd_peer.yml
-  tags: [cluster, survivor, drbd]
 
 - name: Include adding the new node to Corosync
   ansible.builtin.import_tasks: corosync_add.yml
   tags: [cluster, survivor, corosync]
 
-- name: Include the cleanup of leftover old node references
-  ansible.builtin.import_tasks: cleanup.yml
-  tags: [cluster, survivor, cleanup]
+- name: Include the DRBD peer update to the new identity
+  ansible.builtin.import_tasks: drbd_peer.yml
+  tags: [cluster, survivor, drbd]
 
 - name: Include the survivor verification after the replace
   ansible.builtin.import_tasks: verify.yml

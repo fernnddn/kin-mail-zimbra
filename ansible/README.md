@@ -12,13 +12,16 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2–2.3, 2.9 | dry-run (3.4) |
 | `playbooks/mail-drbd.yml` | `drbd_install`, `drbd_resource` | 2.4, 2.5 | dry-run (3.5) |
 | `playbooks/mail-pacemaker.yml` | `pacemaker_agents`, `pacemaker_mail_stack` | 2.7 | dry-run (3.6) |
-| `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_survivor_replace`, `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |
+| `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_remove_host` (via `cluster_survivor_replace`), `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |
+| `playbooks/mail-remove-host.yml` | `cluster_remove_host` | new | **syntax-only (unreachable-peer cleanup)** |
 | `playbooks/mail-zpush.yml` | `zpush_install` | 4.1 / 4.2 | dry-run / Host A only (B disabled in inventory) |
 
 **Add-host scope:** replace a permanently lost peer with a **new** hostname/IP;
 survivor membership + DRBD peer rewrite; new-node live full sync to Primary.  
-**Never tested against any host** — see local progress notes for slice 3.7
-(not committed; under `docs/progress/` on operator machines).
+**Remove-host scope:** clear retired/unreachable peer from survivor only (force
+membership remove, DRBD peer drop, location constraints, precise qnetd NSS
+nickname delete). Must not disturb kin-zimbra/VIP/DRBD Primary.  
+**Never tested against any host as a live apply** — see progress notes.
 
 ## Layout
 
@@ -26,11 +29,14 @@ survivor membership + DRBD peer rewrite; new-node live full sync to Primary.
 ansible/
   playbooks/
     mail-add-host.yml
+    mail-remove-host.yml
     …
   inventory/
     add-host.example.yml
+    remove-host.example.yml
   roles/
     cluster_node_base/
+    cluster_remove_host/
     cluster_survivor_replace/
     drbd_live_join/
     …
@@ -42,8 +48,10 @@ ansible/
 cd ansible
 ansible-playbook -i inventory/add-host.example.yml \
   playbooks/mail-add-host.yml --syntax-check
+ansible-playbook -i inventory/remove-host.example.yml \
+  playbooks/mail-remove-host.yml --syntax-check
 ```
 
-Do **not** run this against the live A/B pair as an add-host rehearsal.
+Do **not** run remove-host / add-host against the live A/B pair as a rehearsal.
 Mutating survivor/`pcs`/`drbdadm` tasks stay gated (`not ansible_check_mode`,
 never `check_mode: false` on those paths).

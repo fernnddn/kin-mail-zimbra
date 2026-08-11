@@ -1,0 +1,61 @@
+---
+- name: Verify retired node is absent from Corosync membership
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_remove_host_nodes_v
+  changed_when: false
+  failed_when: cluster_remove_host_retired_name in cluster_remove_host_nodes_v.stdout
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, verify]
+
+- name: Verify retired hostname is absent from DRBD resource file
+  ansible.builtin.command:
+    cmd: grep -F {{ cluster_remove_host_retired_name }} {{ cluster_remove_host_drbd_res_path }}
+  register: cluster_remove_host_res_v
+  changed_when: false
+  failed_when: cluster_remove_host_res_v.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, verify]
+
+- name: Verify retired hostname is absent from location constraints
+  ansible.builtin.command:
+    cmd: pcs constraint location --full
+  register: cluster_remove_host_loc_v
+  changed_when: false
+  failed_when: cluster_remove_host_retired_name in cluster_remove_host_loc_v.stdout
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, verify]
+
+- name: Confirm survivor is still DRBD Primary after remove-host
+  ansible.builtin.command:
+    cmd: drbdadm role {{ cluster_remove_host_drbd_resource }}
+  register: cluster_remove_host_role_v
+  changed_when: false
+  failed_when: "'Primary' not in cluster_remove_host_role_v.stdout"
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, verify]
+
+- name: Confirm cluster still has quorum
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_remove_host_pcs_v
+  changed_when: false
+  failed_when: >-
+    cluster_remove_host_pcs_v.rc != 0
+    or ('partition with quorum' not in cluster_remove_host_pcs_v.stdout
+        and 'With Quorum' not in cluster_remove_host_pcs_v.stdout)
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, verify]
+
+- name: Note verification skipped under --check
+  ansible.builtin.debug:
+    msg: >-
+      remove-host verify skipped under --check/syntax-only. Live proof requires
+      a blank/replace scenario — do not run against healthy production A/B.
+  when: ansible_check_mode
+  tags: [cluster, remove_host, verify]

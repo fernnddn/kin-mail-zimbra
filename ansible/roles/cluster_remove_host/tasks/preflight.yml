@@ -1,0 +1,46 @@
+---
+# Read-only preflight. NEVER stop/disable kin-zimbra, VIP, or demote DRBD.
+
+- name: Require retired and survivor identities
+  ansible.builtin.assert:
+    that:
+      - cluster_remove_host_retired_name | length > 0
+      - cluster_remove_host_survivor_name | length > 0
+      - cluster_remove_host_survivor_address | length > 0
+      - cluster_remove_host_retired_name != cluster_remove_host_survivor_name
+    fail_msg: >-
+      Set cluster_remove_host_retired_name / survivor_name / survivor_address
+      (or cluster_add_host_* equivalents).
+  tags: [cluster, remove_host, preflight]
+
+- name: Verify the survivor cluster still has quorum
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_remove_host_pcs_pre
+  changed_when: false
+  failed_when: >-
+    cluster_remove_host_pcs_pre.rc != 0
+    or ('partition with quorum' not in cluster_remove_host_pcs_pre.stdout
+        and 'With Quorum' not in cluster_remove_host_pcs_pre.stdout)
+  check_mode: false
+  tags: [cluster, remove_host, preflight]
+
+- name: Verify this host is still DRBD Primary (production must keep serving)
+  ansible.builtin.command:
+    cmd: drbdadm role {{ cluster_remove_host_drbd_resource }}
+  register: cluster_remove_host_drbd_role
+  changed_when: false
+  failed_when: >-
+    cluster_remove_host_drbd_role.rc != 0
+    or ('Primary' not in cluster_remove_host_drbd_role.stdout)
+  check_mode: false
+  tags: [cluster, remove_host, preflight]
+
+- name: Note remove-host proof status
+  ansible.builtin.debug:
+    msg: >-
+      cluster_remove_host must tolerate an unreachable retired node. It must
+      NEVER touch kin-zimbra/VIP/DRBD Primary beyond peer-file membership
+      bookkeeping. Live apply against production A/B is out of scope until a
+      blank/replace VM exists (same honesty bar as slice 3.7).
+  tags: [cluster, remove_host, preflight]

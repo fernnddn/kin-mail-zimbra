@@ -1,0 +1,47 @@
+---
+# =============================================================================
+# Remove-host — clear a retired/unreachable mail peer from the SURVIVOR only.
+#
+# Uses role cluster_remove_host (extracted from cluster_survivor_replace).
+# Tolerates a completely unreachable target. Must not disturb kin-zimbra/VIP/
+# DRBD Primary production state beyond membership bookkeeping + peer rewrite.
+#
+# SCOPE: syntax-check / code-review first. Do NOT run against a healthy live
+# A/B pair as a rehearsal. End-to-end proof needs a blank/replace VM (same
+# honesty bar as slice 3.7 / design brief).
+#
+#   ansible-playbook -i inventory/remove-host.example.yml \
+#     playbooks/mail-remove-host.yml --syntax-check
+# =============================================================================
+
+- name: Validate remove-host identity variables
+  hosts: mail_survivor
+  gather_facts: false
+  become: false
+  run_once: true
+  tasks:
+    - name: Ensure retired ≠ survivor
+      ansible.builtin.assert:
+        that:
+          - cluster_remove_host_retired_name | default(cluster_add_host_retired_name) | length > 0
+          - cluster_remove_host_survivor_name | default(cluster_add_host_survivor_name) | length > 0
+          - (cluster_remove_host_retired_name | default(cluster_add_host_retired_name))
+            != (cluster_remove_host_survivor_name | default(cluster_add_host_survivor_name))
+        fail_msg: >-
+          Fill cluster_remove_host_retired_name / survivor_name (or cluster_add_host_*).
+      tags: [remove_host, validate]
+
+    - name: Record proof status
+      ansible.builtin.debug:
+        msg: >-
+          Playbook mail-remove-host: logic + syntax. Do not apply against live
+          production A/B without an intentional replace window / blank VM.
+      tags: [remove_host, validate]
+
+- name: Remove retired host references on the survivor
+  hosts: mail_survivor
+  gather_facts: true
+  become: true
+  roles:
+    - role: cluster_remove_host
+      tags: [remove_host, survivor]

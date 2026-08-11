@@ -1,0 +1,27 @@
+---
+# Example inventory for standalone remove-host (unreachable peer cleanup).
+# Copy and edit — do NOT point this at a healthy live peer as a drill.
+#
+#   cp inventory/remove-host.example.yml inventory/remove-host.yml
+#
+# Then on the survivor only:
+#   ansible-playbook -i inventory/remove-host.yml playbooks/mail-remove-host.yml --syntax-check
+
+all:
+  vars:
+    cluster_remove_host_survivor_name: mail.gits-it.site
+    cluster_remove_host_survivor_address: 10.10.40.13
+    cluster_remove_host_retired_name: mail2.gits-it.site
+    cluster_remove_host_retired_address: 10.10.40.12
+    # Also accepted via cluster_add_host_* aliases for add-host reuse.
+  children:
+    monitoring:
+      hosts:
+        mon.gits-it.site:
+          ansible_host: 10.10.40.14
+          ansible_user: cursor
+    mail_survivor:
+      hosts:
+        mail.gits-it.site:
+          ansible_host: 10.10.40.13
+          ansible_user: cursor

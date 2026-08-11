@@ -1,0 +1,88 @@
+---
+# Automate location-constraint cleanup for the retired node only.
+# Extract (id: …) from pcs constraint location --full when the line mentions
+# the retired hostname — never wipe unrelated constraints.
+
+- name: List location constraints with ids
+  ansible.builtin.command:
+    cmd: pcs constraint location --full
+  register: cluster_remove_host_loc_full
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, remove_host, constraints]
+
+- name: Extract location constraint ids naming the retired node
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export KIN_LOC_OUT
+    export KIN_RETIRED='{{ cluster_remove_host_retired_name }}'
+    python3 - <<'PY'
+    import os, re
+    text = os.environ.get("KIN_LOC_OUT", "")
+    retired = os.environ["KIN_RETIRED"]
+    ids = []
+    for line in text.splitlines():
+        if retired not in line:
+            continue
+        m = re.search(r"\(id:\s*([^)]+)\)", line)
+        if m:
+            ids.append(m.group(1).strip())
+    print("\n".join(ids))
+    PY
+  args:
+    executable: /bin/bash
+  environment:
+    KIN_LOC_OUT: "{{ cluster_remove_host_loc_full.stdout | default('') }}"
+  register: cluster_remove_host_loc_ids_cmd
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, remove_host, constraints]
+
+- name: Set location constraint id list
+  ansible.builtin.set_fact:
+    cluster_remove_host_loc_ids: "{{ cluster_remove_host_loc_ids_cmd.stdout_lines | default([]) | reject('equalto', '') | list }}"
+  tags: [cluster, remove_host, constraints]
+
+- name: Remove location constraints that reference the retired node
+  ansible.builtin.command:
+    cmd: pcs constraint location remove {{ item }}
+  loop: "{{ cluster_remove_host_loc_ids }}"
+  register: cluster_remove_host_loc_rm
+  changed_when: cluster_remove_host_loc_rm.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_loc_ids | length > 0
+  tags: [cluster, remove_host, constraints]
+
+- name: Re-list location constraints after cleanup
+  ansible.builtin.command:
+    cmd: pcs constraint location --full
+  register: cluster_remove_host_loc_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, constraints]
+
+- name: Fail if retired node still appears in location constraints
+  ansible.builtin.assert:
+    that:
+      - cluster_remove_host_retired_name not in (cluster_remove_host_loc_after.stdout | default(''))
+    fail_msg: >-
+      Location constraints still reference {{ cluster_remove_host_retired_name }}
+      after automated remove.
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_retired_name in (cluster_remove_host_loc_full.stdout | default(''))
+  tags: [cluster, remove_host, constraints]
+
+- name: Note when no location constraints named the retired node
+  ansible.builtin.debug:
+    msg: >-
+      No location constraint ids matched {{ cluster_remove_host_retired_name }}
+      (already clean).
+  when: cluster_remove_host_loc_ids | length == 0
+  tags: [cluster, remove_host, constraints]

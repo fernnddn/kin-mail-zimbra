@@ -1,0 +1,24 @@
+---
+- name: Include remove-host preflight (survivor quorum + Primary; no service stop)
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [cluster, remove_host, preflight]
+
+- name: Include Corosync membership removal (force; already-absent = success)
+  ansible.builtin.import_tasks: remove_membership.yml
+  tags: [cluster, remove_host, membership]
+
+- name: Include DRBD peer drop (survivor-only .res; does not demote Primary)
+  ansible.builtin.import_tasks: drbd_drop_peer.yml
+  tags: [cluster, remove_host, drbd]
+
+- name: Include location-constraint cleanup for the retired node
+  ansible.builtin.import_tasks: cleanup_constraints.yml
+  tags: [cluster, remove_host, constraints]
+
+- name: Include precise qnetd/NSS cleanup for the retired node identity
+  ansible.builtin.import_tasks: cleanup_qnetd.yml
+  tags: [cluster, remove_host, qnetd]
+
+- name: Include remove-host verification
+  ansible.builtin.import_tasks: verify.yml
+  tags: [cluster, remove_host, verify]

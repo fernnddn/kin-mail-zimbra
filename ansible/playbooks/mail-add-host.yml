@@ -16,6 +16,9 @@
 #
 # When a blank VM exists:
 #   ansible-playbook -i inventory/add-host.yml playbooks/mail-add-host.yml --check
+#
+# Survivor replace now starts with shared role cluster_remove_host (same path as
+# playbooks/mail-remove-host.yml), then adds the new identity.
 # =============================================================================
 
 - name: Validate add-host identity variables

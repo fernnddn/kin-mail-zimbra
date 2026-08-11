@@ -1,0 +1,55 @@
+---
+# =============================================================================
+# MUTATING — rewrite kin-zimbra.res to drop the retired peer (survivor stays
+# Primary/UpToDate). Does NOT run drbdadm primary/secondary or touch Pacemaker
+# mail resources.
+# =============================================================================
+
+- name: Check whether the retired peer still appears in the DRBD resource file
+  ansible.builtin.command:
+    cmd: grep -F {{ cluster_remove_host_retired_name }} {{ cluster_remove_host_drbd_res_path }}
+  register: cluster_remove_host_res_grep
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, remove_host, drbd]
+
+- name: Deploy survivor-only DRBD resource (drop retired peer)
+  ansible.builtin.template:
+    src: kin-zimbra-single.res.j2
+    dest: "{{ cluster_remove_host_drbd_res_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_res_grep.rc == 0
+      or cluster_remove_host_retired_address | length > 0
+  register: cluster_remove_host_res_tpl
+  tags: [cluster, remove_host, drbd]
+
+- name: Adjust DRBD after peer drop (survivor remains Primary)
+  ansible.builtin.command:
+    cmd: drbdadm adjust {{ cluster_remove_host_drbd_resource }}
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_res_tpl is changed
+  tags: [cluster, remove_host, drbd]
+
+- name: Ensure retired hostname is gone from DRBD resource file
+  ansible.builtin.command:
+    cmd: grep -F {{ cluster_remove_host_retired_name }} {{ cluster_remove_host_drbd_res_path }}
+  register: cluster_remove_host_res_gone
+  changed_when: false
+  failed_when: cluster_remove_host_res_gone.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, drbd]
+
+- name: Note DRBD peer drop skipped on dry-run
+  ansible.builtin.debug:
+    msg: >-
+      --check: would rewrite {{ cluster_remove_host_drbd_res_path }} to survivor-only
+      ({{ cluster_remove_host_survivor_name }}). Retired={{ cluster_remove_host_retired_name }}.
+  when: ansible_check_mode
+  tags: [cluster, remove_host, drbd]

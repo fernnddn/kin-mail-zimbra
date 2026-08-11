@@ -1,0 +1,72 @@
+---
+# =============================================================================
+# MUTATING pcs — membership only (survivor). Tolerate unreachable peer.
+# =============================================================================
+# Official: pcs cluster node remove <node> [--force]
+# Treat "already not a member" as success. Never pcs cluster stop --all.
+#   * Do NOT set check_mode: false on remove.
+#   * Gate with `when: not ansible_check_mode`.
+# =============================================================================
+
+- name: Check whether the retired node is still listed in Corosync
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_remove_host_nodes
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, remove_host, membership]
+
+- name: Remove the retired node from membership (force; unreachable OK)
+  ansible.builtin.command:
+    cmd: >-
+      pcs cluster node remove {{ cluster_remove_host_retired_name }} --force
+  register: cluster_remove_host_pcs_rm
+  changed_when: cluster_remove_host_pcs_rm.rc == 0
+  failed_when: false
+  # SAFETY: never check_mode: false — rewrites live corosync.conf.
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_retired_name in cluster_remove_host_nodes.stdout
+  tags: [cluster, remove_host, membership]
+
+- name: Re-check Corosync membership after remove attempt
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_remove_host_nodes_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, membership]
+
+- name: Fail only if the retired node is STILL present after forced remove
+  ansible.builtin.assert:
+    that:
+      - cluster_remove_host_retired_name not in (cluster_remove_host_nodes_after.stdout | default(''))
+    fail_msg: >-
+      pcs cluster node remove --force did not clear
+      {{ cluster_remove_host_retired_name }} from membership.
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_retired_name in cluster_remove_host_nodes.stdout
+  tags: [cluster, remove_host, membership]
+
+- name: Remove lost-node CRM entry if present (idempotent)
+  ansible.builtin.command:
+    cmd: crm_node -R {{ cluster_remove_host_retired_name }} --force
+  register: cluster_remove_host_crm_rm
+  changed_when: cluster_remove_host_crm_rm.rc == 0
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [cluster, remove_host, membership]
+
+- name: Note membership remove skipped (dry-run or already absent)
+  ansible.builtin.debug:
+    msg: >-
+      Membership remove for {{ cluster_remove_host_retired_name }} skipped or
+      already clean (--check, or node not listed in pcs status nodes corosync).
+  when: >-
+    ansible_check_mode
+    or (cluster_remove_host_retired_name not in cluster_remove_host_nodes.stdout)
+  tags: [cluster, remove_host, membership]

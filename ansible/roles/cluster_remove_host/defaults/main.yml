@@ -1,0 +1,35 @@
+---
+# Standalone remove-host (survivor-side). Extracted from cluster_survivor_replace
+# so add-host and mail-remove-host.yml share one path.
+#
+# Prefer cluster_remove_host_*; fall back to cluster_add_host_* for add-host reuse.
+
+cluster_remove_host_retired_name: "{{ cluster_add_host_retired_name | default('') }}"
+cluster_remove_host_retired_address: "{{ cluster_add_host_retired_address | default('') }}"
+cluster_remove_host_survivor_name: "{{ cluster_add_host_survivor_name | default('') }}"
+cluster_remove_host_survivor_address: "{{ cluster_add_host_survivor_address | default('') }}"
+
+cluster_remove_host_drbd_resource: "{{ cluster_add_host_drbd_resource | default('kin-zimbra') }}"
+cluster_remove_host_drbd_res_path: "{{ cluster_add_host_drbd_res_path | default('/etc/drbd.d/kin-zimbra.res') }}"
+cluster_remove_host_drbd_device: "{{ cluster_add_host_drbd_device | default('/dev/drbd0') }}"
+cluster_remove_host_drbd_disk: "{{ cluster_add_host_drbd_disk | default('/dev/sdb1') }}"
+cluster_remove_host_drbd_meta_disk: "{{ cluster_add_host_drbd_meta_disk | default('/dev/loop21') }}"
+cluster_remove_host_drbd_port: "{{ cluster_add_host_drbd_port | default(7788) }}"
+cluster_remove_host_drbd_protocol: "{{ cluster_add_host_drbd_protocol | default('C') }}"
+cluster_remove_host_drbd_sync_rate: "{{ cluster_add_host_drbd_sync_rate | default('100M') }}"
+
+# Monitoring / qnetd host for precise NSS nickname cleanup (never wildcard).
+# Empty string → qnetd cleanup skipped (membership/DRBD/constraints still run).
+cluster_remove_host_qnetd_inventory_host: "{{ (groups['monitoring'] | default([]))[0] | default('') }}"
+cluster_remove_host_qnetd_nssdb: /etc/corosync/qnetd/nssdb
+
+# Template aliases for kin-zimbra-single.res.j2
+drbd_resource_name: "{{ cluster_remove_host_drbd_resource }}"
+drbd_resource_device: "{{ cluster_remove_host_drbd_device }}"
+drbd_resource_disk: "{{ cluster_remove_host_drbd_disk }}"
+drbd_resource_meta_disk: "{{ cluster_remove_host_drbd_meta_disk }}"
+drbd_resource_port: "{{ cluster_remove_host_drbd_port }}"
+drbd_resource_protocol: "{{ cluster_remove_host_drbd_protocol }}"
+drbd_resource_sync_rate: "{{ cluster_remove_host_drbd_sync_rate }}"
+drbd_resource_node_a_name: "{{ cluster_remove_host_survivor_name }}"
+drbd_resource_node_a_address: "{{ cluster_remove_host_survivor_address }}"

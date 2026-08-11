@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: cluster_remove_host
+  description: >-
+    Survivor-side remove of a retired/unreachable mail peer — membership,
+    DRBD peer drop, location constraints, precise qnetd cert cleanup.
+    Does not touch kin-zimbra/VIP/DRBD Primary production state beyond
+    membership bookkeeping and peer file rewrite.
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []
