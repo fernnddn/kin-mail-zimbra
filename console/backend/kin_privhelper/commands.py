@@ -184,11 +184,35 @@ async def cmd_run_hardening_status() -> AsyncIterator[dict[str, Any]]:
         yield ev
 
 
+async def cmd_run_hardening() -> AsyncIterator[dict[str, Any]]:
+    """Stream full `09-hardening.sh` (idempotent Part A — no client argv)."""
+    script = resolve_hardening()
+    yield proto.event_stdout(f"Running fixed script: {script} (full Part A)\n")
+    argv = [str(script)]
+    if shutil.which("stdbuf"):
+        argv = ["stdbuf", "-oL", "-eL", *argv]
+    async for ev in _stream_subprocess(argv, cwd=script.parent):
+        yield ev
+
+
+async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
+    """Merge draft into /etc/kin-mail/config after backup + validation (file write only)."""
+    from . import apply_config
+
+    # Run sync work in a thread so the event loop can still stream/busy-gate.
+    code, lines = await asyncio.to_thread(apply_config.apply_wizard_draft)
+    for line in lines:
+        yield proto.event_stdout(line)
+    yield proto.event_done(int(code))
+
+
 CommandHandler = Callable[[], AsyncIterator[dict[str, Any]]]
 
 HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_GET_STATUS: cmd_get_status,
     proto.CMD_RUN_HARDENING_STATUS: cmd_run_hardening_status,
+    proto.CMD_APPLY_WIZARD_DRAFT: cmd_apply_wizard_draft,
+    proto.CMD_RUN_HARDENING: cmd_run_hardening,
 }
 
 

@@ -16,12 +16,14 @@ sudo ./console/bootstrap.sh
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist (slice 9.3) | `get_status`, `run_script:09-hardening.sh --status` only |
+| Whitelist (slice 9.4) | `get_status`, `run_script:09-hardening.sh --status`, `apply_wizard_draft`, `run_hardening` |
 | Concurrency | Second request while busy → `busy` (no silent queue) |
 
-`Perform deployment` streams `run_script:09-hardening.sh --status` via SSE
-(`/api/wizard/deploy/stream`) — exercises `_stream_subprocess` (not `get_status`'s
-`_run_capture` path). `09-hardening.sh --status` is STATUS_ONLY read-only.
+SSE: `/api/wizard/deploy/stream?action=apply_draft|run_hardening|hardening_status|get_status`
+(`action` is a fixed alias map — never a free-form command string).
+
+`apply_wizard_draft` merges the console draft into `/etc/kin-mail/config` after a
+timestamped `config.bak.<epoch>` backup; it does **not** restart services.
 
 ## Slices
 

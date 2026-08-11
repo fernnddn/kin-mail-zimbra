@@ -133,20 +133,36 @@ def put_wizard_draft(
 
 # --- Privileged execution via local privhelper (SSE) -------------------------
 
+# Browser may only pick these action names; each maps to a fixed whitelist cmd.
+_STREAM_ACTIONS: dict[str, str] = {
+    "hardening_status": proto.CMD_RUN_HARDENING_STATUS,
+    "apply_draft": proto.CMD_APPLY_WIZARD_DRAFT,
+    "run_hardening": proto.CMD_RUN_HARDENING,
+    "get_status": proto.CMD_GET_STATUS,
+}
+
 
 @app.get("/api/wizard/deploy/stream")
-async def wizard_deploy_stream(username: str = Depends(auth.require_user)) -> StreamingResponse:
-    """Stream hardening --status through privhelperd (_stream_subprocess path).
+async def wizard_deploy_stream(
+    request: Request,
+    username: str = Depends(auth.require_user),
+) -> StreamingResponse:
+    """Stream a whitelisted privhelper command into the log viewer.
 
-    Start deployment uses whitelist `run_script:09-hardening.sh --status` so the
-    live log viewer exercises real subprocess line streaming (not get_status's
-    _run_capture path).
+    Query `action` is an enum of safe aliases — never a free-form shell/command string.
     """
+    action = (request.query_params.get("action") or "hardening_status").strip()
+    cmd = _STREAM_ACTIONS.get(action)
+    if not cmd:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown action {action!r}; allowed: {', '.join(sorted(_STREAM_ACTIONS))}",
+        )
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'meta', 'cmd': proto.CMD_RUN_HARDENING_STATUS})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'cmd': cmd, 'action': action})}\n\n"
         async for ev in run_command(
-            proto.CMD_RUN_HARDENING_STATUS,
+            cmd,
             username,
             socket_path=settings.privhelper_socket,
         ):
@@ -164,15 +180,13 @@ async def wizard_deploy_stream(username: str = Depends(auth.require_user)) -> St
 
 
 @app.post("/api/wizard/deploy")
-async def wizard_deploy_hint(_user: str = Depends(auth.require_user)) -> dict[str, str]:
-    """Compat: prefer SSE /api/wizard/deploy/stream for live output."""
+async def wizard_deploy_hint(_user: str = Depends(auth.require_user)) -> dict[str, object]:
+    """Compat: prefer SSE /api/wizard/deploy/stream?action=… for live output."""
     return {
         "status": "use_stream",
-        "message": (
-            "Use GET /api/wizard/deploy/stream (SSE) — runs "
-            "run_script:09-hardening.sh --status via privhelper."
-        ),
-        "command": proto.CMD_RUN_HARDENING_STATUS,
+        "message": "Use GET /api/wizard/deploy/stream?action=…",
+        "actions": sorted(_STREAM_ACTIONS.keys()),
+        "commands": {k: v for k, v in _STREAM_ACTIONS.items()},
     }
 
 
