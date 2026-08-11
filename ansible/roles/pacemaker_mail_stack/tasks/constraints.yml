@@ -1,0 +1,53 @@
+---
+# =============================================================================
+# MUTATING pcs CONSTRAINTS — LIVE CLUSTER
+# Colocation/order bind the app group to Promoted DRBD. Never check_mode: false.
+# =============================================================================
+
+- name: Memeriksa constraint colocation dan order yang ada
+  ansible.builtin.command:
+    cmd: pcs constraint
+  register: pacemaker_mail_stack_constraints
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, constraints]
+
+- name: Menambahkan colocation grup layanan dengan Master DRBD
+  ansible.builtin.command:
+    cmd: >-
+      pcs constraint colocation add {{ pacemaker_mail_stack_group }}
+      with {{ pacemaker_mail_stack_drbd_clone }} INFINITY
+      with-rsc-role=Promoted
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout
+      or 'with Promoted' not in pacemaker_mail_stack_constraints.stdout
+  tags: [pacemaker, stack, constraints]
+
+- name: Menambahkan order promote DRBD lalu start grup layanan
+  ansible.builtin.command:
+    cmd: >-
+      pcs constraint order promote {{ pacemaker_mail_stack_drbd_clone }}
+      then start {{ pacemaker_mail_stack_group }}
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - >-
+      ('promote resource' not in pacemaker_mail_stack_constraints.stdout)
+      or (pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout)
+  tags: [pacemaker, stack, constraints]
+
+- name: Mencatat constraint di-skip saat dry-run atau sudah ada
+  ansible.builtin.debug:
+    msg: >-
+      Constraint colocation/order sudah ada atau mode --check: pcs constraint
+      add TIDAK dijalankan. Skema butuh with-rsc-role=Promoted (bukan role=
+      saja) seperti task 2.7.
+  when: ansible_check_mode
+  run_once: true
+  tags: [pacemaker, stack, constraints]

@@ -1,0 +1,95 @@
+#!/bin/sh
+#
+# KIN Mail — OCF Resource Agent for Zimbra (zmcontrol wrapper)
+#
+meta_data() {
+	cat <<'META'
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="zimbra" version="1.0">
+<version>1.0</version>
+<longdesc lang="en">
+Starts/stops/monitors Zimbra Collaboration via zmcontrol.
+Run only where /opt/zimbra is mounted (DRBD Primary + Filesystem RA).
+</longdesc>
+<shortdesc lang="en">Zimbra zmcontrol wrapper</shortdesc>
+<parameters/>
+<actions>
+<action name="start" timeout="600"/>
+<action name="stop" timeout="300"/>
+<action name="monitor" timeout="60" interval="30"/>
+<action name="meta-data" timeout="5"/>
+<action name="validate-all" timeout="20"/>
+</actions>
+</resource-agent>
+META
+}
+
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+#######################################################################
+
+ZIMBRA_USER=zimbra
+
+zimbra_validate() {
+	return $OCF_SUCCESS
+}
+
+zimbra_monitor() {
+	local out
+	[ -x /opt/zimbra/bin/zmcontrol ] || return $OCF_NOT_RUNNING
+	out=$(su - ${ZIMBRA_USER} -c "zmcontrol status" 2>&1) || return $OCF_NOT_RUNNING
+	# Fail if any service line is not Running (ignore Host header / blank / Connect noise)
+	if printf '%s\n' "$out" | grep -v Running | grep -vE '^Host|^$' | grep -v 'Connect:' | grep -q .; then
+		if printf '%s\n' "$out" | grep -q '[[:space:]]Running$'; then
+			ocf_log warn "Zimbra not fully Running"
+			return $OCF_ERR_GENERIC
+		fi
+		return $OCF_NOT_RUNNING
+	fi
+	printf '%s\n' "$out" | grep -q Running || return $OCF_NOT_RUNNING
+	return $OCF_SUCCESS
+}
+
+zimbra_start() {
+	zimbra_monitor && return $OCF_SUCCESS
+	ocf_log info "zmcontrol start"
+	su - ${ZIMBRA_USER} -c "zmcontrol start" || return $OCF_ERR_GENERIC
+	local i=0
+	while [ $i -lt 100 ]; do
+		zimbra_monitor && return $OCF_SUCCESS
+		sleep 5
+		i=$((i+1))
+	done
+	return $OCF_ERR_GENERIC
+}
+
+zimbra_stop() {
+	if [ ! -x /opt/zimbra/bin/zmcontrol ]; then
+		return $OCF_SUCCESS
+	fi
+	ocf_log info "zmcontrol stop"
+	su - ${ZIMBRA_USER} -c "zmcontrol stop" || true
+	sleep 2
+	return $OCF_SUCCESS
+}
+
+case $__OCF_ACTION in
+meta-data)	meta_data
+		exit $OCF_SUCCESS
+		;;
+start)		zimbra_start;;
+stop)		zimbra_stop;;
+monitor)	zimbra_monitor;;
+validate-all)	zimbra_validate;;
+*)		echo "Usage: $0 {start|stop|monitor|validate-all|meta-data}"
+		exit $OCF_ERR_UNIMPLEMENTED
+		;;
+esac
+rc=$?
+ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
+exit $rc

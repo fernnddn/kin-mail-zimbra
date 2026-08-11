@@ -1,0 +1,19 @@
+---
+# Pacemaker mail stack from task 2.7 (promotable DRBD + kin-mail-svc + LDAP HA).
+#
+# Dry-run only against live lab:
+#   ansible-playbook playbooks/mail-pacemaker.yml --check
+#
+# PRODUCTION WARNING: pcs resource create / constraint add / promote alter the
+# live CIB and can bounce Zimbra/VIP. Mutating pcs tasks must never use
+# check_mode: false. See roles/pacemaker_mail_stack/tasks/drbd_clone.yml.
+
+- name: Siapkan agen OCF dan stack Pacemaker di Host A dan Host B
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: pacemaker_agents
+      tags: [pacemaker, agents]
+    - role: pacemaker_mail_stack
+      tags: [pacemaker, stack]

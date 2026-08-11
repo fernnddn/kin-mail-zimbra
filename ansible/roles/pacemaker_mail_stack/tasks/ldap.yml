@@ -1,0 +1,81 @@
+---
+# LDAP localhost fix from task 2.7 Stage C — values live on the shared DRBD
+# filesystem. Mutating zmlocalconfig is gated; read-only verify may run when
+# /opt/zimbra is mounted (Promoted node only).
+
+- name: Memeriksa apakah /opt/zimbra ter-mount untuk baca LDAP
+  ansible.builtin.command:
+    cmd: findmnt -n {{ pacemaker_mail_stack_fs_directory }}
+  register: pacemaker_mail_stack_zimbra_mnt
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [pacemaker, stack, ldap]
+
+- name: Membaca nilai LDAP localconfig saat mount tersedia
+  ansible.builtin.command:
+    cmd: >-
+      su - zimbra -c "zmlocalconfig -s
+      ldap_bind_url ldap_url ldap_master_url
+      zimbra_require_interprocess_security"
+  register: pacemaker_mail_stack_ldap_current
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_mail_stack_zimbra_mnt.rc == 0
+  tags: [pacemaker, stack, ldap]
+
+- name: Memverifikasi LDAP mengarah ke 127.0.0.1
+  ansible.builtin.assert:
+    that:
+      - "'ldap_bind_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
+      - "'ldap_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
+      - "'ldap_master_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
+      - >-
+        ('zimbra_require_interprocess_security = '
+         ~ pacemaker_mail_stack_zimbra_require_interprocess_security)
+        in pacemaker_mail_stack_ldap_current.stdout
+    fail_msg: >-
+      LDAP HA fix dari task 2.7 tidak lengkap di node ini. Expected
+      {{ pacemaker_mail_stack_ldap_url }} dan
+      zimbra_require_interprocess_security={{
+      pacemaker_mail_stack_zimbra_require_interprocess_security }}.
+      Got: {{ pacemaker_mail_stack_ldap_current.stdout | default('(unavailable)') }}
+  when:
+    - pacemaker_mail_stack_zimbra_mnt.rc == 0
+    - pacemaker_mail_stack_ldap_current is defined
+    - pacemaker_mail_stack_ldap_current.rc == 0
+  tags: [pacemaker, stack, ldap]
+
+- name: Mencatat LDAP tidak bisa diverifikasi di Secondary (tidak mount)
+  ansible.builtin.debug:
+    msg: >-
+      {{ pacemaker_mail_stack_fs_directory }} tidak ter-mount di
+      {{ inventory_hostname }} — lewati assert LDAP (nilai ada di shared
+      store; diverifikasi di Primary).
+  when: pacemaker_mail_stack_zimbra_mnt.rc != 0
+  tags: [pacemaker, stack, ldap]
+
+- name: Menetapkan LDAP bind ke localhost (lab HA)
+  ansible.builtin.command:
+    cmd: >-
+      su - zimbra -c "zmlocalconfig -e
+      ldap_bind_url={{ pacemaker_mail_stack_ldap_url }}
+      ldap_url={{ pacemaker_mail_stack_ldap_url }}
+      ldap_master_url={{ pacemaker_mail_stack_ldap_url }}
+      zimbra_require_interprocess_security={{
+      pacemaker_mail_stack_zimbra_require_interprocess_security }}"
+  # SAFETY: never check_mode: false — writes shared Zimbra config on DRBD.
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_zimbra_mnt.rc == 0
+    - >-
+      pacemaker_mail_stack_ldap_current is defined
+      and (
+        pacemaker_mail_stack_ldap_current.rc != 0
+        or (pacemaker_mail_stack_ldap_url not in pacemaker_mail_stack_ldap_current.stdout)
+        or (('zimbra_require_interprocess_security = '
+             ~ pacemaker_mail_stack_zimbra_require_interprocess_security)
+            not in pacemaker_mail_stack_ldap_current.stdout)
+      )
+  tags: [pacemaker, stack, ldap]

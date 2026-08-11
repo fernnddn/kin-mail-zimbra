@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# MUTATING pcs COMMANDS — LIVE CLUSTER kin-mail (PRODUCTION MX)
+# =============================================================================
+# Host A/B currently run the full production stack. Under ansible-playbook
+# --check these tasks must remain PURE dry-run:
+#
+#   * Do NOT set check_mode: false on pcs resource create / constraint /
+#     property / group mutations.
+#   * Gate with `when: not ansible_check_mode` so --check never executes them.
+#   * Idempotency: probe with read-only `pcs … config` first; skip create if
+#     the resource already exists (same pattern as drbd_resource activate.yml).
+#
+# ONLY verify.yml (and read-only existence probes) may use check_mode: false.
+# Adding check_mode: false to create/promote/constraint tasks would alter the
+# live CIB and can bounce Zimbra / VIP / DRBD promotion. Do not "fix" dry-run.
+# =============================================================================
+
+- name: Memeriksa apakah resource promotable DRBD sudah ada
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_drbd_ra }}
+  register: pacemaker_mail_stack_drbd_cfg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, drbd]
+
+- name: Membuat resource promotable DRBD kin-drbd
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource create {{ pacemaker_mail_stack_drbd_ra }} ocf:linbit:drbd
+      drbd_resource={{ pacemaker_mail_stack_drbd_resource_name }}
+      op monitor interval=29s role=Promoted timeout=20s
+      op monitor interval=31s role=Unpromoted timeout=20s
+      promotable promoted-max=1 promoted-node-max=1
+      clone-max=2 clone-node-max=1 notify=true
+  # SAFETY: never check_mode: false — create must not run during --check.
+  run_once: true
+  when:
+    - pacemaker_mail_stack_drbd_cfg.rc != 0
+    - not ansible_check_mode
+  tags: [pacemaker, stack, drbd]
+
+- name: Memeriksa preferensi lokasi soft untuk Master DRBD
+  ansible.builtin.command:
+    cmd: pcs constraint location
+  register: pacemaker_mail_stack_location
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, drbd]
+
+- name: Menambahkan preferensi lokasi soft Master di Host A
+  ansible.builtin.command:
+    cmd: >-
+      pcs constraint location {{ pacemaker_mail_stack_drbd_clone }}
+      prefers {{ pacemaker_mail_stack_prefer_node }}={{ pacemaker_mail_stack_prefer_score }}
+  # SAFETY: never check_mode: false — constraint add must not run during --check.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - >-
+      not (
+        pacemaker_mail_stack_prefer_node in pacemaker_mail_stack_location.stdout
+        and (pacemaker_mail_stack_prefer_score | string) in pacemaker_mail_stack_location.stdout
+      )
+  tags: [pacemaker, stack, drbd]
+
+- name: Mencatat create DRBD clone di-skip saat dry-run atau sudah ada
+  ansible.builtin.debug:
+    msg: >-
+      Resource {{ pacemaker_mail_stack_drbd_ra }} sudah ada atau mode --check:
+      pcs resource create / location prefers TIDAK dijalankan terhadap CIB live.
+  when: ansible_check_mode or pacemaker_mail_stack_drbd_cfg.rc == 0
+  run_once: true
+  tags: [pacemaker, stack, drbd]

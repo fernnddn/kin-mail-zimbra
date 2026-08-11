@@ -1,0 +1,41 @@
+---
+- name: Memverifikasi paket resource-agents-extra terpasang
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f='${Package} ${Version}\n' resource-agents-extra
+  register: pacemaker_agents_pkg
+  changed_when: false
+  failed_when: pacemaker_agents_pkg.rc != 0
+  check_mode: false
+  tags: [pacemaker, agents, verify]
+
+- name: Memverifikasi agen OCF Zimbra dapat dibaca
+  ansible.builtin.stat:
+    path: "{{ pacemaker_agents_ocf_path }}"
+  register: pacemaker_agents_ocf_stat
+  check_mode: false
+  failed_when: >-
+    not pacemaker_agents_ocf_stat.stat.exists or
+    not pacemaker_agents_ocf_stat.stat.executable
+  tags: [pacemaker, agents, verify]
+
+- name: Memverifikasi meta-data OCF Zimbra valid
+  ansible.builtin.command:
+    cmd: "{{ pacemaker_agents_ocf_path }} meta-data"
+  register: pacemaker_agents_ocf_meta
+  changed_when: false
+  failed_when: >-
+    pacemaker_agents_ocf_meta.rc != 0 or
+    ('resource-agent' not in pacemaker_agents_ocf_meta.stdout)
+  environment:
+    OCF_ROOT: /usr/lib/ocf
+  check_mode: false
+  tags: [pacemaker, agents, verify]
+
+- name: Memverifikasi layanan systemd drbd dinonaktifkan
+  ansible.builtin.command:
+    cmd: systemctl is-enabled drbd.service
+  register: pacemaker_agents_drbd_enabled
+  changed_when: false
+  failed_when: pacemaker_agents_drbd_enabled.stdout | trim != "disabled"
+  check_mode: false
+  tags: [pacemaker, agents, verify]

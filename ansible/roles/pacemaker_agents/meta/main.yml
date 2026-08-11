@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: pacemaker_agents
+  description: >-
+    resource-agents-extra, ocf:kin:zimbra, dual-primary assert helper, disable
+    systemd drbd.service (task 2.7 preconditions + Stage C OCF).
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

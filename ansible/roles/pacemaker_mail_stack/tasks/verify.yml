@@ -1,0 +1,97 @@
+---
+# Read-only probes against the live CIB / assert helper.
+# check_mode: false is intentional and LIMITED to status/constraint queries —
+# never extend that to pcs resource create / constraint add / promote.
+
+- name: Memverifikasi status cluster Pacemaker
+  ansible.builtin.command:
+    cmd: pcs status
+  register: pacemaker_mail_stack_status
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_status.rc != 0
+    or (pacemaker_mail_stack_drbd_clone not in pacemaker_mail_stack_status.stdout)
+    or (pacemaker_mail_stack_group not in pacemaker_mail_stack_status.stdout)
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Memverifikasi clone DRBD dalam mode promotable
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_drbd_clone }}
+  register: pacemaker_mail_stack_clone_cfg
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_clone_cfg.rc != 0
+    or ('promoted-max=1' not in pacemaker_mail_stack_clone_cfg.stdout
+        and 'promoted-max:1' not in pacemaker_mail_stack_clone_cfg.stdout)
+    or ('notify=true' not in pacemaker_mail_stack_clone_cfg.stdout
+        and 'notify:true' not in pacemaker_mail_stack_clone_cfg.stdout
+        and 'notify=true' not in pacemaker_mail_stack_clone_cfg.stdout | replace(' ', ''))
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Memverifikasi preferensi lokasi soft Host A
+  ansible.builtin.command:
+    cmd: pcs constraint location
+  register: pacemaker_mail_stack_loc_verify
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_loc_verify.rc != 0
+    or (pacemaker_mail_stack_prefer_node not in pacemaker_mail_stack_loc_verify.stdout)
+    or ((pacemaker_mail_stack_prefer_score | string) not in pacemaker_mail_stack_loc_verify.stdout)
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Memverifikasi colocation dan order grup dengan Master DRBD
+  ansible.builtin.command:
+    cmd: pcs constraint
+  register: pacemaker_mail_stack_cstr_verify
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_cstr_verify.rc != 0
+    or (pacemaker_mail_stack_group not in pacemaker_mail_stack_cstr_verify.stdout)
+    or ('Promoted' not in pacemaker_mail_stack_cstr_verify.stdout)
+    or ('promote' not in (pacemaker_mail_stack_cstr_verify.stdout | lower))
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Memeriksa keberadaan skrip assert dual-primary
+  ansible.builtin.stat:
+    path: "{{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}"
+  register: pacemaker_mail_stack_assert_stat
+  check_mode: false
+  tags: [pacemaker, stack, verify]
+
+- name: Memverifikasi assert dual-primary mengembalikan OK
+  ansible.builtin.command:
+    cmd: "{{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}"
+  register: pacemaker_mail_stack_assert
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_assert.rc != 0
+    or ('NO_DUAL_PRIMARY_OK' not in pacemaker_mail_stack_assert.stdout)
+  check_mode: false
+  when: pacemaker_mail_stack_assert_stat.stat.exists
+  tags: [pacemaker, stack, verify]
+
+- name: Mencatat skrip assert belum ada di host ini
+  ansible.builtin.debug:
+    msg: >-
+      {{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}
+      belum ada di {{ inventory_hostname }} — role pacemaker_agents akan memasang
+      pada apply; dry-run hanya melaporkan gap (terlihat di Host B lab saat ini).
+  when: not pacemaker_mail_stack_assert_stat.stat.exists
+  tags: [pacemaker, stack, verify]
+
+- name: Mencatat batas pembuktian dry-run Pacemaker
+  ansible.builtin.debug:
+    msg: >-
+      Dry-run memverifikasi CIB hidup (status/constraints/LDAP pada Primary).
+      pcs resource create / constraint add / zmlocalconfig -e TIDAK dijalankan.
+      Controlled promote/ban moves dari task 2.7 tidak diotomatisasi di slice ini.
+  run_once: true
+  tags: [pacemaker, stack, verify]

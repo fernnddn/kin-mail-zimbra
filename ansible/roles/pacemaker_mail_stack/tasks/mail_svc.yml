@@ -1,0 +1,94 @@
+---
+# =============================================================================
+# MUTATING pcs COMMANDS — kin-mail-svc group (PRODUCTION)
+# Same rules as drbd_clone.yml: never check_mode: false on create/group add.
+# =============================================================================
+
+- name: Memeriksa apakah resource filesystem kin-fs sudah ada
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_fs }}
+  register: pacemaker_mail_stack_fs_cfg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, group]
+
+- name: Membuat resource filesystem kin-fs
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource create {{ pacemaker_mail_stack_fs }} ocf:heartbeat:Filesystem
+      device={{ pacemaker_mail_stack_fs_device }}
+      directory={{ pacemaker_mail_stack_fs_directory }}
+      fstype={{ pacemaker_mail_stack_fs_fstype }}
+      options={{ pacemaker_mail_stack_fs_options }}
+      --group {{ pacemaker_mail_stack_group }}
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - pacemaker_mail_stack_fs_cfg.rc != 0
+    - not ansible_check_mode
+  tags: [pacemaker, stack, group]
+
+- name: Memeriksa apakah resource Zimbra kin-zimbra sudah ada
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_zimbra }}
+  register: pacemaker_mail_stack_zimbra_cfg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, group]
+
+- name: Membuat resource Zimbra ocf:kin:zimbra
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource create {{ pacemaker_mail_stack_zimbra }} ocf:kin:zimbra
+      op start timeout=600s
+      op stop timeout=300s
+      op monitor interval=30s timeout=60s
+      --group {{ pacemaker_mail_stack_group }}
+  # SAFETY: never check_mode: false — creating this can start Zimbra on a node.
+  run_once: true
+  when:
+    - pacemaker_mail_stack_zimbra_cfg.rc != 0
+    - not ansible_check_mode
+  tags: [pacemaker, stack, group]
+
+- name: Memeriksa apakah resource VIP kin-vip sudah ada
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_vip }}
+  register: pacemaker_mail_stack_vip_cfg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, group]
+
+- name: Membuat resource VIP kin-vip
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource create {{ pacemaker_mail_stack_vip }} ocf:heartbeat:IPaddr2
+      ip={{ pacemaker_mail_stack_vip_ip }}
+      cidr_netmask={{ pacemaker_mail_stack_vip_cidr }}
+      nic={{ pacemaker_mail_stack_vip_nic }}
+      --group {{ pacemaker_mail_stack_group }}
+  # SAFETY: never check_mode: false — would announce VIP on the network.
+  run_once: true
+  when:
+    - pacemaker_mail_stack_vip_cfg.rc != 0
+    - not ansible_check_mode
+  tags: [pacemaker, stack, group]
+
+- name: Mencatat create grup layanan di-skip saat dry-run atau sudah ada
+  ansible.builtin.debug:
+    msg: >-
+      Grup {{ pacemaker_mail_stack_group }} (fs/zimbra/vip) sudah ada atau mode
+      --check: pcs resource create TIDAK dijalankan terhadap CIB live.
+  when: >-
+    ansible_check_mode
+    or (pacemaker_mail_stack_fs_cfg.rc == 0
+        and pacemaker_mail_stack_zimbra_cfg.rc == 0
+        and pacemaker_mail_stack_vip_cfg.rc == 0)
+  run_once: true
+  tags: [pacemaker, stack, group]

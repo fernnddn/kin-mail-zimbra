@@ -1,0 +1,10 @@
+---
+# Packages + agents from task 2.7 (Filesystem / IPaddr2 / custom OCF).
+pacemaker_agents_packages:
+  - resource-agents-extra
+pacemaker_agents_ocf_provider_dir: /usr/lib/ocf/resource.d/kin
+pacemaker_agents_ocf_path: /usr/lib/ocf/resource.d/kin/zimbra
+pacemaker_agents_assert_path: /usr/local/sbin/kin-assert-no-dual-primary.sh
+# Pacemaker owns DRBD bring-up; systemd drbd.service must stay disabled (2.7).
+pacemaker_agents_disable_drbd_service: true
+pacemaker_agents_keep_meta_loop_unit: kin-drbd-meta-loop.service

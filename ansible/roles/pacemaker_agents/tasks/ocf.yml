@@ -1,0 +1,43 @@
+---
+# copy/template are check-mode safe: under --check Ansible reports whether the
+# live OCF differs from the role file (changed=true) without writing.
+
+- name: Menyiapkan direktori provider OCF kin
+  ansible.builtin.file:
+    path: "{{ pacemaker_agents_ocf_provider_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [pacemaker, agents, ocf]
+
+- name: Memeriksa direktori provider OCF kin sudah ada (dry-run)
+  ansible.builtin.stat:
+    path: "{{ pacemaker_agents_ocf_provider_dir }}"
+  register: pacemaker_agents_ocf_dir_stat
+  check_mode: false
+  tags: [pacemaker, agents, ocf]
+
+- name: Memasang agen OCF Zimbra (ocf:kin:zimbra)
+  ansible.builtin.copy:
+    src: zimbra
+    dest: "{{ pacemaker_agents_ocf_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: pacemaker_agents_ocf_copy
+  when: not ansible_check_mode or pacemaker_agents_ocf_dir_stat.stat.exists
+  tags: [pacemaker, agents, ocf]
+
+- name: Mencatat apakah OCF Zimbra berbeda dari versi live
+  ansible.builtin.debug:
+    msg: >-
+      {% if pacemaker_agents_ocf_copy is defined and pacemaker_agents_ocf_copy is changed %}
+      OCF live BERBEDA atau belum ada — role akan menulis
+      {{ pacemaker_agents_ocf_path }} (jalankan dengan --diff untuk detail).
+      {% else %}
+      OCF live cocok dengan role file atau install di-skip
+      ({{ pacemaker_agents_ocf_path }}).
+      {% endif %}
+  tags: [pacemaker, agents, ocf]

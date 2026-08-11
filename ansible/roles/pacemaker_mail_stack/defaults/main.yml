@@ -1,0 +1,25 @@
+---
+# Final wiring from task 2.7 Stages A–C (live lab values).
+pacemaker_mail_stack_drbd_resource_name: kin-zimbra
+pacemaker_mail_stack_drbd_ra: kin-drbd
+pacemaker_mail_stack_drbd_clone: kin-drbd-clone
+pacemaker_mail_stack_group: kin-mail-svc
+pacemaker_mail_stack_fs: kin-fs
+pacemaker_mail_stack_zimbra: kin-zimbra
+pacemaker_mail_stack_vip: kin-vip
+pacemaker_mail_stack_fs_device: /dev/drbd0
+pacemaker_mail_stack_fs_directory: /opt/zimbra
+pacemaker_mail_stack_fs_fstype: ext4
+pacemaker_mail_stack_fs_options: noatime
+pacemaker_mail_stack_vip_ip: 10.10.40.15
+pacemaker_mail_stack_vip_cidr: "24"
+pacemaker_mail_stack_vip_nic: ens33
+pacemaker_mail_stack_prefer_node: mail.gits-it.site
+pacemaker_mail_stack_prefer_score: 50
+# Lab HA LDAP bind (task 2.7 Stage C blocker fix) — shared store on DRBD.
+pacemaker_mail_stack_ldap_url: ldap://127.0.0.1:389
+pacemaker_mail_stack_ldap_keys:
+  - ldap_bind_url
+  - ldap_url
+  - ldap_master_url
+pacemaker_mail_stack_zimbra_require_interprocess_security: "0"

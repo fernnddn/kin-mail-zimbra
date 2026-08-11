@@ -1,0 +1,8 @@
+---
+- name: Menginstal paket resource-agents-extra untuk Filesystem dan IPaddr2
+  ansible.builtin.apt:
+    name: "{{ pacemaker_agents_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [pacemaker, agents, packages]
