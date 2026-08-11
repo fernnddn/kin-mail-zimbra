@@ -10,10 +10,21 @@ import { Button, Hint, Input, Label, Lede, Title } from "../ui";
 type PublicUser = {
   username: string;
   role: string;
+  auth_type: string;
+  ad_username?: string;
   disabled: boolean;
 };
 
 type RoleOpt = { id: string; label: string };
+
+type AdStatus = {
+  enabled: boolean;
+  ldap_url: string;
+  search_base: string;
+  search_filter: string;
+  bind_dn_template: string;
+  search_bind_password_set: boolean;
+};
 
 const Page = styled.div`
   padding: 1.25rem 1.5rem 2rem;
@@ -69,20 +80,25 @@ export default function UsersPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<PublicUser[]>([]);
   const [roles, setRoles] = useState<RoleOpt[]>([]);
+  const [ad, setAd] = useState<AdStatus | null>(null);
   const [error, setError] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [adUsername, setAdUsername] = useState("");
+  const [authType, setAuthType] = useState<"local" | "ad">("local");
   const [role, setRole] = useState("customer_admin");
   const [busy, setBusy] = useState(false);
   const allowed = user?.role === "kin_super_admin";
 
   async function refresh() {
-    const [u, r] = await Promise.all([
+    const [u, r, a] = await Promise.all([
       api<{ users: PublicUser[] }>("/api/users"),
       api<{ roles: RoleOpt[] }>("/api/roles"),
+      api<{ ad: AdStatus }>("/api/ad/status"),
     ]);
     setRows(u.users);
     setRoles(r.roles);
+    setAd(a.ad);
   }
 
   useEffect(() => {
@@ -103,10 +119,17 @@ export default function UsersPage() {
     try {
       await api("/api/users", {
         method: "POST",
-        body: JSON.stringify({ username, password, role }),
+        body: JSON.stringify({
+          username,
+          role,
+          auth_type: authType,
+          password: authType === "local" ? password : "",
+          ad_username: authType === "ad" ? adUsername || username : "",
+        }),
       });
       setUsername("");
       setPassword("");
+      setAdUsername("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
@@ -129,18 +152,30 @@ export default function UsersPage() {
   const roleLabel = (id: string) => roles.find((r) => r.id === id)?.label || id;
 
   return (
-    <ConsoleChrome subtitle="Local users · KIN Super Admin">
+    <ConsoleChrome subtitle="Console users · KIN Super Admin">
       <Page>
         <Title>Users</Title>
         <Lede>
-          Local console accounts only (AD/LDAP is a later slice). Passwords are stored as bcrypt
-          hashes in <code>/var/lib/kin-mail-console/users.json</code>.
+          Per-account auth: <strong>local</strong> (bcrypt in{" "}
+          <code>users.json</code>) or <strong>AD</strong> (LDAP bind using the same{" "}
+          <code>/etc/kin-mail/config</code> AD settings as hybrid mail auth). Role is assigned
+          here — no AD group mapping in this slice.
         </Lede>
+        {ad && (
+          <Hint>
+            Appliance AD: {ad.enabled ? "enabled" : "disabled"}
+            {ad.ldap_url ? ` · ${ad.ldap_url}` : ""}
+            {ad.search_base ? ` · base ${ad.search_base}` : ""}
+            {!ad.enabled &&
+              " — AD-backed console logins will fail closed until Hybrid AD is configured."}
+          </Hint>
+        )}
         {error && <Hint>{error}</Hint>}
         <Table>
           <thead>
             <tr>
               <th>Username</th>
+              <th>Auth</th>
               <th>Role</th>
               <th />
             </tr>
@@ -148,7 +183,13 @@ export default function UsersPage() {
           <tbody>
             {rows.map((row) => (
               <tr key={row.username}>
-                <td>{row.username}</td>
+                <td>
+                  {row.username}
+                  {row.auth_type === "ad" && row.ad_username && row.ad_username !== row.username
+                    ? ` (${row.ad_username})`
+                    : ""}
+                </td>
+                <td>{row.auth_type === "ad" ? "AD" : "local"}</td>
                 <td>{roleLabel(row.role)}</td>
                 <td style={{ textAlign: "right" }}>
                   <Button
@@ -167,6 +208,15 @@ export default function UsersPage() {
         </Table>
         <Title style={{ fontSize: "1.15rem" }}>Add user</Title>
         <FormGrid onSubmit={(e) => void onCreate(e)}>
+          <Label htmlFor="at">Auth type</Label>
+          <Select
+            id="at"
+            value={authType}
+            onChange={(e) => setAuthType(e.target.value === "ad" ? "ad" : "local")}
+          >
+            <option value="local">Local password</option>
+            <option value="ad">Active Directory</option>
+          </Select>
           <Label htmlFor="nu">Username</Label>
           <Input
             id="nu"
@@ -175,15 +225,30 @@ export default function UsersPage() {
             autoComplete="off"
             required
           />
-          <Label htmlFor="np">Password</Label>
-          <Input
-            id="np"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={8}
-            required
-          />
+          {authType === "local" ? (
+            <>
+              <Label htmlFor="np">Password</Label>
+              <Input
+                id="np"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                required
+              />
+            </>
+          ) : (
+            <>
+              <Label htmlFor="adu">AD username / UPN (for bind)</Label>
+              <Input
+                id="adu"
+                value={adUsername}
+                onChange={(e) => setAdUsername(e.target.value)}
+                placeholder="Defaults to username above"
+                autoComplete="off"
+              />
+            </>
+          )}
           <Label htmlFor="nr">Role</Label>
           <Select id="nr" value={role} onChange={(e) => setRole(e.target.value)}>
             {roles.map((r) => (

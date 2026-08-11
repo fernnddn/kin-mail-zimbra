@@ -32,14 +32,16 @@ EULA_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 
 
 class LoginBody(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
+    username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=256)
 
 
 class CreateUserBody(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
+    username: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=64)
+    auth_type: str = Field(default="local", min_length=1, max_length=16)
+    password: str = Field(default="", max_length=256)
+    ad_username: str = Field(default="", max_length=128)
 
 
 @app.on_event("startup")
@@ -96,19 +98,20 @@ def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, obj
 def login(body: LoginBody, response: Response) -> dict[str, str]:
     try:
         user = users.authenticate(body.username, body.password)
+    except users.AuthError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Auth store unavailable",
         ) from exc
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     auth.set_session_cookie(response, user.username)
     return {
         "status": "ok",
         "username": user.username,
         "role": user.role,
         "role_label": role_label(user.role),
+        "auth_type": user.auth_type,
     }
 
 
@@ -124,6 +127,7 @@ def me(user: ConsoleUser = Depends(auth.require_console_user)) -> dict[str, str]
         "username": user.username,
         "role": user.role,
         "role_label": role_label(user.role),
+        "auth_type": user.auth_type,
     }
 
 
@@ -135,6 +139,15 @@ def list_roles(_user: ConsoleUser = Depends(auth.require_console_user)) -> dict[
             for rid in sorted(ALL_ROLES)
         ]
     }
+
+
+@app.get("/api/ad/status")
+def ad_status(
+    _user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    from .ad_settings import load_ad_settings
+
+    return {"ad": load_ad_settings().public_summary()}
 
 
 # --- Local users (KIN Super Admin only) -------------------------------------
@@ -153,7 +166,13 @@ def api_create_user(
     _user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
 ) -> dict[str, object]:
     try:
-        created = users.create_user(body.username, body.password, body.role)
+        created = users.create_user(
+            body.username,
+            body.role,
+            auth_type=body.auth_type,
+            password=body.password,
+            ad_username=body.ad_username,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"user": created.public()}

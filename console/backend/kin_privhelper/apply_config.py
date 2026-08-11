@@ -327,6 +327,13 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
         return 1, lines
 
     lines.append(f"Updated {CONF_FILE} (mode 600)\n")
+    try:
+        from kin_console.ad_settings import sync_ad_env_from_kin_config
+
+        ad_env = sync_ad_env_from_kin_config(source=CONF_FILE)
+        lines.append(f"Synced console AD settings → {ad_env} (mode 640, no secrets in this log)\n")
+    except Exception as exc:  # noqa: BLE001 — apply still succeeded; console may need bootstrap sync
+        lines.append(f"WARN: console AD env sync failed: {exc}\n")
     lines.append(
         "NOTE: No services were restarted. Live Zimbra/Pacemaker still use prior "
         "runtime state until an install stage is run separately.\n"

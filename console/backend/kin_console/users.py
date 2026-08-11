@@ -1,4 +1,4 @@
-"""Multi-user local store (bcrypt hashes, roles). Replaces single admin.hash."""
+"""Multi-user local store (bcrypt hashes and/or AD-backed accounts)."""
 
 from __future__ import annotations
 
@@ -8,28 +8,52 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from . import auth
 from kin_privhelper.rbac import ALL_ROLES, ROLE_SUPER_ADMIN
+
+from . import ad_auth, auth
 from .settings import settings
 
-_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._-]{1,64}$")
+AUTH_LOCAL: Literal["local"] = "local"
+AUTH_AD: Literal["ad"] = "ad"
+ALL_AUTH_TYPES = frozenset({AUTH_LOCAL, AUTH_AD})
+
+# Console login name / AD UPN (allows @).
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._@+-]{1,128}$")
 
 
 @dataclass(frozen=True)
 class ConsoleUser:
     username: str
-    password_hash: str
     role: str
+    auth_type: str = AUTH_LOCAL
+    password_hash: str = ""
+    ad_username: str = ""
     disabled: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
             "username": self.username,
             "role": self.role,
+            "auth_type": self.auth_type,
+            "ad_username": self.ad_username if self.auth_type == AUTH_AD else "",
             "disabled": self.disabled,
         }
+
+    def ldap_identity(self) -> str:
+        if self.auth_type != AUTH_AD:
+            return ""
+        return (self.ad_username or self.username).strip()
+
+
+class AuthError(Exception):
+    """Login failure with an operator-facing message (never includes passwords)."""
+
+    def __init__(self, message: str, *, http_status: int = 401) -> None:
+        super().__init__(message)
+        self.message = message
+        self.http_status = http_status
 
 
 def users_file() -> Path:
@@ -62,16 +86,24 @@ def _parse_users(data: dict[str, Any]) -> list[ConsoleUser]:
         if not isinstance(item, dict):
             continue
         username = str(item.get("username") or "").strip()
-        password_hash = str(item.get("password_hash") or "").strip()
         role = str(item.get("role") or "").strip()
+        auth_type = str(item.get("auth_type") or AUTH_LOCAL).strip() or AUTH_LOCAL
+        password_hash = str(item.get("password_hash") or "").strip()
+        ad_username = str(item.get("ad_username") or "").strip()
         disabled = bool(item.get("disabled", False))
-        if not username or not password_hash or role not in ALL_ROLES:
+        if not username or role not in ALL_ROLES or auth_type not in ALL_AUTH_TYPES:
             continue
+        if auth_type == AUTH_LOCAL and not password_hash:
+            continue
+        if auth_type == AUTH_AD:
+            password_hash = ""  # never keep a local hash for AD accounts
         out.append(
             ConsoleUser(
                 username=username,
-                password_hash=password_hash,
                 role=role,
+                auth_type=auth_type,
+                password_hash=password_hash,
+                ad_username=ad_username,
                 disabled=disabled,
             )
         )
@@ -94,8 +126,10 @@ def save_users(users: list[ConsoleUser]) -> None:
         "users": [
             {
                 "username": u.username,
-                "password_hash": u.password_hash,
                 "role": u.role,
+                "auth_type": u.auth_type,
+                "password_hash": u.password_hash if u.auth_type == AUTH_LOCAL else "",
+                "ad_username": u.ad_username if u.auth_type == AUTH_AD else "",
                 "disabled": u.disabled,
             }
             for u in users
@@ -113,10 +147,23 @@ def get_user(username: str) -> ConsoleUser | None:
 
 
 def ensure_users_store() -> None:
-    """Migrate legacy admin.hash → users.json on first boot after upgrade."""
+    """Migrate legacy admin.hash → users.json; rewrite missing auth_type fields."""
     path = users_file()
     if path.is_file():
-        return
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        users = _parse_users(raw if isinstance(raw, dict) else {})
+        if users:
+            # Persist auth_type / ad_username keys for older files.
+            needs = False
+            for item in (raw.get("users") if isinstance(raw, dict) else None) or []:
+                if not isinstance(item, dict):
+                    continue
+                if "auth_type" not in item:
+                    needs = True
+                    break
+            if needs:
+                save_users(users)
+            return
     if auth.password_hash_exists():
         legacy_hash = auth.load_password_hash()
         bootstrap_user = settings.console_user.strip() or "admin"
@@ -126,6 +173,7 @@ def ensure_users_store() -> None:
                     username=bootstrap_user,
                     password_hash=legacy_hash,
                     role=ROLE_SUPER_ADMIN,
+                    auth_type=AUTH_LOCAL,
                     disabled=False,
                 )
             ]
@@ -141,7 +189,7 @@ def validate_username(username: str) -> str:
     u = username.strip()
     if not _USERNAME_RE.match(u):
         raise ValueError(
-            "username must be 1–64 chars: letters, digits, dot, underscore, hyphen"
+            "username must be 1–128 chars: letters, digits, . _ @ + -"
         )
     return u
 
@@ -153,33 +201,78 @@ def validate_role(role: str) -> str:
     return r
 
 
-def authenticate(username: str, password: str) -> ConsoleUser | None:
+def validate_auth_type(auth_type: str) -> str:
+    a = (auth_type or AUTH_LOCAL).strip()
+    if a not in ALL_AUTH_TYPES:
+        raise ValueError("auth_type must be 'local' or 'ad'")
+    return a
+
+
+def authenticate(username: str, password: str) -> ConsoleUser:
+    """Return the user on success; raise AuthError on failure (fail closed for AD)."""
     user = get_user(username.strip())
     if user is None or user.disabled:
-        return None
-    if not auth.verify_password(password, user.password_hash):
-        return None
-    return user
+        raise AuthError("Invalid credentials")
+
+    if user.auth_type == AUTH_LOCAL:
+        if not auth.verify_password(password, user.password_hash):
+            raise AuthError("Invalid credentials")
+        return user
+
+    if user.auth_type == AUTH_AD:
+        result = ad_auth.verify_ad_password(user.ldap_identity(), password)
+        if result.ok:
+            return user
+        if result.reason in ("not_enabled", "misconfigured", "unreachable"):
+            raise AuthError(result.detail or "AD authentication unavailable", http_status=503)
+        raise AuthError("Invalid credentials")
+
+    raise AuthError("Invalid credentials")
 
 
 def list_public_users() -> list[dict[str, Any]]:
     return [u.public() for u in load_users()]
 
 
-def create_user(username: str, password: str, role: str) -> ConsoleUser:
+def create_user(
+    username: str,
+    role: str,
+    *,
+    auth_type: str = AUTH_LOCAL,
+    password: str = "",
+    ad_username: str = "",
+) -> ConsoleUser:
     username = validate_username(username)
     role = validate_role(role)
-    if len(password) < 8:
-        raise ValueError("password must be at least 8 characters")
+    auth_type = validate_auth_type(auth_type)
     users = load_users()
     if any(u.username == username for u in users):
         raise ValueError(f"user {username!r} already exists")
-    created = ConsoleUser(
-        username=username,
-        password_hash=auth.hash_password(password),
-        role=role,
-        disabled=False,
-    )
+
+    if auth_type == AUTH_LOCAL:
+        if len(password) < 8:
+            raise ValueError("password must be at least 8 characters")
+        created = ConsoleUser(
+            username=username,
+            role=role,
+            auth_type=AUTH_LOCAL,
+            password_hash=auth.hash_password(password),
+            ad_username="",
+            disabled=False,
+        )
+    else:
+        if password:
+            raise ValueError("AD users must not have a local password")
+        ad_id = validate_username(ad_username.strip() or username)
+        created = ConsoleUser(
+            username=username,
+            role=role,
+            auth_type=AUTH_AD,
+            password_hash="",
+            ad_username=ad_id,
+            disabled=False,
+        )
+
     users.append(created)
     save_users(users)
     return created

@@ -18,7 +18,14 @@ sudo ./console/bootstrap.sh
 | KIN Support-Ops | `kin_support_ops` | Privileged deploy/firewall ops; no audit/user admin |
 | Customer Admin | `customer_admin` | Wizard draft + read-only status; **cannot** apply draft / full install / cancel dead-man |
 
-Store: `/var/lib/kin-mail-console/users.json` (bcrypt hashes, mode 600). Legacy `admin.hash` migrates to Super Admin on first bootstrap after upgrade.
+Store: `/var/lib/kin-mail-console/users.json` (mode 600). Each account is either:
+
+| `auth_type` | Credentials |
+|---|---|
+| `local` | bcrypt hash in `users.json` |
+| `ad` | no local password; LDAP bind via the same AD settings as `06-hybrid-auth.sh` (`/etc/kin-mail/config` → synced to `/etc/kin-mail-console/ad.env`) |
+
+AD login is fail-closed (unreachable / disabled AD never grants access). Roles stay manually assigned — no AD group mapping in this slice.
 
 Sensitive commands are denied in **both** the FastAPI stream endpoint and privhelperd (role resolved from `users.json` by username — client cannot claim a role).
 
@@ -44,4 +51,5 @@ Stage 10 still arms the ufw dead-man; pipeline **waits** for `cancel_firewall_de
 | 9.3 Privhelper plumbing | Done |
 | 9.4 Config apply + hardening | Done |
 | 9.5 Full install + dead-man cancel | Done |
-| 9.8 Local multi-user + RBAC | This tree |
+| 9.8 Local multi-user + RBAC | Done |
+| 9.9 AD/LDAP console login | This tree |

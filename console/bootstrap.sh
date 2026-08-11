@@ -186,6 +186,8 @@ payload = {
             "username": username,
             "password_hash": legacy,
             "role": "kin_super_admin",
+            "auth_type": "local",
+            "ad_username": "",
             "disabled": False,
         }
     ],
@@ -217,6 +219,8 @@ payload = {
             "username": username,
             "password_hash": ph,
             "role": "kin_super_admin",
+            "auth_type": "local",
+            "ad_username": "",
             "disabled": False,
         }
     ],
@@ -232,6 +236,26 @@ PY
   chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE" "$HASH_FILE"
   ok "Wrote users.json + admin.hash (plaintext not stored)"
 fi
+
+# Ensure auth_type on older users.json (idempotent).
+PYTHONPATH="${OPT_ROOT}/backend" "${OPT_ROOT}/venv/bin/python" - <<'PY' || true
+import sys
+sys.path.insert(0, "/opt/kin-mail-console/backend")
+from kin_console import users
+users.ensure_users_store()
+print("users store ready")
+PY
+
+say "8b. Sync AD settings for console (from /etc/kin-mail/config)"
+PYTHONPATH="${OPT_ROOT}/backend" "${OPT_ROOT}/venv/bin/python" - <<'PY'
+import sys
+sys.path.insert(0, "/opt/kin-mail-console/backend")
+from kin_console.ad_settings import load_ad_settings, sync_ad_env_from_kin_config
+path = sync_ad_env_from_kin_config()
+cfg = load_ad_settings()
+print(f"ad_env={path} enabled={cfg.enabled} url_set={bool(cfg.ldap_url)}")
+PY
+ok "Console AD env synced (passwords not printed)"
 
 if [ ! -f "$SECRET_FILE" ]; then
   "${OPT_ROOT}/venv/bin/python" - <<PY

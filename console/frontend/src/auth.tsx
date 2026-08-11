@@ -15,6 +15,7 @@ type User = {
   username: string;
   role: ConsoleRole;
   role_label: string;
+  auth_type?: string;
 };
 
 type AuthCtx = {
@@ -55,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       username: me.username,
       role: me.role,
       role_label: me.role_label,
+      auth_type: me.auth_type,
     });
   }, []);
 
