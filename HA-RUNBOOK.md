@@ -1,7 +1,8 @@
 # KIN Mail — HA runbook (Pacemaker / DRBD / SBD)
 
 Operational reference for the **active–passive** KIN Mail lab/cluster proven in Phase 2
-(tasks 2.1–2.9). Commands and behaviors below are taken from that work, not from unverified theory.
+(tasks 2.1–2.9, plus operator failover/failback observations in 2.13–2.14). Commands and
+behaviors below are taken from that work, not from unverified theory.
 
 Cluster name: `kin-mail`  
 Preferred production node: Host A (`mail.gits-it.site` / `10.10.40.13`)  
@@ -11,6 +12,30 @@ Cluster VIP: `10.10.40.15/24` on `ens33` (Pacemaker `kin-vip`)
 
 > **Audience:** anyone operating a KIN Mail HA pair.  
 > **Not covered here:** Zimbra first install (`kin-mail.sh` / stage scripts) — see `README.md`.
+
+### Expectation: measured downtime, not zero-downtime
+
+This design is **active–passive**, not active–active. Only one node runs Zimbra and holds the
+VIP at a time. Every **failover** and every **failback** therefore causes a real service gap —
+mail/webmail are unavailable while the stack moves.
+
+**What operators measured in a full power-off / recover cycle (Host A OFF → B Primary → A
+rejoin → automatic failback to A):** roughly **~2–3 minutes of downtime each direction**
+(failover, then again on failback), on the order of **~5 minutes total** for the full cycle.
+Exact length varies with Zimbra start time and how long DRBD promotion / group start take.
+
+**Why the gap exists (by design, for data safety):**
+
+1. DRBD must **promote** on the survivor before `/opt/zimbra` is mounted (never dual-Primary).
+2. The Filesystem resource mounts the shared store, then the Zimbra OCF runs a **full**
+   `zmcontrol start` on the new Master — not a hot hand-off of an already-running JVM.
+3. VIP (`kin-vip`) starts **after** Zimbra in the group order, so clients see the old VIP
+   disappear before the new side is ready.
+
+**What this HA actually buys you:** automatic (or controlled) recovery with **bounded,
+repeatable downtime**, fencing against split-brain, and a single consistent store — **not**
+continuous availability or zero-downtime cutover. Do not plan change windows or SLAs as if
+failover were transparent.
 
 ---
 
@@ -118,6 +143,9 @@ pcs constraint location
 
 Use this to **intentionally** move the Master (e.g. Host A maintenance). Proven in task 2.7; do **not** rely on plain `pcs resource move … --promoted` while soft prefer is set — it can bounce.
 
+Expect **~2–3 minutes** of real downtime for each controlled move (same order of magnitude as
+automatic failover/failback) while Zimbra fully restarts on the target node.
+
 ### Move Master A → B
 
 ```bash
@@ -135,17 +163,22 @@ pcs status
 # On B: findmnt + VIP 10.10.40.15 present
 ```
 
-Leave the ban in place only while you need B to stay Master. Soft prefer alone is not enough to keep B Master if you clear the ban.
+Leave the ban in place only while you need B to stay Master. Soft prefer alone is not enough to keep B Master if you clear the ban **or** if A simply comes back healthy (see automatic failback below).
 
-### Return Master B → A (failback)
+### Return Master B → A (failback) — when you *do* want it
 
-If a ban on A is still present:
+**You do not always need `pcs resource clear` for failback.** That command only matters when a
+**ban** (or other location constraint from a controlled move) is still holding A off. If the
+only sticky preference is the default soft prefer A score 50 and there is no ban, failback can
+happen **without any operator command** as soon as A is Online and DRBD-ready (next subsection).
+
+If a ban on A is still present and you want to allow failback:
 
 ```bash
 pcs resource clear kin-drbd-clone
 ```
 
-With prefer A score 50, the stack should return to A. Wait for Promoted + full `kin-mail-svc` on `mail.gits-it.site`, then assert no dual-primary.
+With prefer A score 50, the stack should return to A. Wait for Promoted + full `kin-mail-svc` on `mail.gits-it.site`, then assert no dual-primary. Budget another **~2–3 minutes** of downtime for that move.
 
 If there is no ban and the stack is already on B without prefer, either restore prefer:
 
@@ -161,6 +194,47 @@ pcs resource ban kin-drbd-clone mail2.gits-it.site --promoted
 pcs resource clear kin-drbd-clone
 pcs constraint location kin-drbd-clone prefers mail.gits-it.site=50
 ```
+
+### Recovery of the preferred node triggers automatic failback
+
+**Default resting state** includes:
+
+```bash
+pcs constraint location
+# kin-drbd-clone prefers mail.gits-it.site with score 50
+```
+
+With that constraint still active (and **no** ban pinning Master on B):
+
+1. Host A boots, rejoins Corosync, brings up DRBD as Secondary, becomes eligible.
+2. Pacemaker **automatically** schedules promote on A and moves `kin-mail-svc` off B —
+   **no `pcs resource clear`, no manual promote**.
+3. Operators see a **second** downtime window (~2–3 minutes again), separate from the first
+   failover downtime, right after the failed/preferred node comes back.
+
+**Proven (operator-driven test, task 2.14):** after Host A rejoin ~12:07:48, Pacemaker scheduled
+automatic promote/move ~12:08:22; transition finished ~12:11:25 — without a new CIB edit or
+clear. External webmail showed `http_code=000` during the VIP/Zimbra gap.
+
+**If you do *not* want automatic failback yet** (e.g. keep observing Host B as Master after A
+is repaired):
+
+- Act **before** you power Host A back on (or before you let it rejoin with prefer intact).
+- Keep / re-apply a **ban** on promoting A, or temporarily remove/lower the prefer-A location
+  constraint, **then** bring A online.
+- Changing prefer **after** A is already Online is too late if the scheduler has already
+  started the move.
+
+Example — hold Master on B while A is allowed to rejoin as Secondary only:
+
+```bash
+# Before (or as soon as possible when) bringing A back, while B is still Master:
+pcs resource ban kin-drbd-clone mail.gits-it.site --promoted
+# Then power on / allow A. A should join Unpromoted; stack stays on B until you clear.
+```
+
+When ready to return to the normal resting state on A: `pcs resource clear kin-drbd-clone`
+(and ensure prefer A score 50 is present). Expect another measured downtime window.
 
 ### After any controlled move
 
@@ -184,14 +258,23 @@ When the Master becomes unreachable (e.g. network partition from peer while qnet
 4. Start **`kin-mail-svc`** in order: Filesystem mount → Zimbra → VIP `10.10.40.15`
 5. With **`SBD_DELAY_START=yes`**, the fenced node can **auto-rejoin as Secondary** after reboot (task 2.9) without manual `systemctl start pacemaker`
 
-Expect **minutes** of mail downtime while Zimbra starts on the survivor.
+Expect **minutes** of mail downtime while Zimbra starts on the survivor (~2–3 minutes in the
+operator cycle that also measured automatic failback).
+
+### Automatic failback when preferred node returns
+
+If soft prefer A (score 50) is still in place and nothing bans A from promotion, recovery of
+Host A as a healthy Online Secondary **also** triggers an **automatic** failback to A (section
+3). That is a second, separate downtime window — not only the failover to B. To stay on B for
+observation, ban/adjust prefer **before** bringing A back.
 
 ### What is still manual / not automatic
 
 | Item | Status |
 |---|---|
-| **DNS / public NAT to VIP** | **Not switched** in Phase 2. Clients may still hit Host A’s fixed IP (`10.10.40.13`) until operators change split-horizon DNS and/or FortiGate DNAT to `10.10.40.15` with explicit approval. |
+| **DNS / public NAT to VIP** | External path must target VIP `10.10.40.15`; fixed-node DNAT will miss the current Master after a move. Confirm with network ops. |
 | Controlled maintenance move | Operator runs `pcs resource ban` / `clear` (section 3) |
+| **Preventing** automatic failback after A recovers | Operator must ban A or change prefer **before** A rejoins (section 3) — failback itself is automatic when prefer is active |
 | `pcs resource cleanup` after failed starts | Operator |
 | Changing SBD timeouts | Operator — see section 5 (dangerous if incomplete) |
 
@@ -242,7 +325,7 @@ Otherwise you can recreate the 2.8 stay-down race or cause `sbd.service` start t
 3. **Two separate Zimbra stores historically** — Host B was a standalone install (`mail2`) before production data lived on DRBD from Host A. Standby OS config under `/etc/kin-mail/` is not the shared store; shared data is `/opt/zimbra` on DRBD.  
 4. **LDAP bind / interprocess TLS** was adjusted for shared-store HA (localhost LDAP) so Zimbra can start on B; revisit if you split Pacemaker node name from mail service FQDN.  
 5. **VIP / DNS / NAT** — cluster VIP works inside the lab segment; external cutover is a separate change.  
-6. Soft prefer score **50** is sticky preference, not a hard pin; use **ban** for controlled moves.
+6. Soft prefer score **50** is sticky preference, not a hard pin; use **ban** for controlled moves **and** to suppress automatic failback when A returns (section 3). Prefer alone will pull Master back to A once A is healthy.
 
 ---
 
@@ -270,8 +353,11 @@ drbdadm status kin-zimbra
 # Controlled move Master off A:
 pcs resource ban kin-drbd-clone mail.gits-it.site --promoted
 
-# Allow A again / clear move constraint:
+# Allow A again / clear move constraint (triggers failback if prefer A=50):
 pcs resource clear kin-drbd-clone
+
+# Hold Master on B while bringing A back (prevent auto-failback):
+#   ban A BEFORE powering A on; clear later when ready to return to A
 
 # Cleanup failed Zimbra starts:
 pcs resource cleanup kin-zimbra
