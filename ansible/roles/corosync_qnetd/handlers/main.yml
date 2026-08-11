@@ -1,4 +1,3 @@
 ---
-- name: Muat ulang systemd setelah perubahan unit qnetd
-  ansible.builtin.systemd:
-    daemon_reload: true
+# No handlers — this role enables stock corosync-qnetd without custom units.
+[]

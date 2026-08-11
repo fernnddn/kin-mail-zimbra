@@ -1,4 +1,3 @@
 ---
-- name: Muat ulang systemd setelah perubahan terkait DRBD
-  ansible.builtin.systemd:
-    daemon_reload: true
+# No handlers — package/module role; no custom systemd units.
+[]

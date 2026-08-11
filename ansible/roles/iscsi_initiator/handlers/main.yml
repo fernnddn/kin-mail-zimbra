@@ -1,4 +1,3 @@
 ---
-- name: Muat ulang systemd setelah perubahan open-iscsi
-  ansible.builtin.systemd:
-    daemon_reload: true
+# No handlers — this role enables stock open-iscsi without custom unit templates.
+[]

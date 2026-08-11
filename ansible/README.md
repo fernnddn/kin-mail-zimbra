@@ -16,7 +16,8 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 
 **Add-host scope:** replace a permanently lost peer with a **new** hostname/IP;
 survivor membership + DRBD peer rewrite; new-node live full sync to Primary.  
-**Never tested against any host** — see `docs/progress/3.7-ansible-add-host-design.md`.
+**Never tested against any host** — see local progress notes for slice 3.7
+(not committed; under `docs/progress/` on operator machines).
 
 ## Layout
 
