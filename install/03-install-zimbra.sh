@@ -39,12 +39,49 @@ scrub_install_log() {
 say "1. Downloading ${ZCS_FILE}"
 mkdir -p "$ZCS_SRC"; cd "$ZCS_SRC"
 
-[ -f "${ZCS_FILE}.sha256" ] || curl -sL -m 120 -o "${ZCS_FILE}.sha256" "${ZCS_BASE}/${ZCS_FILE}.sha256"
-if [ ! -s "${ZCS_FILE}.sha256" ]; then fail "Could not download checksum"; exit 1; fi
+_zcs_url="${ZCS_BASE}/${ZCS_FILE}"
+_zcs_sum_url="${_zcs_url}.sha256"
+
+# Drop stubs left by a prior 404 (e.g. "Not Found" checksum or 0-byte tarball).
+if [ -f "${ZCS_FILE}.sha256" ] && ! grep -qE '^[0-9a-fA-F]{64}[[:space:]]' "${ZCS_FILE}.sha256" 2>/dev/null; then
+  warn "Removing invalid checksum stub: ${ZCS_FILE}.sha256"
+  rm -f "${ZCS_FILE}.sha256"
+fi
+if [ -f "$ZCS_FILE" ]; then
+  _sz=$(wc -c <"$ZCS_FILE" | tr -d ' ')
+  if [ "${_sz:-0}" -lt 1000000 ]; then
+    warn "Removing undersized tarball stub (${_sz} bytes): ${ZCS_FILE}"
+    rm -f "$ZCS_FILE"
+  fi
+fi
+
+if [ ! -f "${ZCS_FILE}.sha256" ]; then
+  curl -fsSL -m 120 -o "${ZCS_FILE}.sha256" "$_zcs_sum_url" || {
+    fail "Could not download checksum from ${_zcs_sum_url}"
+    info "Check ZCS_FILE / ZCS_BASE in /etc/kin-mail/config (Maldua filenames include a build timestamp)."
+    rm -f "${ZCS_FILE}.sha256"
+    exit 1
+  }
+fi
+if [ ! -s "${ZCS_FILE}.sha256" ] || ! grep -qE '^[0-9a-fA-F]{64}[[:space:]]' "${ZCS_FILE}.sha256"; then
+  fail "Checksum file invalid (HTTP 404 body or corrupt) — ${_zcs_sum_url}"
+  rm -f "${ZCS_FILE}.sha256"
+  exit 1
+fi
 
 if [ ! -s "$ZCS_FILE" ]; then
   info "Downloading (several hundred MB, please wait)"
-  wget -q --show-progress -c -O "$ZCS_FILE" "${ZCS_BASE}/${ZCS_FILE}" || { fail "Download failed"; exit 1; }
+  wget -q --show-progress -c -O "$ZCS_FILE" "$_zcs_url" || {
+    fail "Download failed: ${_zcs_url}"
+    rm -f "$ZCS_FILE"
+    exit 1
+  }
+fi
+_sz=$(wc -c <"$ZCS_FILE" | tr -d ' ')
+if [ "${_sz:-0}" -lt 1000000 ]; then
+  fail "Downloaded tarball too small (${_sz} bytes) — likely a failed URL: ${_zcs_url}"
+  rm -f "$ZCS_FILE"
+  exit 1
 fi
 
 # Never install an unverified tarball: this is a community rebuild, so the

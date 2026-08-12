@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,11 @@ FIREWALL_CANDIDATES = (
 CREATE_MAILBOX_CANDIDATES = (
     "install/08-create-mailbox.sh",
     "08-create-mailbox.sh",
+)
+
+# Last console deploy/install transcript (survives browser refresh / new tabs).
+DEPLOY_LAST_LOG = Path(
+    os.environ.get("KIN_DEPLOY_LAST_LOG", "/var/log/kin-mail/deploy-last.log")
 )
 
 
@@ -145,6 +151,8 @@ async def _stream_subprocess(
     *,
     cwd: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    transcript: Path | None = None,
+    transcript_reset: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
@@ -159,6 +167,27 @@ async def _stream_subprocess(
     assert proc.stdout is not None and proc.stderr is not None
 
     queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+    log_fh = None
+    if transcript is not None:
+        try:
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = transcript.open("w" if transcript_reset else "a", encoding="utf-8")
+            log_fh.write(
+                f"\n=== {' '.join(argv)} @ {datetime.now(timezone.utc).isoformat()} ===\n"
+            )
+            log_fh.flush()
+            os.chmod(transcript, 0o640)
+        except OSError:
+            log_fh = None
+
+    def _tee(text: str) -> None:
+        if log_fh is None:
+            return
+        try:
+            log_fh.write(text)
+            log_fh.flush()
+        except OSError:
+            pass
 
     async def _pump(stream: asyncio.StreamReader, kind: str) -> None:
         while True:
@@ -183,12 +212,18 @@ async def _stream_subprocess(
             if item is None:
                 break
             kind, text = item
+            _tee(text if kind == "stdout" else f"[stderr] {text}")
             if kind == "stdout":
                 yield proto.event_stdout(text)
             else:
                 yield proto.event_stderr(text)
     finally:
         await waiter
+        if log_fh is not None:
+            try:
+                log_fh.close()
+            except OSError:
+                pass
 
     code = await proc.wait()
     yield proto.event_done(int(code))
@@ -313,10 +348,19 @@ async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
 async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     """Stream kin-mail.sh --full-install with KIN_CONSOLE_CONFIRMED=1 (dead-man still armed)."""
     script = resolve_kin_mail()
-    yield proto.event_stdout(
+    header = (
         f"Running fixed script: {script} --full-install "
         f"(KIN_CONSOLE_CONFIRMED=1; dead-man NOT auto-cancelled)\n"
     )
+    yield proto.event_stdout(header)
+    # Persist for View logs in a separate browser tab / after the run ends.
+    try:
+        DEPLOY_LAST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEPLOY_LAST_LOG.open("w", encoding="utf-8") as fh:
+            fh.write(header)
+        os.chmod(DEPLOY_LAST_LOG, 0o640)
+    except OSError:
+        pass
     argv = [str(script), "--full-install"]
     if shutil.which("stdbuf"):
         argv = ["stdbuf", "-oL", "-eL", *argv]
@@ -324,6 +368,8 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
         argv,
         cwd=script.parent,
         extra_env={"KIN_CONSOLE_CONFIRMED": "1"},
+        transcript=DEPLOY_LAST_LOG,
+        transcript_reset=False,
     ):
         yield ev
 
@@ -335,8 +381,42 @@ async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
     argv = [str(script), "cancel-deadman"]
     if shutil.which("stdbuf"):
         argv = ["stdbuf", "-oL", "-eL", *argv]
-    async for ev in _stream_subprocess(argv, cwd=script.parent):
+    async for ev in _stream_subprocess(
+        argv,
+        cwd=script.parent,
+        transcript=DEPLOY_LAST_LOG,
+        transcript_reset=False,
+    ):
         yield ev
+
+
+async def cmd_get_deploy_log(_args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    """Read-only last deploy/install transcript for the console log viewer."""
+    yield proto.event_stdout(f"=== last deploy log: {DEPLOY_LAST_LOG} ===\n")
+    if not DEPLOY_LAST_LOG.is_file():
+        yield proto.event_stdout(
+            "(no deploy log yet — start Deploy from the wizard, then reopen View logs)\n"
+        )
+        yield proto.event_done(0)
+        return
+
+    def _read() -> str:
+        return DEPLOY_LAST_LOG.read_text(encoding="utf-8", errors="replace")
+
+    try:
+        text = await asyncio.to_thread(_read)
+    except OSError as exc:
+        yield proto.event_stderr(f"cannot read deploy log: {exc}\n")
+        yield proto.event_done(1)
+        return
+    if not text.strip():
+        yield proto.event_stdout("(deploy log is empty)\n")
+    else:
+        # Stream in chunks so huge installs do not become one giant SSE frame.
+        chunk = 16_384
+        for i in range(0, len(text), chunk):
+            yield proto.event_stdout(text[i : i + chunk])
+    yield proto.event_done(0)
 
 
 async def cmd_get_audit_log(_args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
@@ -442,6 +522,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_FULL_INSTALL: _adapt(cmd_run_full_install),
     proto.CMD_CANCEL_FIREWALL_DEADMAN: _adapt(cmd_cancel_firewall_deadman),
     proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
+    proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),
     proto.CMD_CREATE_MAILBOX: _adapt(cmd_create_mailbox),
 }
 

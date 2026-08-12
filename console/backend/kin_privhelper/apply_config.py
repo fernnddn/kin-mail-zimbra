@@ -172,24 +172,89 @@ def _os_version_id() -> str:
     return "22.04"
 
 
-def default_zcs_artefacts() -> dict[str, str]:
-    """Safe ZCS download defaults aligned with 00-config.sh Ubuntu platform pick."""
+def _zcs_platform() -> tuple[str, str]:
+    """Return (plat, tag_prefix) matching install/00-config.sh detect_latest_zcs."""
     version_id = _os_version_id()
     if version_id.startswith("24"):
-        plat = "UBUNTU24_64"
-        tag = "zimbra-foss-build-ubuntu-24.04"
-    else:
-        plat = "UBUNTU22_64"
-        tag = "zimbra-foss-build-ubuntu-22.04"
-    zcs_version = "10.1.18.p1"
-    zcs_file = f"zcs-10.1.18_GA_4200001.{plat}.tgz"
-    zcs_base = (
-        f"https://github.com/maldua/zimbra-foss/releases/download/{tag}/{zcs_version}"
-    )
+        return "UBUNTU24_64", "zimbra-foss-build-ubuntu-24.04"
+    return "UBUNTU22_64", "zimbra-foss-build-ubuntu-22.04"
+
+
+def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
+    """Query Maldua GitHub releases for the newest .tgz matching this Ubuntu.
+
+    Filenames include a build timestamp (e.g. …UBUNTU24_64.20260801175919.tgz);
+    hardcoding the short name 404s and leaves empty stubs under /opt/zcs-src.
+    """
+    plat, tag = _zcs_platform()
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            "https://api.github.com/repos/maldua/zimbra-foss/releases?per_page=60",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "kin-mail-console"},
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:  # noqa: S310 — fixed HTTPS URL
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, list):
+        return None
+
+    best_url = ""
+    for rel in payload:
+        if not isinstance(rel, dict):
+            continue
+        for asset in rel.get("assets") or []:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "")
+            url = str(asset.get("browser_download_url") or "")
+            if (
+                plat in name
+                and name.endswith(".tgz")
+                and f"/{tag}/" in url
+                and url
+            ):
+                # Prefer lexicographic max (timestamps / versions sort usefully).
+                if url > best_url:
+                    best_url = url
+    if not best_url:
+        return None
+    zcs_file = best_url.rsplit("/", 1)[-1]
+    # …/download/{tag}/{version}/{file}
+    parts = best_url.split("/")
+    try:
+        zcs_version = parts[parts.index("download") + 2]
+    except (ValueError, IndexError):
+        return None
     return {
         "ZCS_VERSION": zcs_version,
         "ZCS_FILE": zcs_file,
-        "ZCS_BASE": zcs_base,
+        "ZCS_BASE": f"https://github.com/maldua/zimbra-foss/releases/download/{tag}/{zcs_version}",
+        "ZCS_SRC": "/opt/zcs-src",
+    }
+
+
+def default_zcs_artefacts() -> dict[str, str]:
+    """ZCS download defaults — prefer live GitHub resolve, else last-known good."""
+    resolved = resolve_latest_zcs_artefacts()
+    if resolved:
+        return resolved
+    plat, tag = _zcs_platform()
+    # Fallback must include the Maldua build-id suffix or downloads 404.
+    if plat == "UBUNTU24_64":
+        zcs_version = "10.1.18.p1"
+        zcs_file = "zcs-10.1.18_GA_4200001.UBUNTU24_64.20260801175919.tgz"
+    else:
+        zcs_version = "10.1.18.p1"
+        zcs_file = "zcs-10.1.18_GA_4200001.UBUNTU22_64.20260801175919.tgz"
+    return {
+        "ZCS_VERSION": zcs_version,
+        "ZCS_FILE": zcs_file,
+        "ZCS_BASE": (
+            f"https://github.com/maldua/zimbra-foss/releases/download/{tag}/{zcs_version}"
+        ),
         "ZCS_SRC": "/opt/zcs-src",
     }
 
@@ -352,6 +417,13 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     out.setdefault("CF_PROPAGATION", "40")
     out.setdefault("ZCS_SRC", "/opt/zcs-src")
     out.setdefault("EXTERNAL_TEST_ADDRESS", "")
+
+    # Until Zimbra exists, always refresh ZCS_* from GitHub so a stale short
+    # filename (no build timestamp) cannot 404 on the next Deploy.
+    if not Path(os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra")).exists():
+        artefacts = default_zcs_artefacts()
+        out.update(artefacts)
+
     return out
 
 

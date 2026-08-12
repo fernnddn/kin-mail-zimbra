@@ -201,6 +201,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         bypass_busy = cmd in (
             proto.CMD_CANCEL_FIREWALL_DEADMAN,
             proto.CMD_GET_AUDIT_LOG,
+            proto.CMD_GET_DEPLOY_LOG,
         ) or (
             cmd == proto.CMD_CREATE_MAILBOX
             and str(args.get("op") or "").strip().lower() == "status"

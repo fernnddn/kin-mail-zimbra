@@ -238,6 +238,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "full_install": proto.CMD_RUN_FULL_INSTALL,
     "cancel_firewall_deadman": proto.CMD_CANCEL_FIREWALL_DEADMAN,
     "audit_log": proto.CMD_GET_AUDIT_LOG,
+    "deploy_log": proto.CMD_GET_DEPLOY_LOG,
 }
 
 

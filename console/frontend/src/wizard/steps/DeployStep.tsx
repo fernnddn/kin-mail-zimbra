@@ -22,7 +22,9 @@ const StepCard = styled.div`
   border-radius: ${theme.radius};
   padding: 1rem 1.05rem;
   margin-bottom: 0.85rem;
-  transition: box-shadow ${theme.motion} ease-out, border-color ${theme.motion} ease-out;
+  transition:
+    box-shadow ${theme.motion} ease-out,
+    border-color ${theme.motion} ease-out;
 
   &:hover {
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
@@ -85,7 +87,9 @@ const Fill = styled.div<{ $pct: number; $failed?: boolean; $complete?: boolean }
   width: ${(p) => Math.min(100, Math.max(0, p.$pct))}%;
   border-radius: 999px;
   background: ${(p) => (p.$failed ? theme.danger : p.$complete ? theme.ok : theme.accent)};
-  transition: width ${theme.motion} ease-out, background ${theme.motion} ease-out;
+  transition:
+    width ${theme.motion} ease-out,
+    background ${theme.motion} ease-out;
 `;
 
 const StageMeta = styled.p`
@@ -133,7 +137,9 @@ const Dot = styled.span<{ $state: "pending" | "active" | "done" | "failed" }>`
           ? theme.danger
           : theme.line};
   box-shadow: ${(p) => (p.$state === "active" ? `0 0 0 3px ${theme.accentSoft}` : "none")};
-  transition: background ${theme.motion} ease-out, box-shadow ${theme.motion} ease-out;
+  transition:
+    background ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out;
 `;
 
 const ActionsRow = styled.div`
@@ -176,11 +182,14 @@ export default function DeployStep() {
     runApply,
     runDeploy,
     runCancelDeadman,
+    openLogsTab,
   } = useDeploySession();
 
   const { current, total, label, complete, failed } = installProgress;
   const pct = complete ? 100 : current > 0 ? (current / total) * 100 : pipelineBusy ? 4 : 0;
   const showProgress = pipelineBusy || current > 0 || complete || failed;
+  // During an active/finished install, keep the page focused on progress (one copy of controls).
+  const showSetupCards = canOps && !pipelineBusy;
 
   return (
     <>
@@ -238,18 +247,14 @@ export default function DeployStep() {
             })}
           </StageList>
           <ActionsRow>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => navigate("/wizard/deploy/logs")}
-            >
+            <Button type="button" variant="ghost" onClick={openLogsTab}>
               View logs
             </Button>
           </ActionsRow>
         </ProgressCard>
       )}
 
-      {canOps && (
+      {showSetupCards && (
         <>
           <StepCard>
             <StepHeading>1. Save your wizard settings</StepHeading>
@@ -257,19 +262,8 @@ export default function DeployStep() {
               Writes the choices from this wizard to the server. Safe to run more than once — you
               will see whether anything actually changed.
             </StepBody>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={pipelineBusy}
-              onClick={() => void runApply()}
-            >
-              {pipelineBusy ? (
-                <>
-                  <Spinner /> Saving…
-                </>
-              ) : (
-                "Save settings"
-              )}
+            <Button type="button" variant="ghost" onClick={() => void runApply()}>
+              Save settings
             </Button>
             {okMessage && (
               <OkMsg style={{ marginTop: "0.75rem", marginBottom: 0 }}>{okMessage}</OkMsg>
@@ -280,7 +274,7 @@ export default function DeployStep() {
             <StepHeading>2. Deploy the mail system</StepHeading>
             <StepBody>
               Saves settings again if needed, then installs and configures mail on this host. This
-              can take a long time — use View logs for the live stream.
+              can take a long time — use View logs for the live stream (opens in a new tab).
             </StepBody>
             <label
               style={{
@@ -304,72 +298,66 @@ export default function DeployStep() {
             <ActionsRow style={{ marginTop: 0 }}>
               <Button
                 type="button"
-                disabled={pipelineBusy || !confirmFull}
+                disabled={!confirmFull}
                 onClick={() => void runDeploy()}
               >
-                {pipelineBusy ? (
-                  <>
-                    <Spinner /> Working…
-                  </>
-                ) : (
-                  "Deploy"
-                )}
+                Deploy
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => navigate("/wizard/deploy/logs")}
-              >
+              <Button type="button" variant="ghost" onClick={openLogsTab}>
                 View logs
               </Button>
             </ActionsRow>
-            {!applyDone && (
+            {!applyDone && !showProgress && (
               <Hint style={{ marginTop: "0.75rem", marginBottom: 0 }}>
                 Tip: you can Save settings alone first, or just press Deploy (it saves automatically).
               </Hint>
             )}
           </StepCard>
-
-          {(deadmanHint || cancelBusy) && (
-            <StepCard>
-              <StepHeading>3. Confirm admin access still works</StepHeading>
-              <StepBody>
-                After the firewall step runs, verify you can still reach this console and SSH, then
-                confirm below so the temporary safety timer is cancelled.
-              </StepBody>
-              <WarnBox style={{ marginBottom: "0.75rem" }}>
-                <strong>Safety timer may be active.</strong> Confirm only after you have checked
-                access.
-              </WarnBox>
-              <Button
-                type="button"
-                variant="danger"
-                disabled={cancelBusy}
-                onClick={() => void runCancelDeadman()}
-              >
-                {cancelBusy ? (
-                  <>
-                    <Spinner /> Confirming…
-                  </>
-                ) : (
-                  "Confirm access is OK"
-                )}
-              </Button>
-            </StepCard>
-          )}
         </>
       )}
 
-      {!showProgress && (
-        <ActionsRow>
+      {canOps && (deadmanHint || cancelBusy) && (
+        <StepCard>
+          <StepHeading>3. Confirm admin access still works</StepHeading>
+          <StepBody>
+            After the firewall step runs, verify you can still reach this console and SSH, then
+            confirm below so the temporary safety timer is cancelled.
+          </StepBody>
+          <WarnBox style={{ marginBottom: "0.75rem" }}>
+            <strong>Safety timer may be active.</strong> Confirm only after you have checked
+            access.
+          </WarnBox>
           <Button
             type="button"
-            variant="ghost"
-            onClick={() => navigate("/wizard/deploy/logs")}
+            variant="danger"
+            disabled={cancelBusy}
+            onClick={() => void runCancelDeadman()}
           >
+            {cancelBusy ? (
+              <>
+                <Spinner /> Confirming…
+              </>
+            ) : (
+              "Confirm access is OK"
+            )}
+          </Button>
+        </StepCard>
+      )}
+
+      {!showProgress && canOps && (
+        <ActionsRow>
+          <Button type="button" variant="ghost" onClick={openLogsTab}>
             View logs
           </Button>
         </ActionsRow>
+      )}
+
+      {pipelineBusy && (
+        <Hint>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
+            <Spinner /> Working… open View logs in a new tab for the live stream.
+          </span>
+        </Hint>
       )}
 
       {message && <Hint>{message}</Hint>}

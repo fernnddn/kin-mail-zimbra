@@ -41,6 +41,7 @@ type DeploySessionCtx = {
   runApply: () => Promise<void>;
   runDeploy: () => Promise<void>;
   runCancelDeadman: () => Promise<void>;
+  openLogsTab: () => void;
 };
 
 const Ctx = createContext<DeploySessionCtx | null>(null);
@@ -58,6 +59,14 @@ function summarizeApply(logChunk: string): string | null {
   return null;
 }
 
+/** Real firewall dead-man signals — not the banner "dead-man NOT auto-cancelled". */
+function looksLikeDeadmanArmed(chunk: string): boolean {
+  if (/dead-man NOT auto-cancelled/i.test(chunk)) return false;
+  return /Leaving dead-man ARMED|dead-man timer|Dead-man is ARMED|DEADMAN_ARMED|cancel-deadman after/i.test(
+    chunk,
+  );
+}
+
 export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { draft, save } = useWizard();
   const [log, setLog] = useState("# Deployment activity\n");
@@ -73,7 +82,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const cancelEsRef = useRef<EventSource | null>(null);
   const logBufRef = useRef("# Deployment activity\n");
 
-  // Keep EventSource alive across Deploy ↔ Logs views; only tear down on unmount.
   useEffect(() => {
     return () => {
       pipelineEsRef.current?.close();
@@ -87,7 +95,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     logBufRef.current += chunk;
     setLog(logBufRef.current);
     setInstallProgress(parseInstallProgress(logBufRef.current));
-    if (/dead-man|Dead-man|DEADMAN|cancel-deadman|Leaving dead-man ARMED/i.test(chunk)) {
+    if (looksLikeDeadmanArmed(chunk)) {
       setDeadmanHint(true);
     }
     const summary = summarizeApply(chunk);
@@ -165,6 +173,10 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     },
     [attachStream],
   );
+
+  const openLogsTab = useCallback(() => {
+    window.open("/wizard/deploy/logs", "_blank", "noopener,noreferrer");
+  }, []);
 
   const runApply = useCallback(async () => {
     if (pipelineBusy) return;
@@ -274,6 +286,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       runApply,
       runDeploy,
       runCancelDeadman,
+      openLogsTab,
     }),
     [
       log,
@@ -288,6 +301,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       runApply,
       runDeploy,
       runCancelDeadman,
+      openLogsTab,
     ],
   );
 

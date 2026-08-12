@@ -291,7 +291,7 @@ run_wizard() {
       24.04) _plat_hint="UBUNTU24_64" ;;
       *)     _plat_hint="UBUNTU22_64" ;;
     esac
-    ask ZCS_FILE    "File name"  "zcs-10.1.18_GA_4200001.${_plat_hint}.tgz"
+    ask ZCS_FILE    "File name"  "zcs-10.1.18_GA_4200001.${_plat_hint}.20260801175919.tgz"
   fi
   if [ -z "${ZCS_BASE:-}" ] && [ -n "${ZCS_VERSION:-}" ]; then
     . /etc/os-release 2>/dev/null || true

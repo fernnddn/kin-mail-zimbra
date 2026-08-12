@@ -131,11 +131,11 @@ export default function WizardLayout() {
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
 
-  // Full-screen log viewer: keep DeploySession mounted via nested Outlet, hide wizard chrome.
+  // Full-screen log viewer (often opened in a new browser tab).
   if (isDeployLogs) {
     return (
       <ConsoleChrome setupMode>
-        {loading ? <p style={{ color: theme.muted, padding: "1.5rem" }}>Loading draft…</p> : <Outlet />}
+        <Outlet />
       </ConsoleChrome>
     );
   }

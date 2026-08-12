@@ -15,6 +15,7 @@ CMD_RUN_HARDENING = "run_hardening"
 CMD_RUN_FULL_INSTALL = "run_full_install"
 CMD_CANCEL_FIREWALL_DEADMAN = "cancel_firewall_deadman"
 CMD_GET_AUDIT_LOG = "get_audit_log"
+CMD_GET_DEPLOY_LOG = "get_deploy_log"
 CMD_CREATE_MAILBOX = "create_mailbox"
 ALLOWED_COMMANDS = frozenset(
     {
@@ -25,6 +26,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_RUN_FULL_INSTALL,
         CMD_CANCEL_FIREWALL_DEADMAN,
         CMD_GET_AUDIT_LOG,
+        CMD_GET_DEPLOY_LOG,
         CMD_CREATE_MAILBOX,
     }
 )

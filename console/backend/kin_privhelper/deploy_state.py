@@ -24,6 +24,7 @@ SETUP_ALLOWED_COMMANDS = frozenset(
         "run_hardening",
         "run_full_install",
         "cancel_firewall_deadman",
+        "get_deploy_log",
     }
 )
 

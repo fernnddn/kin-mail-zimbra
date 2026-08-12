@@ -1,9 +1,8 @@
-import { useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { Button, Spinner } from "../../ui";
 import { theme } from "../../styles/theme";
-import { useDeploySession } from "../DeploySession";
+import { parseInstallProgress } from "../deployPipeline";
 
 const Frame = styled.div`
   position: fixed;
@@ -82,19 +81,104 @@ const Log = styled.pre`
   color: #e2e8f0;
 `;
 
+type StreamEvent = {
+  type: string;
+  data?: string;
+  message?: string;
+  code?: string;
+  exit_code?: number;
+};
+
+function loadDeployLogOnce(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource("/api/wizard/deploy/stream?action=deploy_log");
+    let buf = "";
+    const timer = window.setTimeout(() => {
+      es.close();
+      reject(new Error("Timed out loading deploy log"));
+    }, 60_000);
+
+    es.onmessage = (ev) => {
+      let parsed: StreamEvent;
+      try {
+        parsed = JSON.parse(ev.data) as StreamEvent;
+      } catch {
+        buf += ev.data + "\n";
+        return;
+      }
+      if (parsed.type === "stdout" && parsed.data) {
+        buf += parsed.data;
+        return;
+      }
+      if (parsed.type === "stderr" && parsed.data) {
+        buf += `[stderr] ${parsed.data}`;
+        return;
+      }
+      if (parsed.type === "error") {
+        window.clearTimeout(timer);
+        es.close();
+        reject(new Error(parsed.message || parsed.code || "error"));
+        return;
+      }
+      if (parsed.type === "done") {
+        window.clearTimeout(timer);
+        es.close();
+        resolve(buf);
+      }
+    };
+    es.onerror = () => {
+      window.clearTimeout(timer);
+      es.close();
+      if (buf.trim()) resolve(buf);
+      else reject(new Error("Failed to load deploy log"));
+    };
+  });
+}
+
 export default function DeployLogsPage() {
-  const navigate = useNavigate();
-  const { log, pipelineBusy, cancelBusy, installProgress } = useDeploySession();
+  const [log, setLog] = useState("Loading last deploy log…\n");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [live, setLive] = useState(false);
   const preRef = useRef<HTMLPreElement | null>(null);
-  const streaming = pipelineBusy || cancelBusy;
+  const stickRef = useRef(true);
+
+  const refresh = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLoading(true);
+    setError("");
+    try {
+      const text = await loadDeployLogOnce();
+      const cleaned = text.replace(/^=== last deploy log:.*===\n/, "");
+      setLog(cleaned.trim() ? cleaned : "(no deploy log yet)\n");
+      const progress = parseInstallProgress(cleaned);
+      setLive(!progress.complete && !progress.failed && /Running /i.test(cleaned));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load log");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Poll so a second tab keeps up while install streams on the server.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void refresh({ quiet: true });
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [refresh]);
 
   useEffect(() => {
     const el = preRef.current;
-    if (!el) return;
+    if (!el || !stickRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, [log]);
 
-  const { current, total, label, complete, failed } = installProgress;
+  const progress = parseInstallProgress(log);
+  const { current, total, label, complete, failed } = progress;
 
   return (
     <Frame>
@@ -108,16 +192,22 @@ export default function DeployLogsPage() {
                 ? "Install finished"
                 : current > 0
                   ? `Step ${current}/${total} — ${label}`
-                  : streaming
-                    ? "Streaming…"
-                    : "Idle — start Deploy from the previous screen"}
+                  : loading
+                    ? "Loading…"
+                    : "Last run transcript (server-persisted)"}
           </p>
         </TitleBlock>
         <Meta>
-          {streaming ? (
+          {loading ? (
+            <Badge $tone="muted">
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                <Spinner /> Loading
+              </span>
+            </Badge>
+          ) : live ? (
             <Badge $tone="warn">
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
-                <Spinner /> Live
+                <Spinner /> Refreshing
               </span>
             </Badge>
           ) : complete ? (
@@ -127,12 +217,27 @@ export default function DeployLogsPage() {
           ) : (
             <Badge $tone="muted">Idle</Badge>
           )}
-          <Button type="button" variant="ghost" onClick={() => navigate("/wizard/deploy")}>
-            Back to progress
+          <Button type="button" variant="ghost" onClick={() => void refresh()}>
+            Reload
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => window.close()}>
+            Close tab
           </Button>
         </Meta>
       </Bar>
-      <Log ref={preRef} aria-label="Deployment log stream">
+      {error && (
+        <p style={{ margin: "0.75rem 1.25rem", color: theme.danger, fontSize: "0.85rem" }}>
+          {error}
+        </p>
+      )}
+      <Log
+        ref={preRef}
+        aria-label="Deployment log"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        }}
+      >
         {log}
       </Log>
     </Frame>

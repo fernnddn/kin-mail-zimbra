@@ -131,8 +131,8 @@ export default function App() {
               <Route path="review" element={<ReviewStep />} />
               <Route path="deploy" element={<DeployOutlet />}>
                 <Route index element={<DeployStep />} />
-                <Route path="logs" element={<DeployLogsPage />} />
               </Route>
+              <Route path="deploy/logs" element={<DeployLogsPage />} />
             </Route>
             <Route path="/" element={<Navigate to="/wizard" replace />} />
             <Route path="*" element={<Navigate to="/wizard" replace />} />
