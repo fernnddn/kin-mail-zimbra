@@ -65,9 +65,8 @@
     cmd: >-
       corosync-qdevice-net-certutil -i -c {{ corosync_qdevice_cacert_local }}
     creates: "{{ corosync_qdevice_nssdb_cert9 }}"
-  run_once: true
   when:
-    - not corosync_qdevice_tls_ready_all
+    - not corosync_qdevice_nss.stat.exists
     - not ansible_check_mode
   tags: [qdevice, tls]
 
@@ -162,6 +161,19 @@
   run_once: true
   when:
     - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+# Secondary nodes never ran certutil -i; create NSS dir before dropping PKCS12.
+- name: Ensure the qdevice NSS directory exists before PKCS12 import
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_nssdb_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0770"
+  when:
+    - not corosync_qdevice_nss.stat.exists
     - not ansible_check_mode
   tags: [qdevice, tls]
 

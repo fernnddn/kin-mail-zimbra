@@ -1,6 +1,9 @@
 ---
 # Ensure quorum.device points at Monitoring (task 2.2 corosync.conf snippet).
-# Prefer pcs when device missing; never rewrite a live matching config.
+#
+# pcs quorum device add contacts qnetd via pcsd (:2224). Our Monitoring VM runs
+# corosync-qnetd only (no pcsd) — same as Phase 2 — so greenfield uses the
+# Phase 2 path: TLS via certutil (tls.yml) + write quorum.device + reload.
 
 - name: Check the current quorum device configuration
   ansible.builtin.command:
@@ -23,30 +26,88 @@
   check_mode: false
   tags: [qdevice, configure]
 
-- name: Register the qdevice quorum device with the cluster
+- name: Flag whether quorum.device still needs wiring
+  ansible.builtin.set_fact:
+    corosync_qdevice_needs_device: "{{ corosync_qdevice_conf_host.rc != 0 }}"
+  run_once: true
+  tags: [qdevice, configure]
+
+- name: Ensure helper directory exists for the quorum.device writer
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - corosync_qdevice_needs_device | bool
+    - not ansible_check_mode
+  tags: [qdevice, configure]
+
+- name: Install the quorum.device writer helper
+  ansible.builtin.copy:
+    src: write_quorum_device.py
+    dest: /usr/local/libexec/kin-mail-write-quorum-device.py
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - corosync_qdevice_needs_device | bool
+    - not ansible_check_mode
+  tags: [qdevice, configure]
+
+- name: Write quorum.device into corosync.conf (Phase 2 / no-pcsd qnetd)
   ansible.builtin.command:
-    cmd: >-
-      pcs quorum device add model net
-      host={{ corosync_qdevice_qnetd_ip }}
-      port={{ corosync_qdevice_qnetd_port }}
-      algorithm={{ corosync_qdevice_algorithm }}
-      tie_breaker={{ corosync_qdevice_tie_breaker }}
+    cmd: /usr/local/libexec/kin-mail-write-quorum-device.py
+  environment:
+    QNETD_HOST: "{{ corosync_qdevice_qnetd_ip }}"
+    QNETD_PORT: "{{ corosync_qdevice_qnetd_port }}"
+    QNETD_ALGORITHM: "{{ corosync_qdevice_algorithm }}"
+    QNETD_TIE_BREAKER: "{{ corosync_qdevice_tie_breaker }}"
+  register: corosync_qdevice_conf_write
+  changed_when: "'UPDATED' in corosync_qdevice_conf_write.stdout"
+  when:
+    - corosync_qdevice_needs_device | bool
+    - not ansible_check_mode
+  tags: [qdevice, configure]
+
+- name: Reload Corosync after quorum.device update
+  ansible.builtin.command:
+    cmd: pcs cluster reload corosync
   run_once: true
   when:
-    - corosync_qdevice_pcs_quorum.rc == 0
-    - "'host:' not in corosync_qdevice_pcs_quorum.stdout"
+    - corosync_qdevice_needs_device | bool
     - not ansible_check_mode
+  tags: [qdevice, configure]
+
+- name: Re-check the quorum device configuration after register
+  ansible.builtin.command:
+    cmd: pcs quorum config
+  register: corosync_qdevice_pcs_quorum
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [qdevice, configure]
+
+- name: Re-check the qnetd host in corosync.conf after register
+  ansible.builtin.command:
+    cmd: >-
+      grep -E 'host:\s*{{ corosync_qdevice_qnetd_ip }}'
+      /etc/corosync/corosync.conf
+  register: corosync_qdevice_conf_host
+  changed_when: false
+  failed_when: false
+  check_mode: false
   tags: [qdevice, configure]
 
 - name: Confirm the quorum device configuration matches
   ansible.builtin.assert:
     that:
       - corosync_qdevice_conf_host.rc == 0
-      - "'host:' in corosync_qdevice_pcs_quorum.stdout"
-      - corosync_qdevice_qnetd_ip in corosync_qdevice_pcs_quorum.stdout
+      - corosync_qdevice_qnetd_ip in corosync_qdevice_conf_host.stdout
     fail_msg: >-
       The quorum device does not point at {{ corosync_qdevice_qnetd_ip }} yet.
-      Run a real apply (not --check) on an empty test environment once TLS is ready.
     success_msg: >-
       The quorum device points at {{ corosync_qdevice_qnetd_ip }}:{{ corosync_qdevice_qnetd_port }}
   run_once: true
