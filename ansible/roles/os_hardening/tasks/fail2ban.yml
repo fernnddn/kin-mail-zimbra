@@ -19,15 +19,46 @@
   when: os_hardening_server_ip is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
   tags: [hardening, os, fail2ban]
 
-- name: Build fail2ban ignoreip (loopback + LAN /24 + admin IPs)
+- name: Stat /etc/kin-mail/config (KIN_ADMIN_IPS source of truth)
+  ansible.builtin.stat:
+    path: "{{ os_hardening_kin_config_path }}"
+  register: os_hardening_kin_config_stat
+  check_mode: false
+  tags: [hardening, os, fail2ban]
+
+- name: Slurp /etc/kin-mail/config when present
+  ansible.builtin.slurp:
+    src: "{{ os_hardening_kin_config_path }}"
+  register: os_hardening_kin_config
+  check_mode: false
+  when: os_hardening_kin_config_stat.stat.exists | default(false)
+  tags: [hardening, os, fail2ban]
+
+- name: Parse KIN_ADMIN_IPS from host config
+  ansible.builtin.set_fact:
+    os_hardening_config_admin_ips: "{{ os_hardening_admin_unquoted.split() }}"
+  vars:
+    os_hardening_admin_raw: "{{ (os_hardening_kin_config.content | b64decode | regex_findall('(?m)^\\s*KIN_ADMIN_IPS=(.*)$') | last | default('')) | trim }}"
+    os_hardening_admin_unquoted: "{{ os_hardening_admin_raw | regex_replace('^\"(.*)\"$', '\\1') | regex_replace(\"^'(.*)'$\", '\\1') | trim }}"
+  when: os_hardening_kin_config.content is defined
+  tags: [hardening, os, fail2ban]
+
+- name: Default KIN_ADMIN_IPS to empty when host config is missing
+  ansible.builtin.set_fact:
+    os_hardening_config_admin_ips: []
+  when: os_hardening_config_admin_ips is not defined
+  tags: [hardening, os, fail2ban]
+
+- name: Build fail2ban ignoreip (loopback + LAN /24 + config + inventory admin IPs)
   ansible.builtin.set_fact:
     os_hardening_ignoreip_effective: "{{ os_hardening_ignoreip_tokens | join(' ') }}"
   vars:
-    os_hardening_admin_ip_list: "{{ os_hardening_admin_ips.split() if os_hardening_admin_ips is string else (os_hardening_admin_ips | default([])) }}"
+    os_hardening_inventory_admin_tokens: "{{ os_hardening_admin_ips.split() if os_hardening_admin_ips is string else (os_hardening_admin_ips | default([])) }}"
     os_hardening_default_tokens: "{{ ['127.0.0.1/8', '::1'] + ([os_hardening_lan_cidr] if os_hardening_lan_cidr is defined else []) }}"
     os_hardening_ignoreip_tokens: "{{ (
         (os_hardening_ignoreip.split() if os_hardening_ignoreip | length > 0 else os_hardening_default_tokens)
-        + (os_hardening_admin_ip_list | default([]))
+        + (os_hardening_config_admin_ips | default([]))
+        + (os_hardening_inventory_admin_tokens | default([]))
       ) | unique | list }}"
   tags: [hardening, os, fail2ban]
 

@@ -7,12 +7,16 @@ os_hardening_packages:
   - fail2ban
   - unattended-upgrades
 
-# Loopback + this node's LAN /24 + os_hardening_admin_ips (KIN_ADMIN_IPS).
+# Loopback + this node's LAN /24 + KIN_ADMIN_IPS from /etc/kin-mail/config
+# (same source as 09-hardening.sh). os_hardening_admin_ips is an optional
+# extra union from inventory/-e, not the only source. Missing/empty config
+# → loopback + LAN /24 only (do not fail the play).
 # Override with os_hardening_ignoreip (KIN_FAIL2BAN_IGNORE_IP); admin IPs are
 # still unioned on top, matching 09-hardening.sh.
 os_hardening_server_ip: "{{ ansible_host }}"
 os_hardening_admin_ips: []
 os_hardening_ignoreip: ""
+os_hardening_kin_config_path: /etc/kin-mail/config
 
 os_hardening_fail2ban_service: fail2ban
 os_hardening_unattended_service: unattended-upgrades
