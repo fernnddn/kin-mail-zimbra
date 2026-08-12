@@ -55,6 +55,17 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "kin-mail-console"}
 
 
+@app.get("/api/setup/status")
+def setup_status() -> dict[str, object]:
+    """Public: whether this host already has a mail deployment (/opt/zimbra)."""
+    from kin_privhelper.deploy_state import ZIMBRA_ROOT, is_mail_deployed
+
+    return {
+        "deployed": is_mail_deployed(),
+        "marker": str(ZIMBRA_ROOT),
+    }
+
+
 # --- EULA (pre-auth; static disclaimer only) ---------------------------------
 
 
@@ -192,18 +203,18 @@ def api_delete_user(
     return {"status": "ok"}
 
 
-# --- Wizard draft (auth required; never applies to the live installer) ------
+# --- Wizard draft (auth required after deploy; anonymous setup before) ------
 
 
 @app.get("/api/wizard/draft")
-def get_wizard_draft(_user: ConsoleUser = Depends(auth.require_console_user)) -> dict:
+def get_wizard_draft(_actor: auth.WizardActor = Depends(auth.wizard_actor)) -> dict:
     return draft.public_draft(draft.load_draft())
 
 
 @app.put("/api/wizard/draft")
 def put_wizard_draft(
     body: draft.DraftPatch,
-    _user: ConsoleUser = Depends(auth.require_console_user),
+    _actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict:
     current = draft.load_draft()
     updated = draft.apply_patch(current, body)
@@ -327,12 +338,13 @@ async def mailbox_create(
 @app.get("/api/wizard/deploy/stream")
 async def wizard_deploy_stream(
     request: Request,
-    user: ConsoleUser = Depends(auth.require_console_user),
+    actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> StreamingResponse:
     """Stream a whitelisted privhelper command into the log viewer.
 
     Query `action` is an enum of safe aliases — never a free-form shell/command string.
-    RBAC is enforced here and again inside privhelperd (server-side role from users.json).
+    RBAC is enforced here and again inside privhelperd (server-side role from users.json,
+    or the synthetic pre-deploy setup identity).
     """
     action = (request.query_params.get("action") or "hardening_status").strip()
     cmd = _STREAM_ACTIONS.get(action)
@@ -342,17 +354,17 @@ async def wizard_deploy_stream(
             detail=f"unknown action {action!r}; allowed: {', '.join(sorted(_STREAM_ACTIONS))}",
         )
 
-    if not command_allowed(user.role, cmd):
+    if not command_allowed(actor.role, cmd):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=deny_message(user.role, cmd),
+            detail=deny_message(actor.role, cmd),
         )
 
     async def event_gen():
         yield f"data: {json.dumps({'type': 'meta', 'cmd': cmd, 'action': action})}\n\n"
         async for ev in run_command(
             cmd,
-            user.username,
+            actor.username,
             socket_path=settings.privhelper_socket,
         ):
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -370,7 +382,7 @@ async def wizard_deploy_stream(
 
 @app.post("/api/wizard/deploy")
 async def wizard_deploy_hint(
-    _user: ConsoleUser = Depends(auth.require_console_user),
+    _actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
     """Compat: prefer SSE /api/wizard/deploy/stream?action=… for live output."""
     return {

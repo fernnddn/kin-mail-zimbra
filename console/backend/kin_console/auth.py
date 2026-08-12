@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 
 import bcrypt
 from fastapi import HTTPException, Request, Response, status
@@ -96,6 +97,45 @@ def require_console_user(request: Request):
     if record is None or record.disabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return record
+
+
+@dataclass(frozen=True)
+class WizardActor:
+    """Caller for wizard endpoints — real user, or anonymous setup pre-deploy."""
+
+    username: str
+    role: str
+    anonymous_setup: bool = False
+
+
+def wizard_actor(request: Request) -> WizardActor:
+    """Allow anonymous wizard access only before /opt/zimbra exists.
+
+    After deploy, always requires a normal console session.
+    """
+    from kin_privhelper.deploy_state import SETUP_USERNAME, is_mail_deployed
+    from kin_privhelper.rbac import ROLE_SUPER_ADMIN
+
+    from . import users as users_mod
+
+    if is_mail_deployed():
+        user = require_console_user(request)
+        return WizardActor(username=user.username, role=user.role, anonymous_setup=False)
+
+    # Pre-deploy: prefer a real session if present, else synthetic setup identity.
+    uname = current_username(request)
+    if uname:
+        record = users_mod.get_user(uname)
+        if record is not None and not record.disabled:
+            return WizardActor(
+                username=record.username, role=record.role, anonymous_setup=False
+            )
+
+    return WizardActor(
+        username=SETUP_USERNAME,
+        role=ROLE_SUPER_ADMIN,
+        anonymous_setup=True,
+    )
 
 
 def require_roles(*allowed: str):

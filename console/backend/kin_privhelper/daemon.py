@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import commands, protocol as proto
-from . import rbac
+from . import deploy_state, rbac
 
 SOCKET_PATH = Path(os.environ.get("PRIVHELPER_SOCKET", "/run/kin-mail/privhelper.sock"))
 LOG_PATH = Path(os.environ.get("PRIVHELPER_LOG", "/var/log/kin-mail/privhelper.log"))
@@ -99,6 +99,24 @@ def _role_for_username(username: str) -> str | None:
     return None
 
 
+def _authorize(username: str, cmd: str) -> tuple[str | None, str | None]:
+    """Return (role, deny_audit_tag). role set means allowed; deny_audit_tag set means denied."""
+    if username == deploy_state.SETUP_USERNAME:
+        if deploy_state.is_mail_deployed():
+            return None, "denied_setup_after_deploy"
+        if cmd not in deploy_state.SETUP_ALLOWED_COMMANDS:
+            return None, "denied_setup_cmd"
+        # Pre-deploy setup identity — ops-equivalent for wizard whitelist only.
+        return rbac.ROLE_SUPER_ADMIN, None
+
+    role = _role_for_username(username)
+    if role is None:
+        return None, "denied_no_user"
+    if not rbac.command_allowed(role, cmd):
+        return None, "denied_rbac"
+    return role, None
+
+
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     global _running
     peer = writer.get_extra_info("peername")
@@ -124,21 +142,23 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
-        role = _role_for_username(username)
+        role, deny_tag = _authorize(username, cmd)
         if role is None:
-            await _send(
-                writer,
-                proto.event_error(
-                    "denied",
-                    f"unknown or disabled user {username!r} — cannot authorize {cmd}",
-                ),
-            )
-            _audit_line(username, cmd, "denied_no_user")
-            return
-        if not rbac.command_allowed(role, cmd):
-            msg = rbac.deny_message(role, cmd)
+            if deny_tag == "denied_setup_after_deploy":
+                msg = (
+                    f"setup identity not allowed after mail is deployed "
+                    f"({deploy_state.ZIMBRA_ROOT} present) — sign in"
+                )
+            elif deny_tag == "denied_setup_cmd":
+                msg = f"setup identity cannot run {cmd!r}"
+            elif deny_tag == "denied_rbac":
+                # Re-resolve for message (role was known but forbidden).
+                known = _role_for_username(username) or "unknown"
+                msg = rbac.deny_message(known, cmd)
+            else:
+                msg = f"unknown or disabled user {username!r} — cannot authorize {cmd}"
             await _send(writer, proto.event_error("denied", msg))
-            _audit_line(username, cmd, "denied_rbac")
+            _audit_line(username, cmd, deny_tag or "denied")
             return
 
         handler = commands.get_handler(cmd)

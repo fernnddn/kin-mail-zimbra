@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isOpsRole, useAuth } from "../../auth";
+import { useSetup } from "../../setup";
 import {
   Button,
   Hint,
@@ -65,8 +66,10 @@ function summarizeApply(logChunk: string): string | null {
 export default function DeployStep() {
   const { draft, save } = useWizard();
   const { user } = useAuth();
+  const { deployed } = useSetup();
   const navigate = useNavigate();
-  const canOps = isOpsRole(user?.role);
+  // Pre-deploy anonymous setup acts as ops; after deploy require an ops role.
+  const canOps = !deployed || isOpsRole(user?.role);
   const [log, setLog] = useState("# Deployment activity\n");
   const [message, setMessage] = useState("");
   const [okMessage, setOkMessage] = useState("");
