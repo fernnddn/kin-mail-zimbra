@@ -1,6 +1,3 @@
-/** Fixed OS admin username for host access (Arcfra-style default identity). */
-export const KIN_OS_USER = "kin";
-
 export type WizardDraft = {
   version: number;
   updated_at: string | null;
@@ -12,7 +9,7 @@ export type WizardDraft = {
   peer_host_name: string;
   /** Root password for host(s). Written to config; not used for SSH in this slice. */
   host_root_pass: string;
-  /** Password for OS user "kin" (sudo). Written to config; not used for SSH in this slice. */
+  /** Host admin password (sudo). Written to config; not used for SSH in this slice. */
   kin_user_pass: string;
   mail_domain: string;
   mail_host: string;

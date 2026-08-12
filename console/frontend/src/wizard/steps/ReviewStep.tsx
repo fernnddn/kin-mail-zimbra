@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { Button, Err, Lede, NavRow, SummaryTable, Title } from "../../ui";
 import { useWizard } from "../WizardContext";
-import { KIN_OS_USER } from "../types";
 
 function mask(value: string): string {
   if (!value) return "—";
@@ -50,11 +49,9 @@ export default function ReviewStep() {
             <dd>{draft.peer_host_name || "—"}</dd>
           </>
         ) : null}
-        <dt>Default OS admin</dt>
-        <dd>{KIN_OS_USER}</dd>
         <dt>Root password</dt>
         <dd>{mask(draft.host_root_pass)}</dd>
-        <dt>Password for {KIN_OS_USER}</dt>
+        <dt>Admin password</dt>
         <dd>{mask(draft.kin_user_pass)}</dd>
         <dt>Mail domain</dt>
         <dd>{draft.mail_domain || "—"}</dd>
@@ -62,7 +59,7 @@ export default function ReviewStep() {
         <dd>{draft.mail_host || "—"}</dd>
         <dt>Timezone</dt>
         <dd>{draft.timezone || "—"}</dd>
-        <dt>Admin password</dt>
+        <dt>Mail admin password</dt>
         <dd>{mask(draft.admin_pass)}</dd>
         <dt>Certificate email</dt>
         <dd>{draft.le_email || "—"}</dd>

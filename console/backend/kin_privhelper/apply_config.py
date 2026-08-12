@@ -414,7 +414,7 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["PEER_HOST_IP"] = ""
         out["PEER_HOST_NAME"] = ""
 
-    # Fixed Arcfra-style OS admin identity; passwords preserve-on-empty like ADMIN_PASS.
+    # OS admin identity for later host provisioning; passwords preserve-on-empty like ADMIN_PASS.
     out["KIN_OS_USER"] = "kin"
     if host_root_pass:
         out["HOST_ROOT_PASS"] = host_root_pass

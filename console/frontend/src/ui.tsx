@@ -178,19 +178,6 @@ export function PasswordInput({
   );
 }
 
-export const ReadonlyValue = styled.div`
-  width: 100%;
-  border: 1px solid ${theme.line};
-  background: ${theme.bgPanel};
-  color: ${theme.ink};
-  border-radius: ${theme.radius};
-  padding: 0.7rem 0.8rem;
-  font: inherit;
-  margin-bottom: 0.9rem;
-  font-family: ${theme.mono};
-  font-size: 0.9rem;
-`;
-
 export const TextArea = styled.textarea`
   width: 100%;
   border: 1px solid ${theme.line};
@@ -278,6 +265,18 @@ export const Hint = styled.p`
 export const FieldRow = styled.div`
   display: grid;
   gap: 0.15rem;
+`;
+
+/** Two fields side by side (password + confirm). Stacks on narrow screens. */
+export const PairGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 1rem;
+  margin-bottom: 0.5rem;
+
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+  }
 `;
 
 export const ChoiceGrid = styled.div`

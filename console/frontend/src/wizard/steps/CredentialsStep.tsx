@@ -8,30 +8,53 @@ import {
   Hint,
   Lede,
   NavRow,
+  PairGrid,
   PasswordInput,
-  ReadonlyValue,
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
-import { KIN_OS_USER } from "../types";
 
 export default function CredentialsStep() {
-  const { draft, setLocal, save, error, saving } = useWizard();
+  const { save, error, saving } = useWizard();
   const navigate = useNavigate();
+  const [rootPass, setRootPass] = useState("");
+  const [rootConfirm, setRootConfirm] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+  const [adminConfirm, setAdminConfirm] = useState("");
   const [fieldErr, setFieldErr] = useState("");
+
+  function clearErr() {
+    setFieldErr("");
+  }
 
   async function next() {
     const missing: string[] = [];
-    if (draft.host_root_pass.length < 8) missing.push("Root password (min 8 characters)");
-    if (draft.kin_user_pass.length < 8) missing.push(`Password for user "${KIN_OS_USER}" (min 8 characters)`);
+    if (!rootPass) missing.push("Root password");
+    if (!adminPass) missing.push("Admin password");
     if (missing.length) {
       setFieldErr(`Please fill in: ${missing.join(", ")}.`);
       return;
     }
+    if (rootPass.length < 8) {
+      setFieldErr("Root password must be at least 8 characters.");
+      return;
+    }
+    if (adminPass.length < 8) {
+      setFieldErr("Admin password must be at least 8 characters.");
+      return;
+    }
+    if (rootPass !== rootConfirm) {
+      setFieldErr("Root password and confirmation do not match.");
+      return;
+    }
+    if (adminPass !== adminConfirm) {
+      setFieldErr("Admin password and confirmation do not match.");
+      return;
+    }
     setFieldErr("");
     await save({
-      host_root_pass: draft.host_root_pass,
-      kin_user_pass: draft.kin_user_pass,
+      host_root_pass: rootPass,
+      kin_user_pass: adminPass,
       current_step: "domain",
     });
     navigate("/wizard/domain");
@@ -39,52 +62,70 @@ export default function CredentialsStep() {
 
   return (
     <>
-      <Title>Default host credentials</Title>
+      <Title>Host credentials</Title>
       <Lede>
-        Same idea as Arcfra’s default admin account: every KIN Mail host gets a standard OS admin
-        user named <strong>{KIN_OS_USER}</strong>, plus a root password you choose. These are saved
-        with the draft for later provisioning — this step does not SSH to any host yet.
+        Set the root password and the admin password for the host(s) in this deployment. Both are
+        required.
       </Lede>
-      <FieldRow>
-        <FieldLabel>Default admin username</FieldLabel>
-        <ReadonlyValue aria-label="Default admin username">{KIN_OS_USER}</ReadonlyValue>
-        <Hint>
-          Fixed identity for KIN Mail (like Arcfra’s “arcfra” user). Not editable.
-        </Hint>
-      </FieldRow>
-      <FieldRow>
-        <FieldLabel htmlFor="host_root_pass" required>
-          Root password
-        </FieldLabel>
-        <PasswordInput
-          id="host_root_pass"
-          autoComplete="new-password"
-          value={draft.host_root_pass}
-          onChange={(e) => {
-            setFieldErr("");
-            setLocal({ host_root_pass: e.target.value });
-          }}
-        />
-        <Hint>At least 8 characters. Used for root access on the host(s) in this deployment.</Hint>
-      </FieldRow>
-      <FieldRow>
-        <FieldLabel htmlFor="kin_user_pass" required>
-          Password for user &quot;{KIN_OS_USER}&quot;
-        </FieldLabel>
-        <PasswordInput
-          id="kin_user_pass"
-          autoComplete="new-password"
-          value={draft.kin_user_pass}
-          onChange={(e) => {
-            setFieldErr("");
-            setLocal({ kin_user_pass: e.target.value });
-          }}
-        />
-        <Hint>
-          At least 8 characters. This sudo-capable account is what future install/provisioning
-          steps will use.
-        </Hint>
-      </FieldRow>
+      <PairGrid>
+        <FieldRow>
+          <FieldLabel htmlFor="host_root_pass" required>
+            Root password
+          </FieldLabel>
+          <PasswordInput
+            id="host_root_pass"
+            autoComplete="new-password"
+            value={rootPass}
+            onChange={(e) => {
+              clearErr();
+              setRootPass(e.target.value);
+            }}
+          />
+        </FieldRow>
+        <FieldRow>
+          <FieldLabel htmlFor="host_root_pass_confirm" required>
+            Confirm root password
+          </FieldLabel>
+          <PasswordInput
+            id="host_root_pass_confirm"
+            autoComplete="new-password"
+            value={rootConfirm}
+            onChange={(e) => {
+              clearErr();
+              setRootConfirm(e.target.value);
+            }}
+          />
+        </FieldRow>
+        <FieldRow>
+          <FieldLabel htmlFor="host_admin_pass" required>
+            Admin password
+          </FieldLabel>
+          <PasswordInput
+            id="host_admin_pass"
+            autoComplete="new-password"
+            value={adminPass}
+            onChange={(e) => {
+              clearErr();
+              setAdminPass(e.target.value);
+            }}
+          />
+        </FieldRow>
+        <FieldRow>
+          <FieldLabel htmlFor="host_admin_pass_confirm" required>
+            Confirm admin password
+          </FieldLabel>
+          <PasswordInput
+            id="host_admin_pass_confirm"
+            autoComplete="new-password"
+            value={adminConfirm}
+            onChange={(e) => {
+              clearErr();
+              setAdminConfirm(e.target.value);
+            }}
+          />
+        </FieldRow>
+      </PairGrid>
+      <Hint>At least 8 characters each. Confirmation must match.</Hint>
       <Err>{fieldErr || error}</Err>
       <NavRow>
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/topology")}>

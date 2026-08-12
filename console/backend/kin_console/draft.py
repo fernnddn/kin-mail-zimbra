@@ -25,7 +25,7 @@ SECRET_KEYS = frozenset(
     }
 )
 
-# Fixed OS admin username written to config (Arcfra-style default identity).
+# OS admin username written to config (not shown in the wizard UI).
 KIN_OS_USER = "kin"
 
 
@@ -41,7 +41,7 @@ class WizardDraft(BaseModel):
     peer_host_ip: str = ""
     peer_host_name: str = ""
 
-    # a2. Default host credentials (Arcfra-style; not used for SSH in this slice)
+    # Host credentials (not used for SSH in this slice)
     host_root_pass: str = ""
     kin_user_pass: str = ""
 
