@@ -166,7 +166,7 @@ function stageState(
 
 export default function DeployStep() {
   const { user } = useAuth();
-  const { deployed } = useSetup();
+  const { deployed, installInProgress } = useSetup();
   const navigate = useNavigate();
   const canOps = !deployed || isOpsRole(user?.role);
   const {
@@ -186,10 +186,11 @@ export default function DeployStep() {
   } = useDeploySession();
 
   const { current, total, label, complete, failed } = installProgress;
-  const pct = complete ? 100 : current > 0 ? (current / total) * 100 : pipelineBusy ? 4 : 0;
-  const showProgress = pipelineBusy || current > 0 || complete || failed;
-  // During an active/finished install, keep the page focused on progress (one copy of controls).
-  const showSetupCards = canOps && !pipelineBusy;
+  const activeRun = pipelineBusy || installInProgress;
+  const pct = complete ? 100 : current > 0 ? (current / total) * 100 : activeRun ? 4 : 0;
+  const showProgress = activeRun || current > 0 || complete || failed;
+  // Hide setup cards while any install is active on this host (SSE or server-side).
+  const showSetupCards = canOps && !activeRun;
 
   return (
     <>
@@ -213,7 +214,7 @@ export default function DeployStep() {
                 ? "Deployment failed"
                 : complete
                   ? "Deployment complete"
-                  : pipelineBusy
+                  : activeRun
                     ? "Deployment in progress"
                     : "Deployment status"}
             </ProgressLabel>
@@ -346,7 +347,7 @@ export default function DeployStep() {
         </StepCard>
       )}
 
-      {pipelineBusy && (
+      {activeRun && (
         <Hint>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
             <Spinner /> Working… open View logs in a new tab for the live stream.

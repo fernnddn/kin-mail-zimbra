@@ -30,10 +30,23 @@ type StreamEvent = {
   exit_code?: number;
 };
 
+type SetupStatus = {
+  deployed?: boolean;
+  busy?: boolean;
+  install_in_progress?: boolean;
+};
+
+type LastLogResponse = {
+  text: string;
+  missing?: boolean;
+  install_in_progress?: boolean;
+};
+
 type DeploySessionCtx = {
   log: string;
   message: string;
   okMessage: string;
+  /** True while this tab owns an SSE *or* the server still reports an active install. */
   pipelineBusy: boolean;
   cancelBusy: boolean;
   deadmanHint: boolean;
@@ -70,13 +83,21 @@ function looksLikeDeadmanArmed(chunk: string): boolean {
   );
 }
 
+async function fetchSetupStatus(): Promise<SetupStatus> {
+  return api<SetupStatus>("/api/setup/status");
+}
+
+async function fetchLastLog(): Promise<LastLogResponse> {
+  return api<LastLogResponse>("/api/wizard/deploy/last-log");
+}
+
 export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { draft, save } = useWizard();
-  const { installInProgress } = useSetup();
+  const { installInProgress, refresh: refreshSetup } = useSetup();
   const [log, setLog] = useState("# Deployment activity\n");
   const [message, setMessage] = useState("");
   const [okMessage, setOkMessage] = useState("");
-  const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [localBusy, setLocalBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [deadmanHint, setDeadmanHint] = useState(false);
   const [applyDone, setApplyDone] = useState(false);
@@ -85,7 +106,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const pipelineEsRef = useRef<EventSource | null>(null);
   const cancelEsRef = useRef<EventSource | null>(null);
   const logBufRef = useRef("# Deployment activity\n");
+  /** True only while this tab's EventSource is healthy and delivering events. */
   const localStreamRef = useRef(false);
+  /** Last action that owned the pipeline EventSource (for messaging). */
+  const pipelineActionRef = useRef<DeployActionId | null>(null);
+
+  const pipelineBusy = localBusy || installInProgress;
 
   useEffect(() => {
     return () => {
@@ -96,41 +122,64 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Hydrate progress from server transcript when this tab did not start the SSE
-  // (e.g. operator opened a fresh tab while full-install is already running).
+  const hydrateFromServer = useCallback(async (): Promise<boolean> => {
+    try {
+      const [st, res] = await Promise.all([fetchSetupStatus(), fetchLastLog()]);
+      const installing = Boolean(st.install_in_progress || st.busy || res.install_in_progress);
+      const cleaned = formatDeployLog(res.text || "");
+      if (cleaned.trim()) {
+        logBufRef.current = cleaned;
+        setLog(cleaned);
+        setInstallProgress(parseInstallProgress(cleaned));
+      }
+      if (installing) {
+        setLocalBusy(true);
+        return true;
+      }
+      const p = parseInstallProgress(cleaned);
+      if (p.complete || p.failed) {
+        setLocalBusy(false);
+      }
+      return false;
+    } catch {
+      return installInProgress;
+    }
+  }, [installInProgress]);
+
+  // Follow server transcript whenever we are not on a live SSE (new tab, or after disconnect).
   useEffect(() => {
     let cancelled = false;
     async function poll() {
       if (localStreamRef.current) return;
-      try {
-        const res = await api<{ text: string; install_in_progress?: boolean }>(
-          "/api/wizard/deploy/last-log",
+      if (cancelled) return;
+      const still = await hydrateFromServer();
+      if (!cancelled && still) {
+        setMessage((m) =>
+          m === "Stream closed" || m.startsWith("Live stream disconnected")
+            ? "Following server progress (live stream disconnected)…"
+            : m,
         );
-        if (cancelled) return;
-        const cleaned = formatDeployLog(res.text || "");
-        if (!cleaned.trim()) return;
-        logBufRef.current = cleaned;
-        setLog(cleaned);
-        setInstallProgress(parseInstallProgress(cleaned));
-        if (res.install_in_progress || installInProgress) {
-          setPipelineBusy(true);
-        } else {
-          const p = parseInstallProgress(cleaned);
-          if (p.complete || p.failed) setPipelineBusy(false);
-        }
-      } catch {
-        /* quiet — Deploy page still usable */
       }
     }
     void poll();
     const id = window.setInterval(() => {
       void poll();
-    }, 3000);
+    }, 2500);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [installInProgress]);
+  }, [hydrateFromServer, installInProgress]);
+
+  // Keep localBusy aligned with setup provider when install finishes elsewhere.
+  useEffect(() => {
+    if (!installInProgress && !localStreamRef.current) {
+      // Let hydrate decide complete/failed; don't force idle if progress incomplete.
+      void hydrateFromServer();
+    } else if (installInProgress) {
+      setLocalBusy(true);
+    }
+  }, [installInProgress, hydrateFromServer]);
 
   const append = useCallback((chunk: string) => {
     logBufRef.current += chunk;
@@ -147,7 +196,11 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const attachStream = useCallback(
-    (action: DeployActionId, es: EventSource, onFinished: (exit?: number) => void) => {
+    (
+      action: DeployActionId,
+      es: EventSource,
+      onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
+    ) => {
       es.onmessage = (ev) => {
         let parsed: StreamEvent;
         try {
@@ -175,17 +228,23 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         if (parsed.type === "error") {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
+          if (parsed.code === "busy") {
+            // Another job owns the install — follow server state, do not look "idle".
+            setMessage("Install already running on the server — showing live progress.");
+            setOkMessage("");
+            onFinished(undefined, "error");
+            es.close();
+            void hydrateFromServer();
+            void refreshSetup();
+            return;
+          }
           setMessage(msg);
           setOkMessage("");
-          if (parsed.code === "busy") {
-            onFinished();
-            es.close();
-          }
           return;
         }
         if (parsed.type === "done") {
           append(`[done] exit=${parsed.exit_code ?? "?"}\n`);
-          onFinished(parsed.exit_code);
+          onFinished(parsed.exit_code, "done");
           es.close();
           if (action === "cancel_firewall_deadman" && parsed.exit_code === 0) {
             setDeadmanHint(false);
@@ -195,24 +254,46 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       };
 
       es.onerror = () => {
-        append(`[stream] connection error or closed\n`);
-        setMessage((m) => m || "Stream closed");
-        onFinished();
+        // EventSource drops on background tabs / brief network blips. Do NOT treat as finished
+        // until the server confirms the install is no longer running.
+        append(`[stream] disconnected — checking server status…\n`);
         es.close();
+        onFinished(undefined, "disconnect");
+        void (async () => {
+          await refreshSetup();
+          const still = await hydrateFromServer();
+          if (still) {
+            setMessage("Live stream disconnected — following server progress…");
+            setLocalBusy(true);
+          } else {
+            setMessage((m) =>
+              m.startsWith("Live stream disconnected") || m.includes("checking server")
+                ? ""
+                : m,
+            );
+          }
+        })();
       };
     },
-    [append],
+    [append, hydrateFromServer, refreshSetup],
   );
 
   const openStream = useCallback(
-    (action: DeployActionId, onFinished: (exit?: number) => void) => {
+    (
+      action: DeployActionId,
+      onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
+    ) => {
       localStreamRef.current = true;
+      pipelineActionRef.current = action;
       const es = new EventSource(
         `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}`,
       );
-      const wrapped = (exit?: number) => {
+      const wrapped = (exit?: number, reason?: "done" | "error" | "disconnect") => {
         localStreamRef.current = false;
-        onFinished(exit);
+        if (pipelineEsRef.current === es) {
+          pipelineEsRef.current = null;
+        }
+        onFinished(exit, reason);
       };
       attachStream(action, es, wrapped);
       return es;
@@ -243,13 +324,31 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       pipelineEsRef.current.close();
       pipelineEsRef.current = null;
     }
-    setPipelineBusy(true);
-    pipelineEsRef.current = openStream("apply_draft", (exit) => {
-      setPipelineBusy(false);
-      pipelineEsRef.current = null;
+    setLocalBusy(true);
+    pipelineEsRef.current = openStream("apply_draft", (exit, reason) => {
+      if (reason === "disconnect") {
+        // hydrateFromServer will keep busy if install somehow started; apply alone:
+        void hydrateFromServer().then((still) => {
+          if (!still) setLocalBusy(false);
+        });
+        return;
+      }
+      if (reason === "error") {
+        // busy → follow server
+        return;
+      }
+      setLocalBusy(false);
       if (exit === 0) setApplyDone(true);
     });
-  }, [append, draft.mail_domain, draft.topology, openStream, pipelineBusy, save]);
+  }, [
+    append,
+    draft.mail_domain,
+    draft.topology,
+    hydrateFromServer,
+    openStream,
+    pipelineBusy,
+    save,
+  ]);
 
   const runDeploy = useCallback(async () => {
     if (pipelineBusy) return;
@@ -277,28 +376,48 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       pipelineEsRef.current.close();
       pipelineEsRef.current = null;
     }
-    setPipelineBusy(true);
+    setLocalBusy(true);
 
-    pipelineEsRef.current = openStream("apply_draft", (applyExit) => {
+    const onInstallFinished = (_exit?: number, reason?: "done" | "error" | "disconnect") => {
+      void refreshSetup();
+      void hydrateFromServer().then((still) => {
+        if (reason === "disconnect" || reason === "error") {
+          // Keep progress UI if the server job is still running.
+          setLocalBusy(still);
+          return;
+        }
+        setLocalBusy(still);
+      });
+    };
+
+    pipelineEsRef.current = openStream("apply_draft", (applyExit, reason) => {
+      if (reason === "disconnect") {
+        void hydrateFromServer();
+        void refreshSetup();
+        return;
+      }
+      if (reason === "error") {
+        void hydrateFromServer();
+        return;
+      }
       if (applyExit !== 0) {
-        setPipelineBusy(false);
+        setLocalBusy(false);
         pipelineEsRef.current = null;
         setMessage("Could not save settings — Deploy stopped before install.");
         return;
       }
       append(`\n[${new Date().toISOString()}] Starting mail system install…\n`);
-      pipelineEsRef.current = openStream("full_install", () => {
-        setPipelineBusy(false);
-        pipelineEsRef.current = null;
-      });
+      pipelineEsRef.current = openStream("full_install", onInstallFinished);
     });
   }, [
     append,
     confirmFull,
     draft.mail_domain,
     draft.topology,
+    hydrateFromServer,
     openStream,
     pipelineBusy,
+    refreshSetup,
     save,
   ]);
 
@@ -311,9 +430,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     }
     setCancelBusy(true);
     append(`\n[${new Date().toISOString()}] Confirm firewall access OK\n`);
-    cancelEsRef.current = openStream("cancel_firewall_deadman", () => {
+    cancelEsRef.current = openStream("cancel_firewall_deadman", (_exit, reason) => {
       setCancelBusy(false);
       cancelEsRef.current = null;
+      if (reason === "disconnect") {
+        setMessage("Stream interrupted while confirming access — try again if needed.");
+      }
     });
   }, [append, cancelBusy, openStream]);
 
