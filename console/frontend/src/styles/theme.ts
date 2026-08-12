@@ -1,7 +1,7 @@
 /** Shared Emotion theme tokens for the console (light UI).
- * Font stack verified from docs.arcfra.com CSS:
+ * Font stack chosen for visual consistency:
  *   font-family: DM Sans, InterVariable, Inter, -apple-system, …, sans-serif
- * Motion ~0.3s ease-out matches arcfra.com interactive transitions.
+ * Motion is a short ~0.3s ease-out on interactive elements.
  */
 
 export const theme = {
