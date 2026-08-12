@@ -52,8 +52,22 @@ def resolve_under_deploy(candidates: tuple[str, ...], label: str) -> Path:
             return candidate
     if found:
         return found[0]
+
+    hint = ""
+    try:
+        if DEPLOY_DIR.is_symlink():
+            target = os.readlink(DEPLOY_DIR)
+            if target.startswith("/home/") or "/home/" in f"/{target}":
+                hint = (
+                    f" {DEPLOY_DIR} is a symlink to {target}; "
+                    "kin-mail-privhelperd runs with ProtectHome=true so /home is invisible. "
+                    "Run console/bootstrap.sh to install a real tree under /opt/kin-mail-deploy "
+                    "(do not symlink into /home)."
+                )
+    except OSError:
+        pass
     raise FileNotFoundError(
-        f"{label} not found under {DEPLOY_DIR} (tried {', '.join(candidates)})"
+        f"{label} not found under {DEPLOY_DIR} (tried {', '.join(candidates)}).{hint}"
     )
 
 

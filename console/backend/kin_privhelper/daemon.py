@@ -62,6 +62,24 @@ def _audit_line(username: str, cmd: str, result: str, exit_code: int | None = No
     )
 
 
+def _safe_exec_error(exc: BaseException) -> str:
+    """Operator-facing error text — type + message, redacted, no traceback dump."""
+    import re
+
+    name = type(exc).__name__
+    text = str(exc).strip() or repr(exc)
+    text = re.sub(
+        r"(?i)(password|passwd|pwd|token|secret|admin_pass)\s*[:=]\s*\S+",
+        r"\1=***",
+        text,
+    )
+    # Collapse whitespace for the SSE one-liner.
+    text = " ".join(text.split())
+    if len(text) > 480:
+        text = text[:480] + "…"
+    return f"{name}: {text}"
+
+
 def _prepare_socket_dir() -> None:
     SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
     if SOCKET_PATH.exists():
@@ -213,8 +231,8 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                     await _send(writer, proto.event_done(exit_code))
                 _audit_line(username, audit_cmd, "ok", exit_code)
             except Exception as exc:  # noqa: BLE001 — keep daemon alive
-                # Never echo exception text that might include a password from argv.
-                msg = "execution failed"
+                log.exception("privileged command failed cmd=%s user=%s", audit_cmd, username)
+                msg = _safe_exec_error(exc)
                 await _send(writer, proto.event_error("exec_failed", msg))
                 await _send(writer, proto.event_done(1))
                 _audit_line(username, audit_cmd, "exec_failed", 1)

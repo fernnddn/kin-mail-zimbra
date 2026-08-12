@@ -107,6 +107,30 @@ chown -R root:root "$OPT_ROOT"
 chmod -R a+rX "$OPT_ROOT"
 ok "Synced to ${OPT_ROOT}"
 
+say "4b. Install pipeline tree (/opt/kin-mail-deploy)"
+# privhelperd runs with ProtectHome=true — NEVER symlink this into /home.
+DEPLOY_ROOT="${KIN_MAIL_DEPLOY_DIR:-/opt/kin-mail-deploy}"
+REPO_INSTALL="$(cd "${SCRIPT_DIR}/.." && pwd)/install"
+if [ -d "$REPO_INSTALL" ]; then
+  if [ -L "$DEPLOY_ROOT" ]; then
+    warn "Removing symlink ${DEPLOY_ROOT} (ProtectHome cannot follow /home targets)"
+    rm -f "$DEPLOY_ROOT"
+  fi
+  install -d -o root -g root -m 755 "$DEPLOY_ROOT"
+  rsync -a --delete "${REPO_INSTALL}/" "${DEPLOY_ROOT}/install/"
+  # Ensure stage scripts are executable
+  find "${DEPLOY_ROOT}/install" -type f -name '*.sh' -exec chmod a+rx {} +
+  if [ -x "${DEPLOY_ROOT}/install/kin-mail.sh" ]; then
+    ok "Synced install scripts → ${DEPLOY_ROOT}/install (real tree)"
+  else
+    fail "kin-mail.sh missing after sync to ${DEPLOY_ROOT}/install"
+    exit 1
+  fi
+else
+  warn "No sibling install/ next to console/ — privileged Deploy needs ${DEPLOY_ROOT}/install"
+  info "Clone the full repo (console/ + install/) or set KIN_MAIL_DEPLOY_DIR to a real tree under /opt"
+fi
+
 say "5. Python virtualenv + dependencies"
 install_uv() {
   if command -v uv >/dev/null 2>&1 || [ -x /usr/local/bin/uv ]; then

@@ -10,6 +10,10 @@ Isolated from Zimbra/DRBD/Pacemaker. Bootstrap installs:
 sudo ./console/bootstrap.sh
 ```
 
+Bootstrap also copies sibling `install/` into **`/opt/kin-mail-deploy/install/`** as a real tree
+(not a symlink into `/home`). `kin-mail-privhelperd` runs with `ProtectHome=true`, so a
+`/opt/kin-mail-deploy → /home/...` symlink makes Deploy fail instantly with "file not found".
+
 ## Local users + RBAC
 
 | Role | ID | Notes |
