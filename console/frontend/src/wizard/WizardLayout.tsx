@@ -126,7 +126,7 @@ function currentStepId(pathname: string): StepId {
 
 export default function WizardLayout() {
   const { loading } = useWizard();
-  const { installInProgress } = useSetup();
+  const { deployed, installInProgress } = useSetup();
   const location = useLocation();
   const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
   const isDeploy = /\/wizard\/deploy\/?$/.test(location.pathname) || isDeployLogs;
@@ -134,8 +134,9 @@ export default function WizardLayout() {
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
 
-  // While full-install runs, keep the operator on Deploy (not Topology / other steps).
-  if (installInProgress && !isDeploy) {
+  // Mid-install always stays on Deploy. Already-deployed hosts that land on
+  // Topology (stale bookmark / old SPA) get bounced to Deploy/progress.
+  if ((installInProgress || (deployed && active === "topology")) && !isDeploy) {
     return <Navigate to="/wizard/deploy" replace />;
   }
 

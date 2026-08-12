@@ -22,7 +22,7 @@ export default function EulaPage() {
 
   if (!loading && !setupLoading && accepted) {
     if (deployed) return <Navigate to="/login" replace />;
-    return <Navigate to={wizardHomePath(installInProgress)} replace />;
+    return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
 
   async function onSubmit(e: FormEvent) {

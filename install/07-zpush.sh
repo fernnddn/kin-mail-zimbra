@@ -188,14 +188,59 @@ configure_zpush() {
 }
 
 # -----------------------------------------------------------------------------
+# Zimbra's nginx does NOT ship /etc/nginx (distro package often absent). Including
+# /etc/nginx/fastcgi_params made every zmproxy restart [emerg] and silently leave
+# the old master running — ActiveSync kept returning 404 while the stage reported OK.
+write_zpush_fastcgi_params() {
+  local dest="${ZPUSH_ROOT}/fastcgi_params"
+  local tmp
+  tmp=$(mktemp)
+  cat >"$tmp" <<'EOF'
+fastcgi_param  QUERY_STRING       $query_string;
+fastcgi_param  REQUEST_METHOD     $request_method;
+fastcgi_param  CONTENT_TYPE       $content_type;
+fastcgi_param  CONTENT_LENGTH     $content_length;
+fastcgi_param  SCRIPT_NAME        $fastcgi_script_name;
+fastcgi_param  REQUEST_URI        $request_uri;
+fastcgi_param  DOCUMENT_URI       $document_uri;
+fastcgi_param  DOCUMENT_ROOT      $document_root;
+fastcgi_param  SERVER_PROTOCOL    $server_protocol;
+fastcgi_param  REQUEST_SCHEME     $scheme;
+fastcgi_param  HTTPS             $https if_not_empty;
+fastcgi_param  GATEWAY_INTERFACE  CGI/1.1;
+fastcgi_param  SERVER_SOFTWARE    nginx/$nginx_version;
+fastcgi_param  REMOTE_ADDR        $remote_addr;
+fastcgi_param  REMOTE_PORT        $remote_port;
+fastcgi_param  SERVER_ADDR        $server_addr;
+fastcgi_param  SERVER_PORT        $server_port;
+fastcgi_param  SERVER_NAME        $server_name;
+fastcgi_param  REDIRECT_STATUS    200;
+EOF
+  if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cp "$tmp" "$dest"
+  rm -f "$tmp"
+  return 0
+}
+
 write_nginx_snippets() {
   say "5. Nginx fastcgi snippets"
-  local as_tmp ad_tmp as_changed=0 ad_changed=0
+  local as_tmp ad_tmp as_changed=0 ad_changed=0 params_changed=0
   as_tmp=$(mktemp)
   ad_tmp=$(mktemp)
+
+  if write_zpush_fastcgi_params; then
+    params_changed=1
+    ok "fastcgi_params written under ${ZPUSH_ROOT} (Zimbra-safe, not /etc/nginx)"
+  else
+    ok "fastcgi_params unchanged"
+  fi
+
   cat >"$as_tmp" <<EOF
 fastcgi_pass ${PHP_FPM_LISTEN};
-include /etc/nginx/fastcgi_params;
+include ${ZPUSH_ROOT}/fastcgi_params;
 fastcgi_param SCRIPT_FILENAME ${ZPUSH_ROOT}/index.php;
 fastcgi_param SCRIPT_NAME /Microsoft-Server-ActiveSync;
 fastcgi_param HTTPS on;
@@ -205,7 +250,7 @@ client_max_body_size 128m;
 EOF
   cat >"$ad_tmp" <<EOF
 fastcgi_pass ${PHP_FPM_LISTEN};
-include /etc/nginx/fastcgi_params;
+include ${ZPUSH_ROOT}/fastcgi_params;
 fastcgi_param SCRIPT_FILENAME ${ZPUSH_ROOT}/autodiscover/autodiscover.php;
 fastcgi_param SCRIPT_NAME /Autodiscover/Autodiscover.xml;
 fastcgi_param HTTPS on;
@@ -226,11 +271,32 @@ EOF
     ad_changed=1
     ok "nginx-zpush-autodiscover.conf written"
   fi
+  # Capture modes before chmod: Zimbra nginx runs as `zimbra` and must be able to
+  # `include` these snippets. Mode 0600 www-data-only produced ActiveSync HTTP 404
+  # (empty location after failed include) despite a "successful" proxy restart.
+  as_mode=$(stat -c '%a' "${ZPUSH_ROOT}/nginx-zpush.conf" 2>/dev/null || echo 000)
+  ad_mode=$(stat -c '%a' "${ZPUSH_ROOT}/nginx-zpush-autodiscover.conf" 2>/dev/null || echo 000)
+  # Directory must be traversable by zimbra (o+x); files world-readable.
+  chmod 755 "$ZPUSH_ROOT"
   chown www-data:www-data \
+    "${ZPUSH_ROOT}/fastcgi_params" \
     "${ZPUSH_ROOT}/nginx-zpush.conf" \
     "${ZPUSH_ROOT}/nginx-zpush-autodiscover.conf"
+  chmod 644 \
+    "${ZPUSH_ROOT}/fastcgi_params" \
+    "${ZPUSH_ROOT}/nginx-zpush.conf" \
+    "${ZPUSH_ROOT}/nginx-zpush-autodiscover.conf"
+  if [ "$as_mode" != "644" ] || [ "$ad_mode" != "644" ]; then
+    warn "Fixed nginx snippet modes (${as_mode}/${ad_mode} → 644) so zimbra can include them"
+    as_changed=1
+  fi
+  if ! sudo -u zimbra test -r "${ZPUSH_ROOT}/nginx-zpush.conf" \
+    || ! sudo -u zimbra test -r "${ZPUSH_ROOT}/fastcgi_params"; then
+    fail "zimbra still cannot read Z-Push nginx snippets — ActiveSync would 404"
+    exit 1
+  fi
   rm -f "$as_tmp" "$ad_tmp"
-  SNIPPET_CHANGED=$((as_changed + ad_changed))
+  SNIPPET_CHANGED=$((as_changed + ad_changed + params_changed))
 }
 
 apply_nginx_template_patches() {
@@ -372,6 +438,18 @@ reload_proxy_if_needed() {
     trap - EXIT
     exit 1
   fi
+  # Config-test BEFORE restart: a failed include ([emerg]) leaves the old master
+  # running while zmproxyctl can still look "OK".
+  if ! sudo -u zimbra /opt/zimbra/common/sbin/nginx \
+    -c /opt/zimbra/conf/nginx.conf -t >/tmp/kin-zpush-nginx-t.out 2>&1; then
+    fail "nginx -t failed after confgen — ActiveSync include broken (see /tmp/kin-zpush-nginx-t.out)"
+    sed -n '1,40p' /tmp/kin-zpush-nginx-t.out | sed 's/^/    /'
+    kin_zimbra_remanage
+    trap - EXIT
+    exit 1
+  fi
+  local master_before
+  master_before=$(pgrep -o -f '/opt/zimbra/common/sbin/nginx -c' || true)
   if ! zimbra_cmd zmproxyctl restart >/tmp/kin-zpush-proxy.out 2>&1; then
     fail "zmproxyctl restart failed — see /tmp/kin-zpush-proxy.out"
     kin_zimbra_remanage
@@ -379,6 +457,19 @@ reload_proxy_if_needed() {
     exit 1
   fi
   sleep 2
+  local master_after emerg_hit
+  master_after=$(pgrep -o -f '/opt/zimbra/common/sbin/nginx -c' || true)
+  emerg_hit=$(tail -n 80 /opt/zimbra/log/nginx.log 2>/dev/null | grep '\[emerg\]' | tail -n 3 || true)
+  if [ -n "$emerg_hit" ]; then
+    # Only fail if emerg is newer than this restart attempt (same second window is enough).
+    if [ -n "$master_before" ] && [ "$master_before" = "$master_after" ]; then
+      fail "zmproxy restart did not replace nginx master (still pid ${master_after}) — likely [emerg] on new config"
+      printf '%s\n' "$emerg_hit" | sed 's/^/    /'
+      kin_zimbra_remanage
+      trap - EXIT
+      exit 1
+    fi
+  fi
   if ! kin_zimbra_wait_healthy; then
     fail "Webmail/Zimbra not healthy after proxy restart"
     kin_zimbra_remanage
@@ -388,8 +479,9 @@ reload_proxy_if_needed() {
   kin_zimbra_remanage
   trap - EXIT
   local code
-  code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ || true)
-  ok "Proxy restarted; https://127.0.0.1/ → ${code}"
+  code=$(curl -sk -o /dev/null -w '%{http_code}' \
+    --resolve "${MAIL_HOST}:443:127.0.0.1" "https://${MAIL_HOST}/" || true)
+  ok "Proxy restarted; https://${MAIL_HOST}/ → ${code}"
 }
 
 # -----------------------------------------------------------------------------
@@ -414,9 +506,17 @@ ensure_throttle_safe_ip() {
 # -----------------------------------------------------------------------------
 verify_activesync() {
   say "9. Verify ActiveSync endpoint"
-  local hdrs
+  local hdrs code
+  # Use the real server_name — default_server is often commented out on Zimbra.
   hdrs=$(curl -sk -D- -o /dev/null -X OPTIONS \
-    "https://127.0.0.1/Microsoft-Server-ActiveSync" 2>/dev/null || true)
+    --resolve "${MAIL_HOST}:443:127.0.0.1" \
+    "https://${MAIL_HOST}/Microsoft-Server-ActiveSync" 2>/dev/null || true)
+  code=$(printf '%s' "$hdrs" | awk 'toupper($0) ~ /^HTTP\//{print $2; exit}')
+  if [ "$code" = "404" ]; then
+    fail "ActiveSync OPTIONS → 404 (nginx location/include not loaded — check nginx -t / nginx.log [emerg])"
+    printf '%s\n' "$hdrs" | sed -n '1,20p' | sed 's/^/    /'
+    exit 1
+  fi
   if printf '%s' "$hdrs" | grep -qi 'MS-Server-ActiveSync'; then
     ok "OPTIONS returns MS-Server-ActiveSync headers"
   elif printf '%s' "$hdrs" | grep -qi 'x-z-push-version'; then
@@ -429,7 +529,7 @@ verify_activesync() {
       warn "ActiveSync responded but without AS headers — check auth/backend logs"
       printf '%s\n' "$hdrs" | sed -n '1,15p' | sed 's/^/    /'
     else
-      fail "ActiveSync OPTIONS failed"
+      fail "ActiveSync OPTIONS failed (HTTP ${code:-?})"
       printf '%s\n' "$hdrs" | sed -n '1,20p' | sed 's/^/    /'
       exit 1
     fi

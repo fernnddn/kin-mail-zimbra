@@ -63,11 +63,11 @@ function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Bare /wizard → Deploy when install is running, else topology. */
+/** Bare /wizard → Deploy when install is running or already deployed, else topology. */
 function WizardIndexRedirect() {
-  const { installInProgress, loading } = useSetup();
+  const { deployed, installInProgress, loading } = useSetup();
   if (loading) return <LoadingShell text="Checking setup…" />;
-  const dest = wizardHomePath(installInProgress);
+  const dest = wizardHomePath(installInProgress, deployed);
   // Nested route: relative path under /wizard
   const rel = dest.replace(/^\/wizard\/?/, "") || "topology";
   return <Navigate to={rel} replace />;

@@ -27,10 +27,10 @@ export default function LoginPage() {
   if (!eulaLoading && !accepted) return <Navigate to="/eula" replace />;
   // Pre-deploy / mid-install: no login gate — send operators to the right wizard step.
   if (!setupLoading && !deployed && !user) {
-    return <Navigate to={wizardHomePath(installInProgress)} replace />;
+    return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
   if (!loading && !setupLoading && user) {
-    return <Navigate to={wizardHomePath(installInProgress)} replace />;
+    return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
 
   async function onSubmit(e: FormEvent) {
