@@ -100,20 +100,37 @@ ok "Extracted to $ZDIR"
 
 # --- 1b. Ubuntu apt packaging key (install.sh skips keyserver when present) ---
 # Maldua FOSS install.sh (util/utilfunc.sh) for Ubuntu does NOT use
-# files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is now 404).
-# It fetches key 9BE6ED79 from hkp://keyserver.ubuntu.com:80 — which needs a
-# working dirmngr + writable GNUPGHOME. Console Deploy runs under
-# kin-mail-privhelperd with ProtectHome=yes (so /root is inaccessible) and
-# PrivateTmp=yes; gpg then dies with "can't create directory '/root/.gnupg'"
-# and install.sh exits while our driver used to sleep forever.
-# Pre-seed the same key via the Ubuntu keyserver HTTPS API (no dirmngr), with
-# GNUPGHOME under /tmp, matching the fingerprint install.sh checks:
-#   254F9170B966D193D6BAD300D5CEF8BF9BE6ED79
-# (signing subkey 5234D2B73B6996C7 is the Mar-2025 packaging update — same cert).
+# files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is 404 as of
+# 2026-08). It expects key 9BE6ED79 in /etc/apt/trusted.gpg.d/zimbra.gpg —
+# fingerprint 254F9170B966D193D6BAD300D5CEF8BF9BE6ED79 (signing subkey
+# 5234D2B73B6996C7 = Mar-2025 packaging refresh, same primary cert).
+#
+# Console Deploy runs under kin-mail-privhelperd with ProtectHome=yes (/root
+# inaccessible) and PrivateTmp=yes, so install.sh's HKP `gpg --recv-keys`
+# fails with "can't create directory '/root/.gnupg'". We pre-seed the same
+# key with a writable GNUPGHOME under /tmp.
+#
+# Source order (same idea as resolving ZCS artefacts remotely first):
+#   1) Official remote — Ubuntu keyserver HTTPS (what install.sh + Zimbra's
+#      Mar-2025 packaging blog use). Prefer fresh key when the network works.
+#   2) Bundled fallback — install/lib/zimbra-key.asc (committed copy of (1),
+#      verified fingerprint on 2026-08-12). Used when remote 404/timeout/etc.
+#   3) Both fail → hard stop with a clear error (never silent sleep).
+#
+# Do NOT use files.zimbra.com/downloads/security/public.key here — that file
+# is the RPM packaging key (fingerprint B8D6…0F30C305), not the Ubuntu apt key.
+#
+# Refreshing install/lib/zimbra-key.asc when Zimbra rotates packaging keys:
+#   curl -fsSL -o install/lib/zimbra-key.asc \
+#     "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x254F9170B966D193D6BAD300D5CEF8BF9BE6ED79"
+#   gpg --show-keys install/lib/zimbra-key.asc   # confirm FPR still 254F…9BE6ED79
+#   # If Zimbra publishes a NEW primary fingerprint, update ZIMBRA_APT_FPR below
+#   # and re-verify against util/utilfunc.sh in the Maldua tarball before commit.
 ZIMBRA_APT_FPR="254F9170B966D193D6BAD300D5CEF8BF9BE6ED79"
 ZIMBRA_APT_KEYRING="/etc/apt/trusted.gpg.d/zimbra.gpg"
-# Prefer long-form search; short id 9BE6ED79 is the historical key id.
 ZIMBRA_APT_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${ZIMBRA_APT_FPR}"
+# Script already cd'd to install/; keep absolute for clarity under callers.
+ZIMBRA_APT_KEY_LOCAL="${PWD}/lib/zimbra-key.asc"
 
 # Writable gnupg home for ProtectHome=yes (must stay set for install.sh in tmux).
 if [ -z "${GNUPGHOME:-}" ] || [ ! -d "${GNUPGHOME}" ]; then
@@ -122,10 +139,39 @@ if [ -z "${GNUPGHOME:-}" ] || [ ! -d "${GNUPGHOME}" ]; then
 fi
 export GNUPGHOME
 
+# Populate $1 with key ASCII-armor. Sets ZIMBRA_APT_KEY_SOURCE to a short label.
+# Returns 0 on success, 1 if official remote and bundled fallback both fail.
+fetch_zimbra_apt_key_asc() {
+  local dest="$1"
+  ZIMBRA_APT_KEY_SOURCE=""
+
+  if curl -fsSL -m 60 -o "$dest" "$ZIMBRA_APT_KEY_URL" \
+    && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$dest"; then
+    ZIMBRA_APT_KEY_SOURCE="official remote (${ZIMBRA_APT_KEY_URL})"
+    return 0
+  fi
+  warn "Official packaging-key URL failed (404/timeout/invalid body):"
+  info "  ${ZIMBRA_APT_KEY_URL}"
+  rm -f "$dest"
+
+  if [ -f "$ZIMBRA_APT_KEY_LOCAL" ] \
+    && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$ZIMBRA_APT_KEY_LOCAL"; then
+    cp -f "$ZIMBRA_APT_KEY_LOCAL" "$dest"
+    ZIMBRA_APT_KEY_SOURCE="bundled fallback (${ZIMBRA_APT_KEY_LOCAL})"
+    warn "Using bundled key copy — refresh install/lib/zimbra-key.asc when Zimbra rotates keys"
+    return 0
+  fi
+
+  fail "Could not obtain Zimbra Ubuntu packaging GPG key from any source."
+  info "  Tried official:  ${ZIMBRA_APT_KEY_URL}"
+  info "  Tried fallback:  ${ZIMBRA_APT_KEY_LOCAL}"
+  info "Fix network to keyserver.ubuntu.com, or restore install/lib/zimbra-key.asc, then re-run Deploy."
+  return 1
+}
+
 ensure_zimbra_ubuntu_gpg_key() {
   local tmp_asc tmp_kr gpg_err
   say "1b. Ensuring Zimbra Ubuntu packaging GPG key"
-  info "Source: Ubuntu keyserver HTTPS (not files.zimbra.com/ZCSKeys — that tree 404s)"
   info "Expected fingerprint: ${ZIMBRA_APT_FPR}"
   info "GNUPGHOME=${GNUPGHOME} (required when ProtectHome blocks /root/.gnupg)"
 
@@ -143,31 +189,26 @@ ensure_zimbra_ubuntu_gpg_key() {
   tmp_kr=$(mktemp "${TMPDIR:-/tmp}/kin-zimbra-gpg.XXXXXX.krring")
   rm -f "$tmp_kr"
   gpg_err=$(mktemp "${TMPDIR:-/tmp}/kin-zimbra-gpg.XXXXXX.err")
-  if ! curl -fsSL -m 60 -o "$tmp_asc" "$ZIMBRA_APT_KEY_URL"; then
-    rm -f "$tmp_asc" "$gpg_err"
-    fail "Could not download Zimbra packaging GPG key from:"
-    info "  ${ZIMBRA_APT_KEY_URL}"
-    info "Fix network/DNS to keyserver.ubuntu.com, then re-run Deploy."
+
+  if ! fetch_zimbra_apt_key_asc "$tmp_asc"; then
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
     exit 1
   fi
-  if ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$tmp_asc"; then
-    rm -f "$tmp_asc" "$gpg_err"
-    fail "GPG key download was not a PGP public key (URL may have moved):"
-    info "  ${ZIMBRA_APT_KEY_URL}"
-    exit 1
-  fi
+  info "Key material from: ${ZIMBRA_APT_KEY_SOURCE}"
+
   if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --import "$tmp_asc" \
         >/dev/null 2>"$gpg_err"; then
     fail "gpg --import failed for Zimbra packaging key (GNUPGHOME=${GNUPGHOME})"
-    info "  URL: ${ZIMBRA_APT_KEY_URL}"
+    info "  Source: ${ZIMBRA_APT_KEY_SOURCE}"
     sed 's/^/    /' "$gpg_err" | tail -n 20
     rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
     exit 1
   fi
   if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --list-keys 2>/dev/null \
        | grep -qw "$ZIMBRA_APT_FPR"; then
-    fail "Downloaded key does not contain expected fingerprint ${ZIMBRA_APT_FPR}"
-    info "  URL: ${ZIMBRA_APT_KEY_URL}"
+    fail "Key does not contain expected fingerprint ${ZIMBRA_APT_FPR}"
+    info "  Source: ${ZIMBRA_APT_KEY_SOURCE}"
+    info "  Refusing to install an unverified key."
     rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
     exit 1
   fi
@@ -183,7 +224,7 @@ ensure_zimbra_ubuntu_gpg_key() {
     fail "Installed ${ZIMBRA_APT_KEYRING} but fingerprint check failed"
     exit 1
   fi
-  ok "Installed packaging key → ${ZIMBRA_APT_KEYRING}"
+  ok "Installed packaging key → ${ZIMBRA_APT_KEYRING} (via ${ZIMBRA_APT_KEY_SOURCE})"
 }
 
 ensure_zimbra_ubuntu_gpg_key
