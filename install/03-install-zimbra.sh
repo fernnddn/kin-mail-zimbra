@@ -98,6 +98,78 @@ ZDIR="${ZCS_SRC}/${ZCS_FILE%.tgz}"
 [ -x "$ZDIR/install.sh" ] || { fail "install.sh not found in $ZDIR"; exit 1; }
 ok "Extracted to $ZDIR"
 
+# --- 1b. Ubuntu apt packaging key (install.sh skips keyserver when present) ---
+# Maldua FOSS install.sh (util/utilfunc.sh) for Ubuntu does NOT use
+# files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is now 404).
+# It fetches key 9BE6ED79 from hkp://keyserver.ubuntu.com:80 — which needs a
+# working dirmngr + /root/.gnupg. Under privhelperd PrivateTmp that often fails
+# with "No dirmngr" / missing .gnupg, and the installer exits while our driver
+# keeps sleeping. Pre-seed the same key via the Ubuntu keyserver HTTPS API
+# (no dirmngr), matching the fingerprint install.sh checks:
+#   254F9170B966D193D6BAD300D5CEF8BF9BE6ED79
+# (signing subkey 5234D2B73B6996C7 is the Mar-2025 packaging update — same cert).
+ZIMBRA_APT_FPR="254F9170B966D193D6BAD300D5CEF8BF9BE6ED79"
+ZIMBRA_APT_KEYRING="/etc/apt/trusted.gpg.d/zimbra.gpg"
+# Prefer long-form search; short id 9BE6ED79 is the historical key id.
+ZIMBRA_APT_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${ZIMBRA_APT_FPR}"
+
+ensure_zimbra_ubuntu_gpg_key() {
+  local tmp_asc tmp_kr
+  say "1b. Ensuring Zimbra Ubuntu packaging GPG key"
+  info "Source: Ubuntu keyserver HTTPS (not files.zimbra.com/ZCSKeys — that tree 404s)"
+  info "Expected fingerprint: ${ZIMBRA_APT_FPR}"
+
+  if [ -f "$ZIMBRA_APT_KEYRING" ] \
+    && gpg --list-keys --keyring "$ZIMBRA_APT_KEYRING" 2>/dev/null \
+         | grep -qw "$ZIMBRA_APT_FPR"; then
+    ok "Key already present in ${ZIMBRA_APT_KEYRING}"
+    return 0
+  fi
+
+  command -v curl >/dev/null || { fail "curl required to fetch packaging GPG key"; exit 1; }
+  command -v gpg >/dev/null || { fail "gpg required to import packaging GPG key"; exit 1; }
+
+  # Prime gnupg home so later install.sh keyserver attempts (if any) are less brittle.
+  mkdir -p /root/.gnupg
+  chmod 700 /root/.gnupg
+  gpg --batch --list-keys >/dev/null 2>&1 || true
+
+  tmp_asc=$(mktemp /tmp/kin-zimbra-gpg.XXXXXX.asc)
+  tmp_kr=$(mktemp /tmp/kin-zimbra-gpg.XXXXXX.kbx)
+  rm -f "$tmp_kr"
+  if ! curl -fsSL -m 60 -o "$tmp_asc" "$ZIMBRA_APT_KEY_URL"; then
+    rm -f "$tmp_asc"
+    fail "Could not download Zimbra packaging GPG key from:"
+    info "  ${ZIMBRA_APT_KEY_URL}"
+    info "Fix network/DNS to keyserver.ubuntu.com, then re-run Deploy."
+    exit 1
+  fi
+  if ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$tmp_asc"; then
+    rm -f "$tmp_asc"
+    fail "GPG key download was not a PGP public key (URL may have moved):"
+    info "  ${ZIMBRA_APT_KEY_URL}"
+    exit 1
+  fi
+  if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --import "$tmp_asc" >/dev/null 2>&1; then
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
+    fail "gpg --import failed for Zimbra packaging key"
+    exit 1
+  fi
+  if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --list-keys 2>/dev/null \
+       | grep -qw "$ZIMBRA_APT_FPR"; then
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
+    fail "Downloaded key does not contain expected fingerprint ${ZIMBRA_APT_FPR}"
+    exit 1
+  fi
+  mkdir -p "$(dirname "$ZIMBRA_APT_KEYRING")"
+  gpg --batch --no-default-keyring --keyring "$tmp_kr" --export --output "$ZIMBRA_APT_KEYRING"
+  chmod 644 "$ZIMBRA_APT_KEYRING"
+  rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
+  ok "Installed packaging key → ${ZIMBRA_APT_KEYRING}"
+}
+
+ensure_zimbra_ubuntu_gpg_key
+
 # --- manual mode -------------------------------------------------------------
 if [ $MANUAL -eq 1 ]; then
   echo; say "MANUAL MODE - run yourself:"
@@ -203,10 +275,57 @@ lastln() { scr | tail -1; }
 
 STAGE="packages"
 DEADLINE=$(( $(date +%s) + 3600 ))
+INSTALL_STARTED=1
+
+installer_pane() { tmux capture-pane -p -S -80 -t "$SESS" 2>/dev/null || true; }
+
+installer_failed_hard() {
+  # install.sh exited with a fatal message — do not keep sleeping on prompts.
+  local pane
+  pane="$(installer_pane)"
+  printf '%s' "$pane" | grep -q "Unable to retrive Zimbra GPG key" && return 0
+  printf '%s' "$pane" | grep -q "Unable to export Zimbra GPG key" && return 0
+  printf '%s' "$pane" | grep -q "Please fix system to allow normal package installation" && return 0
+  printf '%s' "$pane" | grep -q "ERROR: Unable to install packages via apt-get" && return 0
+  return 1
+}
+
+installer_still_running() {
+  # Match the install.sh we launched in this ZDIR (avoid false positives).
+  pgrep -f "${ZDIR}/install.sh" >/dev/null 2>&1
+}
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep 4
   L="$(lastln)"
+  PANE="$(installer_pane)"
+
+  if installer_failed_hard; then
+    fail "Zimbra install.sh aborted (see pane / ${LOG})."
+    info "Typical cause: packaging GPG key import failed (keyserver/dirmngr)."
+    info "KIN pre-seeds the key from: ${ZIMBRA_APT_KEY_URL}"
+    printf '%s\n' "$PANE" | tail -n 25 | sed 's/^/    /'
+    scrub_install_log "$LOG"
+    exit 1
+  fi
+
+  # After we have answered past EULA, if install.sh is gone and we never reached
+  # the config menu / success path, treat as unexpected exit (no silent sleep).
+  if [ "$INSTALL_STARTED" -eq 1 ] && ! installer_still_running; then
+    case "$L" in
+      *"press return to exit"*|*"Configuration complete"*|*"Address unconfigured"*|*"press 'a' to apply"*)
+        ;;
+      *)
+        if [ "$STAGE" = "packages" ]; then
+          fail "Zimbra install.sh exited before package selection finished (last line: ${L:-empty})"
+          info "Attach with: tmux attach -t ${SESS}  (socket may be under privhelper PrivateTmp)"
+          printf '%s\n' "$PANE" | tail -n 30 | sed 's/^/    /'
+          scrub_install_log "$LOG"
+          exit 1
+        fi
+        ;;
+    esac
+  fi
 
   case "$L" in
     *"agree with the terms"*)              info "EULA -> Y";              send Y 6 ;;
@@ -253,6 +372,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         ;;
   esac
 done
+
+if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+  fail "Timed out waiting for Zimbra installer (1h). Last line: ${L:-empty}"
+  scrub_install_log "$LOG"
+  exit 1
+fi
 fi
 
 # --- 3. verify ---------------------------------------------------------------
