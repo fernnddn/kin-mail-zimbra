@@ -39,8 +39,15 @@ Sensitive commands are denied in **both** the FastAPI stream endpoint and privhe
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log`, `create_mailbox` |
-| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`**, **`get_audit_log`**, and mailbox **`--status`** bypass busy |
+| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log`, `create_mailbox`, `clear_initial_console_password` |
+| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`**, **`get_audit_log`**, **`get_deploy_log`**, **`clear_initial_console_password`**, and mailbox **`--status`** bypass busy |
+
+First-boot local admin password is printed on SSH stdout **and** stored at
+`/etc/kin-mail-console/initial-admin-password` (`root:root` `0600`) until the first successful
+local login (or a root password rotate via `users.set_local_password`), then deleted.
+(Path is under `/etc/kin-mail-console` rather than `/root` so `kin-mail-privhelperd`
+can unlink it despite `ProtectHome=true`.) After that, recover access with a real reset
+(not by re-reading the file).
 
 Self-service: `POST /api/mailbox` (Customer Admin allowed) wraps `install/08-create-mailbox.sh` so the shared `kin_quota_gate_allow_new_mailbox` runs before any `zmprov ca`. Seat limit (`CONTRACTED_SEATS`) remains ops-only via draft apply.
 SSE: `/api/wizard/deploy/stream?action=…`  

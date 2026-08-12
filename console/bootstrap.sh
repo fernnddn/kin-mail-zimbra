@@ -8,7 +8,9 @@
 #
 #   sudo ./console/bootstrap.sh
 #
-# First boot prints a one-time admin password on stdout (not written to disk).
+# First boot prints a one-time admin password on stdout and also stores it at
+# /etc/kin-mail-console/initial-admin-password (root:root 0600) so operators can
+# retrieve it over SSH until the first successful local login (file is then deleted).
 # Default HTTPS port: 9443 (override CONSOLE_PORT in /etc/kin-mail-console/console.env).
 # =============================================================================
 set -eu
@@ -36,6 +38,9 @@ UNIT_SRC="${SCRIPT_DIR}/deploy/kin-mail-console.service"
 UNIT_DST="/etc/systemd/system/kin-mail-console.service"
 PRIV_UNIT_SRC="${SCRIPT_DIR}/deploy/kin-mail-privhelperd.service"
 PRIV_UNIT_DST="/etc/systemd/system/kin-mail-privhelperd.service"
+# Keep in sync with kin_privhelper.initial_password.INITIAL_PASSWORD_FILE
+# (not /root — privhelperd ProtectHome=true cannot unlink there)
+INITIAL_PASS_FILE="${ETC_ROOT}/initial-admin-password"
 
 need_root
 
@@ -258,7 +263,15 @@ legacy.chmod(0o600)
 PY
   unset KIN_BOOT_PASS
   chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE" "$HASH_FILE"
-  ok "Wrote users.json + admin.hash (plaintext not stored)"
+  # Retrievable until first successful local login (then privhelperd deletes it).
+  old_umask=$(umask)
+  umask 077
+  printf '%s\n' "$BOOT_PASS" >"$INITIAL_PASS_FILE"
+  umask "$old_umask"
+  chown root:root "$INITIAL_PASS_FILE"
+  chmod 600 "$INITIAL_PASS_FILE"
+  ok "Wrote users.json + admin.hash"
+  ok "Initial password also at ${INITIAL_PASS_FILE} (root:root 0600)"
 fi
 
 # Ensure auth_type on older users.json (idempotent).
@@ -368,10 +381,11 @@ info "URL : https://<this-host>:${CONSOLE_PORT}/"
 info "User: admin"
 if [ -n "$BOOT_PASS" ]; then
   echo
-  printf '%s\n' "${YLW}${BLD}ONE-TIME ADMIN PASSWORD (save now — will not be shown again):${RST}"
+  printf '%s\n' "${YLW}${BLD}ONE-TIME ADMIN PASSWORD (save now — also stored root-only until first login):${RST}"
   printf '%s\n' "${BLD}${BOOT_PASS}${RST}"
   echo
-  warn "This password is not written to any file or log."
+  info "Retrieve later (root SSH): cat ${INITIAL_PASS_FILE}"
+  info "File is deleted automatically after the first successful local admin login."
 else
   info "Password unchanged (existing install)."
 fi

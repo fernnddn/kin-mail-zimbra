@@ -291,3 +291,38 @@ def delete_user(username: str, *, actor: str) -> None:
     if target.role == ROLE_SUPER_ADMIN and not supers:
         raise ValueError("cannot delete the last KIN Super Admin")
     save_users(remaining)
+
+
+def set_local_password(username: str, password: str) -> ConsoleUser:
+    """Rotate a local user's password; drop any root-only first-boot plaintext."""
+    username = validate_username(username)
+    if len(password) < 8:
+        raise ValueError("password must be at least 8 characters")
+    users = load_users()
+    idx = next((i for i, u in enumerate(users) if u.username == username), None)
+    if idx is None:
+        raise KeyError(username)
+    target = users[idx]
+    if target.auth_type != AUTH_LOCAL:
+        raise ValueError("cannot set a local password on an AD-backed account")
+    users[idx] = ConsoleUser(
+        username=target.username,
+        role=target.role,
+        auth_type=AUTH_LOCAL,
+        password_hash=auth.hash_password(password),
+        ad_username="",
+        disabled=target.disabled,
+    )
+    save_users(users)
+    # Keep legacy admin.hash aligned when rotating the bootstrap console user.
+    if username == (settings.console_user.strip() or "admin"):
+        auth.write_password_hash(users[idx].password_hash)
+    # Root tooling (reset scripts) can unlink directly; unprivileged callers also
+    # go through privhelper after login — best-effort here when we are root.
+    try:
+        from kin_privhelper.initial_password import clear_initial_password_file
+
+        clear_initial_password_file()
+    except OSError:
+        pass
+    return users[idx]

@@ -498,6 +498,28 @@ async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterato
         yield ev
 
 
+async def cmd_clear_initial_console_password(
+    _args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Remove root-only first-boot password file after successful local login/rotate.
+
+    Never reads or echoes the password. Idempotent when the file is already gone.
+    """
+    from .initial_password import INITIAL_PASSWORD_FILE, clear_initial_password_file
+
+    try:
+        removed = clear_initial_password_file()
+    except OSError as exc:
+        yield proto.event_stderr(f"cannot remove {INITIAL_PASSWORD_FILE}: {exc}\n")
+        yield proto.event_done(1)
+        return
+    if removed:
+        yield proto.event_stdout(f"removed {INITIAL_PASSWORD_FILE}\n")
+    else:
+        yield proto.event_stdout(f"{INITIAL_PASSWORD_FILE} already absent\n")
+    yield proto.event_done(0)
+
+
 CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]
 
 
@@ -525,6 +547,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
     proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),
     proto.CMD_CREATE_MAILBOX: _adapt(cmd_create_mailbox),
+    proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
 }
 
 

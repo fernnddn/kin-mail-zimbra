@@ -202,6 +202,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             proto.CMD_CANCEL_FIREWALL_DEADMAN,
             proto.CMD_GET_AUDIT_LOG,
             proto.CMD_GET_DEPLOY_LOG,
+            proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
         ) or (
             cmd == proto.CMD_CREATE_MAILBOX
             and str(args.get("op") or "").strip().lower() == "status"

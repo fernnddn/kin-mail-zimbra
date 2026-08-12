@@ -144,7 +144,7 @@ def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, obj
 
 
 @app.post("/api/login")
-def login(body: LoginBody, response: Response) -> dict[str, str]:
+async def login(body: LoginBody, response: Response) -> dict[str, str]:
     try:
         user = users.authenticate(body.username, body.password)
     except users.AuthError as exc:
@@ -155,6 +155,17 @@ def login(body: LoginBody, response: Response) -> dict[str, str]:
             detail="Auth store unavailable",
         ) from exc
     auth.set_session_cookie(response, user.username)
+    # First-boot plaintext lives only under /root (root:root 0600). Console cannot
+    # unlink it itself — ask privhelperd after a successful *local* login. Never
+    # block login if cleanup fails (helper down / busy race).
+    if user.auth_type == users.AUTH_LOCAL:
+        try:
+            await _collect_privhelper(
+                proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
+                user.username,
+            )
+        except Exception:  # noqa: BLE001 — login must succeed regardless
+            pass
     return {
         "status": "ok",
         "username": user.username,
