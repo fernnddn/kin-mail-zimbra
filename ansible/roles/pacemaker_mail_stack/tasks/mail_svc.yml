@@ -23,7 +23,9 @@
       fstype={{ pacemaker_mail_stack_fs_fstype }}
       options={{ pacemaker_mail_stack_fs_options }}
       --group {{ pacemaker_mail_stack_group }}
+      --disabled
   # SAFETY: never check_mode: false.
+  # --disabled: avoid starting the group on a Secondary before colocation exists.
   run_once: true
   when:
     - pacemaker_mail_stack_fs_cfg.rc != 0
@@ -48,6 +50,7 @@
       op stop timeout=300s
       op monitor interval=30s timeout=60s
       --group {{ pacemaker_mail_stack_group }}
+      --disabled
   # SAFETY: never check_mode: false — creating this can start Zimbra on a node.
   run_once: true
   when:
@@ -73,6 +76,7 @@
       cidr_netmask={{ pacemaker_mail_stack_vip_cidr }}
       nic={{ pacemaker_mail_stack_vip_nic }}
       --group {{ pacemaker_mail_stack_group }}
+      --disabled
   # SAFETY: never check_mode: false — would announce VIP on the network.
   run_once: true
   when:

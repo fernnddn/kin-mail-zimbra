@@ -2,6 +2,9 @@
 # LDAP localhost fix from task 2.7 Stage C — values live on the shared DRBD
 # filesystem. Mutating zmlocalconfig is gated; read-only verify may run when
 # /opt/zimbra is mounted (Promoted node only).
+#
+# Order: read → set (if needed) → re-read → assert. Asserting before set
+# breaks greenfield apply (rebuild hosts still have FQDN LDAP URLs).
 
 - name: Check whether /opt/zimbra is mounted for reading LDAP
   ansible.builtin.command:
@@ -23,28 +26,6 @@
   failed_when: false
   check_mode: false
   when: pacemaker_mail_stack_zimbra_mnt.rc == 0
-  tags: [pacemaker, stack, ldap]
-
-- name: Verify LDAP points to 127.0.0.1
-  ansible.builtin.assert:
-    that:
-      - "'ldap_bind_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
-      - "'ldap_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
-      - "'ldap_master_url = {{ pacemaker_mail_stack_ldap_url }}' in pacemaker_mail_stack_ldap_current.stdout"
-      - >-
-        ('zimbra_require_interprocess_security = '
-         ~ pacemaker_mail_stack_zimbra_require_interprocess_security)
-        in pacemaker_mail_stack_ldap_current.stdout
-    fail_msg: >-
-      The LDAP HA fix from task 2.7 is incomplete on this node. Expected
-      {{ pacemaker_mail_stack_ldap_url }} and
-      zimbra_require_interprocess_security={{
-      pacemaker_mail_stack_zimbra_require_interprocess_security }}.
-      Got: {{ pacemaker_mail_stack_ldap_current.stdout | default('(unavailable)') }}
-  when:
-    - pacemaker_mail_stack_zimbra_mnt.rc == 0
-    - pacemaker_mail_stack_ldap_current is defined
-    - pacemaker_mail_stack_ldap_current.rc == 0
   tags: [pacemaker, stack, ldap]
 
 - name: Note that LDAP cannot be verified on the Secondary (not mounted)
@@ -78,4 +59,39 @@
              ~ pacemaker_mail_stack_zimbra_require_interprocess_security)
             not in pacemaker_mail_stack_ldap_current.stdout)
       )
+  tags: [pacemaker, stack, ldap]
+
+- name: Re-read LDAP localconfig after apply
+  ansible.builtin.command:
+    cmd: >-
+      su - zimbra -c "zmlocalconfig -s
+      ldap_bind_url ldap_url ldap_master_url
+      zimbra_require_interprocess_security"
+  register: pacemaker_mail_stack_ldap_current
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_mail_stack_zimbra_mnt.rc == 0
+  tags: [pacemaker, stack, ldap]
+
+- name: Verify LDAP points to 127.0.0.1
+  ansible.builtin.assert:
+    that:
+      - pacemaker_mail_stack_ldap_url in pacemaker_mail_stack_ldap_current.stdout
+      - >-
+          ('zimbra_require_interprocess_security = '
+           ~ pacemaker_mail_stack_zimbra_require_interprocess_security)
+          in pacemaker_mail_stack_ldap_current.stdout
+      - "'ldap_url = ' + pacemaker_mail_stack_ldap_url in pacemaker_mail_stack_ldap_current.stdout"
+      - "'ldap_master_url = ' + pacemaker_mail_stack_ldap_url in pacemaker_mail_stack_ldap_current.stdout"
+    fail_msg: >-
+      The LDAP HA fix from task 2.7 is incomplete on this node. Expected
+      {{ pacemaker_mail_stack_ldap_url }} and
+      zimbra_require_interprocess_security={{
+      pacemaker_mail_stack_zimbra_require_interprocess_security }}.
+      Got: {{ pacemaker_mail_stack_ldap_current.stdout | default('(unavailable)') }}
+  when:
+    - pacemaker_mail_stack_zimbra_mnt.rc == 0
+    - pacemaker_mail_stack_ldap_current is defined
+    - pacemaker_mail_stack_ldap_current.rc == 0
   tags: [pacemaker, stack, ldap]

@@ -42,6 +42,16 @@
       or (pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout)
   tags: [pacemaker, stack, constraints]
 
+# Group members are created --disabled so they do not start on a Secondary
+# before colocation exists. Enable only after constraints are in place.
+- name: Enable the kin-mail-svc group after constraints
+  ansible.builtin.command:
+    cmd: pcs resource enable {{ pacemaker_mail_stack_group }}
+  run_once: true
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [pacemaker, stack, constraints]
+
 - name: Note that constraints are skipped during a dry-run or already exist
   ansible.builtin.debug:
     msg: >-

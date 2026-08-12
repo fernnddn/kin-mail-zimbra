@@ -20,6 +20,10 @@ all:
     # Override after iSCSI login — role defaults still ship the old lab by-id.
     # iscsi_initiator_sbd_by_id: /dev/disk/by-id/scsi-…
     # sbd_stonith_device: /dev/disk/by-id/scsi-…
+    # Rebuild: Host A is 10.10.40.15 — do NOT reuse old-lab VIP .15.
+    # pacemaker_mail_stack_vip_ip: 10.10.40.16
+    # Partition meta: leave meta-loop empty (no kin-drbd-meta-loop.service).
+    # pacemaker_agents_keep_meta_loop_unit: ""
   children:
     monitoring:
       hosts:

@@ -11,6 +11,19 @@
   when: pacemaker_agents_disable_drbd_service | bool
   tags: [pacemaker, agents, systemd]
 
+# Rebuild uses external meta on a real partition (/dev/sdb2). The old lab used
+# kin-drbd-meta-loop.service (/dev/loop21). Only assert the unit when configured
+# and present — empty/absent is a documented topology difference, not a failure.
+- name: Check whether the DRBD meta-loop unit exists on this host
+  ansible.builtin.command:
+    cmd: systemctl cat {{ pacemaker_agents_keep_meta_loop_unit }}
+  register: pacemaker_agents_meta_loop_cat
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_agents_keep_meta_loop_unit | length > 0
+  tags: [pacemaker, agents, systemd]
+
 - name: Verify the DRBD meta-loop unit stays enabled
   ansible.builtin.command:
     cmd: systemctl is-enabled {{ pacemaker_agents_keep_meta_loop_unit }}
@@ -18,4 +31,20 @@
   changed_when: false
   failed_when: pacemaker_agents_meta_loop_enabled.stdout | trim != "enabled"
   check_mode: false
+  when:
+    - pacemaker_agents_keep_meta_loop_unit | length > 0
+    - pacemaker_agents_meta_loop_cat is defined
+    - pacemaker_agents_meta_loop_cat.rc == 0
+  tags: [pacemaker, agents, systemd]
+
+- name: Note when meta-loop is not used (partition external meta)
+  ansible.builtin.debug:
+    msg: >-
+      {{ pacemaker_agents_keep_meta_loop_unit | default('(unset)') }} is not
+      present — OK when DRBD meta-disk is a real partition (rebuild), unlike
+      the Phase 2 loop-backed meta path.
+  when: >-
+    pacemaker_agents_keep_meta_loop_unit | length == 0
+    or (pacemaker_agents_meta_loop_cat is defined
+        and pacemaker_agents_meta_loop_cat.rc != 0)
   tags: [pacemaker, agents, systemd]
