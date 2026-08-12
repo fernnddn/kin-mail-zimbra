@@ -47,13 +47,13 @@ export default function EulaPage() {
           <pre
             style={{
               whiteSpace: "pre-wrap",
-              background: "#0a0e13",
-              border: "1px solid #2a3542",
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
               borderRadius: 8,
               padding: "0.9rem 1rem",
               maxHeight: 280,
               overflow: "auto",
-              color: "#c5d0dc",
+              color: "#334155",
               fontSize: "0.86rem",
               lineHeight: 1.45,
               margin: "0 0 1rem",

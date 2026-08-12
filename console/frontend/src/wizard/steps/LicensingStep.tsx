@@ -2,10 +2,10 @@ import { useNavigate } from "react-router-dom";
 import {
   Button,
   Err,
+  FieldLabel,
   FieldRow,
   Hint,
   Input,
-  Label,
   Lede,
   NavRow,
   Title,
@@ -25,24 +25,30 @@ export default function LicensingStep() {
     navigate("/wizard/firewall");
   }
 
+  const displaySeats =
+    draft.contracted_seats === "PLACEHOLDER_UNSET" ? "" : draft.contracted_seats;
+
   return (
     <>
-      <Title>Licensing</Title>
+      <Title>Contracted mailboxes</Title>
       <Lede>
-        CONTRACTED_SEATS limits <strong>new</strong> mailbox creation only (quota gate). Password
-        resets and other modify operations are never gated by this value.
+        Optionally set how many mailboxes this customer has purchased. Leave blank to decide later
+        — new mailbox creation stays unlimited until you set a number.
       </Lede>
       <FieldRow>
-        <Label htmlFor="contracted_seats">Contracted mailbox seats</Label>
+        <FieldLabel htmlFor="contracted_seats" optional>
+          Number of contracted mailboxes
+        </FieldLabel>
         <Input
           id="contracted_seats"
-          value={draft.contracted_seats}
-          onChange={(e) => setLocal({ contracted_seats: e.target.value })}
-          placeholder="PLACEHOLDER_UNSET"
+          value={displaySeats}
+          onChange={(e) => setLocal({ contracted_seats: e.target.value || "PLACEHOLDER_UNSET" })}
+          placeholder="Leave blank to set later"
+          inputMode="numeric"
         />
         <Hint>
-          Use PLACEHOLDER_UNSET until the operator confirms the real contracted count. Do not invent
-          a production number here.
+          Optional. Only limits creating <strong>new</strong> mailboxes once a number is set.
+          Password resets and other changes are never blocked by this.
         </Hint>
       </FieldRow>
       <Err>{error}</Err>

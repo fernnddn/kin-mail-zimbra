@@ -48,10 +48,14 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
   background: ${(p) => (p.$active ? theme.accentSoft : "transparent")};
   border: 1px solid ${(p) => (p.$active ? "color-mix(in srgb, " + theme.accent + " 35%, transparent)" : "transparent")};
   font-size: 0.9rem;
+  transition:
+    color ${theme.motion} ease,
+    background ${theme.motion} ease,
+    border-color ${theme.motion} ease;
 
   &:hover {
     color: ${theme.ink};
-    background: ${(p) => (p.$active ? theme.accentSoft : "rgba(255,255,255,0.03)")};
+    background: ${(p) => (p.$active ? theme.accentSoft : "rgba(0, 97, 255, 0.05)")};
   }
 `;
 
@@ -65,7 +69,7 @@ const StepNum = styled.span<{ $active?: boolean; $done?: boolean }>`
   font-weight: 700;
   flex-shrink: 0;
   background: ${(p) =>
-    p.$active ? theme.accent : p.$done ? "rgba(61,154,106,0.25)" : theme.bgPanel};
+    p.$active ? theme.accent : p.$done ? "rgba(5, 150, 105, 0.18)" : theme.bgElev};
   color: ${(p) => (p.$active ? "#fff" : p.$done ? theme.ok : theme.muted)};
   border: 1px solid ${(p) => (p.$active ? theme.accent : theme.line)};
 `;
@@ -100,11 +104,7 @@ const Content = styled.div`
   padding: 1rem 1.5rem 2rem;
   max-width: 760px;
   width: 100%;
-`;
-
-const SaveHint = styled.span`
-  color: ${theme.muted};
-  font-size: 0.78rem;
+  animation: kin-fade-in ${theme.motion} ease-out;
 `;
 
 function currentStepId(pathname: string): StepId {
@@ -114,20 +114,17 @@ function currentStepId(pathname: string): StepId {
 }
 
 export default function WizardLayout() {
-  const { saving, draft } = useWizard();
+  const { loading } = useWizard();
   const location = useLocation();
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
 
   return (
-    <ConsoleChrome
-      subtitle="Setup wizard · draft only (not applied)"
-      hint={<SaveHint>{saving ? "Saving draft…" : draft.updated_at ? "Draft saved" : ""}</SaveHint>}
-    >
+    <ConsoleChrome setupMode>
       <Body>
         <Sidebar>
-          <SideTitle>Deployment steps</SideTitle>
+          <SideTitle>Setup steps</SideTitle>
           {WIZARD_STEPS.map((step, idx) => {
             const done = idx < activeIdx;
             const isActive = step.id === active;
@@ -152,8 +149,8 @@ export default function WizardLayout() {
             {" / "}
             <strong>{activeDef.crumb}</strong>
           </CrumbBar>
-          <Content>
-            <Outlet />
+          <Content key={active}>
+            {loading ? <p style={{ color: theme.muted }}>Loading draft…</p> : <Outlet />}
           </Content>
         </Main>
       </Body>

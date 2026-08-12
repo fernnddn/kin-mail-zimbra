@@ -14,11 +14,47 @@ body,
 
 body {
   margin: 0;
-  background: #0e1318;
-  color: #e7eef6;
+  background: #f5f7fb;
+  color: #0f172a;
 }
 
 code {
   font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
   font-size: 0.9em;
+}
+
+@keyframes kin-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes kin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kin-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.kin-fade-in {
+  animation: kin-fade-in 180ms ease-out;
+}
+
+.kin-scale-in {
+  animation: kin-scale-in 180ms ease-out;
 }

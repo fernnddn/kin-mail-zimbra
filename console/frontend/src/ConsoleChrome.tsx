@@ -21,7 +21,7 @@ const Top = styled.header`
   gap: 1rem;
   padding: 0.85rem 1.25rem;
   border-bottom: 1px solid ${theme.line};
-  background: color-mix(in srgb, ${theme.bgElev} 88%, transparent);
+  background: color-mix(in srgb, ${theme.bgElev} 92%, transparent);
 `;
 
 const BrandMark = styled.div`
@@ -50,6 +50,7 @@ const NavLinks = styled.nav`
     color: ${theme.muted};
     text-decoration: none;
     font-size: 0.85rem;
+    transition: color ${theme.motion} ease;
   }
 
   a:hover {
@@ -61,10 +62,13 @@ export function ConsoleChrome({
   subtitle,
   hint,
   children,
+  setupMode = false,
 }: {
-  subtitle: string;
+  subtitle?: string;
   hint?: ReactNode;
   children: ReactNode;
+  /** Initial wizard setup: brand only — hide nav / account chrome until deploy is done. */
+  setupMode?: boolean;
 }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -75,29 +79,31 @@ export function ConsoleChrome({
       <Top>
         <BrandMark>
           <strong>KIN Mail Console</strong>
-          <span>{subtitle}</span>
+          {!setupMode && subtitle ? <span>{subtitle}</span> : null}
         </BrandMark>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem", flexWrap: "wrap" }}>
-          {hint}
-          <NavLinks>
-            <Link to="/wizard">Wizard</Link>
-            <Link to="/mailboxes">Mailboxes</Link>
-            {isSuper && <Link to="/users">Users</Link>}
-            {isSuper && <Link to="/audit">Audit log</Link>}
-          </NavLinks>
-          <Mono style={{ color: theme.muted }}>
-            {user?.username}
-            {user?.role_label ? ` · ${user.role_label}` : ""}
-          </Mono>
-          <Button
-            type="button"
-            variant="ghost"
-            style={{ padding: "0.4rem 0.75rem", fontSize: "0.85rem" }}
-            onClick={() => void logout().then(() => navigate("/login"))}
-          >
-            Sign out
-          </Button>
-        </div>
+        {!setupMode ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.85rem", flexWrap: "wrap" }}>
+            {hint}
+            <NavLinks>
+              <Link to="/wizard">Wizard</Link>
+              <Link to="/mailboxes">Mailboxes</Link>
+              {isSuper && <Link to="/users">Users</Link>}
+              {isSuper && <Link to="/audit">Audit log</Link>}
+            </NavLinks>
+            <Mono style={{ color: theme.muted }}>
+              {user?.username}
+              {user?.role_label ? ` · ${user.role_label}` : ""}
+            </Mono>
+            <Button
+              type="button"
+              variant="ghost"
+              style={{ padding: "0.4rem 0.75rem", fontSize: "0.85rem" }}
+              onClick={() => void logout().then(() => navigate("/login"))}
+            >
+              Sign out
+            </Button>
+          </div>
+        ) : null}
       </Top>
       {children}
     </Frame>

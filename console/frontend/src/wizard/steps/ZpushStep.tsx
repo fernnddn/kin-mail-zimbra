@@ -14,10 +14,10 @@ export default function ZpushStep() {
 
   return (
     <>
-      <Title>Z-Push ActiveSync</Title>
+      <Title>Email on phones</Title>
       <Lede>
-        Not every deployment needs mobile ActiveSync. Full install skips <code>07-zpush.sh</code>{" "}
-        when disabled (ZPUSH_ENABLED).
+        Choose whether staff can sync mail on mobile devices (ActiveSync). You can skip this if
+        phones are not needed for this customer.
       </Lede>
       <ChoiceGrid>
         <Choice
@@ -25,16 +25,16 @@ export default function ZpushStep() {
           selected={draft.zpush_enabled === true}
           onClick={() => setLocal({ zpush_enabled: true })}
         >
-          <strong>Enable Z-Push</strong>
-          <span>Install ActiveSync for mobile clients during full install.</span>
+          <strong>Enable mobile email access</strong>
+          <span>Staff can add company mail on phones and tablets.</span>
         </Choice>
         <Choice
           type="button"
           selected={draft.zpush_enabled === false}
           onClick={() => setLocal({ zpush_enabled: false })}
         >
-          <strong>Skip Z-Push</strong>
-          <span>Leave ActiveSync out of this deployment.</span>
+          <strong>Skip mobile email</strong>
+          <span>Web and desktop mail only for this deployment.</span>
         </Choice>
       </ChoiceGrid>
       <Err>{error}</Err>

@@ -45,11 +45,11 @@ export const WIZARD_STEPS: StepDef[] = [
   { id: "domain", label: "Domain & mail", crumb: "Domain" },
   { id: "tls", label: "TLS", crumb: "TLS" },
   { id: "hybrid", label: "Hybrid auth", crumb: "Hybrid auth" },
-  { id: "zpush", label: "Z-Push", crumb: "Z-Push" },
-  { id: "licensing", label: "Licensing", crumb: "Licensing" },
-  { id: "firewall", label: "Firewall admin IPs", crumb: "Firewall" },
+  { id: "zpush", label: "Mobile email", crumb: "Mobile email" },
+  { id: "licensing", label: "Mailbox seats", crumb: "Mailbox seats" },
+  { id: "firewall", label: "Admin access (optional)", crumb: "Admin access" },
   { id: "review", label: "Review", crumb: "Review" },
-  { id: "deploy", label: "Perform deployment", crumb: "Deploy" },
+  { id: "deploy", label: "Deploy", crumb: "Deploy" },
 ];
 
 export function emptyDraft(): WizardDraft {
