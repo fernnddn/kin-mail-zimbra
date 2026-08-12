@@ -39,7 +39,9 @@
 
 - name: Add the new node to Corosync membership
   ansible.builtin.command:
-    cmd: pcs cluster node add {{ cluster_add_host_new_name }}
+    cmd: >-
+      pcs cluster node add {{ cluster_add_host_new_name }}
+      addr={{ cluster_add_host_new_address }}
   # SAFETY: never check_mode: false — rewrites live corosync.conf / authkeys.
   when:
     - not ansible_check_mode

@@ -1,0 +1,39 @@
+---
+# Corosync knet ring0_addr must be the node LAN IP, not the Zimbra service
+# hostname. Active-passive HA remaps that hostname to 127.0.0.1 (hosts.yml);
+# if ring0_addr still used the hostname, membership would follow loopback.
+#
+# SAFETY: never check_mode: false on the reload. replace is check-mode safe.
+
+- name: Point each Corosync ring0_addr at the inventory LAN IP
+  ansible.builtin.replace:
+    path: /etc/corosync/corosync.conf
+    regexp: '^(\s*)ring0_addr:\s*{{ item | regex_escape }}\s*$'
+    replace: '\1ring0_addr: {{ hostvars[item].ansible_host }}'
+  loop: "{{ groups['mail_nodes'] }}"
+  loop_control:
+    label: "{{ item }} -> {{ hostvars[item].ansible_host | default('(no ansible_host)') }}"
+  register: pacemaker_mail_stack_corosync_replace
+  when: hostvars[item].ansible_host is defined
+  tags: [pacemaker, stack, corosync]
+
+- name: Reload Corosync after ring0_addr changes
+  ansible.builtin.command:
+    cmd: pcs cluster reload corosync
+  # SAFETY: never check_mode: false — live membership reload.
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_corosync_replace is changed
+  run_once: true
+  tags: [pacemaker, stack, corosync]
+
+- name: Assert Corosync ring0_addr is not the Zimbra service hostname
+  ansible.builtin.command:
+    cmd: grep -E '^\s*ring0_addr:' /etc/corosync/corosync.conf
+  register: pacemaker_mail_stack_corosync_ring0
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_zimbra_service_hostname
+    in pacemaker_mail_stack_corosync_ring0.stdout
+  check_mode: false
+  tags: [pacemaker, stack, corosync]

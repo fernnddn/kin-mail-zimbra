@@ -3,7 +3,7 @@ galaxy_info:
   role_name: pacemaker_mail_stack
   description: >-
     Promotable kin-drbd-clone, kin-mail-svc group (fs/zimbra/vip), constraints,
-    and LDAP localhost HA fix (task 2.7).
+    LDAP localhost HA fix, and active-passive nginx/memcached loopback remap.
   license: proprietary
   min_ansible_version: "2.14"
 dependencies: []

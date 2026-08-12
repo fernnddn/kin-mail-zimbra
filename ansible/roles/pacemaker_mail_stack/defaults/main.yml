@@ -16,6 +16,13 @@ pacemaker_mail_stack_vip_cidr: "24"
 pacemaker_mail_stack_vip_nic: ens33
 pacemaker_mail_stack_prefer_node: mail.gits-it.site
 pacemaker_mail_stack_prefer_score: 50
+# Shared Zimbra server identity (LDAP cn / zimbraServiceHostname). Active-passive
+# HA remaps this name to 127.0.0.1 on every mail node so nginx/memcached/zmlookup
+# talk to the co-located instance. Corosync ring0_addr must be IPs first.
+pacemaker_mail_stack_zimbra_service_hostname: mail.gits-it.site
+pacemaker_mail_stack_zimbra_service_shortname: mail
+pacemaker_mail_stack_memcached_client_server: 127.0.0.1:11211
+pacemaker_mail_stack_dnsmasq_conf: /etc/dnsmasq.d/kin-mail.conf
 # Lab HA LDAP bind (task 2.7 Stage C blocker fix) — shared store on DRBD.
 pacemaker_mail_stack_ldap_url: ldap://127.0.0.1:389
 pacemaker_mail_stack_ldap_keys:

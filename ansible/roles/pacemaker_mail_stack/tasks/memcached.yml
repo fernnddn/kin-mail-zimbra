@@ -1,0 +1,41 @@
+---
+# mailboxd memcached client list (LDAP, shared on DRBD). nginx memcached
+# servers are NOT this attribute — those come from zmproxyconfgen resolving
+# zimbraServiceHostname (see hosts.yml). Set the client list anyway so
+# mailboxd does not depend on that hostname resolving to a peer LAN IP.
+
+- name: Check whether /opt/zimbra is mounted for memcached LDAP
+  ansible.builtin.command:
+    cmd: findmnt -n {{ pacemaker_mail_stack_fs_directory }}
+  register: pacemaker_mail_stack_memcached_mnt
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [pacemaker, stack, memcached]
+
+- name: Read zimbraMemcachedClientServerList when the mount is available
+  ansible.builtin.command:
+    cmd: >-
+      su - zimbra -c "zmprov gs {{ pacemaker_mail_stack_zimbra_service_hostname }}
+      zimbraMemcachedClientServerList"
+  register: pacemaker_mail_stack_memcached_current
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: pacemaker_mail_stack_memcached_mnt.rc == 0
+  tags: [pacemaker, stack, memcached]
+
+- name: Set zimbraMemcachedClientServerList to loopback
+  ansible.builtin.command:
+    cmd: >-
+      su - zimbra -c "zmprov ms {{ pacemaker_mail_stack_zimbra_service_hostname }}
+      zimbraMemcachedClientServerList {{ pacemaker_mail_stack_memcached_client_server }}"
+  # SAFETY: never check_mode: false — writes shared LDAP on DRBD.
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_memcached_mnt.rc == 0
+    - pacemaker_mail_stack_memcached_current is defined
+    - pacemaker_mail_stack_memcached_current.rc == 0
+    - pacemaker_mail_stack_memcached_client_server
+      not in pacemaker_mail_stack_memcached_current.stdout
+  tags: [pacemaker, stack, memcached]

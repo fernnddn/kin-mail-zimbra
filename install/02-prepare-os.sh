@@ -22,8 +22,12 @@ ok "hostname : $(hostname -f)"
 ok "timezone : ${TIMEZONE}"
 
 # --- 2. /etc/hosts -----------------------------------------------------------
-# The FQDN must resolve to the LAN address. Ubuntu's default 127.0.1.1 entry
-# makes the installer bind services to loopback, so it has to go.
+# The FQDN must resolve to the LAN address during Zimbra install. Ubuntu's
+# default 127.0.1.1 entry makes the installer bind services to loopback, so
+# it has to go. After HA is wired, pacemaker_mail_stack remaps the *shared*
+# Zimbra service hostname to 127.0.0.1 on every mail node (nginx/memcached
+# co-located with mailboxd). That remap requires Corosync ring0_addr to be
+# LAN IPs first — do not point the FQDN at loopback before cluster setup.
 say "2. /etc/hosts"
 [ -f /etc/hosts.kin-backup ] || cp /etc/hosts /etc/hosts.kin-backup
 cat > /etc/hosts <<EOF

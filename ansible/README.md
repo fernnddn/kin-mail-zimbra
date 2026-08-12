@@ -27,6 +27,15 @@ nickname delete). Must not disturb kin-zimbra/VIP/DRBD Primary.
 **OS hardening scope:** `os_hardening` is fail2ban + unattended-upgrades only
 (per-machine). It does not write COS/cleartext/TLS/SMTP LDAP attrs.
 
+**Active-passive proxy:** `pacemaker_mail_stack` remaps the shared Zimbra
+service hostname to `127.0.0.1` in `/etc/hosts` (and dnsmasq) so nginx /
+memcached / zmlookup talk to the co-located instance on whichever node is
+Promoted. Corosync `ring0_addr` is forced to inventory `ansible_host` IPs
+first — the hostname cannot stay as the cluster transport address. Do not
+set LDAP `zimbraServiceHostname` to `127.0.0.1` (that is also nginx
+`server_name`). After a first remap, regenerate proxy on the Promoted node
+(`zmproxyctl restart`) so baked-in lookup/memcached IPs update.
+
 ## Layout
 
 ```

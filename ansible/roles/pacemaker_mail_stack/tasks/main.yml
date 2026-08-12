@@ -3,6 +3,18 @@
   ansible.builtin.import_tasks: ldap.yml
   tags: [pacemaker, stack, ldap]
 
+- name: Include the Corosync ring0_addr IP steps
+  ansible.builtin.import_tasks: corosync_addrs.yml
+  tags: [pacemaker, stack, corosync]
+
+- name: Include the Zimbra service-hostname loopback remap
+  ansible.builtin.import_tasks: hosts.yml
+  tags: [pacemaker, stack, hosts]
+
+- name: Include the mailboxd memcached loopback LDAP steps
+  ansible.builtin.import_tasks: memcached.yml
+  tags: [pacemaker, stack, memcached]
+
 - name: Include the promotable DRBD resource steps
   ansible.builtin.import_tasks: drbd_clone.yml
   tags: [pacemaker, stack, drbd]
