@@ -303,9 +303,11 @@ export default function DeployStep() {
               >
                 Deploy
               </Button>
-              <Button type="button" variant="ghost" onClick={openLogsTab}>
-                View logs
-              </Button>
+              {!showProgress && (
+                <Button type="button" variant="ghost" onClick={openLogsTab}>
+                  View logs
+                </Button>
+              )}
             </ActionsRow>
             {!applyDone && !showProgress && (
               <Hint style={{ marginTop: "0.75rem", marginBottom: 0 }}>
@@ -342,14 +344,6 @@ export default function DeployStep() {
             )}
           </Button>
         </StepCard>
-      )}
-
-      {!showProgress && canOps && (
-        <ActionsRow>
-          <Button type="button" variant="ghost" onClick={openLogsTab}>
-            View logs
-          </Button>
-        </ActionsRow>
       )}
 
       {pipelineBusy && (

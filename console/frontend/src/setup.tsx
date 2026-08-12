@@ -11,11 +11,16 @@ import { api } from "./api";
 
 type SetupStatus = {
   deployed: boolean;
+  busy?: boolean;
+  install_in_progress?: boolean;
   marker: string;
+  zimbra_tree_present?: boolean;
 };
 
 type SetupCtx = {
   deployed: boolean;
+  /** Full-install (or stage 03) appears to be running on this host. */
+  installInProgress: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
 };
@@ -23,16 +28,19 @@ type SetupCtx = {
 const Ctx = createContext<SetupCtx | null>(null);
 
 export function SetupProvider({ children }: { children: ReactNode }) {
-  const [deployed, setDeployed] = useState(true); // fail closed until loaded
+  // Fail closed until loaded: require login if we cannot tell (safer for post-deploy).
+  const [deployed, setDeployed] = useState(true);
+  const [installInProgress, setInstallInProgress] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const st = await api<SetupStatus>("/api/setup/status");
       setDeployed(Boolean(st.deployed));
+      setInstallInProgress(Boolean(st.install_in_progress || st.busy));
     } catch {
-      // If status cannot be read, require login (safer default).
       setDeployed(true);
+      setInstallInProgress(false);
     } finally {
       setLoading(false);
     }
@@ -40,11 +48,15 @@ export function SetupProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
+    const id = window.setInterval(() => {
+      void refresh();
+    }, 5000);
+    return () => window.clearInterval(id);
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ deployed, loading, refresh }),
-    [deployed, loading, refresh],
+    () => ({ deployed, installInProgress, loading, refresh }),
+    [deployed, installInProgress, loading, refresh],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -54,4 +66,9 @@ export function useSetup(): SetupCtx {
   const ctx = useContext(Ctx);
   if (!ctx) throw new Error("useSetup outside SetupProvider");
   return ctx;
+}
+
+/** Where to send the operator after login / EULA / bare /wizard. */
+export function wizardHomePath(installInProgress: boolean): string {
+  return installInProgress ? "/wizard/deploy" : "/wizard/topology";
 }

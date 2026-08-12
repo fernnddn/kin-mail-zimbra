@@ -8,6 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { api } from "../api";
+import { useSetup } from "../setup";
+import { formatDeployLog } from "./ansi";
 import { useWizard } from "./WizardContext";
 import {
   emptyInstallProgress,
@@ -69,6 +72,7 @@ function looksLikeDeadmanArmed(chunk: string): boolean {
 
 export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { draft, save } = useWizard();
+  const { installInProgress } = useSetup();
   const [log, setLog] = useState("# Deployment activity\n");
   const [message, setMessage] = useState("");
   const [okMessage, setOkMessage] = useState("");
@@ -81,6 +85,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const pipelineEsRef = useRef<EventSource | null>(null);
   const cancelEsRef = useRef<EventSource | null>(null);
   const logBufRef = useRef("# Deployment activity\n");
+  const localStreamRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -90,6 +95,42 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       cancelEsRef.current = null;
     };
   }, []);
+
+  // Hydrate progress from server transcript when this tab did not start the SSE
+  // (e.g. operator opened a fresh tab while full-install is already running).
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      if (localStreamRef.current) return;
+      try {
+        const res = await api<{ text: string; install_in_progress?: boolean }>(
+          "/api/wizard/deploy/last-log",
+        );
+        if (cancelled) return;
+        const cleaned = formatDeployLog(res.text || "");
+        if (!cleaned.trim()) return;
+        logBufRef.current = cleaned;
+        setLog(cleaned);
+        setInstallProgress(parseInstallProgress(cleaned));
+        if (res.install_in_progress || installInProgress) {
+          setPipelineBusy(true);
+        } else {
+          const p = parseInstallProgress(cleaned);
+          if (p.complete || p.failed) setPipelineBusy(false);
+        }
+      } catch {
+        /* quiet — Deploy page still usable */
+      }
+    }
+    void poll();
+    const id = window.setInterval(() => {
+      void poll();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [installInProgress]);
 
   const append = useCallback((chunk: string) => {
     logBufRef.current += chunk;
@@ -165,10 +206,15 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
 
   const openStream = useCallback(
     (action: DeployActionId, onFinished: (exit?: number) => void) => {
+      localStreamRef.current = true;
       const es = new EventSource(
         `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}`,
       );
-      attachStream(action, es, onFinished);
+      const wrapped = (exit?: number) => {
+        localStreamRef.current = false;
+        onFinished(exit);
+      };
+      attachStream(action, es, wrapped);
       return es;
     },
     [attachStream],

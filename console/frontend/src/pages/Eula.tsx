@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useEula } from "../eula";
-import { useSetup } from "../setup";
+import { useSetup, wizardHomePath } from "../setup";
 import {
   Brand,
   Button,
@@ -15,13 +15,14 @@ import {
 
 export default function EulaPage() {
   const { loading, accepted, title, body, accept } = useEula();
-  const { deployed, loading: setupLoading } = useSetup();
+  const { deployed, installInProgress, loading: setupLoading } = useSetup();
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   if (!loading && !setupLoading && accepted) {
-    return <Navigate to={deployed ? "/login" : "/wizard"} replace />;
+    if (deployed) return <Navigate to="/login" replace />;
+    return <Navigate to={wizardHomePath(installInProgress)} replace />;
   }
 
   async function onSubmit(e: FormEvent) {

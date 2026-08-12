@@ -24,7 +24,10 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/kin-mail-console /run/kin-mail
-ReadOnlyPaths=/etc/kin-mail-console /opt/kin-mail-console
+ReadOnlyPaths=/etc/kin-mail-console /opt/kin-mail-console /var/log/kin-mail
+# Allow listing processes so /api/setup/status can detect an in-flight install.
+ProtectProc=default
+ProcSubset=all
 CapabilityBoundingSet=
 AmbientCapabilities=
 LockPersonality=true

@@ -57,12 +57,50 @@ def health() -> dict[str, str]:
 
 @app.get("/api/setup/status")
 def setup_status() -> dict[str, object]:
-    """Public: whether this host already has a mail deployment (/opt/zimbra)."""
-    from kin_privhelper.deploy_state import ZIMBRA_ROOT, is_mail_deployed
+    """Public: setup gate + whether a full install is currently running."""
+    from kin_privhelper.deploy_state import (
+        ZIMBRA_ROOT,
+        full_install_in_progress,
+        is_mail_deployed,
+    )
 
+    installing = full_install_in_progress()
     return {
+        # Auth gate: false during first-time setup AND while full-install runs
+        # (even after /opt/zimbra appears mid-install).
         "deployed": is_mail_deployed(),
+        "busy": installing,
+        "install_in_progress": installing,
         "marker": str(ZIMBRA_ROOT),
+        "zimbra_tree_present": ZIMBRA_ROOT.exists(),
+    }
+
+
+@app.get("/api/wizard/deploy/last-log")
+def wizard_deploy_last_log(
+    _actor: auth.WizardActor = Depends(auth.wizard_actor),
+) -> dict[str, object]:
+    """Read-only last deploy transcript (no privhelper — safe during busy install)."""
+    from kin_privhelper.deploy_state import DEPLOY_LAST_LOG, full_install_in_progress
+
+    text = ""
+    missing = not DEPLOY_LAST_LOG.is_file()
+    if not missing:
+        try:
+            text = DEPLOY_LAST_LOG.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"cannot read deploy log: {exc}",
+            ) from exc
+    return {
+        "path": str(DEPLOY_LAST_LOG),
+        "missing": missing,
+        "text": text,
+        "install_in_progress": full_install_in_progress(),
+        "mtime": (
+            DEPLOY_LAST_LOG.stat().st_mtime if DEPLOY_LAST_LOG.is_file() else None
+        ),
     }
 
 

@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useEula } from "../eula";
-import { useSetup } from "../setup";
+import { useSetup, wizardHomePath } from "../setup";
 import {
   Brand,
   Button,
@@ -18,16 +18,20 @@ import {
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
   const { accepted, loading: eulaLoading } = useEula();
-  const { deployed, loading: setupLoading } = useSetup();
+  const { deployed, installInProgress, loading: setupLoading } = useSetup();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (!eulaLoading && !accepted) return <Navigate to="/eula" replace />;
-  // Pre-deploy: no login gate — send operators straight to the wizard.
-  if (!setupLoading && !deployed && !user) return <Navigate to="/wizard" replace />;
-  if (!loading && user) return <Navigate to="/wizard" replace />;
+  // Pre-deploy / mid-install: no login gate — send operators to the right wizard step.
+  if (!setupLoading && !deployed && !user) {
+    return <Navigate to={wizardHomePath(installInProgress)} replace />;
+  }
+  if (!loading && !setupLoading && user) {
+    return <Navigate to={wizardHomePath(installInProgress)} replace />;
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
-import { SetupProvider, useSetup } from "./setup";
+import { SetupProvider, useSetup, wizardHomePath } from "./setup";
 import AuditLogPage from "./pages/AuditLog";
 import CreateMailboxPage from "./pages/CreateMailbox";
 import EulaPage from "./pages/Eula";
@@ -54,13 +54,23 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Wizard only: skip login before mail is deployed (/opt/zimbra absent). */
+/** Wizard only: skip login before setup is complete (incl. mid full-install). */
 function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
   const { deployed, loading: setupLoading } = useSetup();
   const { user, loading: authLoading } = useAuth();
   if (setupLoading || authLoading) return <LoadingShell text="Checking setup…" />;
   if (deployed && !user) return <Navigate to="/login" replace />;
   return <>{children}</>;
+}
+
+/** Bare /wizard → Deploy when install is running, else topology. */
+function WizardIndexRedirect() {
+  const { installInProgress, loading } = useSetup();
+  if (loading) return <LoadingShell text="Checking setup…" />;
+  const dest = wizardHomePath(installInProgress);
+  // Nested route: relative path under /wizard
+  const rel = dest.replace(/^\/wizard\/?/, "") || "topology";
+  return <Navigate to={rel} replace />;
 }
 
 export default function App() {
@@ -120,7 +130,7 @@ export default function App() {
                 </RequireEula>
               }
             >
-              <Route index element={<Navigate to="topology" replace />} />
+              <Route index element={<WizardIndexRedirect />} />
               <Route path="topology" element={<TopologyStep />} />
               <Route path="domain" element={<DomainStep />} />
               <Route path="tls" element={<TlsStep />} />

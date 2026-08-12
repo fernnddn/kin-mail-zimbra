@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import grp
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol as proto
+from .deploy_state import DEPLOY_LAST_LOG
 
 # Deploy tree on appliance (kin-mail.sh default). Override via env for lab clones.
 DEPLOY_DIR = Path(os.environ.get("KIN_MAIL_DEPLOY_DIR", "/opt/kin-mail-deploy"))
@@ -32,11 +34,6 @@ FIREWALL_CANDIDATES = (
 CREATE_MAILBOX_CANDIDATES = (
     "install/08-create-mailbox.sh",
     "08-create-mailbox.sh",
-)
-
-# Last console deploy/install transcript (survives browser refresh / new tabs).
-DEPLOY_LAST_LOG = Path(
-    os.environ.get("KIN_DEPLOY_LAST_LOG", "/var/log/kin-mail/deploy-last.log")
 )
 
 
@@ -176,7 +173,11 @@ async def _stream_subprocess(
                 f"\n=== {' '.join(argv)} @ {datetime.now(timezone.utc).isoformat()} ===\n"
             )
             log_fh.flush()
-            os.chmod(transcript, 0o640)
+            try:
+                os.chmod(transcript, 0o640)
+                os.chown(transcript, -1, grp.getgrnam("kin-console").gr_gid)
+            except (OSError, KeyError):
+                pass
         except OSError:
             log_fh = None
 

@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
+import { useSetup } from "../setup";
 import { theme } from "../styles/theme";
 import { useWizard } from "./WizardContext";
 import { WIZARD_STEPS, stepIndex, type StepId } from "./types";
@@ -125,11 +126,18 @@ function currentStepId(pathname: string): StepId {
 
 export default function WizardLayout() {
   const { loading } = useWizard();
+  const { installInProgress } = useSetup();
   const location = useLocation();
   const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
+  const isDeploy = /\/wizard\/deploy\/?$/.test(location.pathname) || isDeployLogs;
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
+
+  // While full-install runs, keep the operator on Deploy (not Topology / other steps).
+  if (installInProgress && !isDeploy) {
+    return <Navigate to="/wizard/deploy" replace />;
+  }
 
   // Full-screen log viewer (often opened in a new browser tab).
   if (isDeployLogs) {
