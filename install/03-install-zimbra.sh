@@ -102,10 +102,12 @@ ok "Extracted to $ZDIR"
 # Maldua FOSS install.sh (util/utilfunc.sh) for Ubuntu does NOT use
 # files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is now 404).
 # It fetches key 9BE6ED79 from hkp://keyserver.ubuntu.com:80 — which needs a
-# working dirmngr + /root/.gnupg. Under privhelperd PrivateTmp that often fails
-# with "No dirmngr" / missing .gnupg, and the installer exits while our driver
-# keeps sleeping. Pre-seed the same key via the Ubuntu keyserver HTTPS API
-# (no dirmngr), matching the fingerprint install.sh checks:
+# working dirmngr + writable GNUPGHOME. Console Deploy runs under
+# kin-mail-privhelperd with ProtectHome=yes (so /root is inaccessible) and
+# PrivateTmp=yes; gpg then dies with "can't create directory '/root/.gnupg'"
+# and install.sh exits while our driver used to sleep forever.
+# Pre-seed the same key via the Ubuntu keyserver HTTPS API (no dirmngr), with
+# GNUPGHOME under /tmp, matching the fingerprint install.sh checks:
 #   254F9170B966D193D6BAD300D5CEF8BF9BE6ED79
 # (signing subkey 5234D2B73B6996C7 is the Mar-2025 packaging update — same cert).
 ZIMBRA_APT_FPR="254F9170B966D193D6BAD300D5CEF8BF9BE6ED79"
@@ -113,14 +115,22 @@ ZIMBRA_APT_KEYRING="/etc/apt/trusted.gpg.d/zimbra.gpg"
 # Prefer long-form search; short id 9BE6ED79 is the historical key id.
 ZIMBRA_APT_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${ZIMBRA_APT_FPR}"
 
+# Writable gnupg home for ProtectHome=yes (must stay set for install.sh in tmux).
+if [ -z "${GNUPGHOME:-}" ] || [ ! -d "${GNUPGHOME}" ]; then
+  GNUPGHOME=$(mktemp -d /tmp/kin-gnupghome.XXXXXX)
+  chmod 700 "$GNUPGHOME"
+fi
+export GNUPGHOME
+
 ensure_zimbra_ubuntu_gpg_key() {
-  local tmp_asc tmp_kr
+  local tmp_asc tmp_kr gpg_err
   say "1b. Ensuring Zimbra Ubuntu packaging GPG key"
   info "Source: Ubuntu keyserver HTTPS (not files.zimbra.com/ZCSKeys — that tree 404s)"
   info "Expected fingerprint: ${ZIMBRA_APT_FPR}"
+  info "GNUPGHOME=${GNUPGHOME} (required when ProtectHome blocks /root/.gnupg)"
 
   if [ -f "$ZIMBRA_APT_KEYRING" ] \
-    && gpg --list-keys --keyring "$ZIMBRA_APT_KEYRING" 2>/dev/null \
+    && gpg --batch --no-default-keyring --keyring "$ZIMBRA_APT_KEYRING" --list-keys 2>/dev/null \
          | grep -qw "$ZIMBRA_APT_FPR"; then
     ok "Key already present in ${ZIMBRA_APT_KEYRING}"
     return 0
@@ -129,42 +139,50 @@ ensure_zimbra_ubuntu_gpg_key() {
   command -v curl >/dev/null || { fail "curl required to fetch packaging GPG key"; exit 1; }
   command -v gpg >/dev/null || { fail "gpg required to import packaging GPG key"; exit 1; }
 
-  # Prime gnupg home so later install.sh keyserver attempts (if any) are less brittle.
-  mkdir -p /root/.gnupg
-  chmod 700 /root/.gnupg
-  gpg --batch --list-keys >/dev/null 2>&1 || true
-
-  tmp_asc=$(mktemp /tmp/kin-zimbra-gpg.XXXXXX.asc)
-  tmp_kr=$(mktemp /tmp/kin-zimbra-gpg.XXXXXX.kbx)
+  tmp_asc=$(mktemp "${TMPDIR:-/tmp}/kin-zimbra-gpg.XXXXXX.asc")
+  tmp_kr=$(mktemp "${TMPDIR:-/tmp}/kin-zimbra-gpg.XXXXXX.krring")
   rm -f "$tmp_kr"
+  gpg_err=$(mktemp "${TMPDIR:-/tmp}/kin-zimbra-gpg.XXXXXX.err")
   if ! curl -fsSL -m 60 -o "$tmp_asc" "$ZIMBRA_APT_KEY_URL"; then
-    rm -f "$tmp_asc"
+    rm -f "$tmp_asc" "$gpg_err"
     fail "Could not download Zimbra packaging GPG key from:"
     info "  ${ZIMBRA_APT_KEY_URL}"
     info "Fix network/DNS to keyserver.ubuntu.com, then re-run Deploy."
     exit 1
   fi
   if ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$tmp_asc"; then
-    rm -f "$tmp_asc"
+    rm -f "$tmp_asc" "$gpg_err"
     fail "GPG key download was not a PGP public key (URL may have moved):"
     info "  ${ZIMBRA_APT_KEY_URL}"
     exit 1
   fi
-  if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --import "$tmp_asc" >/dev/null 2>&1; then
-    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
-    fail "gpg --import failed for Zimbra packaging key"
+  if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --import "$tmp_asc" \
+        >/dev/null 2>"$gpg_err"; then
+    fail "gpg --import failed for Zimbra packaging key (GNUPGHOME=${GNUPGHOME})"
+    info "  URL: ${ZIMBRA_APT_KEY_URL}"
+    sed 's/^/    /' "$gpg_err" | tail -n 20
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
     exit 1
   fi
   if ! gpg --batch --no-default-keyring --keyring "$tmp_kr" --list-keys 2>/dev/null \
        | grep -qw "$ZIMBRA_APT_FPR"; then
-    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
     fail "Downloaded key does not contain expected fingerprint ${ZIMBRA_APT_FPR}"
+    info "  URL: ${ZIMBRA_APT_KEY_URL}"
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
     exit 1
   fi
   mkdir -p "$(dirname "$ZIMBRA_APT_KEYRING")"
+  # Binary keyring path install.sh checks (Signed-By + --list-keys --keyring).
+  # gpg refuses --export --output when the destination already exists.
+  rm -f "$ZIMBRA_APT_KEYRING"
   gpg --batch --no-default-keyring --keyring "$tmp_kr" --export --output "$ZIMBRA_APT_KEYRING"
   chmod 644 "$ZIMBRA_APT_KEYRING"
-  rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~"
+  rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
+  if ! gpg --batch --no-default-keyring --keyring "$ZIMBRA_APT_KEYRING" --list-keys 2>/dev/null \
+       | grep -qw "$ZIMBRA_APT_FPR"; then
+    fail "Installed ${ZIMBRA_APT_KEYRING} but fingerprint check failed"
+    exit 1
+  fi
   ok "Installed packaging key → ${ZIMBRA_APT_KEYRING}"
 }
 
@@ -267,7 +285,9 @@ tmux new-session -d -s "$SESS" -x 200 -y 50
 # box is $LOG (mode 0600, scrubbed). Do not widen pane access (e.g. shared
 # read-only attach) without restoring pane-level redaction.
 tmux pipe-pane -t "$SESS" -o "$REDACTOR | tee -a $LOG"
-tmux send-keys -t "$SESS" "cd $ZDIR && ./install.sh --platform-override --skip-activation-check" Enter
+# Export GNUPGHOME into the pane so install.sh's gpg --list-keys/--recv-keys
+# does not try to create /root/.gnupg under ProtectHome=yes.
+tmux send-keys -t "$SESS" "export GNUPGHOME=$(printf %q "$GNUPGHOME"); cd $ZDIR && ./install.sh --platform-override --skip-activation-check" Enter
 
 send()   { tmux send-keys -t "$SESS" "$1" Enter; sleep "${2:-2}"; }
 scr()    { tmux capture-pane -p -t "$SESS" | grep -v '^[[:space:]]*$'; }
