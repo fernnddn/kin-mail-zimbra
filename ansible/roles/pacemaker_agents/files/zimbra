@@ -6,11 +6,18 @@ meta_data() {
 	cat <<'META'
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="zimbra" version="1.0">
-<version>1.0</version>
+<resource-agent name="zimbra" version="1.1">
+<version>1.1</version>
 <longdesc lang="en">
 Starts/stops/monitors Zimbra Collaboration via zmcontrol.
 Run only where /opt/zimbra is mounted (DRBD Primary + Filesystem RA).
+
+Cold start after DRBD promote: slapd is not running. zmcontrol's
+isLdapLocal() is false when ldap_url is ldap://127.0.0.1:389 (it only
+matches when the URL contains zimbra_server_hostname), so zmcontrol
+will not start ldap first and then fails getEnabledServices. This
+agent starts /opt/zimbra/bin/ldap and waits until it is ready before
+zmcontrol start.
 </longdesc>
 <shortdesc lang="en">Zimbra zmcontrol wrapper</shortdesc>
 <parameters/>
@@ -55,15 +62,42 @@ zimbra_monitor() {
 	return $OCF_SUCCESS
 }
 
+zimbra_ldap_status() {
+	su - ${ZIMBRA_USER} -c "/opt/zimbra/bin/ldap status" >/dev/null 2>&1
+}
+
+# zmcontrol will not start slapd when ldap_url is 127.0.0.1 (isLdapLocal=0).
+zimbra_ensure_ldap() {
+	local i=0
+	[ -x /opt/zimbra/bin/ldap ] || return 0
+	if zimbra_ldap_status; then
+		return 0
+	fi
+	ocf_log info "starting local slapd before zmcontrol"
+	su - ${ZIMBRA_USER} -c "/opt/zimbra/bin/ldap start" || return $OCF_ERR_GENERIC
+	while [ $i -lt 30 ]; do
+		zimbra_ldap_status && return 0
+		sleep 2
+		i=$((i + 1))
+	done
+	ocf_log err "ldap did not become ready after start"
+	return $OCF_ERR_GENERIC
+}
+
 zimbra_start() {
+	local out rc
 	zimbra_monitor && return $OCF_SUCCESS
+	zimbra_ensure_ldap || return $OCF_ERR_GENERIC
 	ocf_log info "zmcontrol start"
-	su - ${ZIMBRA_USER} -c "zmcontrol start" || return $OCF_ERR_GENERIC
+	out=$(su - ${ZIMBRA_USER} -c "zmcontrol start" 2>&1)
+	rc=$?
+	ocf_log info "zmcontrol start rc=${rc}: ${out}"
+	[ "$rc" -eq 0 ] || return $OCF_ERR_GENERIC
 	local i=0
 	while [ $i -lt 100 ]; do
 		zimbra_monitor && return $OCF_SUCCESS
 		sleep 5
-		i=$((i+1))
+		i=$((i + 1))
 	done
 	return $OCF_ERR_GENERIC
 }

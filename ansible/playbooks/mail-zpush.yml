@@ -1,8 +1,13 @@
 ---
 # Z-Push ActiveSync + Autodiscover (Phase 4) on mail nodes.
 #
-# Until the Pacemaker HA question is decided, enable only on the current
-# Primary (Host A). Host B stays zpush_install_enabled: false in inventory.
+# Nginx snippets under /opt/z-push are required on EVERY mail node (the
+# Zimbra template on DRBD includes them). Full Z-Push (PHP, backend, proxy
+# restart) stays enabled only on the current Primary until dual-node
+# ActiveSync is designed.
+#
+# Snippets only (safe on Host B, no zmproxy restart):
+#   ansible-playbook playbooks/mail-zpush.yml --tags snippets
 #
 # Dry-run against live lab:
 #   ansible-playbook playbooks/mail-zpush.yml --limit mail.gits-it.site --check

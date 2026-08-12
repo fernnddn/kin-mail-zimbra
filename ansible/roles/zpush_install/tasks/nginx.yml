@@ -2,42 +2,7 @@
 # SAFETY: template edits + zmproxyctl restart are live-impacting.
 # Gate mutations with `when: not ansible_check_mode`.
 # Do NOT set check_mode: false on those tasks.
-
-- name: Write the ActiveSync nginx snippet
-  ansible.builtin.copy:
-    dest: "{{ zpush_root }}/nginx-zpush.conf"
-    owner: www-data
-    group: www-data
-    mode: "0644"
-    content: |
-      fastcgi_pass {{ zpush_php_fpm_listen }};
-      include /etc/nginx/fastcgi_params;
-      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/index.php;
-      fastcgi_param SCRIPT_NAME /Microsoft-Server-ActiveSync;
-      fastcgi_param HTTPS on;
-      fastcgi_param PHP_VALUE "post_max_size=128M \n upload_max_filesize=128M \n max_execution_time=3660";
-      fastcgi_read_timeout 910;
-      client_max_body_size 128m;
-  register: zpush_snippet_as
-  when: not ansible_check_mode
-  tags: [zpush, nginx]
-
-- name: Write the Autodiscover nginx snippet
-  ansible.builtin.copy:
-    dest: "{{ zpush_root }}/nginx-zpush-autodiscover.conf"
-    owner: www-data
-    group: www-data
-    mode: "0644"
-    content: |
-      fastcgi_pass {{ zpush_php_fpm_listen }};
-      include /etc/nginx/fastcgi_params;
-      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/autodiscover/autodiscover.php;
-      fastcgi_param SCRIPT_NAME /Autodiscover/Autodiscover.xml;
-      fastcgi_param HTTPS on;
-      fastcgi_read_timeout 60;
-  register: zpush_snippet_ad
-  when: not ansible_check_mode
-  tags: [zpush, nginx]
+# Snippet files are written by snippets.yml (all mail nodes).
 
 - name: Patch the Zimbra HTTPS template for ActiveSync and Autodiscover
   ansible.builtin.shell: |

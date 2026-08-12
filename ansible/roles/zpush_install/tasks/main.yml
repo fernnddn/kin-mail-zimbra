@@ -1,5 +1,11 @@
 ---
-- name: End host when Z-Push install is disabled
+# OS-local nginx snippets every mail node needs (shared DRBD template includes them).
+
+- name: Include Z-Push nginx snippets (all mail nodes)
+  ansible.builtin.import_tasks: snippets.yml
+  tags: [zpush, snippets]
+
+- name: End host when full Z-Push install is disabled
   ansible.builtin.meta: end_host
   when: not (zpush_install_enabled | bool)
   tags: [zpush]

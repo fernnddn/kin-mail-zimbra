@@ -1,0 +1,57 @@
+---
+# Nginx snippets live on the local OS disk (/opt/z-push), but the Zimbra
+# template that includes them lives on DRBD. Every mail node needs these
+# files or zmproxy fails to start after promote (Host B had none).
+
+- name: Ensure the Z-Push root directory exists
+  ansible.builtin.file:
+    path: "{{ zpush_root }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags: [zpush, snippets]
+
+- name: Deploy fastcgi_params for Zimbra nginx includes
+  ansible.builtin.copy:
+    src: fastcgi_params
+    dest: "{{ zpush_root }}/fastcgi_params"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  register: zpush_fastcgi_params
+  tags: [zpush, snippets]
+
+- name: Write the ActiveSync nginx snippet
+  ansible.builtin.copy:
+    dest: "{{ zpush_root }}/nginx-zpush.conf"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    content: |
+      fastcgi_pass {{ zpush_php_fpm_listen }};
+      include {{ zpush_root }}/fastcgi_params;
+      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/index.php;
+      fastcgi_param SCRIPT_NAME /Microsoft-Server-ActiveSync;
+      fastcgi_param HTTPS on;
+      fastcgi_param PHP_VALUE "post_max_size=128M \n upload_max_filesize=128M \n max_execution_time=3660";
+      fastcgi_read_timeout 910;
+      client_max_body_size 128m;
+  register: zpush_snippet_as
+  tags: [zpush, snippets]
+
+- name: Write the Autodiscover nginx snippet
+  ansible.builtin.copy:
+    dest: "{{ zpush_root }}/nginx-zpush-autodiscover.conf"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+    content: |
+      fastcgi_pass {{ zpush_php_fpm_listen }};
+      include {{ zpush_root }}/fastcgi_params;
+      fastcgi_param SCRIPT_FILENAME {{ zpush_root }}/autodiscover/autodiscover.php;
+      fastcgi_param SCRIPT_NAME /Autodiscover/Autodiscover.xml;
+      fastcgi_param HTTPS on;
+      fastcgi_read_timeout 60;
+  register: zpush_snippet_ad
+  tags: [zpush, snippets]
