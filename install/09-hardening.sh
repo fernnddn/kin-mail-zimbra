@@ -16,6 +16,11 @@
 #   sudo ./09-hardening.sh --os-only    # fail2ban + unattended only (Host B)
 #   sudo ./09-hardening.sh --status     # print current hardening signals
 #
+# Dual-node: apply OS pieces via ansible/playbooks/mail-os-hardening.yml
+# (role os_hardening) on BOTH mail hosts. Keep fail2ban filters/jails and
+# the unattended drop-in in sync with that role. COS / cleartext / TLS /
+# SMTP rates stay in this script only (shared LDAP, not per-node).
+#
 # Idempotent. Proxy restart (if needed) temporarily unmanages kin-zimbra so
 # Pacemaker does not tear down the VIP on a brief zmproxy blip.
 # =============================================================================

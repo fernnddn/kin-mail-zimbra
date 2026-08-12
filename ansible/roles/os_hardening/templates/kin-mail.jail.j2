@@ -1,0 +1,37 @@
+# KIN Mail Part A — managed by install/09-hardening.sh
+[DEFAULT]
+ignoreip = {{ os_hardening_ignoreip_effective }}
+bantime  = 1h
+findtime = 10m
+maxretry = 8
+backend  = auto
+
+[sshd]
+enabled = true
+port    = ssh
+mode    = normal
+
+
+{% if os_hardening_mailbox_log_stat.stat.exists %}
+[zimbra-auth]
+enabled  = true
+filter   = zimbra-auth
+port     = http,https
+logpath  = {{ os_hardening_mailbox_log }}
+maxretry = 8
+findtime = 10m
+bantime  = 1h
+
+
+{% endif %}
+{% if os_hardening_nginx_log_stat.stat.exists %}
+[zpush-auth]
+enabled  = true
+filter   = zpush-auth
+port     = https
+logpath  = {{ os_hardening_nginx_log }}
+maxretry = 10
+findtime = 10m
+bantime  = 1h
+
+{% endif %}

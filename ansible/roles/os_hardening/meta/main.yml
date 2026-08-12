@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: os_hardening
+  description: >-
+    Per-machine OS hardening from 09-hardening.sh --os-only: fail2ban (sshd,
+    zimbra-auth, zpush-auth) and unattended-upgrades (security-only, no
+    auto-reboot). Does not touch zmprov, zmproxyctl, or shared LDAP attrs.
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["22.04", "24.04"]
+dependencies: []

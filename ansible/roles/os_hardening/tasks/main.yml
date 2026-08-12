@@ -1,0 +1,23 @@
+---
+# OS-only: fail2ban + unattended-upgrades. Never zmprov / zmproxyctl / postfix.
+
+- name: Include OS-hardening packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [hardening, os, packages]
+
+- name: Include fail2ban filters and jails
+  ansible.builtin.import_tasks: fail2ban.yml
+  tags: [hardening, os, fail2ban]
+
+- name: Include unattended-upgrades (security-only, no auto-reboot)
+  ansible.builtin.import_tasks: unattended.yml
+  tags: [hardening, os, unattended]
+
+- name: Include OS-hardening verification
+  ansible.builtin.import_tasks: verify.yml
+  tags: [hardening, os, verify]
+
+- name: Include optional fail2ban TEST-NET ban/unban smoke test
+  ansible.builtin.import_tasks: smoke.yml
+  when: os_hardening_smoke_ban | bool
+  tags: [hardening, os, smoke]

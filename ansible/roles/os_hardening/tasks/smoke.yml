@@ -1,0 +1,38 @@
+---
+# Optional TEST-NET ban/unban. Not desired state — default off.
+# fail2ban-client banip bypasses ignoreip (operator override), same as
+# install/09-hardening.sh test_fail2ban_ban_unban.
+
+- name: Ban TEST-NET IP in the smoke jail
+  ansible.builtin.command:
+    cmd: fail2ban-client set {{ os_hardening_smoke_jail }} banip {{ os_hardening_smoke_ip }}
+  register: os_hardening_smoke_ban_cmd
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [hardening, os, smoke]
+
+- name: Confirm TEST-NET IP is banned
+  ansible.builtin.command:
+    cmd: fail2ban-client status {{ os_hardening_smoke_jail }}
+  register: os_hardening_smoke_banned
+  changed_when: false
+  failed_when: os_hardening_smoke_ip not in os_hardening_smoke_banned.stdout
+  when: not ansible_check_mode
+  tags: [hardening, os, smoke]
+
+- name: Unban TEST-NET IP
+  ansible.builtin.command:
+    cmd: fail2ban-client set {{ os_hardening_smoke_jail }} unbanip {{ os_hardening_smoke_ip }}
+  register: os_hardening_smoke_unban_cmd
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [hardening, os, smoke]
+
+- name: Confirm TEST-NET IP is no longer banned
+  ansible.builtin.command:
+    cmd: fail2ban-client status {{ os_hardening_smoke_jail }}
+  register: os_hardening_smoke_unbanned
+  changed_when: false
+  failed_when: os_hardening_smoke_ip in os_hardening_smoke_unbanned.stdout
+  when: not ansible_check_mode
+  tags: [hardening, os, smoke]

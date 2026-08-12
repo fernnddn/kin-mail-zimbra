@@ -1,0 +1,32 @@
+---
+# Per-machine OS hardening — same behaviour as install/09-hardening.sh --os-only.
+# COS lockout, IMAP/POP cleartext, TLS ciphers, and SMTP rates live in shared
+# LDAP/DRBD and must NOT be applied here.
+
+os_hardening_packages:
+  - fail2ban
+  - unattended-upgrades
+
+# Loopback + this node's LAN /24 + os_hardening_admin_ips (KIN_ADMIN_IPS).
+# Override with os_hardening_ignoreip (KIN_FAIL2BAN_IGNORE_IP); admin IPs are
+# still unioned on top, matching 09-hardening.sh.
+os_hardening_server_ip: "{{ ansible_host }}"
+os_hardening_admin_ips: []
+os_hardening_ignoreip: ""
+
+os_hardening_fail2ban_service: fail2ban
+os_hardening_unattended_service: unattended-upgrades
+
+os_hardening_mailbox_log: /opt/zimbra/log/mailbox.log
+os_hardening_nginx_log: /opt/zimbra/log/nginx.access.log
+
+os_hardening_jail_path: /etc/fail2ban/jail.d/kin-mail.conf
+os_hardening_zimbra_filter_path: /etc/fail2ban/filter.d/zimbra-auth.conf
+os_hardening_zpush_filter_path: /etc/fail2ban/filter.d/zpush-auth.conf
+os_hardening_auto_upgrades_path: /etc/apt/apt.conf.d/20auto-upgrades
+os_hardening_unattended_dropin_path: /etc/apt/apt.conf.d/52kin-mail-unattended
+
+# Optional TEST-NET ban/unban (not part of desired state; default off).
+os_hardening_smoke_ban: false
+os_hardening_smoke_ip: "203.0.113.77"
+os_hardening_smoke_jail: zpush-auth

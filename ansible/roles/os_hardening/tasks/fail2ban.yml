@@ -1,0 +1,73 @@
+---
+- name: Stat Zimbra mailbox.log (enables zimbra-auth jail when present)
+  ansible.builtin.stat:
+    path: "{{ os_hardening_mailbox_log }}"
+  register: os_hardening_mailbox_log_stat
+  check_mode: false
+  tags: [hardening, os, fail2ban]
+
+- name: Stat nginx.access.log (enables zpush-auth jail when present)
+  ansible.builtin.stat:
+    path: "{{ os_hardening_nginx_log }}"
+  register: os_hardening_nginx_log_stat
+  check_mode: false
+  tags: [hardening, os, fail2ban]
+
+- name: Derive cluster LAN /24 from this node's IP
+  ansible.builtin.set_fact:
+    os_hardening_lan_cidr: "{{ os_hardening_server_ip.split('.')[0:3] | join('.') }}.0/24"
+  when: os_hardening_server_ip is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+  tags: [hardening, os, fail2ban]
+
+- name: Build fail2ban ignoreip (loopback + LAN /24 + admin IPs)
+  ansible.builtin.set_fact:
+    os_hardening_ignoreip_effective: "{{ os_hardening_ignoreip_tokens | join(' ') }}"
+  vars:
+    os_hardening_admin_ip_list: "{{ os_hardening_admin_ips.split() if os_hardening_admin_ips is string else (os_hardening_admin_ips | default([])) }}"
+    os_hardening_default_tokens: "{{ ['127.0.0.1/8', '::1'] + ([os_hardening_lan_cidr] if os_hardening_lan_cidr is defined else []) }}"
+    os_hardening_ignoreip_tokens: "{{ (
+        (os_hardening_ignoreip.split() if os_hardening_ignoreip | length > 0 else os_hardening_default_tokens)
+        + (os_hardening_admin_ip_list | default([]))
+      ) | unique | list }}"
+  tags: [hardening, os, fail2ban]
+
+- name: Deploy the zimbra-auth fail2ban filter
+  ansible.builtin.copy:
+    src: zimbra-auth.conf
+    dest: "{{ os_hardening_zimbra_filter_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload fail2ban after jail or filter change
+  tags: [hardening, os, fail2ban]
+
+- name: Deploy the zpush-auth fail2ban filter
+  ansible.builtin.copy:
+    src: zpush-auth.conf
+    dest: "{{ os_hardening_zpush_filter_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload fail2ban after jail or filter change
+  tags: [hardening, os, fail2ban]
+
+- name: Deploy the kin-mail fail2ban jail
+  ansible.builtin.template:
+    src: kin-mail.jail.j2
+    dest: "{{ os_hardening_jail_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload fail2ban after jail or filter change
+  tags: [hardening, os, fail2ban]
+
+- name: Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: "{{ os_hardening_fail2ban_service }}"
+    enabled: true
+    state: started
+  tags: [hardening, os, fail2ban]
+
+- name: Apply queued fail2ban reload before verification
+  ansible.builtin.meta: flush_handlers
+  tags: [hardening, os, fail2ban]

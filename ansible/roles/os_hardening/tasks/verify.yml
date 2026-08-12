@@ -1,0 +1,91 @@
+---
+# Read-only probes — check_mode: false so --check still reports live state.
+
+- name: Verify fail2ban is active
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ os_hardening_fail2ban_service }}
+  register: os_hardening_f2b_active
+  changed_when: false
+  failed_when: os_hardening_f2b_active.stdout | trim != "active"
+  check_mode: false
+  tags: [hardening, os, verify]
+
+- name: Read fail2ban jail list
+  ansible.builtin.command:
+    cmd: fail2ban-client status
+  register: os_hardening_f2b_status
+  changed_when: false
+  check_mode: false
+  tags: [hardening, os, verify]
+
+- name: Assert sshd jail is enabled
+  ansible.builtin.assert:
+    that:
+      - "'sshd' in os_hardening_f2b_status.stdout"
+    fail_msg: "fail2ban sshd jail is not running"
+  tags: [hardening, os, verify]
+
+- name: Assert zimbra-auth jail when mailbox.log exists
+  ansible.builtin.assert:
+    that:
+      - "'zimbra-auth' in os_hardening_f2b_status.stdout"
+    fail_msg: "mailbox.log is present but zimbra-auth jail is not running"
+  when: os_hardening_mailbox_log_stat.stat.exists | default(false)
+  tags: [hardening, os, verify]
+
+- name: Assert zpush-auth jail when nginx.access.log exists
+  ansible.builtin.assert:
+    that:
+      - "'zpush-auth' in os_hardening_f2b_status.stdout"
+    fail_msg: "nginx.access.log is present but zpush-auth jail is not running"
+  when: os_hardening_nginx_log_stat.stat.exists | default(false)
+  tags: [hardening, os, verify]
+
+- name: Read fail2ban ignoreip from the kin-mail jail
+  ansible.builtin.command:
+    cmd: grep -E '^ignoreip[[:space:]]*=' {{ os_hardening_jail_path }}
+  register: os_hardening_ignoreip_line
+  changed_when: false
+  check_mode: false
+  tags: [hardening, os, verify]
+
+- name: Assert ignoreip includes loopback and cluster LAN
+  ansible.builtin.assert:
+    that:
+      - "'127.0.0.1/8' in os_hardening_ignoreip_line.stdout"
+      - "'::1' in os_hardening_ignoreip_line.stdout"
+      - os_hardening_lan_cidr is not defined or (os_hardening_lan_cidr in os_hardening_ignoreip_line.stdout)
+    fail_msg: "fail2ban ignoreip missing loopback or LAN: {{ os_hardening_ignoreip_line.stdout }}"
+  tags: [hardening, os, verify]
+
+- name: Read unattended-upgrades drop-in
+  ansible.builtin.command:
+    cmd: grep -E 'Automatic-Reboot|Allowed-Origins' {{ os_hardening_unattended_dropin_path }}
+  register: os_hardening_unattended_dropin
+  changed_when: false
+  check_mode: false
+  tags: [hardening, os, verify]
+
+- name: Assert unattended-upgrades will not auto-reboot
+  ansible.builtin.assert:
+    that:
+      - "'Unattended-Upgrade::Automatic-Reboot \"false\"' in os_hardening_unattended_dropin.stdout"
+    fail_msg: "Automatic-Reboot is not false in {{ os_hardening_unattended_dropin_path }}"
+  tags: [hardening, os, verify]
+
+- name: Read APT periodic unattended-upgrade flag
+  ansible.builtin.command:
+    cmd: grep -F 'APT::Periodic::Unattended-Upgrade "1"' {{ os_hardening_auto_upgrades_path }}
+  register: os_hardening_auto_upgrades
+  changed_when: false
+  failed_when: os_hardening_auto_upgrades.rc != 0
+  check_mode: false
+  tags: [hardening, os, verify]
+
+- name: Note OS-only scope (shared LDAP attrs are not applied here)
+  ansible.builtin.debug:
+    msg: >-
+      os_hardening is fail2ban + unattended-upgrades only. COS lockout,
+      IMAP/POP cleartext, TLS ciphers, and SMTP rates stay in shared LDAP/DRBD
+      (install/09-hardening.sh full Part A on the live Primary).
+  tags: [hardening, os, verify]

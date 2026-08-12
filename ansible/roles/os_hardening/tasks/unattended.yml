@@ -1,0 +1,26 @@
+---
+- name: Deploy APT periodic unattended-upgrade flags
+  ansible.builtin.copy:
+    src: 20auto-upgrades
+    dest: "{{ os_hardening_auto_upgrades_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hardening, os, unattended]
+
+- name: Deploy KIN Mail unattended-upgrades drop-in (no auto-reboot)
+  ansible.builtin.copy:
+    src: 52kin-mail-unattended
+    dest: "{{ os_hardening_unattended_dropin_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [hardening, os, unattended]
+
+- name: Enable unattended-upgrades at boot
+  ansible.builtin.systemd:
+    name: "{{ os_hardening_unattended_service }}"
+    enabled: true
+    state: started
+  failed_when: false
+  tags: [hardening, os, unattended]

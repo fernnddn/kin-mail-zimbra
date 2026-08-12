@@ -1,0 +1,6 @@
+---
+# Reload only — never restart Zimbra / zmproxy / postfix from this role.
+- name: Reload fail2ban after jail or filter change
+  ansible.builtin.systemd:
+    name: "{{ os_hardening_fail2ban_service }}"
+    state: reloaded

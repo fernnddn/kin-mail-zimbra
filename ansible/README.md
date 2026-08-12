@@ -15,6 +15,7 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_remove_host` (via `cluster_survivor_replace`), `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |
 | `playbooks/mail-remove-host.yml` | `cluster_remove_host` | new | **syntax-only (unreachable-peer cleanup)** |
 | `playbooks/mail-zpush.yml` | `zpush_install` | 4.1 / 4.2 | dry-run / Host A only (B disabled in inventory) |
+| `playbooks/mail-os-hardening.yml` | `os_hardening` | 09 `--os-only` | fail2ban + unattended-upgrades on **both** mail nodes |
 
 **Add-host scope:** replace a permanently lost peer with a **new** hostname/IP;
 survivor membership + DRBD peer rewrite; new-node live full sync to Primary.  
@@ -22,6 +23,9 @@ survivor membership + DRBD peer rewrite; new-node live full sync to Primary.
 membership remove, DRBD peer drop, location constraints, precise qnetd NSS
 nickname delete). Must not disturb kin-zimbra/VIP/DRBD Primary.  
 **Never tested against any host as a live apply** — see progress notes.
+
+**OS hardening scope:** `os_hardening` is fail2ban + unattended-upgrades only
+(per-machine). It does not write COS/cleartext/TLS/SMTP LDAP attrs.
 
 ## Layout
 
@@ -36,6 +40,7 @@ ansible/
     remove-host.example.yml
   roles/
     cluster_node_base/
+    os_hardening/
     cluster_remove_host/
     cluster_survivor_replace/
     drbd_live_join/
