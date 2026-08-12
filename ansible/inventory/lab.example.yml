@@ -3,20 +3,30 @@
 # Copy to lab.yml (gitignored) and fill in auth — never commit passwords.
 #
 #   cp inventory/lab.example.yml inventory/lab.yml
+#
+# Rebuild topology (2026-08-12):
+#   mail  (Zimbra 01 / Host A) : 10.10.40.15
+#   mail2 (Zimbra 02 / Host B) : 10.10.40.14  — empty peer, no Zimbra install
+#   mon   (Observability)      : 10.10.40.12
 
 all:
+  vars:
+    # Keep in sync with live lab.yml — role defaults still ship old IPs.
+    corosync_qdevice_qnetd_ip: 10.10.40.12
+    corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
+    iscsi_initiator_portal: "10.10.40.12:3260"
   children:
     monitoring:
       hosts:
         mon.gits-it.site:
-          ansible_host: 10.10.40.14
+          ansible_host: 10.10.40.12
           ansible_user: cursor
           # ansible_password: "..."
           # ansible_become_password: "..."
     mail_nodes:
       hosts:
         mail.gits-it.site:
-          ansible_host: 10.10.40.13
+          ansible_host: 10.10.40.15
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
           # Host A / current Primary — Z-Push until HA placement is decided.
@@ -24,7 +34,7 @@ all:
           # ansible_password: "..."
           # ansible_become_password: "..."
         mail2.gits-it.site:
-          ansible_host: 10.10.40.12
+          ansible_host: 10.10.40.14
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail2"
           # Host B — leave false until Pacemaker / dual-node Z-Push design lands.
