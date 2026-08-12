@@ -255,11 +255,33 @@ printf '%s\n' "=== KIN Mail ACME DNS-01 challenge ===" | tee /tmp/kin-mail-acme-
 printf '%s\n' "Host/Name : _acme-challenge.${CERTBOT_DOMAIN}" | tee -a /tmp/kin-mail-acme-challenge.txt
 printf '%s\n' "Type      : TXT" | tee -a /tmp/kin-mail-acme-challenge.txt
 printf '%s\n' "Value     : ${CERTBOT_VALIDATION}" | tee -a /tmp/kin-mail-acme-challenge.txt
-printf '%s\n' "Waiting up to 20 minutes for public DNS (1.1.1.1)…" | tee -a /tmp/kin-mail-acme-challenge.txt
-for _i in $(seq 1 120); do
-  if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @1.1.1.1 2>/dev/null | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
-    echo "TXT visible on 1.1.1.1" | tee -a /tmp/kin-mail-acme-challenge.txt
-    exit 0
+printf '%s\n' "Waiting up to 25 minutes for public DNS (1.1.1.1 + 8.8.8.8)…" | tee -a /tmp/kin-mail-acme-challenge.txt
+# Slow DNS panels (e.g. legacy Rumahweb) can leave resolvers split for several
+# minutes. Let's Encrypt multi-perspective validation fails if any vantage still
+# sees a previous TXT — so require both public resolvers, then hold before exit.
+_seen_cf=0
+for _i in $(seq 1 150); do
+  if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @1.1.1.1 2>/dev/null \
+       | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
+    _seen_cf=1
+    if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @8.8.8.8 2>/dev/null \
+         | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
+      echo "TXT visible on 1.1.1.1 and 8.8.8.8 — holding 2 minutes for LE vantage points…" \
+        | tee -a /tmp/kin-mail-acme-challenge.txt
+      sleep 120
+      # Re-check after hold (catch mid-propagation flip back to a stale token).
+      if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @1.1.1.1 2>/dev/null \
+           | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null \
+         && dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @8.8.8.8 2>/dev/null \
+           | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
+        echo "TXT still correct after hold — proceeding" | tee -a /tmp/kin-mail-acme-challenge.txt
+        exit 0
+      fi
+      echo "TXT changed during hold — keep waiting…" | tee -a /tmp/kin-mail-acme-challenge.txt
+    elif [ "$_seen_cf" -eq 1 ]; then
+      echo "TXT on 1.1.1.1 but not yet on 8.8.8.8 — keep waiting…" \
+        | tee -a /tmp/kin-mail-acme-challenge.txt
+    fi
   fi
   sleep 10
 done
