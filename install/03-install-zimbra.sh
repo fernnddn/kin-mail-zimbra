@@ -311,8 +311,9 @@ installer_failed_hard() {
 }
 
 installer_still_running() {
-  # Match the install.sh we launched in this ZDIR (avoid false positives).
-  pgrep -f "${ZDIR}/install.sh" >/dev/null 2>&1
+  # install.sh is started as `./install.sh ...` from $ZDIR — argv usually does
+  # NOT contain the absolute $ZDIR path, so only match the flags we pass.
+  pgrep -f "install\\.sh --platform-override --skip-activation-check" >/dev/null 2>&1
 }
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
@@ -333,7 +334,8 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # the config menu / success path, treat as unexpected exit (no silent sleep).
   if [ "$INSTALL_STARTED" -eq 1 ] && ! installer_still_running; then
     case "$L" in
-      *"press return to exit"*|*"Configuration complete"*|*"Address unconfigured"*|*"press 'a' to apply"*)
+      *"press return to exit"*|*"Configuration complete"*|*"Address unconfigured"*|*"press 'a' to apply"*|*"agree with the terms"*|*"Use Zimbra's package repository"*|*"Install zimbra-"*|*"system will be modified"*|*"Change hostname"*|*"Change domain name"*|*"Create domain:"*|*"Notify Zimbra"*)
+        # Prompt still on screen — process check can race; keep looping.
         ;;
       *)
         if [ "$STAGE" = "packages" ]; then
