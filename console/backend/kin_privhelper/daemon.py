@@ -69,7 +69,7 @@ def _safe_exec_error(exc: BaseException) -> str:
     name = type(exc).__name__
     text = str(exc).strip() or repr(exc)
     text = re.sub(
-        r"(?i)(password|passwd|pwd|token|secret|admin_pass)\s*[:=]\s*\S+",
+        r"(?i)((?:host_)?root_pass|kin_user_pass|admin_pass|password|passwd|pwd|token|secret)\s*[:=]\s*\S+",
         r"\1=***",
         text,
     )

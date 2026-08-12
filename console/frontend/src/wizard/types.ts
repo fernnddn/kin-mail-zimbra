@@ -1,8 +1,19 @@
+/** Fixed OS admin username for host access (Arcfra-style default identity). */
+export const KIN_OS_USER = "kin";
+
 export type WizardDraft = {
   version: number;
   updated_at: string | null;
   current_step: string;
   topology: "" | "1vm" | "2vm";
+  /** Required when topology is 2vm — second server IP (no reachability check in this slice). */
+  peer_host_ip: string;
+  /** Optional hostname for the second server. */
+  peer_host_name: string;
+  /** Root password for host(s). Written to config; not used for SSH in this slice. */
+  host_root_pass: string;
+  /** Password for OS user "kin" (sudo). Written to config; not used for SSH in this slice. */
+  kin_user_pass: string;
   mail_domain: string;
   mail_host: string;
   timezone: string;
@@ -25,6 +36,7 @@ export type WizardDraft = {
 
 export type StepId =
   | "topology"
+  | "credentials"
   | "domain"
   | "tls"
   | "hybrid"
@@ -42,6 +54,7 @@ export type StepDef = {
 
 export const WIZARD_STEPS: StepDef[] = [
   { id: "topology", label: "Topology", crumb: "Topology" },
+  { id: "credentials", label: "Default credentials", crumb: "Credentials" },
   { id: "domain", label: "Domain & mail", crumb: "Domain" },
   { id: "tls", label: "TLS", crumb: "TLS" },
   { id: "hybrid", label: "Hybrid auth", crumb: "Hybrid auth" },
@@ -58,6 +71,10 @@ export function emptyDraft(): WizardDraft {
     updated_at: null,
     current_step: "topology",
     topology: "",
+    peer_host_ip: "",
+    peer_host_name: "",
+    host_root_pass: "",
+    kin_user_pass: "",
     mail_domain: "",
     mail_host: "",
     timezone: "Asia/Jakarta",

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { theme } from "./styles/theme";
@@ -86,6 +86,109 @@ export const Input = styled.input`
     outline: 2px solid color-mix(in srgb, ${theme.accent} 35%, transparent);
     border-color: ${theme.accent};
   }
+`;
+
+const PasswordWrap = styled.div`
+  position: relative;
+  margin-bottom: 0.9rem;
+
+  ${Input} {
+    margin-bottom: 0;
+    padding-right: 2.75rem;
+  }
+`;
+
+const PasswordToggle = styled.button`
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: ${theme.muted};
+  cursor: pointer;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: grid;
+  place-items: center;
+  border-radius: ${theme.radius};
+  padding: 0;
+  transition:
+    color ${theme.motion} ease-out,
+    background ${theme.motion} ease-out;
+
+  &:hover {
+    color: ${theme.ink};
+    background: ${theme.bgPanel};
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, ${theme.accent} 35%, transparent);
+  }
+`;
+
+function EyeIcon({ open }: { open: boolean }) {
+  if (open) {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.2A10.5 10.5 0 0121 12a10.6 10.6 0 01-4.1 4.9M6.1 6.1A10.5 10.5 0 003 12a10.6 10.6 0 0011.4 5.9"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.75" />
+    </svg>
+  );
+}
+
+/** Password field with show/hide toggle. Paste/copy are intentionally allowed. */
+export function PasswordInput({
+  className,
+  style,
+  ...props
+}: Omit<ComponentProps<"input">, "type">) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <PasswordWrap className={className} style={style}>
+      <Input {...props} type={visible ? "text" : "password"} />
+      <PasswordToggle
+        type="button"
+        tabIndex={-1}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+        onClick={() => setVisible((v) => !v)}
+      >
+        <EyeIcon open={visible} />
+      </PasswordToggle>
+    </PasswordWrap>
+  );
+}
+
+export const ReadonlyValue = styled.div`
+  width: 100%;
+  border: 1px solid ${theme.line};
+  background: ${theme.bgPanel};
+  color: ${theme.ink};
+  border-radius: ${theme.radius};
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  margin-bottom: 0.9rem;
+  font-family: ${theme.mono};
+  font-size: 0.9rem;
 `;
 
 export const TextArea = styled.textarea`

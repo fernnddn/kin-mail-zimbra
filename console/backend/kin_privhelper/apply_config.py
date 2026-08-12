@@ -28,6 +28,8 @@ DRAFT_FILE = Path(
 _SINGLE_QUOTE_KEYS = frozenset(
     {
         "ADMIN_PASS",
+        "HOST_ROOT_PASS",
+        "KIN_USER_PASS",
         "AD_SEARCH_FILTER",
         "AD_SEARCH_BIND_PASSWORD",
         "AD_TEST_PASS",
@@ -37,6 +39,11 @@ _SINGLE_QUOTE_KEYS = frozenset(
 # Preferred key order matching 00-config.sh wizard output (+ TOPOLOGY).
 _KEY_ORDER = [
     "TOPOLOGY",
+    "PEER_HOST_IP",
+    "PEER_HOST_NAME",
+    "KIN_OS_USER",
+    "HOST_ROOT_PASS",
+    "KIN_USER_PASS",
     "MAIL_DOMAIN",
     "MAIL_HOST",
     "SERVER_IP",
@@ -308,6 +315,24 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     if topology not in ("1vm", "2vm"):
         errs.append("topology must be 1vm or 2vm")
 
+    peer_ip = str(draft.get("peer_host_ip") or "").strip()
+    if topology == "2vm" and not peer_ip:
+        errs.append("peer_host_ip is required when topology is 2vm")
+
+    host_root_pass = str(draft.get("host_root_pass") or "")
+    if host_root_pass:
+        if len(host_root_pass) < 8:
+            errs.append("host_root_pass must be at least 8 characters")
+    elif not existing.get("HOST_ROOT_PASS"):
+        errs.append("host_root_pass is required (draft empty and no existing HOST_ROOT_PASS)")
+
+    kin_user_pass = str(draft.get("kin_user_pass") or "")
+    if kin_user_pass:
+        if len(kin_user_pass) < 8:
+            errs.append("kin_user_pass must be at least 8 characters")
+    elif not existing.get("KIN_USER_PASS"):
+        errs.append("kin_user_pass is required (draft empty and no existing KIN_USER_PASS)")
+
     domain = str(draft.get("mail_domain") or "").strip()
     if not domain or " " in domain or "@" in domain:
         errs.append("mail_domain is required (example: example.co.id)")
@@ -349,8 +374,13 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
             ("ad_test_pass", "AD test password"),
         ]
         for key, label in required_ad:
-            if not str(draft.get(key) or "").strip():
-                errs.append(f"{label} required when hybrid AD is enabled")
+            if str(draft.get(key) or "").strip():
+                continue
+            if key == "ad_search_bind_password" and existing.get("AD_SEARCH_BIND_PASSWORD"):
+                continue
+            if key == "ad_test_pass" and existing.get("AD_TEST_PASS"):
+                continue
+            errs.append(f"{label} required when hybrid AD is enabled")
 
     # Preserve-critical live fields must already exist when merging
     # (populated by build_base_config() on first create).
@@ -367,13 +397,30 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     host = str(draft.get("mail_host") or "").strip()
     tz = str(draft.get("timezone") or "").strip() or "Asia/Jakarta"
     admin_pass = str(draft.get("admin_pass") or "")
+    host_root_pass = str(draft.get("host_root_pass") or "")
+    kin_user_pass = str(draft.get("kin_user_pass") or "")
     le = str(draft.get("le_email") or "").strip()
     tls = str(draft.get("tls_method") or "").strip()
     seats = str(draft.get("contracted_seats") or "").strip() or "PLACEHOLDER_UNSET"
     if seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
         seats = "PLACEHOLDER_UNSET"
 
-    out["TOPOLOGY"] = str(draft.get("topology") or "").strip()
+    topology = str(draft.get("topology") or "").strip()
+    out["TOPOLOGY"] = topology
+    if topology == "2vm":
+        out["PEER_HOST_IP"] = str(draft.get("peer_host_ip") or "").strip()
+        out["PEER_HOST_NAME"] = str(draft.get("peer_host_name") or "").strip()
+    else:
+        out["PEER_HOST_IP"] = ""
+        out["PEER_HOST_NAME"] = ""
+
+    # Fixed Arcfra-style OS admin identity; passwords preserve-on-empty like ADMIN_PASS.
+    out["KIN_OS_USER"] = "kin"
+    if host_root_pass:
+        out["HOST_ROOT_PASS"] = host_root_pass
+    if kin_user_pass:
+        out["KIN_USER_PASS"] = kin_user_pass
+
     out["MAIL_DOMAIN"] = domain
     out["MAIL_HOST"] = host
     out["TIMEZONE"] = tz
@@ -408,10 +455,19 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         str(draft.get("ad_search_filter") or "").strip() or "(sAMAccountName=%u)"
     )
     out["AD_SEARCH_BIND_DN"] = str(draft.get("ad_search_bind_dn") or "").strip()
-    out["AD_SEARCH_BIND_PASSWORD"] = str(draft.get("ad_search_bind_password") or "")
+    # Preserve-on-empty for AD secrets (same discipline as HOST_ROOT_PASS / ADMIN_PASS).
+    ad_bind_pw = str(draft.get("ad_search_bind_password") or "")
+    if ad_bind_pw:
+        out["AD_SEARCH_BIND_PASSWORD"] = ad_bind_pw
+    elif "AD_SEARCH_BIND_PASSWORD" not in out:
+        out["AD_SEARCH_BIND_PASSWORD"] = ""
     out["AD_BIND_DN_TEMPLATE"] = str(draft.get("ad_bind_dn_template") or "").strip()
     out["AD_TEST_USER"] = str(draft.get("ad_test_user") or "").strip()
-    out["AD_TEST_PASS"] = str(draft.get("ad_test_pass") or "")
+    ad_test_pw = str(draft.get("ad_test_pass") or "")
+    if ad_test_pw:
+        out["AD_TEST_PASS"] = ad_test_pw
+    elif "AD_TEST_PASS" not in out:
+        out["AD_TEST_PASS"] = ""
 
     out.setdefault("CF_CREDS", "/etc/letsencrypt/cloudflare.ini")
     out.setdefault("CF_PROPAGATION", "40")
@@ -431,6 +487,9 @@ def _config_fingerprint(values: dict[str, str]) -> dict[str, str]:
     """Non-secret keys for change detection / operator-facing logs."""
     keys = (
         "TOPOLOGY",
+        "PEER_HOST_IP",
+        "PEER_HOST_NAME",
+        "KIN_OS_USER",
         "MAIL_DOMAIN",
         "MAIL_HOST",
         "SERVER_IP",

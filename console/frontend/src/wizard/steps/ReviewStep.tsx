@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { Button, Err, Lede, NavRow, SummaryTable, Title } from "../../ui";
 import { useWizard } from "../WizardContext";
+import { KIN_OS_USER } from "../types";
 
 function mask(value: string): string {
   if (!value) return "—";
@@ -41,6 +42,20 @@ export default function ReviewStep() {
       <SummaryTable>
         <dt>Servers</dt>
         <dd>{topologyLabel}</dd>
+        {draft.topology === "2vm" ? (
+          <>
+            <dt>Second server IP</dt>
+            <dd>{draft.peer_host_ip || "—"}</dd>
+            <dt>Second server hostname</dt>
+            <dd>{draft.peer_host_name || "—"}</dd>
+          </>
+        ) : null}
+        <dt>Default OS admin</dt>
+        <dd>{KIN_OS_USER}</dd>
+        <dt>Root password</dt>
+        <dd>{mask(draft.host_root_pass)}</dd>
+        <dt>Password for {KIN_OS_USER}</dt>
+        <dd>{mask(draft.kin_user_pass)}</dd>
         <dt>Mail domain</dt>
         <dd>{draft.mail_domain || "—"}</dd>
         <dt>Mail hostname</dt>

@@ -18,10 +18,15 @@ DRAFT_VERSION = 1
 SECRET_KEYS = frozenset(
     {
         "admin_pass",
+        "host_root_pass",
+        "kin_user_pass",
         "ad_search_bind_password",
         "ad_test_pass",
     }
 )
+
+# Fixed OS admin username written to config (Arcfra-style default identity).
+KIN_OS_USER = "kin"
 
 
 class WizardDraft(BaseModel):
@@ -33,6 +38,12 @@ class WizardDraft(BaseModel):
 
     # a. Topology
     topology: str = ""  # "1vm" | "2vm"
+    peer_host_ip: str = ""
+    peer_host_name: str = ""
+
+    # a2. Default host credentials (Arcfra-style; not used for SSH in this slice)
+    host_root_pass: str = ""
+    kin_user_pass: str = ""
 
     # b. Domain & mail
     mail_domain: str = ""
@@ -108,6 +119,10 @@ class DraftPatch(BaseModel):
 
     current_step: str | None = None
     topology: str | None = None
+    peer_host_ip: str | None = None
+    peer_host_name: str | None = None
+    host_root_pass: str | None = None
+    kin_user_pass: str | None = None
     mail_domain: str | None = None
     mail_host: str | None = None
     timezone: str | None = None

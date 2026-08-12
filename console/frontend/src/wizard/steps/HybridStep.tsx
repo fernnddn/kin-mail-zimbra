@@ -10,6 +10,7 @@ import {
   Input,
   Lede,
   NavRow,
+  PasswordInput,
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
@@ -127,9 +128,9 @@ export default function HybridStep() {
             <FieldLabel htmlFor="ad_search_bind_password" required>
               Search service account password
             </FieldLabel>
-            <Input
+            <PasswordInput
               id="ad_search_bind_password"
-              type="password"
+              autoComplete="new-password"
               value={draft.ad_search_bind_password}
               onChange={(e) => setLocal({ ad_search_bind_password: e.target.value })}
             />
@@ -160,9 +161,9 @@ export default function HybridStep() {
             <FieldLabel htmlFor="ad_test_pass" required>
               Test account password
             </FieldLabel>
-            <Input
+            <PasswordInput
               id="ad_test_pass"
-              type="password"
+              autoComplete="new-password"
               value={draft.ad_test_pass}
               onChange={(e) => setLocal({ ad_test_pass: e.target.value })}
             />

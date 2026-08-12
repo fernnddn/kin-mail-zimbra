@@ -9,6 +9,7 @@ import {
   Input,
   Lede,
   NavRow,
+  PasswordInput,
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
@@ -99,9 +100,8 @@ export default function DomainStep() {
         <FieldLabel htmlFor="admin_pass" required>
           Mail admin password
         </FieldLabel>
-        <Input
+        <PasswordInput
           id="admin_pass"
-          type="password"
           autoComplete="new-password"
           value={draft.admin_pass}
           onChange={(e) => {
@@ -126,7 +126,7 @@ export default function DomainStep() {
       </FieldRow>
       <Err>{fieldErr || error}</Err>
       <NavRow>
-        <Button type="button" variant="ghost" onClick={() => navigate("/wizard/topology")}>
+        <Button type="button" variant="ghost" onClick={() => navigate("/wizard/credentials")}>
           Back
         </Button>
         <Button type="button" disabled={saving} onClick={() => void next()}>

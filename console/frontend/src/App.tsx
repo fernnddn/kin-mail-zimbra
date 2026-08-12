@@ -10,6 +10,7 @@ import LoginPage from "./pages/Login";
 import UsersPage from "./pages/Users";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
+import CredentialsStep from "./wizard/steps/CredentialsStep";
 import DeployStep from "./wizard/steps/DeployStep";
 import DeployLogsPage from "./wizard/steps/DeployLogsPage";
 import DomainStep from "./wizard/steps/DomainStep";
@@ -132,6 +133,7 @@ export default function App() {
             >
               <Route index element={<WizardIndexRedirect />} />
               <Route path="topology" element={<TopologyStep />} />
+              <Route path="credentials" element={<CredentialsStep />} />
               <Route path="domain" element={<DomainStep />} />
               <Route path="tls" element={<TlsStep />} />
               <Route path="hybrid" element={<HybridStep />} />
