@@ -78,9 +78,9 @@ export const Input = styled.input`
   font: inherit;
   margin-bottom: 0.9rem;
   transition:
-    border-color ${theme.motion} ease,
-    box-shadow ${theme.motion} ease,
-    background ${theme.motion} ease;
+    border-color ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out,
+    background ${theme.motion} ease-out;
 
   &:focus {
     outline: 2px solid color-mix(in srgb, ${theme.accent} 35%, transparent);
@@ -100,8 +100,8 @@ export const TextArea = styled.textarea`
   min-height: 5rem;
   resize: vertical;
   transition:
-    border-color ${theme.motion} ease,
-    box-shadow ${theme.motion} ease;
+    border-color ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out;
 
   &:focus {
     outline: 2px solid color-mix(in srgb, ${theme.accent} 35%, transparent);
@@ -124,10 +124,10 @@ export const Button = styled.button<{ variant?: "primary" | "ghost" | "danger" }
   padding: 0.7rem 1rem;
   cursor: pointer;
   transition:
-    background ${theme.motion} ease,
-    border-color ${theme.motion} ease,
-    transform ${theme.motion} ease,
-    box-shadow ${theme.motion} ease;
+    background ${theme.motion} ease-out,
+    border-color ${theme.motion} ease-out,
+    transform ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -141,6 +141,7 @@ export const Button = styled.button<{ variant?: "primary" | "ghost" | "danger" }
           ? "#dc2626"
           : theme.accentHover};
     transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
   }
 
   &:disabled {
@@ -192,9 +193,9 @@ export const Choice = styled.button<{ selected?: boolean }>`
   cursor: pointer;
   font: inherit;
   transition:
-    border-color ${theme.motion} ease,
-    background ${theme.motion} ease,
-    box-shadow ${theme.motion} ease;
+    border-color ${theme.motion} ease-out,
+    background ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out;
 
   &:hover {
     border-color: ${(p) => (p.selected ? theme.accent : theme.accentHover)};

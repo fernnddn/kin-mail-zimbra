@@ -50,7 +50,7 @@ const NavLinks = styled.nav`
     color: ${theme.muted};
     text-decoration: none;
     font-size: 0.85rem;
-    transition: color ${theme.motion} ease;
+    transition: color ${theme.motion} ease-out;
   }
 
   a:hover {

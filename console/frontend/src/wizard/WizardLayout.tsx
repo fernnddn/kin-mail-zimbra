@@ -49,13 +49,15 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
   border: 1px solid ${(p) => (p.$active ? "color-mix(in srgb, " + theme.accent + " 35%, transparent)" : "transparent")};
   font-size: 0.9rem;
   transition:
-    color ${theme.motion} ease,
-    background ${theme.motion} ease,
-    border-color ${theme.motion} ease;
+    color ${theme.motion} ease-out,
+    background ${theme.motion} ease-out,
+    border-color ${theme.motion} ease-out,
+    box-shadow ${theme.motion} ease-out;
 
   &:hover {
     color: ${theme.ink};
     background: ${(p) => (p.$active ? theme.accentSoft : "rgba(0, 97, 255, 0.05)")};
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
   }
 `;
 
@@ -72,6 +74,10 @@ const StepNum = styled.span<{ $active?: boolean; $done?: boolean }>`
     p.$active ? theme.accent : p.$done ? "rgba(5, 150, 105, 0.18)" : theme.bgElev};
   color: ${(p) => (p.$active ? "#fff" : p.$done ? theme.ok : theme.muted)};
   border: 1px solid ${(p) => (p.$active ? theme.accent : theme.line)};
+  transition:
+    background ${theme.motion} ease-out,
+    color ${theme.motion} ease-out,
+    border-color ${theme.motion} ease-out;
 `;
 
 const Main = styled.main`
@@ -88,6 +94,7 @@ const CrumbBar = styled.div`
   a {
     color: ${theme.muted};
     text-decoration: none;
+    transition: color ${theme.motion} ease-out;
   }
 
   a:hover {
@@ -108,7 +115,10 @@ const Content = styled.div`
 `;
 
 function currentStepId(pathname: string): StepId {
-  const part = pathname.split("/").filter(Boolean).pop() || "topology";
+  const parts = pathname.split("/").filter(Boolean);
+  // /wizard/deploy and /wizard/deploy/logs both map to Deploy in the sidebar.
+  if (parts.includes("deploy")) return "deploy";
+  const part = parts[parts.length - 1] || "topology";
   const found = WIZARD_STEPS.find((s) => s.id === part);
   return found ? found.id : "topology";
 }
@@ -116,9 +126,19 @@ function currentStepId(pathname: string): StepId {
 export default function WizardLayout() {
   const { loading } = useWizard();
   const location = useLocation();
+  const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
+
+  // Full-screen log viewer: keep DeploySession mounted via nested Outlet, hide wizard chrome.
+  if (isDeployLogs) {
+    return (
+      <ConsoleChrome setupMode>
+        {loading ? <p style={{ color: theme.muted, padding: "1.5rem" }}>Loading draft…</p> : <Outlet />}
+      </ConsoleChrome>
+    );
+  }
 
   return (
     <ConsoleChrome setupMode>

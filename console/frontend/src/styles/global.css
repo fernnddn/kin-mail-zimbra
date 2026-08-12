@@ -16,10 +16,13 @@ body {
   margin: 0;
   background: #f5f7fb;
   color: #0f172a;
+  font-family: "DM Sans", InterVariable, Inter, -apple-system, "system-ui", "Segoe UI", Helvetica,
+    Arial, sans-serif;
 }
 
 code {
-  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, Monaco, Consolas,
+    monospace;
   font-size: 0.9em;
 }
 
@@ -52,9 +55,9 @@ code {
 }
 
 .kin-fade-in {
-  animation: kin-fade-in 180ms ease-out;
+  animation: kin-fade-in 300ms ease-out;
 }
 
 .kin-scale-in {
-  animation: kin-scale-in 180ms ease-out;
+  animation: kin-scale-in 300ms ease-out;
 }
