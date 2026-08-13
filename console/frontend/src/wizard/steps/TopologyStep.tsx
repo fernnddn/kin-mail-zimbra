@@ -115,7 +115,7 @@ export default function TopologyStep() {
                 setFieldErr("");
                 setLocal({ peer_host_ip: e.target.value });
               }}
-              placeholder="10.10.40.14"
+              placeholder="192.0.2.14"
               autoComplete="off"
             />
             <Hint>
@@ -146,7 +146,7 @@ export default function TopologyStep() {
                 setFieldErr("");
                 setLocal({ observability_vm_ip: e.target.value });
               }}
-              placeholder="10.10.40.12"
+              placeholder="192.0.2.12"
               autoComplete="off"
             />
             <Hint>

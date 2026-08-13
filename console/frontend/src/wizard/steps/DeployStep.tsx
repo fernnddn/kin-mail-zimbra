@@ -16,6 +16,7 @@ import {
 } from "../../ui";
 import { theme } from "../../styles/theme";
 import { useWizard } from "../WizardContext";
+import { useDeploySession } from "../DeploySession";
 import { FULL_INSTALL_STAGES } from "../deployPipeline";
 
 const StepCard = styled.div`

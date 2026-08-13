@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Button,
@@ -15,12 +16,16 @@ import { useWizard } from "../WizardContext";
 export default function LicensingStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
   const navigate = useNavigate();
+  const [fieldErr, setFieldErr] = useState("");
 
   async function next() {
-    let seats = draft.contracted_seats.trim() || "PLACEHOLDER_UNSET";
-    if (seats !== "PLACEHOLDER_UNSET" && !/^\d+$/.test(seats)) {
-      seats = "PLACEHOLDER_UNSET";
+    const raw = draft.contracted_seats.trim();
+    if (raw && raw !== "PLACEHOLDER_UNSET" && !/^\d+$/.test(raw)) {
+      setFieldErr("Contracted mailboxes must be a whole number, or left blank.");
+      return;
     }
+    const seats = raw && raw !== "PLACEHOLDER_UNSET" ? raw : "PLACEHOLDER_UNSET";
+    setFieldErr("");
     await save({ contracted_seats: seats, current_step: "firewall" });
     navigate("/wizard/firewall");
   }
@@ -33,7 +38,7 @@ export default function LicensingStep() {
       <Title>Contracted mailboxes</Title>
       <Lede>
         Optionally set how many mailboxes this customer has purchased. Leave blank to decide later
-        — new mailbox creation stays unlimited until you set a number.
+        — until a number is set, the quota gate blocks new mailbox creates.
       </Lede>
       <FieldRow>
         <FieldLabel htmlFor="contracted_seats" optional>
@@ -42,7 +47,10 @@ export default function LicensingStep() {
         <Input
           id="contracted_seats"
           value={displaySeats}
-          onChange={(e) => setLocal({ contracted_seats: e.target.value || "PLACEHOLDER_UNSET" })}
+          onChange={(e) => {
+            setFieldErr("");
+            setLocal({ contracted_seats: e.target.value || "PLACEHOLDER_UNSET" });
+          }}
           placeholder="Leave blank to set later"
           inputMode="numeric"
         />
@@ -51,7 +59,7 @@ export default function LicensingStep() {
           Password resets and other changes are never blocked by this.
         </Hint>
       </FieldRow>
-      <Err>{error}</Err>
+      <Err>{fieldErr || error}</Err>
       <NavRow>
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/zpush")}>
           Back
