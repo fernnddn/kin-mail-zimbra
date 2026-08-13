@@ -17,9 +17,10 @@
 #   sudo ./09-hardening.sh --status     # print current hardening signals
 #
 # Dual-node: apply OS pieces via ansible/playbooks/mail-os-hardening.yml
-# (role os_hardening) on BOTH mail hosts. Keep fail2ban filters/jails and
-# the unattended drop-in in sync with that role. COS / cleartext / TLS /
-# SMTP rates stay in this script only (shared LDAP, not per-node).
+# (role os_hardening) on BOTH mail hosts. Jail file is written by
+# install/lib/kin-fail2ban-jails.sh (also called from ocf:kin:zimbra).
+# Keep fail2ban filters and the unattended drop-in in sync with that role.
+# COS / cleartext / TLS / SMTP rates stay in this script only (shared LDAP).
 #
 # Idempotent. Proxy restart (if needed) temporarily unmanages kin-zimbra so
 # Pacemaker does not tear down the VIP on a brief zmproxy blip.
@@ -143,56 +144,11 @@ failregex = ^<HOST>:\d+ .* "(?:OPTIONS|POST|GET) https?://[^"]*/(?:Microsoft-Ser
 ignoreregex =
 EOF
 
-  JAIL_SSHD='
-[sshd]
-enabled = true
-port    = ssh
-mode    = normal
-'
-
-  JAIL_ZIMBRA=""
-  JAIL_ZPUSH=""
-  if [ -f /opt/zimbra/log/mailbox.log ]; then
-    JAIL_ZIMBRA='
-[zimbra-auth]
-enabled  = true
-filter   = zimbra-auth
-port     = http,https
-logpath  = /opt/zimbra/log/mailbox.log
-maxretry = 8
-findtime = 10m
-bantime  = 1h
-'
-  else
-    warn "mailbox.log missing — zimbra-auth jail not enabled on this node"
+  install -m 0755 ./lib/kin-fail2ban-jails.sh /usr/local/sbin/kin-fail2ban-jails
+  if ! FAIL2BAN_IGNORE_IP="${FAIL2BAN_IGNORE_IP}" /usr/local/sbin/kin-fail2ban-jails auto; then
+    fail "fail2ban jail render failed"
+    exit 1
   fi
-  if [ -f /opt/zimbra/log/nginx.access.log ]; then
-    JAIL_ZPUSH='
-[zpush-auth]
-enabled  = true
-filter   = zpush-auth
-port     = https
-logpath  = /opt/zimbra/log/nginx.access.log
-maxretry = 10
-findtime = 10m
-bantime  = 1h
-'
-  else
-    warn "nginx.access.log missing — zpush-auth jail not enabled on this node"
-  fi
-
-  cat > /etc/fail2ban/jail.d/kin-mail.conf <<EOF
-# KIN Mail Part A — managed by install/09-hardening.sh
-[DEFAULT]
-ignoreip = ${FAIL2BAN_IGNORE_IP}
-bantime  = 1h
-findtime = 10m
-maxretry = 8
-backend  = auto
-${JAIL_SSHD}
-${JAIL_ZIMBRA}
-${JAIL_ZPUSH}
-EOF
 
   systemctl enable --now fail2ban >/dev/null
   systemctl reload fail2ban 2>/dev/null || systemctl restart fail2ban

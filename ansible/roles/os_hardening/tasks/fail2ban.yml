@@ -82,13 +82,25 @@
   notify: Reload fail2ban after jail or filter change
   tags: [hardening, os, fail2ban]
 
-- name: Deploy the kin-mail fail2ban jail
-  ansible.builtin.template:
-    src: kin-mail.jail.j2
-    dest: "{{ os_hardening_jail_path }}"
+- name: Install the shared fail2ban jail helper
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../install/lib/kin-fail2ban-jails.sh"
+    dest: "{{ os_hardening_fail2ban_jails_path }}"
     owner: root
     group: root
-    mode: "0644"
+    mode: "0755"
+  tags: [hardening, os, fail2ban]
+
+- name: Render the kin-mail fail2ban jail via the shared helper
+  ansible.builtin.command:
+    argv:
+      - "{{ os_hardening_fail2ban_jails_path }}"
+      - auto
+  environment:
+    FAIL2BAN_IGNORE_IP: "{{ os_hardening_ignoreip_effective }}"
+  register: os_hardening_jail_script
+  changed_when: "'updated' in (os_hardening_jail_script.stdout | default(''))"
+  when: not ansible_check_mode
   notify: Reload fail2ban after jail or filter change
   tags: [hardening, os, fail2ban]
 

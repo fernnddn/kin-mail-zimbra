@@ -6,8 +6,8 @@ meta_data() {
 	cat <<'META'
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="zimbra" version="1.1">
-<version>1.1</version>
+<resource-agent name="zimbra" version="1.2">
+<version>1.2</version>
 <longdesc lang="en">
 Starts/stops/monitors Zimbra Collaboration via zmcontrol.
 Run only where /opt/zimbra is mounted (DRBD Primary + Filesystem RA).
@@ -18,6 +18,11 @@ matches when the URL contains zimbra_server_hostname), so zmcontrol
 will not start ldap first and then fails getEnabledServices. This
 agent starts /opt/zimbra/bin/ldap and waits until it is ready before
 zmcontrol start.
+
+After a successful start (and on stop, before zmcontrol stop) this
+agent refreshes fail2ban jails via /usr/local/sbin/kin-fail2ban-jails
+so zimbra-auth/zpush-auth track the mounted mailbox logs. A fail2ban
+hiccup is logged and ignored — it must never fail the OCF action.
 </longdesc>
 <shortdesc lang="en">Zimbra zmcontrol wrapper</shortdesc>
 <parameters/>
@@ -84,9 +89,24 @@ zimbra_ensure_ldap() {
 	return $OCF_ERR_GENERIC
 }
 
+# Best-effort fail2ban jail refresh. Never fails the OCF action.
+zimbra_fail2ban_jails() {
+	local mode="$1" script="/usr/local/sbin/kin-fail2ban-jails" out
+	if [ ! -x "$script" ]; then
+		ocf_log warn "kin-fail2ban-jails missing; skip jail refresh (${mode})"
+		return 0
+	fi
+	out=$(KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$script" "$mode" 2>&1) || true
+	ocf_log info "fail2ban jails ${mode}: ${out}"
+	return 0
+}
+
 zimbra_start() {
 	local out rc
-	zimbra_monitor && return $OCF_SUCCESS
+	if zimbra_monitor; then
+		zimbra_fail2ban_jails mounted
+		return $OCF_SUCCESS
+	fi
 	zimbra_ensure_ldap || return $OCF_ERR_GENERIC
 	ocf_log info "zmcontrol start"
 	out=$(su - ${ZIMBRA_USER} -c "zmcontrol start" 2>&1)
@@ -95,7 +115,10 @@ zimbra_start() {
 	[ "$rc" -eq 0 ] || return $OCF_ERR_GENERIC
 	local i=0
 	while [ $i -lt 100 ]; do
-		zimbra_monitor && return $OCF_SUCCESS
+		if zimbra_monitor; then
+			zimbra_fail2ban_jails mounted
+			return $OCF_SUCCESS
+		fi
 		sleep 5
 		i=$((i + 1))
 	done
@@ -103,6 +126,7 @@ zimbra_start() {
 }
 
 zimbra_stop() {
+	zimbra_fail2ban_jails unmounted
 	if [ ! -x /opt/zimbra/bin/zmcontrol ]; then
 		return $OCF_SUCCESS
 	fi

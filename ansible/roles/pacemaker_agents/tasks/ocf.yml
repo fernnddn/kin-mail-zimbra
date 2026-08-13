@@ -30,6 +30,16 @@
   when: not ansible_check_mode or pacemaker_agents_ocf_dir_stat.stat.exists
   tags: [pacemaker, agents, ocf]
 
+- name: Deploy the fail2ban jail helper used by ocf:kin:zimbra
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../install/lib/kin-fail2ban-jails.sh"
+    dest: "{{ pacemaker_agents_fail2ban_jails_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: pacemaker_agents_fail2ban_jails_copy
+  tags: [pacemaker, agents, ocf]
+
 - name: Note whether the Zimbra OCF differs from the live version
   ansible.builtin.debug:
     msg: >-

@@ -31,6 +31,16 @@
   check_mode: false
   tags: [pacemaker, agents, verify]
 
+- name: Verify the fail2ban jail helper is executable
+  ansible.builtin.stat:
+    path: "{{ pacemaker_agents_fail2ban_jails_path }}"
+  register: pacemaker_agents_fail2ban_jails_stat
+  check_mode: false
+  failed_when: >-
+    not pacemaker_agents_fail2ban_jails_stat.stat.exists or
+    not pacemaker_agents_fail2ban_jails_stat.stat.executable
+  tags: [pacemaker, agents, verify]
+
 - name: Verify the systemd drbd service is disabled
   ansible.builtin.command:
     cmd: systemctl is-enabled drbd.service

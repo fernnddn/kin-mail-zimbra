@@ -25,6 +25,7 @@ os_hardening_mailbox_log: /opt/zimbra/log/mailbox.log
 os_hardening_nginx_log: /opt/zimbra/log/nginx.access.log
 
 os_hardening_jail_path: /etc/fail2ban/jail.d/kin-mail.conf
+os_hardening_fail2ban_jails_path: /usr/local/sbin/kin-fail2ban-jails
 os_hardening_zimbra_filter_path: /etc/fail2ban/filter.d/zimbra-auth.conf
 os_hardening_zpush_filter_path: /etc/fail2ban/filter.d/zpush-auth.conf
 os_hardening_auto_upgrades_path: /etc/apt/apt.conf.d/20auto-upgrades
