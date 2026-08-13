@@ -121,14 +121,15 @@ jobs:
 
       # These scripts were written against a live customer environment. This
       # gate exists so no address, key or token can be reintroduced by accident.
-      # Includes cover installer scripts, markdown, NOTICE, and Ansible YAML /
-      # Jinja — ansible/ was previously unscanned.
+      # Includes cover installer scripts, markdown, NOTICE, Ansible YAML /
+      # Jinja, and Python (console/backend, monitoring/zabbix, install/lib).
       - name: Scan for leaked deployment data
         run: |
           fail=0
           includes=(
             --include='*.sh' --include='*.md' --include='NOTICE'
             --include='*.yml' --include='*.yaml' --include='*.j2'
+            --include='*.py'
           )
           scan() {
             if grep -RInE "$1" "${includes[@]}" . ; then
@@ -146,11 +147,15 @@ jobs:
           #   defaults/              — role defaults/main.yml ship lab IPs as
           #                            documented examples; playbooks/tasks/j2
           #                            stay fully gated
+          #   register_hosts.py      — Zabbix lab host table (Observability /
+          #                            Mail A/B / Backup); same lab IPs as
+          #                            *.example.yml, not a leaked secret
           scan_private_ip() {
             if grep -RInE "$1" "${includes[@]}" \
                  --exclude='HA-RUNBOOK.md' \
                  --exclude='*.example.yml' \
                  --exclude='checks.yml' \
+                 --exclude='register_hosts.py' \
                  --exclude-dir=defaults \
                  . ; then
               echo ">>> $2"; fail=1
@@ -251,7 +256,9 @@ jobs:
           cache: npm
           cache-dependency-path: console/frontend/package-lock.json
 
-      - name: Frontend production build
+      # Vite does not run tsc. A missing import can still produce a production
+      # bundle (pre-release audit: useDeploySession). Fail the job on type errors.
+      - name: Frontend type-check
         working-directory: console/frontend
         run: |
           set -euo pipefail
@@ -260,6 +267,16 @@ jobs:
             exit 1
           fi
           npm ci
+          npx tsc --noEmit
+
+      - name: Frontend production build
+        working-directory: console/frontend
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "ERROR: console/frontend/package.json missing — refusing silent pass"
+            exit 1
+          fi
           npm run build
 
       - uses: actions/setup-python@v5

@@ -161,7 +161,7 @@ def detect_host_network() -> tuple[str, str]:
         return "", ""
     for line in out.splitlines():
         parts = line.split()
-        # e.g. "2: ens33    inet 10.10.40.15/24 brd ..."
+        # e.g. "2: ens33    inet 192.0.2.15/24 brd ..." (RFC 5737; not a lab address)
         if len(parts) >= 4 and parts[2] == "inet":
             iface = parts[1]
             ip = parts[3].split("/", 1)[0]
