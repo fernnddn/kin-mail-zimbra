@@ -20,6 +20,7 @@ CMD_CREATE_MAILBOX = "create_mailbox"
 CMD_CLEAR_INITIAL_CONSOLE_PASSWORD = "clear_initial_console_password"
 CMD_MAINTENANCE = "maintenance"
 CMD_STORE_PROVISIONING_SECRETS = "store_provisioning_secrets"
+CMD_RUN_HA_ORCHESTRATION = "run_ha_orchestration"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -34,6 +35,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
         CMD_MAINTENANCE,
         CMD_STORE_PROVISIONING_SECRETS,
+        CMD_RUN_HA_ORCHESTRATION,
     }
 )
 

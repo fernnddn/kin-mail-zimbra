@@ -26,6 +26,8 @@ PrivateTmp=true
 ProtectHome=true
 # Peer zmcontrol during maintenance pre-flight uses root SSH keys.
 BindReadOnlyPaths=-/root/.ssh
+# Ansible (HA orchestration) must not write under /root — ProtectHome makes it RO.
+Environment=HOME=/var/lib/kin-mail-privhelper
 NoNewPrivileges=false
 # Root by design (Option B); capabilities left unrestricted for install scripts later.
 # Do not add a network ListenStream here.

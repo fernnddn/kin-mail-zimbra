@@ -530,6 +530,15 @@ async def cmd_clear_initial_console_password(
     yield proto.event_done(0)
 
 
+async def cmd_run_ha_orchestration(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    from .orchestration import cmd_run_ha_orchestration as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     from .maintenance import cmd_maintenance as _run
 
@@ -594,6 +603,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
     proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
     proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
+    proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
 }
 
 

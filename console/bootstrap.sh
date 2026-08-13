@@ -136,6 +136,34 @@ else
   info "Clone the full repo (console/ + install/) or set KIN_MAIL_DEPLOY_DIR to a real tree under /opt"
 fi
 
+say "4c. Ansible playbooks for HA orchestration"
+REPO_ANSIBLE="$(cd "${SCRIPT_DIR}/.." && pwd)/ansible"
+ANSIBLE_DST="${OPT_ROOT}/ansible"
+if [ -d "$REPO_ANSIBLE/playbooks" ]; then
+  install -d -o root -g root -m 755 "$ANSIBLE_DST"
+  rsync -a --delete \
+    --exclude 'inventory/lab.yml' \
+    --exclude 'inventory/*.local.yml' \
+    --exclude '*.retry' \
+    "${REPO_ANSIBLE}/" "${ANSIBLE_DST}/"
+  ok "Synced ansible → ${ANSIBLE_DST}"
+else
+  warn "No sibling ansible/ next to console/ — HA orchestration needs ${ANSIBLE_DST}"
+fi
+need_orch_pkgs=()
+for p in ansible-core sshpass; do
+  if ! dpkg -s "$p" >/dev/null 2>&1; then
+    need_orch_pkgs+=("$p")
+  fi
+done
+if [ "${#need_orch_pkgs[@]}" -gt 0 ]; then
+  info "Installing: ${need_orch_pkgs[*]}"
+  apt-get -qq update
+  apt-get -y install "${need_orch_pkgs[@]}" >/dev/null
+else
+  ok "ansible-core / sshpass present"
+fi
+
 say "5. Python virtualenv + dependencies"
 install_uv() {
   if command -v uv >/dev/null 2>&1 || [ -x /usr/local/bin/uv ]; then

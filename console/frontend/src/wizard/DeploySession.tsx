@@ -18,7 +18,11 @@ import {
   type InstallProgress,
 } from "./deployPipeline";
 
-export type DeployActionId = "apply_draft" | "full_install" | "cancel_firewall_deadman";
+export type DeployActionId =
+  | "apply_draft"
+  | "full_install"
+  | "cancel_firewall_deadman"
+  | "ha_orchestration";
 
 type StreamEvent = {
   type: string;
@@ -54,8 +58,11 @@ type DeploySessionCtx = {
   installProgress: InstallProgress;
   confirmFull: boolean;
   setConfirmFull: (v: boolean) => void;
+  confirmHa: boolean;
+  setConfirmHa: (v: boolean) => void;
   runApply: () => Promise<void>;
   runDeploy: () => Promise<void>;
+  runHaOrchestration: () => Promise<void>;
   runCancelDeadman: () => Promise<void>;
   openLogsTab: () => void;
 };
@@ -102,6 +109,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const [deadmanHint, setDeadmanHint] = useState(false);
   const [applyDone, setApplyDone] = useState(false);
   const [confirmFull, setConfirmFull] = useState(false);
+  const [confirmHa, setConfirmHa] = useState(false);
   const [installProgress, setInstallProgress] = useState<InstallProgress>(emptyInstallProgress);
   const pipelineEsRef = useRef<EventSource | null>(null);
   const cancelEsRef = useRef<EventSource | null>(null);
@@ -282,11 +290,13 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     (
       action: DeployActionId,
       onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
+      extraQuery?: string,
     ) => {
       localStreamRef.current = true;
       pipelineActionRef.current = action;
+      const qs = extraQuery ? `&${extraQuery}` : "";
       const es = new EventSource(
-        `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}`,
+        `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}${qs}`,
       );
       const wrapped = (exit?: number, reason?: "done" | "error" | "disconnect") => {
         localStreamRef.current = false;
@@ -421,6 +431,48 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     save,
   ]);
 
+  const runHaOrchestration = useCallback(async () => {
+    if (pipelineBusy) return;
+    if (!confirmHa) {
+      setMessage("Tick the confirmation box before starting HA orchestration.");
+      return;
+    }
+    setMessage("");
+    setOkMessage("");
+    append(
+      `\n[${new Date().toISOString()}] HA orchestration (Ansible sequence)\n` +
+        `# topology=${draft.topology || "unset"} peer=${draft.peer_host_ip || "unset"} ` +
+        `obs=${draft.observability_vm_ip || "unset"}\n`,
+    );
+    if (pipelineEsRef.current) {
+      pipelineEsRef.current.close();
+      pipelineEsRef.current = null;
+    }
+    setLocalBusy(true);
+    pipelineEsRef.current = openStream(
+      "ha_orchestration",
+      (_exit, reason) => {
+        void hydrateFromServer().then((still) => {
+          if (reason === "disconnect" || reason === "error") {
+            setLocalBusy(still);
+            return;
+          }
+          setLocalBusy(false);
+        });
+      },
+      "join_mode=apply",
+    );
+  }, [
+    append,
+    confirmHa,
+    draft.observability_vm_ip,
+    draft.peer_host_ip,
+    draft.topology,
+    hydrateFromServer,
+    openStream,
+    pipelineBusy,
+  ]);
+
   const runCancelDeadman = useCallback(async () => {
     if (cancelBusy) return;
     setMessage("");
@@ -451,8 +503,11 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       installProgress,
       confirmFull,
       setConfirmFull,
+      confirmHa,
+      setConfirmHa,
       runApply,
       runDeploy,
+      runHaOrchestration,
       runCancelDeadman,
       openLogsTab,
     }),
@@ -466,8 +521,10 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       applyDone,
       installProgress,
       confirmFull,
+      confirmHa,
       runApply,
       runDeploy,
+      runHaOrchestration,
       runCancelDeadman,
       openLogsTab,
     ],

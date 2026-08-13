@@ -312,6 +312,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "audit_log": proto.CMD_GET_AUDIT_LOG,
     "deploy_log": proto.CMD_GET_DEPLOY_LOG,
     "maintenance": proto.CMD_MAINTENANCE,
+    "ha_orchestration": proto.CMD_RUN_HA_ORCHESTRATION,
 }
 
 
@@ -444,6 +445,10 @@ async def wizard_deploy_stream(
         op = (request.query_params.get("op") or "status").strip().lower()
         target = (request.query_params.get("target") or "").strip()
         stream_args = {"op": op, "target": target}
+    elif cmd == proto.CMD_RUN_HA_ORCHESTRATION:
+        join_mode = (request.query_params.get("join_mode") or "apply").strip().lower()
+        skip = (request.query_params.get("skip_remote_install") or "").strip().lower()
+        stream_args = {"join_mode": join_mode, "skip_remote_install": skip}
 
     if not command_allowed(actor.role, cmd, args=stream_args):
         raise HTTPException(

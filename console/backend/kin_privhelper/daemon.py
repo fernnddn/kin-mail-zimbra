@@ -200,6 +200,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             audit_cmd = f"{cmd}:{mop}" + (f":{tgt}" if tgt else "")
         elif cmd == proto.CMD_STORE_PROVISIONING_SECRETS:
             audit_cmd = f"{cmd}:redacted"
+        elif cmd == proto.CMD_RUN_HA_ORCHESTRATION:
+            jmode = str(args.get("join_mode") or "apply")[:16]
+            audit_cmd = f"{cmd}:{jmode}"
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).

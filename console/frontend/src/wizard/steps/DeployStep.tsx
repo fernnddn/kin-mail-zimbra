@@ -15,7 +15,7 @@ import {
   WarnBox,
 } from "../../ui";
 import { theme } from "../../styles/theme";
-import { useDeploySession } from "../DeploySession";
+import { useWizard } from "../WizardContext";
 import { FULL_INSTALL_STAGES } from "../deployPipeline";
 
 const StepCard = styled.div`
@@ -167,6 +167,7 @@ function stageState(
 }
 
 export default function DeployStep() {
+  const { draft } = useWizard();
   const { user } = useAuth();
   const { deployed, installInProgress } = useSetup();
   const navigate = useNavigate();
@@ -181,8 +182,11 @@ export default function DeployStep() {
     installProgress,
     confirmFull,
     setConfirmFull,
+    confirmHa,
+    setConfirmHa,
     runApply,
     runDeploy,
+    runHaOrchestration,
     runCancelDeadman,
     openLogsTab,
   } = useDeploySession();
@@ -333,6 +337,48 @@ export default function DeployStep() {
               </Hint>
             )}
           </StepCard>
+
+          {draft.topology === "2vm" && (
+            <StepCard>
+              <StepHeading>3. Build the 2-server HA pair</StepHeading>
+              <StepBody>
+                After this host has mail installed, run the Ansible sequence against the second
+                server (OS hardening, qdevice, fencing agents, DRBD, Pacemaker). Progress streams
+                into View logs with a checkpoint per playbook. A failure stops there — nothing is
+                retried or rolled back automatically. After a manual fix, run this again from the
+                top; the playbooks are idempotent.
+              </StepBody>
+              <label
+                style={{
+                  display: "flex",
+                  gap: "0.55rem",
+                  alignItems: "flex-start",
+                  margin: "0 0 0.75rem",
+                  fontSize: "0.88rem",
+                  lineHeight: 1.4,
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={confirmHa}
+                  onChange={(e) => setConfirmHa(e.target.checked)}
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span>
+                  I confirm HA orchestration should run for {draft.peer_host_ip || "the second server"}{" "}
+                  (observability {draft.observability_vm_ip || "unset"}).
+                </span>
+              </label>
+              <Button
+                type="button"
+                disabled={!confirmHa || inMaintenance || pipelineBusy}
+                onClick={() => void runHaOrchestration()}
+              >
+                Build HA pair
+              </Button>
+            </StepCard>
+          )}
         </>
       )}
 

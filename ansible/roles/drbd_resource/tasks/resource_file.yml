@@ -11,7 +11,7 @@
 
 - name: Check the kin-zimbra resource definition uses external meta
   ansible.builtin.command:
-    cmd: grep -E 'meta-disk\s+/dev/loop21' {{ drbd_resource_res_path }}
+    cmd: grep -E 'meta-disk\s+{{ drbd_resource_meta_disk | regex_escape }}' {{ drbd_resource_res_path }}
   changed_when: false
   check_mode: false
   tags: [drbd, resource, config]

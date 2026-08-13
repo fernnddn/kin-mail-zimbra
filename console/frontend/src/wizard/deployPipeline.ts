@@ -46,6 +46,14 @@ export function emptyInstallProgress(): InstallProgress {
 
 /** Derive install progress from streamed kin-mail.sh output. */
 export function parseInstallProgress(log: string): InstallProgress {
+  if (
+    /HA orchestration Slice 2/i.test(log) ||
+    /\bORCH_(DONE|FAILED)\b/.test(log) ||
+    /\[\d+\/\d+\] START /.test(log)
+  ) {
+    return parseHaOrchProgress(log);
+  }
+
   const total = FULL_INSTALL_STAGE_COUNT;
   let current = 0;
   let label = "Starting…";
@@ -101,6 +109,59 @@ export function parseInstallProgress(log: string): InstallProgress {
   return {
     current,
     total,
+    label: current ? label : "Waiting…",
+    script,
+    complete: false,
+    failed: false,
+  };
+}
+
+/** Per-playbook checkpoints from privhelper HA orchestration (Slice 2). */
+export function parseHaOrchProgress(log: string): InstallProgress {
+  const startRe = /\[(\d+)\/(\d+)\] START (\S+):\s*(.+)$/gm;
+  let current = 0;
+  let total = 0;
+  let label = "Starting…";
+  let script = "";
+  let m: RegExpExecArray | null;
+  while ((m = startRe.exec(log)) !== null) {
+    current = Number(m[1]);
+    total = Number(m[2]);
+    script = m[3];
+    label = m[4].replace(/\s+proof=.*$/, "").trim() || script;
+  }
+  if (!total) {
+    const skip = /\[(\d+)\/(\d+)\] SKIP /.exec(log);
+    if (skip) {
+      current = Number(skip[1]);
+      total = Number(skip[2]);
+    }
+  }
+  const failed = /\bORCH_FAILED\b/.test(log) || /\] FAIL /.test(log);
+  const complete = /\bORCH_DONE\b/.test(log);
+  if (complete) {
+    return {
+      current: total || current,
+      total: total || current,
+      label: "HA sequence complete",
+      script,
+      complete: true,
+      failed: false,
+    };
+  }
+  if (failed) {
+    return {
+      current: current || 1,
+      total: total || current || 1,
+      label: current ? `${label} (failed)` : "HA sequence failed",
+      script,
+      complete: false,
+      failed: true,
+    };
+  }
+  return {
+    current,
+    total: total || 0,
     label: current ? label : "Waiting…",
     script,
     complete: false,

@@ -42,6 +42,7 @@ SETUP_ALLOWED_COMMANDS = frozenset(
         "cancel_firewall_deadman",
         "get_deploy_log",
         "store_provisioning_secrets",
+        "run_ha_orchestration",
     }
 )
 
