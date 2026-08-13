@@ -324,6 +324,7 @@ async def _stream_redacted(
         extra_env=extra_env,
         transcript=transcript,
         transcript_reset=False,
+        secrets=secrets,
     ):
         if ev.get("type") in ("stdout", "stderr") and ev.get("data"):
             ev = dict(ev)

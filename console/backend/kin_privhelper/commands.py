@@ -142,6 +142,16 @@ def validate_create_mailbox_args(args: dict[str, Any]) -> tuple[str, list[str]]:
     return "create", argv
 
 
+def _redact_secrets(text: str, secrets: list[str] | None) -> str:
+    """Replace known secrets before a line is logged or yielded. Empty values ignored."""
+    if not secrets:
+        return text
+    out = text
+    for secret in secrets:
+        if secret:
+            out = out.replace(secret, "***")
+    return out
+
 
 async def _stream_subprocess(
     argv: list[str],
@@ -150,6 +160,7 @@ async def _stream_subprocess(
     extra_env: dict[str, str] | None = None,
     transcript: Path | None = None,
     transcript_reset: bool = False,
+    secrets: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
@@ -169,8 +180,9 @@ async def _stream_subprocess(
         try:
             transcript.parent.mkdir(parents=True, exist_ok=True)
             log_fh = transcript.open("w" if transcript_reset else "a", encoding="utf-8")
+            header_cmd = _redact_secrets(" ".join(argv), secrets)
             log_fh.write(
-                f"\n=== {' '.join(argv)} @ {datetime.now(timezone.utc).isoformat()} ===\n"
+                f"\n=== {header_cmd} @ {datetime.now(timezone.utc).isoformat()} ===\n"
             )
             log_fh.flush()
             try:
@@ -185,7 +197,7 @@ async def _stream_subprocess(
         if log_fh is None:
             return
         try:
-            log_fh.write(text)
+            log_fh.write(_redact_secrets(text, secrets))
             log_fh.flush()
         except OSError:
             pass
@@ -213,6 +225,7 @@ async def _stream_subprocess(
             if item is None:
                 break
             kind, text = item
+            text = _redact_secrets(text, secrets)
             _tee(text if kind == "stdout" else f"[stderr] {text}")
             if kind == "stdout":
                 yield proto.event_stdout(text)

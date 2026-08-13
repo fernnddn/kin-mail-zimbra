@@ -118,5 +118,43 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertTrue(by_id["mon_iscsi"].check_on_join_check)
 
 
+class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transcript_file_does_not_contain_secret(self) -> None:
+        """Force a secret through stdout, stderr, and argv; the on-disk log must not keep it."""
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.commands import _stream_subprocess
+
+        secret = "kin-test-vault-pass-NOTREAL-9f3a"
+        marker = "KIN_ORCH_REDACT_PROBE"
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "deploy-last.log"
+            argv = [
+                "python3",
+                "-c",
+                (
+                    "import sys;"
+                    f"sys.stdout.write({marker!r}+':'+{secret!r}+'\\n');"
+                    f"sys.stderr.write('err-'+{secret!r}+'\\n')"
+                ),
+            ]
+            events: list[dict] = []
+            async for ev in _stream_subprocess(
+                argv,
+                transcript=path,
+                secrets=[secret],
+            ):
+                events.append(ev)
+            body = path.read_text(encoding="utf-8")
+            self.assertTrue(path.is_file())
+            self.assertNotIn(secret, body)
+            self.assertIn("***", body)
+            self.assertIn(marker, body)
+            joined = "".join(str(e.get("data") or "") for e in events)
+            self.assertNotIn(secret, joined)
+            self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
+
+
 if __name__ == "__main__":
     unittest.main()
