@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          scripts=(install/*.sh install/lib/*.sh)
+          scripts=(install/*.sh install/lib/*.sh backup/*.sh)
           if [ ${#scripts[@]} -eq 0 ]; then
             echo "ERROR: no install/*.sh found — refusing silent pass"
             exit 1
@@ -46,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          scripts=(install/*.sh install/lib/*.sh)
+          scripts=(install/*.sh install/lib/*.sh backup/*.sh)
           if [ ${#scripts[@]} -eq 0 ]; then
             echo "ERROR: no install/*.sh found — refusing silent pass"
             exit 1
@@ -62,7 +62,7 @@ jobs:
         continue-on-error: true
         run: |
           shopt -s nullglob
-          for f in install/*.sh install/lib/*.sh; do
+          for f in install/*.sh install/lib/*.sh backup/*.sh; do
             shellcheck -S warning -e SC1090,SC1091 "$f" || true
           done
 

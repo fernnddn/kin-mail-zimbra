@@ -1,0 +1,20 @@
+# Copy to /etc/kin-mail-backup/config on the backup repository VM (mode 0600).
+# Real cluster addresses belong only in that file — never in git.
+
+# Space-separated mail-node IPs or hostnames. The backup finds whichever
+# node currently has /opt/zimbra mounted (the Promoted replica). Do not
+# pin a node identity here.
+MAIL_NODES="192.0.2.10 192.0.2.11"
+
+SSH_USER="cursor"
+SSH_IDENTITY="/etc/kin-mail-backup/id_ed25519"
+
+BACKUP_ROOT="/var/lib/kin-mail-backup"
+REMOTE_STAGING="/var/tmp/kin-mail-backup-staging"
+
+# DRBD resource name (used only as a comment in the MANIFEST; discovery is
+# the /opt/zimbra mount, not a hardcoded Primary hostname).
+DRBD_RESOURCE="kin-zimbra"
+
+DAILY_KEEP=7
+WEEKLY_KEEP=4

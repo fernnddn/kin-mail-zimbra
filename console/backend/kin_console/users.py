@@ -63,6 +63,7 @@ def users_file() -> Path:
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    prev = path.stat() if path.is_file() else None
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".users.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -71,6 +72,11 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             os.fsync(fh.fileno())
         os.chmod(tmp_name, 0o600)
         os.replace(tmp_name, path)
+        if prev is not None:
+            try:
+                os.chown(path, prev.st_uid, prev.st_gid)
+            except PermissionError:
+                pass
         path.chmod(0o600)
     finally:
         if os.path.exists(tmp_name):

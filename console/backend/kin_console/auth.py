@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from dataclasses import dataclass
 
@@ -39,7 +40,13 @@ def load_password_hash() -> str:
 def write_password_hash(password_hash: str) -> None:
     path = settings.password_hash_file
     path.parent.mkdir(parents=True, exist_ok=True)
+    prev = path.stat() if path.is_file() else None
     path.write_text(password_hash + "\n", encoding="utf-8")
+    if prev is not None:
+        try:
+            os.chown(path, prev.st_uid, prev.st_gid)
+        except PermissionError:
+            pass
     path.chmod(0o600)
 
 
