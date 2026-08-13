@@ -1,0 +1,6 @@
+# Zabbix agent wrappers run as root for DRBD / quorum / stonith / backup dir.
+zabbix ALL=(root) NOPASSWD: /usr/local/lib/kin-zabbix/kin-drbd-ok.sh
+zabbix ALL=(root) NOPASSWD: /usr/local/lib/kin-zabbix/kin-backup-age.sh
+zabbix ALL=(root) NOPASSWD: /usr/local/lib/kin-zabbix/kin-qdevice-votes.sh
+zabbix ALL=(root) NOPASSWD: /usr/local/lib/kin-zabbix/kin-stonith-new.sh
+Defaults:zabbix !requiretty
