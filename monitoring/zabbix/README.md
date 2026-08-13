@@ -1,4 +1,4 @@
-# KIN Mail Zabbix extras (Timeline 3.7–3.9)
+# KIN Mail Zabbix extras (Timeline 3.7–3.9, 5.4)
 
 Agent `UserParameter` keys and a Zabbix 6.0 template for the HA/backup stack.
 The Zabbix Server / Grafana / agent **packages** are installed by
@@ -13,8 +13,12 @@ not by this repo.
 | `kin.qdevice.votes` | mail A/B | Qdevice vote count (`corosync-quorumtool`) |
 | `kin.stonith.new_events` | mail A/B | Count of `pcs stonith history` events completed after **2026-08-13 09:05:00** (excludes the morning fence-test) |
 | `kin.backup.age_seconds` | Backup VM | Age of newest `/var/lib/kin-mail-backup/daily/*` directory |
+| `kin.mailbox.active_count` | mail A/B (Promoted only) | Active billable mailboxes — same rules as `install/lib/quota-gate.sh` (`zmprov -l gaa -v`, status active, not system/admin). Unpromoted returns `ZBX_NOTSUPPORTED`. |
+| `kin.mailbox.contracted_seats` | mail A/B | `CONTRACTED_SEATS` from `/etc/kin-mail/config` (`0` if unset / `PLACEHOLDER_UNSET`) |
 
-Triggers: DRBD `=0` (High), qdevice votes `<1` (High), stonith new events `>0` (High), backup age `>93600` (26h, Warning).
+Triggers: DRBD `=0` (High), qdevice votes `<1` (High), stonith new events `>0` (High), backup age `>93600` (26h, Warning). Metering items are gauges (no trigger).
+
+`kin.mailbox.active_count` is LDAP-only (`zmprov -l`). It must not write under `/opt/zimbra`. The agent `Timeout` on mail nodes needs to be at least **30s** so the LDAP listing can finish.
 
 ## Deploy on a node
 

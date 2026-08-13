@@ -140,6 +140,8 @@ def main() -> int:
     ensure_item(auth, ha_id, "KIN DRBD replication OK", "kin.drbd.ok")
     ensure_item(auth, ha_id, "KIN qdevice votes", "kin.qdevice.votes")
     ensure_item(auth, ha_id, "KIN new STONITH events", "kin.stonith.new_events")
+    ensure_item(auth, ha_id, "KIN active mailbox count", "kin.mailbox.active_count", delay="60s")
+    ensure_item(auth, ha_id, "KIN contracted seats", "kin.mailbox.contracted_seats", delay="60s")
     ensure_item(auth, backup_id, "KIN backup age seconds", "kin.backup.age_seconds", delay="300s")
     ensure_trigger(auth, "KIN DRBD not Established/UpToDate", f"last(/KIN Mail HA/kin.drbd.ok)=0", 4)
     ensure_trigger(auth, "KIN qdevice votes missing", f"last(/KIN Mail HA/kin.qdevice.votes)<1", 4)
