@@ -33,6 +33,8 @@ console/frontend/node_modules/
 console/backend/.venv/
 console/**/__pycache__/
 console/**/*.pyc
+**/__pycache__/
+*.pyc
 
 
 # --- logs and scratch --------------------------------------------------------
