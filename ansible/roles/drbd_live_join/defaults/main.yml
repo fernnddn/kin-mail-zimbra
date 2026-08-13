@@ -3,9 +3,10 @@
 # Shares cluster_add_host_* with cluster_survivor_replace.
 
 cluster_add_host_survivor_name: mail.gits-it.site
-cluster_add_host_survivor_address: 10.10.40.13
+# Must be overridden in inventory — previous default 10.10.40.13 is now Backup.
+cluster_add_host_survivor_address: ""
 cluster_add_host_new_name: mail3.gits-it.site
-cluster_add_host_new_address: 10.10.40.16
+cluster_add_host_new_address: ""
 cluster_add_host_drbd_resource: kin-zimbra
 cluster_add_host_drbd_res_path: /etc/drbd.d/kin-zimbra.res
 cluster_add_host_drbd_device: /dev/drbd0

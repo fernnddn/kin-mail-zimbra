@@ -94,6 +94,27 @@ else
   ln -sf /etc/resolv.conf.kin /etc/resolv.conf
 fi
 
+# Ubuntu's dnsmasq unit reads every file in /etc/dnsmasq.d except dpkg suffixes.
+# A leftover *.bak (illegal repeated keyword) fails the unit while resolv.conf
+# still points at 127.0.0.1 — outbound DNS dies silently.
+mkdir -p /var/backups/kin-mail/dnsmasq
+shopt -s nullglob
+for f in /etc/dnsmasq.d/*; do
+  base=$(basename "$f")
+  case "$base" in
+    *.conf|*.dpkg-dist|*.dpkg-old|*.dpkg-new) ;;
+    *) mv "$f" /var/backups/kin-mail/dnsmasq/ && info "quarantined stray dnsmasq file: $base" ;;
+  esac
+done
+
+mkdir -p /etc/systemd/system/dnsmasq.service.d
+cat > /etc/systemd/system/dnsmasq.service.d/kin-restart.conf <<'EOF'
+[Service]
+Restart=on-failure
+RestartSec=3
+EOF
+systemctl daemon-reload
+
 systemctl enable dnsmasq >/dev/null 2>&1
 systemctl restart dnsmasq
 sleep 2

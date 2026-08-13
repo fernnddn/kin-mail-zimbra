@@ -1,4 +1,30 @@
 ---
+- name: Derive DRBD replication addresses from inventory ansible_host
+  ansible.builtin.set_fact:
+    drbd_resource_node_a_address: "{{ hostvars[drbd_resource_node_a_name].ansible_host }}"
+    drbd_resource_node_b_address: "{{ hostvars[drbd_resource_node_b_name].ansible_host }}"
+  when:
+    - drbd_resource_node_a_name in hostvars
+    - drbd_resource_node_b_name in hostvars
+    - (hostvars[drbd_resource_node_a_name].ansible_host | default('') | length) > 0
+    - (hostvars[drbd_resource_node_b_name].ansible_host | default('') | length) > 0
+  tags: [drbd, resource, config]
+
+- name: Require DRBD node addresses (never silently use stale role defaults)
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_node_a_address | length > 0
+      - drbd_resource_node_b_address | length > 0
+      - drbd_resource_node_a_address != drbd_resource_node_b_address
+      - drbd_resource_node_a_address != (corosync_qdevice_qnetd_ip | default(''))
+      - drbd_resource_node_b_address != (corosync_qdevice_qnetd_ip | default(''))
+    fail_msg: >-
+      drbd_resource_node_*_address is empty or collides with the qnetd IP
+      ({{ corosync_qdevice_qnetd_ip | default('unset') }}). Set ansible_host on
+      {{ drbd_resource_node_a_name }} / {{ drbd_resource_node_b_name }}, or
+      override the addresses in inventory. Do not reuse Backup/Observability IPs.
+  tags: [drbd, resource, config]
+
 - name: Deploy the kin-zimbra DRBD resource definition
   ansible.builtin.template:
     src: kin-zimbra.res.j2

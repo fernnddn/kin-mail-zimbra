@@ -85,14 +85,27 @@ def render_inventory(mail_hosts: list[OrchHost], monitoring: OrchHost) -> str:
         "    corosync_qdevice_qnetd_ip: " + monitoring.ip,
         "    corosync_qdevice_qnetd_inventory_host: " + monitoring.name,
         "    iscsi_initiator_portal: \"" + monitoring.ip + ":3260\"",
-        "  children:",
-        "    monitoring:",
-        "      hosts:",
-        f"        {monitoring.name}:",
-        f"          ansible_host: {monitoring.ip}",
-        "    mail_nodes:",
-        "      hosts:",
     ]
+    if len(mail_hosts) >= 2:
+        lines.extend(
+            [
+                f"    drbd_resource_node_a_name: {mail_hosts[0].name}",
+                f"    drbd_resource_node_a_address: {mail_hosts[0].ip}",
+                f"    drbd_resource_node_b_name: {mail_hosts[1].name}",
+                f"    drbd_resource_node_b_address: {mail_hosts[1].ip}",
+            ]
+        )
+    lines.extend(
+        [
+            "  children:",
+            "    monitoring:",
+            "      hosts:",
+            f"        {monitoring.name}:",
+            f"          ansible_host: {monitoring.ip}",
+            "    mail_nodes:",
+            "      hosts:",
+        ]
+    )
     for host in mail_hosts:
         lines.append(f"        {host.name}:")
         lines.append(f"          ansible_host: {host.ip}")

@@ -15,8 +15,9 @@ not by this repo.
 | `kin.backup.age_seconds` | Backup VM | Age of newest `/var/lib/kin-mail-backup/daily/*` directory |
 | `kin.mailbox.active_count` | mail A/B (Promoted only) | Active billable mailboxes — same rules as `install/lib/quota-gate.sh` (`zmprov -l gaa -v`, status active, not system/admin). Unpromoted returns `ZBX_NOTSUPPORTED`. |
 | `kin.mailbox.contracted_seats` | mail A/B | `CONTRACTED_SEATS` from `/etc/kin-mail/config` (`0` if unset / `PLACEHOLDER_UNSET`) |
+| `kin.systemd.failed_count` | mail A/B + Backup | Number of systemd units in `failed` (catches restart-loop give-up / stray dnsmasq `.bak`). Alert only — never auto-restarts cluster daemons. |
 
-Triggers: DRBD `=0` (High), qdevice votes `<1` (High), stonith new events `>0` (High), backup age `>93600` (26h, Warning). Metering items are gauges (no trigger).
+Triggers: DRBD `=0` (High), qdevice votes `<1` (High), stonith new events `>0` (High), backup age `>93600` (26h, Warning), systemd failed count `>0` (Warning). Metering items are gauges (no trigger).
 
 `kin.mailbox.active_count` is LDAP-only (`zmprov -l`). It must not write under `/opt/zimbra`. The agent `Timeout` on mail nodes needs to be at least **30s** so the LDAP listing can finish.
 

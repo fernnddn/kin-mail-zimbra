@@ -13,3 +13,24 @@
     state: started
     enabled: true
   tags: [zpush, php]
+
+- name: Install a PHP-FPM Restart=on-failure drop-in
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ zpush_php_fpm_service }}.service.d/kin-restart.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      Restart=on-failure
+      RestartSec=3
+  register: zpush_php_fpm_restart_dropin
+  tags: [zpush, php]
+
+- name: Reload systemd after the PHP-FPM restart drop-in
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - zpush_php_fpm_restart_dropin is changed
+  tags: [zpush, php]

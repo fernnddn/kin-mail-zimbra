@@ -11,34 +11,34 @@
 all:
   vars:
     cluster_add_host_survivor_name: mail.gits-it.site
-    cluster_add_host_survivor_address: 10.10.40.13
+    cluster_add_host_survivor_address: 10.10.40.15
     cluster_add_host_retired_name: mail2.gits-it.site
-    cluster_add_host_retired_address: 10.10.40.12
-    # NEW identity — must differ from retired Host B.
+    cluster_add_host_retired_address: 10.10.40.14
+    # NEW identity — must differ from retired Host B and from the live VIP .16.
     cluster_add_host_new_name: mail3.gits-it.site
-    cluster_add_host_new_address: 10.10.40.16
+    cluster_add_host_new_address: 10.10.40.17
     cluster_add_host_hacluster_password: ""
     cluster_node_base_hacluster_password: "{{ cluster_add_host_hacluster_password }}"
     # Reuse fencing defaults; override initiator name for the new host.
-    iscsi_initiator_portal: "10.10.40.14:3260"
+    iscsi_initiator_portal: "10.10.40.12:3260"
   children:
     monitoring:
       hosts:
         mon.gits-it.site:
-          ansible_host: 10.10.40.14
+          ansible_host: 10.10.40.12
           ansible_user: cursor
           # ansible_password: "..."
     mail_survivor:
       hosts:
         mail.gits-it.site:
-          ansible_host: 10.10.40.13
+          ansible_host: 10.10.40.15
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
           # ansible_password: "..."
     mail_new_node:
       hosts:
         mail3.gits-it.site:
-          ansible_host: 10.10.40.16
+          ansible_host: 10.10.40.17
           ansible_user: cursor
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail3"
           # ansible_password: "..."

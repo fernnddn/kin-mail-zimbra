@@ -27,6 +27,19 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("s3cret", inv)
         self.assertIn("192.0.2.15", inv)
         self.assertIn("192.0.2.12", inv)
+        self.assertNotIn("drbd_resource_node_a_address", inv)
+
+    def test_two_mail_hosts_emit_drbd_addresses(self) -> None:
+        inv = render_inventory(
+            [
+                OrchHost("mail.example.test", "192.0.2.15", "mail"),
+                OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+            ],
+            OrchHost("mon.example.test", "192.0.2.12", "mon"),
+        )
+        self.assertIn("drbd_resource_node_a_address: 192.0.2.15", inv)
+        self.assertIn("drbd_resource_node_b_address: 192.0.2.14", inv)
+        self.assertNotIn("10.10.40.", inv)
 
     def test_redact(self) -> None:
         self.assertEqual(redact_text("pass=hunter2 extra", ["hunter2"]), "pass=*** extra")
@@ -95,6 +108,13 @@ class OrchRbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "run_ha_orchestration"))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "store_provisioning_secrets"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "store_provisioning_secrets"))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "run_hardening"))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "run_hardening"))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "run_hardening"))
+        # Status is read-only; apply is the sensitive mutation.
+        self.assertTrue(
+            command_allowed(ROLE_CUSTOMER_ADMIN, "run_script:09-hardening.sh --status")
+        )
 
 
 class CheckModeSafetyTests(unittest.TestCase):

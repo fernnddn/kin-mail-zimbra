@@ -1,7 +1,9 @@
 ---
 iscsi_initiator_packages:
   - open-iscsi
-iscsi_initiator_portal: "10.10.40.14:3260"
+# Must be overridden in inventory (witness/qnetd host). Empty on purpose:
+# the previous default targeted an address that is now a mail node.
+iscsi_initiator_portal: ""
 iscsi_initiator_target_iqn: "iqn.2026-08.site.gits-it:kin-mail-sbd"
 # Override per host in inventory (mail vs mail2).
 iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"

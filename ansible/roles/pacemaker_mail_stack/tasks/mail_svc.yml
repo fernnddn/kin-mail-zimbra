@@ -4,6 +4,19 @@
 # Same rules as drbd_clone.yml: never check_mode: false on create/group add.
 # =============================================================================
 
+- name: Require a VIP that is not a mail-node address
+  ansible.builtin.assert:
+    that:
+      - pacemaker_mail_stack_vip_ip | length > 0
+      - pacemaker_mail_stack_vip_ip != (hostvars[inventory_hostname].ansible_host | default(''))
+      - pacemaker_mail_stack_vip_ip not in (groups['mail_nodes'] | default([]) | map('extract', hostvars, 'ansible_host') | list)
+    fail_msg: >-
+      pacemaker_mail_stack_vip_ip={{ pacemaker_mail_stack_vip_ip | default('(empty)') }}
+      is unset or collides with a mail-node ansible_host. Set the VIP explicitly
+      in inventory — never reuse a node NIC address as the floating IP.
+  run_once: true
+  tags: [pacemaker, stack, group]
+
 - name: Check whether the kin-fs filesystem resource already exists
   ansible.builtin.command:
     cmd: pcs resource config {{ pacemaker_mail_stack_fs }}

@@ -22,7 +22,11 @@ all:
     # sbd_stonith_device: /dev/disk/by-id/scsi-…
     # Rebuild: Host A is 10.10.40.15 — do NOT reuse old-lab VIP .15.
     # Public FortiGate NAT targets VIP 10.10.40.16 (not Host A .15).
-    # pacemaker_mail_stack_vip_ip: 10.10.40.16
+    pacemaker_mail_stack_vip_ip: 10.10.40.16
+    drbd_resource_node_a_name: mail.gits-it.site
+    drbd_resource_node_a_address: 10.10.40.15
+    drbd_resource_node_b_name: mail2.gits-it.site
+    drbd_resource_node_b_address: 10.10.40.14
     # Partition meta: leave meta-loop empty (no kin-drbd-meta-loop.service).
     # pacemaker_agents_keep_meta_loop_unit: ""
   children:

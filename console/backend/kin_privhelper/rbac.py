@@ -26,6 +26,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
     {
         "apply_wizard_draft",
         "run_full_install",
+        "run_hardening",
         "cancel_firewall_deadman",
         "store_provisioning_secrets",
         "run_ha_orchestration",

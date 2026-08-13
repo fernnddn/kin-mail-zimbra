@@ -11,7 +11,10 @@ pacemaker_mail_stack_fs_device: /dev/drbd0
 pacemaker_mail_stack_fs_directory: /opt/zimbra
 pacemaker_mail_stack_fs_fstype: ext4
 pacemaker_mail_stack_fs_options: noatime
-pacemaker_mail_stack_vip_ip: 10.10.40.15
+# Must be set in inventory. Empty on purpose: the previous default (10.10.40.15)
+# is Host A's node address on the rebuild lab — announcing that as a VIP would
+# collide with the real NIC. Live lab uses 10.10.40.16.
+pacemaker_mail_stack_vip_ip: ""
 pacemaker_mail_stack_vip_cidr: "24"
 pacemaker_mail_stack_vip_nic: ens33
 # After a fence the survivor must stay Promoted; a node location score

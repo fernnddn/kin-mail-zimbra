@@ -8,7 +8,9 @@ corosync_qdevice_service: corosync-qdevice
 # Cluster / QNetd pairing (matches lab kin-mail + mon)
 corosync_qdevice_cluster_name: kin-mail
 corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
-corosync_qdevice_qnetd_ip: 10.10.40.14
+# Must be overridden in inventory. Empty on purpose: the previous default
+# targeted an address that is now a mail node, not the witness VM.
+corosync_qdevice_qnetd_ip: ""
 corosync_qdevice_qnetd_port: 5403
 corosync_qdevice_algorithm: ffsplit
 corosync_qdevice_tie_breaker: lowest

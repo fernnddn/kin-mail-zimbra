@@ -142,11 +142,15 @@ def main() -> int:
     ensure_item(auth, ha_id, "KIN new STONITH events", "kin.stonith.new_events")
     ensure_item(auth, ha_id, "KIN active mailbox count", "kin.mailbox.active_count", delay="60s")
     ensure_item(auth, ha_id, "KIN contracted seats", "kin.mailbox.contracted_seats", delay="60s")
+    ensure_item(auth, ha_id, "KIN systemd failed unit count", "kin.systemd.failed_count", delay="60s")
     ensure_item(auth, backup_id, "KIN backup age seconds", "kin.backup.age_seconds", delay="300s")
+    ensure_item(auth, backup_id, "KIN systemd failed unit count", "kin.systemd.failed_count", delay="60s")
     ensure_trigger(auth, "KIN DRBD not Established/UpToDate", f"last(/KIN Mail HA/kin.drbd.ok)=0", 4)
     ensure_trigger(auth, "KIN qdevice votes missing", f"last(/KIN Mail HA/kin.qdevice.votes)<1", 4)
     ensure_trigger(auth, "KIN new STONITH fence event", f"last(/KIN Mail HA/kin.stonith.new_events)>0", 4)
     ensure_trigger(auth, "KIN backup older than 26h", f"last(/KIN Mail Backup/kin.backup.age_seconds)>93600", 2)
+    ensure_trigger(auth, "KIN systemd unit failed (mail)", f"last(/KIN Mail HA/kin.systemd.failed_count)>0", 2)
+    ensure_trigger(auth, "KIN systemd unit failed (backup)", f"last(/KIN Mail Backup/kin.systemd.failed_count)>0", 2)
 
     tplmap = {"linux": linux_id, "ha": ha_id, "backup": backup_id}
     for spec in HOSTS:
