@@ -30,7 +30,12 @@ export default function DomainStep() {
     if (!domain) missing.push("Email domain");
     if (!host) missing.push("Mail server hostname");
     if (!tz) missing.push("Timezone");
-    if (draft.admin_pass.length < 8) missing.push("Admin password (min 8 characters)");
+    const typedPass = draft.admin_pass;
+    if (typedPass) {
+      if (typedPass.length < 8) missing.push("Admin password (min 8 characters)");
+    } else if (!draft.admin_pass_set) {
+      missing.push("Admin password (min 8 characters)");
+    }
     if (!le) missing.push("Certificate notification email");
     if (missing.length) {
       setFieldErr(`Please fill in: ${missing.join(", ")}.`);
@@ -41,7 +46,7 @@ export default function DomainStep() {
       mail_domain: domain,
       mail_host: host,
       timezone: tz,
-      admin_pass: draft.admin_pass,
+      ...(typedPass ? { admin_pass: typedPass } : {}),
       le_email: le,
       current_step: "tls",
     });
@@ -109,7 +114,11 @@ export default function DomainStep() {
             setLocal({ admin_pass: e.target.value });
           }}
         />
-        <Hint>At least 8 characters. Used for the mail system administrator account.</Hint>
+        <Hint>
+          {draft.admin_pass_set
+            ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace."
+            : "At least 8 characters. Used for the mail system administrator account."}
+        </Hint>
       </FieldRow>
       <FieldRow>
         <FieldLabel htmlFor="le_email" optional>

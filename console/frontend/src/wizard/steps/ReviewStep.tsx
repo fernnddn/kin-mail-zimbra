@@ -62,7 +62,7 @@ export default function ReviewStep() {
         <dt>Timezone</dt>
         <dd>{draft.timezone || "—"}</dd>
         <dt>Mail admin password</dt>
-        <dd>{mask(draft.admin_pass)}</dd>
+        <dd>{draft.admin_pass_set || draft.admin_pass ? mask(draft.admin_pass || "stored") : "—"}</dd>
         <dt>Certificate email</dt>
         <dd>{draft.le_email || "—"}</dd>
         <dt>HTTPS certificates</dt>

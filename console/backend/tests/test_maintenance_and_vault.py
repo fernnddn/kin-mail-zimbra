@@ -135,6 +135,37 @@ class DraftPublicTests(unittest.TestCase):
         self.assertEqual(pub["kin_user_pass"], "")
         self.assertTrue(HOST_PROVISION_KEYS)
 
+    def test_public_draft_never_returns_admin_pass(self) -> None:
+        secret = "kin-test-admin-pass-NOTREAL-4c2e"
+        d = WizardDraft(admin_pass=secret, mail_domain="example.test")
+        pub = public_draft(d)
+        self.assertEqual(pub["admin_pass"], "")
+        self.assertTrue(pub["admin_pass_set"])
+        blob = json.dumps(pub)
+        self.assertNotIn(secret, blob)
+        empty = public_draft(WizardDraft(admin_pass="", mail_domain="example.test"))
+        self.assertFalse(empty["admin_pass_set"])
+        self.assertEqual(empty["admin_pass"], "")
+
+    def test_apply_patch_keeps_admin_pass_when_client_sends_empty(self) -> None:
+        from kin_console.draft import DraftPatch, apply_patch
+
+        current = WizardDraft(admin_pass="stored-admin-secret", mail_domain="old.example")
+        wiped = apply_patch(
+            current,
+            DraftPatch(admin_pass="", mail_domain="new.example"),
+        )
+        self.assertEqual(wiped.admin_pass, "stored-admin-secret")
+        self.assertEqual(wiped.mail_domain, "new.example")
+        replaced = apply_patch(
+            current,
+            DraftPatch(admin_pass="replacement-admin-9"),
+        )
+        self.assertEqual(replaced.admin_pass, "replacement-admin-9")
+        pub = public_draft(replaced)
+        self.assertEqual(pub["admin_pass"], "")
+        self.assertNotIn("replacement-admin-9", json.dumps(pub))
+
     def test_ipv4(self) -> None:
         self.assertTrue(valid_ipv4("192.0.2.12"))
         self.assertFalse(valid_ipv4("not-an-ip"))

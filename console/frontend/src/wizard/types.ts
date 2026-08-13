@@ -18,7 +18,10 @@ export type WizardDraft = {
   mail_domain: string;
   mail_host: string;
   timezone: string;
+  /** Mail admin password. Sent on PUT; never returned by GET. */
   admin_pass: string;
+  /** True when a mail admin password is stored in the draft (plaintext not in the API). */
+  admin_pass_set: boolean;
   le_email: string;
   tls_method: "" | "cloudflare" | "manual" | "customer";
   ad_auth_enabled: boolean;
@@ -82,6 +85,7 @@ export function emptyDraft(): WizardDraft {
     mail_host: "",
     timezone: "Asia/Jakarta",
     admin_pass: "",
+    admin_pass_set: false,
     le_email: "",
     tls_method: "",
     ad_auth_enabled: false,
