@@ -166,6 +166,60 @@ class DraftPublicTests(unittest.TestCase):
         self.assertEqual(pub["admin_pass"], "")
         self.assertNotIn("replacement-admin-9", json.dumps(pub))
 
+    def test_public_draft_never_returns_ad_bind_or_test_pass(self) -> None:
+        bind = "kin-test-ad-bind-NOTREAL-8a1c"
+        test = "kin-test-ad-test-NOTREAL-9b2d"
+        d = WizardDraft(
+            ad_search_bind_password=bind,
+            ad_test_pass=test,
+            ad_auth_enabled=True,
+        )
+        pub = public_draft(d)
+        self.assertEqual(pub["ad_search_bind_password"], "")
+        self.assertEqual(pub["ad_test_pass"], "")
+        self.assertTrue(pub["ad_search_bind_password_set"])
+        self.assertTrue(pub["ad_test_pass_set"])
+        blob = json.dumps(pub)
+        self.assertNotIn(bind, blob)
+        self.assertNotIn(test, blob)
+        empty = public_draft(WizardDraft())
+        self.assertFalse(empty["ad_search_bind_password_set"])
+        self.assertFalse(empty["ad_test_pass_set"])
+        self.assertEqual(empty["ad_search_bind_password"], "")
+        self.assertEqual(empty["ad_test_pass"], "")
+
+    def test_apply_patch_keeps_ad_passwords_when_client_sends_empty(self) -> None:
+        from kin_console.draft import DraftPatch, apply_patch
+
+        current = WizardDraft(
+            ad_search_bind_password="stored-ad-bind",
+            ad_test_pass="stored-ad-test",
+            ad_ldap_url="ldap://old.example",
+        )
+        wiped = apply_patch(
+            current,
+            DraftPatch(
+                ad_search_bind_password="",
+                ad_test_pass="",
+                ad_ldap_url="ldap://new.example",
+            ),
+        )
+        self.assertEqual(wiped.ad_search_bind_password, "stored-ad-bind")
+        self.assertEqual(wiped.ad_test_pass, "stored-ad-test")
+        self.assertEqual(wiped.ad_ldap_url, "ldap://new.example")
+        replaced = apply_patch(
+            current,
+            DraftPatch(ad_search_bind_password="new-bind-9", ad_test_pass="new-test-9"),
+        )
+        self.assertEqual(replaced.ad_search_bind_password, "new-bind-9")
+        self.assertEqual(replaced.ad_test_pass, "new-test-9")
+        pub = public_draft(replaced)
+        self.assertEqual(pub["ad_search_bind_password"], "")
+        self.assertEqual(pub["ad_test_pass"], "")
+        blob = json.dumps(pub)
+        self.assertNotIn("new-bind-9", blob)
+        self.assertNotIn("new-test-9", blob)
+
     def test_ipv4(self) -> None:
         self.assertTrue(valid_ipv4("192.0.2.12"))
         self.assertFalse(valid_ipv4("not-an-ip"))

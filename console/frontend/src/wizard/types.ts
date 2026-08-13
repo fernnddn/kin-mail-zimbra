@@ -29,10 +29,16 @@ export type WizardDraft = {
   ad_search_base: string;
   ad_search_filter: string;
   ad_search_bind_dn: string;
+  /** AD search bind password. Sent on PUT; never returned by GET. */
   ad_search_bind_password: string;
+  /** True when a search bind password is stored in the draft (plaintext not in the API). */
+  ad_search_bind_password_set: boolean;
   ad_bind_dn_template: string;
   ad_test_user: string;
+  /** AD test account password. Sent on PUT; never returned by GET. */
   ad_test_pass: string;
+  /** True when a test account password is stored in the draft (plaintext not in the API). */
+  ad_test_pass_set: boolean;
   zpush_enabled: boolean;
   contracted_seats: string;
   kin_admin_ips: string;
@@ -94,9 +100,11 @@ export function emptyDraft(): WizardDraft {
     ad_search_filter: "(sAMAccountName=%u)",
     ad_search_bind_dn: "",
     ad_search_bind_password: "",
+    ad_search_bind_password_set: false,
     ad_bind_dn_template: "",
     ad_test_user: "",
     ad_test_pass: "",
+    ad_test_pass_set: false,
     zpush_enabled: true,
     contracted_seats: "PLACEHOLDER_UNSET",
     kin_admin_ips: "",

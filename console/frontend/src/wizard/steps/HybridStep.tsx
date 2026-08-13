@@ -21,17 +21,19 @@ export default function HybridStep() {
   const [fieldErr, setFieldErr] = useState("");
 
   async function go(enabled: boolean) {
+    const typedBind = draft.ad_search_bind_password;
+    const typedTest = draft.ad_test_pass;
     await save({
       ad_auth_enabled: enabled,
       ad_ldap_url: enabled ? draft.ad_ldap_url : "",
       ad_search_base: enabled ? draft.ad_search_base : "",
       ad_search_filter: draft.ad_search_filter || "(sAMAccountName=%u)",
       ad_search_bind_dn: enabled ? draft.ad_search_bind_dn : "",
-      ad_search_bind_password: enabled ? draft.ad_search_bind_password : "",
       ad_bind_dn_template: enabled ? draft.ad_bind_dn_template : "",
       ad_test_user: enabled ? draft.ad_test_user : "",
-      ad_test_pass: enabled ? draft.ad_test_pass : "",
       current_step: "zpush",
+      ...(enabled && typedBind ? { ad_search_bind_password: typedBind } : {}),
+      ...(enabled && typedTest ? { ad_test_pass: typedTest } : {}),
     });
     navigate("/wizard/zpush");
   }
@@ -51,9 +53,11 @@ export default function HybridStep() {
     if (!draft.ad_ldap_url.trim()) missing.push("LDAP/AD URL");
     if (!draft.ad_search_base.trim()) missing.push("Search base");
     if (!draft.ad_search_bind_dn.trim()) missing.push("Search bind account");
-    if (!draft.ad_search_bind_password) missing.push("Search bind password");
+    if (!draft.ad_search_bind_password && !draft.ad_search_bind_password_set) {
+      missing.push("Search bind password");
+    }
     if (!draft.ad_test_user.trim()) missing.push("Test account");
-    if (!draft.ad_test_pass) missing.push("Test account password");
+    if (!draft.ad_test_pass && !draft.ad_test_pass_set) missing.push("Test account password");
     if (missing.length) {
       setFieldErr(`Fill the required Active Directory fields: ${missing.join(", ")}.`);
       return;
@@ -134,6 +138,11 @@ export default function HybridStep() {
               value={draft.ad_search_bind_password}
               onChange={(e) => setLocal({ ad_search_bind_password: e.target.value })}
             />
+            <Hint>
+              {draft.ad_search_bind_password_set
+                ? "Already stored. Leave blank to keep it, or enter a new value to replace."
+                : "Password for the search service account."}
+            </Hint>
           </FieldRow>
           <FieldRow>
             <FieldLabel htmlFor="ad_bind_dn_template" optional>
@@ -167,6 +176,11 @@ export default function HybridStep() {
               value={draft.ad_test_pass}
               onChange={(e) => setLocal({ ad_test_pass: e.target.value })}
             />
+            <Hint>
+              {draft.ad_test_pass_set
+                ? "Already stored. Leave blank to keep it, or enter a new value to replace."
+                : "Used to verify the bind before deploy."}
+            </Hint>
           </FieldRow>
         </>
       )}

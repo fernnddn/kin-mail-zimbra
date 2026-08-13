@@ -26,6 +26,14 @@ DRAFT_VERSION = 1
 # Host provisioning passwords must never sit in the console-readable draft.
 HOST_PROVISION_KEYS = frozenset({"host_root_pass", "kin_user_pass"})
 
+# Secrets kept in the draft for apply_config, but GET always returns "".
+# Empty PUT values must not wipe a stored value (GET→PUT round-trip).
+DRAFT_ECHO_SECRETS = (
+    "admin_pass",
+    "ad_search_bind_password",
+    "ad_test_pass",
+)
+
 # Secrets are kept in the draft for review/redeploy later, but never echo'd in logs.
 SECRET_KEYS = frozenset(
     {
@@ -126,11 +134,11 @@ def save_draft(draft: WizardDraft) -> WizardDraft:
 def public_draft(draft: WizardDraft) -> dict[str, Any]:
     """Return draft for API. Secrets are never included; flags say whether they exist."""
     data = draft.model_dump()
-    stored_admin = bool((data.get("admin_pass") or "").strip())
+    for key in DRAFT_ECHO_SECRETS:
+        data[f"{key}_set"] = bool((data.get(key) or "").strip())
+        data[key] = ""
     for key in HOST_PROVISION_KEYS:
         data[key] = ""
-    data["admin_pass"] = ""
-    data["admin_pass_set"] = stored_admin
     try:
         from kin_privhelper.provisioning_secrets import marker_present
 
@@ -178,11 +186,14 @@ def apply_patch(draft: WizardDraft, patch: DraftPatch) -> WizardDraft:
     # Never persist host provisioning passwords in the console-readable draft.
     updates.pop("host_root_pass", None)
     updates.pop("kin_user_pass", None)
-    # Empty admin_pass from GET-stripped clients must not wipe a stored value.
-    incoming_admin = updates.pop("admin_pass", None)
+    # Empty secrets from GET-stripped clients must not wipe a stored value.
+    incoming_secrets: dict[str, str] = {}
+    for key in DRAFT_ECHO_SECRETS:
+        incoming = updates.pop(key, None)
+        if isinstance(incoming, str) and incoming.strip():
+            incoming_secrets[key] = incoming
     data.update(updates)
-    if isinstance(incoming_admin, str) and incoming_admin.strip():
-        data["admin_pass"] = incoming_admin
+    data.update(incoming_secrets)
     data["host_root_pass"] = ""
     data["kin_user_pass"] = ""
     return WizardDraft.model_validate(data)
