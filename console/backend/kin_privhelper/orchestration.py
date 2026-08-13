@@ -71,7 +71,12 @@ def _iqn_suffix(hostname: str) -> str:
     return short[:32]
 
 
-def render_inventory(mail_hosts: list[OrchHost], monitoring: OrchHost) -> str:
+def render_inventory(
+    mail_hosts: list[OrchHost],
+    monitoring: OrchHost,
+    *,
+    vip_ip: str = "",
+) -> str:
     """YAML inventory with env-lookup passwords — no secret values in the file."""
     lines = [
         "all:",
@@ -85,7 +90,11 @@ def render_inventory(mail_hosts: list[OrchHost], monitoring: OrchHost) -> str:
         "    corosync_qdevice_qnetd_ip: " + monitoring.ip,
         "    corosync_qdevice_qnetd_inventory_host: " + monitoring.name,
         "    iscsi_initiator_portal: \"" + monitoring.ip + ":3260\"",
+        "    cluster_node_base_hacluster_password: '{{ lookup(\"env\", \"KIN_HACLUSTER_PASSWORD\") }}'",
+        "    cluster_setup_name: kin-mail",
     ]
+    if vip_ip:
+        lines.append(f"    pacemaker_mail_stack_vip_ip: {vip_ip}")
     if len(mail_hosts) >= 2:
         lines.extend(
             [
@@ -173,6 +182,13 @@ STEPS: tuple[Step, ...] = (
         "playbooks/mon-qnetd.yml",
         "ansible",
         check_on_join_check=True,
+    ),
+    Step(
+        "mail_cluster_setup",
+        "mail-cluster-setup.yml (pcsd + pcs cluster setup)",
+        "playbooks/mail-cluster-setup.yml",
+        "ansible",
+        cluster_join=True,
     ),
     Step(
         "mail_qdevice",
@@ -300,6 +316,31 @@ def resolve_topology(
     peer = OrchHost(peer_name, peer_ip, _iqn_suffix(peer_name))
     monitoring = OrchHost(obs_name, obs_ip, _iqn_suffix(obs_name))
     return local, peer, monitoring
+
+
+def resolve_cluster_vip(
+    *,
+    draft: dict[str, Any],
+    config: dict[str, str],
+    local: OrchHost,
+    peer: OrchHost,
+    monitoring: OrchHost,
+) -> str:
+    """Floating mail VIP — must not collide with any node NIC."""
+    vip = str(draft.get("cluster_vip_ip") or config.get("CLUSTER_VIP_IP") or "").strip()
+    if not valid_ipv4(vip):
+        raise ValueError("Cluster VIP is missing or not IPv4 (wizard topology)")
+    collisions = {
+        local.ip: "this server",
+        peer.ip: "the second server",
+        monitoring.ip: "the Observability VM",
+    }
+    if vip in collisions:
+        raise ValueError(
+            f"Cluster VIP {vip} is the same as {collisions[vip]} — "
+            "the VIP must be a dedicated unused address"
+        )
+    return vip
 
 
 def _write_work_files(inventory_text: str) -> Path:
@@ -479,12 +520,29 @@ async def cmd_run_ha_orchestration(
         )
         yield proto.event_done(2)
         return
-    secrets = [root_pass, kin_pass]
+    hacluster_pass = secrets_map.get("hacluster_pass") or ""
+    if not hacluster_pass:
+        import secrets as pysecrets
+
+        from .provisioning_secrets import store_secrets
+
+        hacluster_pass = pysecrets.token_urlsafe(24)
+        try:
+            store_secrets({"hacluster_pass": hacluster_pass})
+        except ValueError as exc:
+            yield emit_line(f"Refusing: could not persist hacluster password: {exc}", err=True)
+            yield proto.event_done(2)
+            return
+        yield emit_line("generated hacluster pcs password (stored in vault, not logged)")
+    secrets = [root_pass, kin_pass, hacluster_pass]
 
     try:
         draft = _load_draft()
         config = _load_config()
         local, peer, monitoring = resolve_topology(draft=draft, config=config)
+        vip_ip = resolve_cluster_vip(
+            draft=draft, config=config, local=local, peer=peer, monitoring=monitoring
+        )
     except Exception as exc:  # noqa: BLE001
         yield emit_line(f"Refusing: {exc}", err=True)
         yield proto.event_done(2)
@@ -502,6 +560,7 @@ async def cmd_run_ha_orchestration(
     yield emit_line(f"local={local.name} ({local.ip})")
     yield emit_line(f"peer={peer.name} ({peer.ip})")
     yield emit_line(f"observability={monitoring.name} ({monitoring.ip})")
+    yield emit_line(f"cluster_vip={vip_ip}")
 
     from .maintenance import gather_status, parse_corosync_ring_addrs
 
@@ -529,10 +588,10 @@ async def cmd_run_ha_orchestration(
     if join_mode == "apply" and live_nodes and not peer_is_member:
         yield emit_line(
             "Refusing join_mode=apply: the wizard peer is not a member of the live "
-            f"Pacemaker cluster ({live_nodes}). Applying mail-drbd/mail-pacemaker "
-            "would mutate the production CIB. Use join_mode=check for a dry-run of "
-            "the join playbooks against the live pair, or set the wizard peer to "
-            "the intended HA partner.",
+            f"Pacemaker cluster ({live_nodes}). Applying mail-cluster-setup / "
+            "mail-drbd / mail-pacemaker would mutate the production CIB. Use "
+            "join_mode=check for a dry-run of the join playbooks against the live "
+            "pair, or set the wizard peer to the intended HA partner.",
             err=True,
         )
         yield proto.event_done(2)
@@ -592,14 +651,15 @@ async def cmd_run_ha_orchestration(
         "KIN_ANSIBLE_USER": ssh_user,
         "KIN_ANSIBLE_PASSWORD": ssh_pass,
         "KIN_ANSIBLE_BECOME_PASSWORD": ssh_pass,
+        "KIN_HACLUSTER_PASSWORD": hacluster_pass,
         "ANSIBLE_CONFIG": str(WORK_DIR / "ansible.cfg"),
         "ANSIBLE_HOST_KEY_CHECKING": "False",
         "ANSIBLE_RETRY_FILES_ENABLED": "False",
         "ANSIBLE_LOCAL_TEMP": str(WORK_DIR / ".ansible" / "tmp"),
     }
 
-    peer_inv = render_inventory([peer], monitoring)
-    full_inv = render_inventory([local, peer], monitoring)
+    peer_inv = render_inventory([peer], monitoring, vip_ip=vip_ip)
+    full_inv = render_inventory([local, peer], monitoring, vip_ip=vip_ip)
     live_hosts = []
     for name in live_nodes:
         ip = ring.get(name, "")
@@ -611,7 +671,7 @@ async def cmd_run_ha_orchestration(
                 ip = peer.ip
         if ip and valid_ipv4(ip) and valid_name(name):
             live_hosts.append(OrchHost(name, ip, _iqn_suffix(name)))
-    live_inv = render_inventory(live_hosts, monitoring) if live_hosts else ""
+    live_inv = render_inventory(live_hosts, monitoring, vip_ip=vip_ip) if live_hosts else ""
 
     # Sanity: generated YAML must never contain the vault plaintext.
     for blob, label in ((peer_inv, "peer"), (full_inv, "full"), (live_inv, "live")):
@@ -735,6 +795,7 @@ async def cmd_run_ha_orchestration(
                     "(role default loop device is the old lab; verify tags skipped)"
                 )
             for rel, extra in (
+                ("playbooks/mail-cluster-setup.yml", ["--skip-tags", "auth,pcs,properties"]),
                 ("playbooks/mail-drbd.yml", drbd_skip),
                 ("playbooks/mail-pacemaker.yml", ["--skip-tags", "agents"]),
             ):

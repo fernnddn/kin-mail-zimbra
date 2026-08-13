@@ -49,6 +49,8 @@ export default function ReviewStep() {
             <dd>{draft.peer_host_name || "—"}</dd>
             <dt>Observability VM IP</dt>
             <dd>{draft.observability_vm_ip || "—"}</dd>
+            <dt>Cluster VIP</dt>
+            <dd>{draft.cluster_vip_ip || "—"}</dd>
           </>
         ) : null}
         <dt>Root password</dt>

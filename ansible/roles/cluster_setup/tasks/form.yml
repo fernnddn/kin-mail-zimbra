@@ -1,0 +1,72 @@
+---
+# =============================================================================
+# MUTATING — pcs cluster setup / start / enable
+# Never check_mode: false. Never pcs cluster destroy / --overwrite.
+# =============================================================================
+
+- name: Form the Corosync cluster (greenfield only)
+  ansible.builtin.command:
+    cmd: >-
+      pcs cluster setup {{ cluster_setup_name }}
+      {{ groups['mail_nodes'][0] }} addr={{ hostvars[groups['mail_nodes'][0]].ansible_host }}
+      {{ groups['mail_nodes'][1] }} addr={{ hostvars[groups['mail_nodes'][1]].ansible_host }}
+  # SAFETY: never check_mode: false — this writes corosync.conf + authkey.
+  # Never --overwrite / --force / pcs cluster destroy.
+  run_once: true
+  when:
+    - not (cluster_setup_running | bool)
+    - not (cluster_setup_configured | bool)
+    - not ansible_check_mode
+  register: cluster_setup_form
+  tags: [cluster, setup, pcs]
+
+- name: Flag that this run formed a new cluster
+  ansible.builtin.set_fact:
+    cluster_setup_formed_this_run: true
+  when:
+    - cluster_setup_form is changed
+    - cluster_setup_form is not skipped
+  tags: [cluster, setup, pcs]
+
+- name: Start the cluster on both nodes (fresh setup only)
+  ansible.builtin.command:
+    cmd: pcs cluster start --all
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - cluster_setup_formed_this_run | bool
+  tags: [cluster, setup, pcs]
+
+- name: Wait until Pacemaker answers after start
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_setup_wait
+  until: cluster_setup_wait.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - cluster_setup_formed_this_run | bool
+  tags: [cluster, setup, pcs]
+
+- name: Enable cluster start at boot on both nodes (fresh cluster only)
+  ansible.builtin.command:
+    cmd: pcs cluster enable --all
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - cluster_setup_formed_this_run | bool
+  tags: [cluster, setup, pcs]
+
+- name: Note that cluster setup is skipped when already running or this is --check
+  ansible.builtin.debug:
+    msg: >-
+      pcs cluster setup was NOT executed
+      (cluster already running={{ cluster_setup_running }}
+      check_mode={{ ansible_check_mode }}).
+  when: (cluster_setup_running | bool) or ansible_check_mode
+  run_once: true
+  tags: [cluster, setup, pcs]

@@ -7,6 +7,7 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | Playbook | Roles | Source | Status |
 |---|---|---|---|
 | `playbooks/mon-qnetd.yml` | `corosync_qnetd` | 2.1 §2 | dry-run (3.1) |
+| `playbooks/mail-cluster-setup.yml` | `cluster_node_base`, `cluster_setup` | greenfield `pcs cluster setup` | idempotent; skip if cluster already running |
 | `playbooks/mail-qdevice.yml` | `corosync_qdevice` | 2.2 §1 | dry-run (3.2) |
 | `playbooks/mon-iscsi-target.yml` | `iscsi_target` | 2.1 §3 | dry-run (3.4) |
 | `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2–2.3, 2.9 | dry-run (3.4) |
@@ -55,6 +56,7 @@ ansible/
     remove-host.example.yml
   roles/
     cluster_node_base/
+    cluster_setup/
     os_hardening/
     cluster_remove_host/
     cluster_survivor_replace/

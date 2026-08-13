@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: cluster_setup
+  description: >-
+    Idempotent pcs host auth + pcs cluster setup for a 2-node mail pair.
+    Skips when the expected cluster already exists. Never destroys a cluster.
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["22.04", "24.04"]
+dependencies: []

@@ -23,6 +23,7 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertIn("lookup", inv)
         self.assertIn("KIN_ANSIBLE_PASSWORD", inv)
+        self.assertIn("KIN_HACLUSTER_PASSWORD", inv)
         self.assertNotIn("ansible_password: 'secret", inv)
         self.assertNotIn("s3cret", inv)
         self.assertIn("192.0.2.15", inv)
@@ -36,10 +37,22 @@ class InventoryTests(unittest.TestCase):
                 OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
             ],
             OrchHost("mon.example.test", "192.0.2.12", "mon"),
+            vip_ip="192.0.2.16",
         )
         self.assertIn("drbd_resource_node_a_address: 192.0.2.15", inv)
         self.assertIn("drbd_resource_node_b_address: 192.0.2.14", inv)
+        self.assertIn("pacemaker_mail_stack_vip_ip: 192.0.2.16", inv)
         self.assertNotIn("10.10.40.", inv)
+
+    def test_empty_vip_is_omitted_from_inventory(self) -> None:
+        inv = render_inventory(
+            [
+                OrchHost("mail.example.test", "192.0.2.15", "mail"),
+                OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+            ],
+            OrchHost("mon.example.test", "192.0.2.12", "mon"),
+        )
+        self.assertNotIn("pacemaker_mail_stack_vip_ip", inv)
 
     def test_redact(self) -> None:
         self.assertEqual(redact_text("pass=hunter2 extra", ["hunter2"]), "pass=*** extra")
@@ -62,6 +75,45 @@ class InventoryTests(unittest.TestCase):
                 config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
             )
 
+    def test_resolve_cluster_vip_rejects_collisions(self) -> None:
+        from kin_privhelper.orchestration import resolve_cluster_vip
+
+        local, peer, mon = resolve_topology(
+            draft={
+                "peer_host_ip": "192.0.2.14",
+                "peer_host_name": "mail2.example.test",
+                "observability_vm_ip": "192.0.2.12",
+                "cluster_vip_ip": "192.0.2.16",
+            },
+            config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
+        )
+        self.assertEqual(
+            resolve_cluster_vip(
+                draft={"cluster_vip_ip": "192.0.2.16"},
+                config={},
+                local=local,
+                peer=peer,
+                monitoring=mon,
+            ),
+            "192.0.2.16",
+        )
+        with self.assertRaises(ValueError):
+            resolve_cluster_vip(
+                draft={"cluster_vip_ip": "192.0.2.15"},
+                config={},
+                local=local,
+                peer=peer,
+                monitoring=mon,
+            )
+        with self.assertRaises(ValueError):
+            resolve_cluster_vip(
+                draft={"cluster_vip_ip": "192.0.2.14"},
+                config={},
+                local=local,
+                peer=peer,
+                monitoring=mon,
+            )
+
     def test_step_order(self) -> None:
         ids = [s.step_id for s in STEPS]
         self.assertEqual(
@@ -70,9 +122,9 @@ class InventoryTests(unittest.TestCase):
                 "peer_os_prep",
                 "os_hardening",
                 "mon_qnetd",
+                "mail_cluster_setup",
                 "mail_qdevice",
                 "mon_iscsi",
-                "mail_fencing",
             ],
         )
         self.assertIn("mail_drbd_activate", ids)
@@ -120,7 +172,9 @@ class OrchRbacTests(unittest.TestCase):
 class CheckModeSafetyTests(unittest.TestCase):
     def test_cluster_join_steps_are_flagged(self) -> None:
         join_ids = {s.step_id for s in STEPS if s.cluster_join}
-        self.assertEqual(join_ids, {"mail_drbd_activate", "mail_pacemaker_stack"})
+        self.assertEqual(
+            join_ids, {"mail_cluster_setup", "mail_drbd_activate", "mail_pacemaker_stack"}
+        )
 
     def test_check_mode_skip_tags_keep_peer_off_live_sbd_and_pcs(self) -> None:
         by_id = {s.step_id: s for s in STEPS}

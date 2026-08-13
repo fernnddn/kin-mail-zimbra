@@ -9,6 +9,10 @@ export type WizardDraft = {
   peer_host_name: string;
   /** Observability / qdevice witness VM IP. Required when topology is 2vm. */
   observability_vm_ip: string;
+  /** Floating mail VIP. Required when topology is 2vm — must not be a node NIC. */
+  cluster_vip_ip: string;
+  /** This console host's IPv4 (from config or autodetection). Not stored in the draft. */
+  local_host_ip?: string;
   /** Root password for host(s). Sent once to privhelper; never returned by GET. */
   host_root_pass: string;
   /** Host admin password (sudo). Sent once to privhelper; never returned by GET. */
@@ -84,6 +88,7 @@ export function emptyDraft(): WizardDraft {
     peer_host_ip: "",
     peer_host_name: "",
     observability_vm_ip: "",
+    cluster_vip_ip: "",
     host_root_pass: "",
     kin_user_pass: "",
     host_credentials_set: false,

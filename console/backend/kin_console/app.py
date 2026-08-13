@@ -295,6 +295,26 @@ async def put_wizard_draft(
             raise HTTPException(status_code=400, detail="Second server IP must be an IPv4 address")
         if updated.observability_vm_ip and not draft.valid_ipv4(updated.observability_vm_ip):
             raise HTTPException(status_code=400, detail="Observability VM IP must be an IPv4 address")
+        if updated.cluster_vip_ip and not draft.valid_ipv4(updated.cluster_vip_ip):
+            raise HTTPException(status_code=400, detail="Cluster VIP must be an IPv4 address")
+        if updated.cluster_vip_ip:
+            vip = updated.cluster_vip_ip.strip()
+            if updated.peer_host_ip and vip == updated.peer_host_ip.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cluster VIP must not be the second server IP",
+                )
+            if updated.observability_vm_ip and vip == updated.observability_vm_ip.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cluster VIP must not be the Observability VM IP",
+                )
+            local_ip = draft.detect_local_ipv4()
+            if local_ip and vip == local_ip:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cluster VIP must not be this server's own address",
+                )
     saved = draft.save_draft(updated)
     return draft.public_draft(saved)
 

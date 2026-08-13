@@ -32,6 +32,7 @@
   when:
     - not ansible_check_mode
     - cluster_node_base_hacluster_password | length > 0
+    - cluster_node_base_set_hacluster_password | bool
   no_log: true
   tags: [cluster, base, pcsd]
 

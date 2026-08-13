@@ -1,0 +1,32 @@
+---
+# Greenfield 2-node Corosync/Pacemaker bootstrap.
+#
+# Sits AFTER mon-qnetd.yml (witness packages only) and BEFORE mail-qdevice.yml
+# / mail-fencing.yml — both of those need an already-formed cluster.
+#
+# Idempotent: if pcs status already shows the expected two mail nodes, setup
+# is skipped. Never `pcs cluster destroy`. Never disable STONITH when fence_sbd
+# already exists.
+#
+#   ansible-playbook -i inventory/lab.yml playbooks/mail-cluster-setup.yml --check
+#
+# Full apply is for a genuine empty pair only. Do not apply against a live
+# production CIB as a drill.
+
+- name: Install pcs/corosync/pacemaker and start pcsd on both mail nodes
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: cluster_node_base
+      vars:
+        cluster_node_base_set_hacluster_password: false
+      tags: [cluster, base]
+
+- name: Form or resume the two-node cluster
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: cluster_setup
+      tags: [cluster, setup]

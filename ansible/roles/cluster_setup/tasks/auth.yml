@@ -1,0 +1,46 @@
+---
+# =============================================================================
+# MUTATING — hacluster password + pcs host auth
+# Never check_mode: false. Skip entirely when the expected cluster is running.
+# =============================================================================
+
+- name: Require a hacluster password before forming a new cluster
+  ansible.builtin.assert:
+    that:
+      - cluster_setup_hacluster_password | length >= 8
+    fail_msg: >-
+      cluster_node_base_hacluster_password / KIN_HACLUSTER_PASSWORD is empty.
+      The wizard sets this via the provisioning vault; CLI apply must set it
+      in inventory.
+  when: not (cluster_setup_running | bool)
+  run_once: true
+  tags: [cluster, setup, auth]
+
+- name: Set the hacluster password on both nodes (new cluster only)
+  ansible.builtin.user:
+    name: "{{ cluster_setup_hacluster_user }}"
+    password: "{{ cluster_setup_hacluster_password | password_hash('sha512') }}"
+    update_password: always
+  when:
+    - not (cluster_setup_running | bool)
+    - not ansible_check_mode
+    - cluster_setup_hacluster_password | length >= 8
+  no_log: true
+  tags: [cluster, setup, auth]
+
+- name: Authenticate both mail nodes to pcsd (new cluster only)
+  ansible.builtin.command:
+    cmd: >-
+      pcs host auth
+      {{ groups['mail_nodes'][0] }} addr={{ hostvars[groups['mail_nodes'][0]].ansible_host }}
+      {{ groups['mail_nodes'][1] }} addr={{ hostvars[groups['mail_nodes'][1]].ansible_host }}
+      -u {{ cluster_setup_hacluster_user }}
+      -p {{ cluster_setup_hacluster_password }}
+  # SAFETY: never check_mode: false.
+  no_log: true
+  run_once: true
+  when:
+    - not (cluster_setup_running | bool)
+    - not ansible_check_mode
+    - cluster_setup_hacluster_password | length >= 8
+  tags: [cluster, setup, auth]

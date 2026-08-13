@@ -61,6 +61,7 @@ class WizardDraft(BaseModel):
     peer_host_ip: str = ""
     peer_host_name: str = ""
     observability_vm_ip: str = ""
+    cluster_vip_ip: str = ""
 
     # Host credentials live in the privhelper vault, not in this JSON.
     host_root_pass: str = ""
@@ -96,6 +97,32 @@ class WizardDraft(BaseModel):
 
     # g. Firewall
     kin_admin_ips: str = ""
+
+
+def detect_local_ipv4() -> str:
+    """Best-effort local NIC IPv4 for VIP collision checks (not a secret)."""
+    conf = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    if conf.is_file():
+        try:
+            for line in conf.read_text(encoding="utf-8").splitlines():
+                if line.startswith("SERVER_IP="):
+                    raw = line.split("=", 1)[1].strip().strip("'").strip('"')
+                    if valid_ipv4(raw):
+                        return raw
+        except OSError:
+            pass
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("192.0.2.1", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        if valid_ipv4(ip):
+            return ip
+    except OSError:
+        pass
+    return ""
 
 
 def draft_path() -> Path:
@@ -139,6 +166,7 @@ def public_draft(draft: WizardDraft) -> dict[str, Any]:
         data[key] = ""
     for key in HOST_PROVISION_KEYS:
         data[key] = ""
+    data["local_host_ip"] = detect_local_ipv4()
     try:
         from kin_privhelper.provisioning_secrets import marker_present
 
@@ -158,6 +186,7 @@ class DraftPatch(BaseModel):
     peer_host_ip: str | None = None
     peer_host_name: str | None = None
     observability_vm_ip: str | None = None
+    cluster_vip_ip: str | None = None
     host_root_pass: str | None = None
     kin_user_pass: str | None = None
     mail_domain: str | None = None

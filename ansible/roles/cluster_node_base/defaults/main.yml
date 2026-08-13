@@ -10,3 +10,6 @@ cluster_node_base_pcsd_service: pcsd
 cluster_node_base_hacluster_user: hacluster
 # Set via inventory / --extra-vars — never commit real passwords.
 cluster_node_base_hacluster_password: ""
+# When false, cluster_setup sets the password only while forming a new cluster
+# (avoids rotating hacluster on an already-running pair).
+cluster_node_base_set_hacluster_password: true

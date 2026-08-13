@@ -1,0 +1,33 @@
+---
+- name: Re-probe Pacemaker after setup
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_setup_pcs_status_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, setup, verify]
+
+- name: Confirm the cluster is running (apply only)
+  ansible.builtin.assert:
+    that:
+      - cluster_setup_pcs_status_after.rc == 0
+    fail_msg: >-
+      pcs status failed after cluster setup. Pacemaker is not running on this
+      node — stop and inspect before retrying. This role never destroys an
+      existing cluster.
+  when: not ansible_check_mode
+  tags: [cluster, setup, verify]
+
+- name: Confirm both expected node names appear in pcs status
+  ansible.builtin.assert:
+    that:
+      - item in (cluster_setup_pcs_status_after.stdout | default(''))
+    fail_msg: >-
+      Expected mail node {{ item }} is not in pcs status after cluster setup.
+  loop: "{{ groups['mail_nodes'] }}"
+  when:
+    - not ansible_check_mode
+    - cluster_setup_pcs_status_after.rc == 0
+  run_once: true
+  tags: [cluster, setup, verify]

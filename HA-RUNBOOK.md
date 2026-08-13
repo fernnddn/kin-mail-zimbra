@@ -5,7 +5,9 @@ behaviors below are taken from live lab work (Phase 2, HA rebuild 2026-08-12/13,
 ha-build-14/15, maintenance mode, Observability resize, backup/restore, KIN Sight,
 fail2ban OCF hooks) — not from unverified theory.
 
-Cluster name: `kin-mail`
+Cluster name: `kin-mail`. Greenfield formation (empty pair, not this live lab) is
+`ansible-playbook -i inventory/lab.yml playbooks/mail-cluster-setup.yml` — idempotent;
+skips if the cluster is already running. Never `pcs cluster destroy` against this pair.
 
 | Role | Host | IP | Notes |
 |---|---|---|---|

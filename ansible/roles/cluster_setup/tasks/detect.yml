@@ -1,0 +1,82 @@
+---
+# Read-only. Never check_mode: false on mutating pcs.
+- name: Require exactly two mail_nodes for cluster setup
+  ansible.builtin.assert:
+    that:
+      - groups['mail_nodes'] | length == 2
+    fail_msg: >-
+      cluster_setup expects exactly two hosts in mail_nodes
+      (got {{ groups['mail_nodes'] | length }}).
+  run_once: true
+  tags: [cluster, setup, detect]
+
+- name: Require ansible_host on every mail node
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].ansible_host | default('') | length > 0
+    fail_msg: >-
+      {{ item }} has no ansible_host — pcs cluster setup needs a real LAN IP,
+      not a hostname that might resolve to loopback after the HA remap.
+  loop: "{{ groups['mail_nodes'] }}"
+  run_once: true
+  tags: [cluster, setup, detect]
+
+- name: Probe whether Pacemaker is already running
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_setup_pcs_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, setup, detect]
+
+- name: Check for an existing Corosync configuration
+  ansible.builtin.stat:
+    path: /etc/corosync/corosync.conf
+  register: cluster_setup_corosync_conf
+  check_mode: false
+  tags: [cluster, setup, detect]
+
+- name: Read current Corosync node names (best-effort)
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_setup_nodes_corosync
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [cluster, setup, detect]
+
+- name: Flag whether this host is already in a running cluster
+  ansible.builtin.set_fact:
+    cluster_setup_running: "{{ cluster_setup_pcs_status.rc == 0 }}"
+    cluster_setup_configured: "{{ cluster_setup_corosync_conf.stat.exists | default(false) }}"
+    cluster_setup_expected_names: "{{ groups['mail_nodes'] }}"
+    cluster_setup_formed_this_run: false
+  tags: [cluster, setup, detect]
+
+- name: Refuse pcs cluster setup when a corosync.conf already exists
+  ansible.builtin.assert:
+    that:
+      - cluster_setup_running | bool
+    fail_msg: >-
+      /etc/corosync/corosync.conf exists but pcs status is not running on
+      {{ inventory_hostname }}. Refusing pcs cluster setup (would need
+      destroy/overwrite). Start the existing cluster by hand
+      (`pcs cluster start --all`) or inspect the leftover config.
+  when:
+    - cluster_setup_configured | bool
+    - not (cluster_setup_running | bool)
+  tags: [cluster, setup, detect]
+
+- name: Refuse to form a cluster that already has unexpected members
+  ansible.builtin.assert:
+    that:
+      - item in (cluster_setup_nodes_corosync.stdout | default(''))
+    fail_msg: >-
+      A Corosync cluster is already running but {{ item }} is not in
+      `pcs status nodes corosync`. Refusing to re-run pcs cluster setup
+      (that would destroy or split membership). Fix membership by hand.
+  loop: "{{ groups['mail_nodes'] }}"
+  when: cluster_setup_running | bool
+  run_once: true
+  tags: [cluster, setup, detect]

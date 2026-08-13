@@ -344,10 +344,10 @@ export default function DeployStep() {
               <StepHeading>3. Build the 2-server HA pair</StepHeading>
               <StepBody>
                 After this host has mail installed, run the Ansible sequence against the second
-                server (OS hardening, qdevice, fencing agents, DRBD, Pacemaker). Progress streams
-                into View logs with a checkpoint per playbook. A failure stops there — nothing is
-                retried or rolled back automatically. After a manual fix, run this again from the
-                top; the playbooks are idempotent.
+                server (OS hardening, qnetd, Corosync cluster setup, qdevice, fencing, DRBD,
+                Pacemaker). Progress streams into View logs with a checkpoint per playbook. A
+                failure stops there — nothing is retried or rolled back automatically. After a
+                manual fix, run this again from the top; the playbooks are idempotent.
               </StepBody>
               <label
                 style={{
@@ -368,7 +368,8 @@ export default function DeployStep() {
                 />
                 <span>
                   I confirm HA orchestration should run for {draft.peer_host_ip || "the second server"}{" "}
-                  (observability {draft.observability_vm_ip || "unset"}).
+                  (observability {draft.observability_vm_ip || "unset"}, VIP{" "}
+                  {draft.cluster_vip_ip || "unset"}).
                 </span>
               </label>
               <Button

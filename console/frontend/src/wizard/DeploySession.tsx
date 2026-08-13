@@ -442,7 +442,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     append(
       `\n[${new Date().toISOString()}] HA orchestration (Ansible sequence)\n` +
         `# topology=${draft.topology || "unset"} peer=${draft.peer_host_ip || "unset"} ` +
-        `obs=${draft.observability_vm_ip || "unset"}\n`,
+        `obs=${draft.observability_vm_ip || "unset"} vip=${draft.cluster_vip_ip || "unset"}\n`,
     );
     if (pipelineEsRef.current) {
       pipelineEsRef.current.close();

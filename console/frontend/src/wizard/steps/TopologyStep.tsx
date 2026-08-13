@@ -31,7 +31,7 @@ export default function TopologyStep() {
   async function pick(topology: WizardDraft["topology"]) {
     setFieldErr("");
     if (topology === "1vm") {
-      setLocal({ topology, peer_host_ip: "", peer_host_name: "", observability_vm_ip: "", current_step: "topology" });
+      setLocal({ topology, peer_host_ip: "", peer_host_name: "", observability_vm_ip: "", cluster_vip_ip: "", current_step: "topology" });
     } else {
       setLocal({ topology, current_step: "topology" });
     }
@@ -58,15 +58,43 @@ export default function TopologyStep() {
       setFieldErr("Observability VM IP must be an IPv4 address.");
       return;
     }
+    if (draft.topology === "2vm" && !draft.cluster_vip_ip.trim()) {
+      setFieldErr("Enter the cluster VIP (unused IPv4, not a mail-node address).");
+      return;
+    }
+    if (draft.topology === "2vm" && !validIpv4(draft.cluster_vip_ip)) {
+      setFieldErr("Cluster VIP must be an IPv4 address.");
+      return;
+    }
+    if (draft.topology === "2vm") {
+      const vip = draft.cluster_vip_ip.trim();
+      const peer = draft.peer_host_ip.trim();
+      const obs = draft.observability_vm_ip.trim();
+      const local = (draft.local_host_ip || "").trim();
+      if (vip === peer) {
+        setFieldErr("Cluster VIP must not be the second server IP.");
+        return;
+      }
+      if (vip === obs) {
+        setFieldErr("Cluster VIP must not be the Observability VM IP.");
+        return;
+      }
+      if (local && vip === local) {
+        setFieldErr("Cluster VIP must not be this server's own address.");
+        return;
+      }
+    }
     setFieldErr("");
     const peer_host_ip = draft.topology === "2vm" ? draft.peer_host_ip.trim() : "";
     const peer_host_name = draft.topology === "2vm" ? draft.peer_host_name.trim() : "";
     const observability_vm_ip = draft.topology === "2vm" ? draft.observability_vm_ip.trim() : "";
+    const cluster_vip_ip = draft.topology === "2vm" ? draft.cluster_vip_ip.trim() : "";
     await save({
       topology: draft.topology,
       peer_host_ip,
       peer_host_name,
       observability_vm_ip,
+      cluster_vip_ip,
       current_step: "credentials",
     });
     navigate("/wizard/credentials");
@@ -152,6 +180,26 @@ export default function TopologyStep() {
             <Hint>
               Independent witness for quorum (qdevice) plus monitoring. Same step as the second
               mail server because a 2-server HA pair is not complete without it.
+            </Hint>
+          </FieldRow>
+          <FieldRow>
+            <FieldLabel htmlFor="cluster_vip_ip" required>
+              Cluster VIP
+            </FieldLabel>
+            <Input
+              id="cluster_vip_ip"
+              value={draft.cluster_vip_ip}
+              onChange={(e) => {
+                setFieldErr("");
+                setLocal({ cluster_vip_ip: e.target.value });
+              }}
+              placeholder="192.0.2.16"
+              autoComplete="off"
+            />
+            <Hint>
+              Unused IPv4 that Pacemaker will float to whichever node is Promoted. Must not be this
+              server, the second server, or the Observability VM.
+              {draft.local_host_ip ? ` This server is ${draft.local_host_ip}.` : ""}
             </Hint>
           </FieldRow>
         </>

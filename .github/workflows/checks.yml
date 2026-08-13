@@ -207,6 +207,7 @@ jobs:
           shopt -s nullglob
           lab_plays=(
             playbooks/mail-os-hardening.yml
+            playbooks/mail-cluster-setup.yml
             playbooks/mail-drbd.yml
             playbooks/mail-fencing.yml
             playbooks/mail-qdevice.yml

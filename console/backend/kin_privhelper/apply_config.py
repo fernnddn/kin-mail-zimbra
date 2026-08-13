@@ -18,6 +18,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+_IPV4_RE = re.compile(
+    r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
+)
+
+
+def valid_ipv4(value: str) -> bool:
+    return bool(_IPV4_RE.match((value or "").strip()))
+
+
 CONF_DIR = Path("/etc/kin-mail")
 CONF_FILE = CONF_DIR / "config"
 DRAFT_FILE = Path(
@@ -42,6 +51,7 @@ _KEY_ORDER = [
     "PEER_HOST_IP",
     "PEER_HOST_NAME",
     "OBSERVABILITY_VM_IP",
+    "CLUSTER_VIP_IP",
     "KIN_OS_USER",
     "HOST_ROOT_PASS",
     "KIN_USER_PASS",
@@ -322,6 +332,20 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     obs_ip = str(draft.get("observability_vm_ip") or existing.get("OBSERVABILITY_VM_IP") or "").strip()
     if topology == "2vm" and not obs_ip:
         errs.append("observability_vm_ip is required when topology is 2vm")
+    vip = str(draft.get("cluster_vip_ip") or existing.get("CLUSTER_VIP_IP") or "").strip()
+    if topology == "2vm":
+        if not vip:
+            errs.append("cluster_vip_ip is required when topology is 2vm")
+        elif not valid_ipv4(vip):
+            errs.append("cluster_vip_ip must be an IPv4 address")
+        else:
+            local_ip = str(existing.get("SERVER_IP") or "").strip()
+            if vip == peer_ip:
+                errs.append("cluster_vip_ip must not be the second server IP")
+            if vip == obs_ip:
+                errs.append("cluster_vip_ip must not be the Observability VM IP")
+            if local_ip and vip == local_ip:
+                errs.append("cluster_vip_ip must not be this server's own address")
 
     host_root_pass = str(draft.get("host_root_pass") or "")
     if not host_root_pass:
@@ -435,10 +459,16 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
             out["OBSERVABILITY_VM_IP"] = obs
         elif "OBSERVABILITY_VM_IP" not in out:
             out["OBSERVABILITY_VM_IP"] = ""
+        vip = str(draft.get("cluster_vip_ip") or "").strip()
+        if vip:
+            out["CLUSTER_VIP_IP"] = vip
+        elif "CLUSTER_VIP_IP" not in out:
+            out["CLUSTER_VIP_IP"] = ""
     else:
         out["PEER_HOST_IP"] = ""
         out["PEER_HOST_NAME"] = ""
         out["OBSERVABILITY_VM_IP"] = ""
+        out["CLUSTER_VIP_IP"] = ""
 
     # OS admin identity for later host provisioning; passwords preserve-on-empty like ADMIN_PASS.
     out["KIN_OS_USER"] = "kin"
@@ -526,6 +556,8 @@ def _config_fingerprint(values: dict[str, str]) -> dict[str, str]:
         "TOPOLOGY",
         "PEER_HOST_IP",
         "PEER_HOST_NAME",
+        "OBSERVABILITY_VM_IP",
+        "CLUSTER_VIP_IP",
         "KIN_OS_USER",
         "MAIL_DOMAIN",
         "MAIL_HOST",

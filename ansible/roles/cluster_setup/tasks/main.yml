@@ -1,0 +1,20 @@
+---
+- name: Include cluster membership detection
+  ansible.builtin.import_tasks: detect.yml
+  tags: [cluster, setup, detect]
+
+- name: Include hacluster password + pcs host auth
+  ansible.builtin.import_tasks: auth.yml
+  tags: [cluster, setup, auth]
+
+- name: Include pcs cluster setup / start / enable
+  ansible.builtin.import_tasks: form.yml
+  tags: [cluster, setup, pcs]
+
+- name: Include initial cluster properties (fresh cluster only)
+  ansible.builtin.import_tasks: properties.yml
+  tags: [cluster, setup, properties]
+
+- name: Include cluster-setup verification
+  ansible.builtin.import_tasks: verify.yml
+  tags: [cluster, setup, verify]

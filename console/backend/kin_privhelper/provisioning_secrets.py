@@ -34,7 +34,7 @@ MARKER_PATH = Path(
     )
 )
 
-ALLOWED_FIELDS = ("host_root_pass", "kin_user_pass")
+ALLOWED_FIELDS = ("host_root_pass", "kin_user_pass", "hacluster_pass")
 
 
 def marker_present() -> bool:

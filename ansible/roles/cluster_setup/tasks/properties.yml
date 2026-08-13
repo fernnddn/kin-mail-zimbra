@@ -1,0 +1,40 @@
+---
+# Fresh cluster only. If fence_sbd already exists, leave STONITH properties
+# alone — a resume against a live fenced pair must not disable fencing.
+- name: Check whether a fence_sbd STONITH resource already exists
+  ansible.builtin.command:
+    cmd: pcs stonith status
+  register: cluster_setup_stonith_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [cluster, setup, properties]
+
+- name: Flag a cluster that already has fencing
+  ansible.builtin.set_fact:
+    cluster_setup_has_fence: "{{ 'fence_sbd' in (cluster_setup_stonith_status.stdout | default('')) }}"
+  run_once: true
+  tags: [cluster, setup, properties]
+
+- name: Disable STONITH until the fencing playbook creates fence_sbd
+  ansible.builtin.command:
+    cmd: pcs property set stonith-enabled=false
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - cluster_setup_formed_this_run | default(false) | bool
+    - not (cluster_setup_has_fence | bool)
+  changed_when: false
+  tags: [cluster, setup, properties]
+
+- name: Set no-quorum-policy=stop (safe with 2 nodes before qdevice)
+  ansible.builtin.command:
+    cmd: pcs property set no-quorum-policy={{ cluster_setup_no_quorum_policy }}
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - cluster_setup_formed_this_run | default(false) | bool
+    - not (cluster_setup_has_fence | bool)
+  changed_when: false
+  tags: [cluster, setup, properties]
