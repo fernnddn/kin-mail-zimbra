@@ -275,6 +275,7 @@ jobs:
           fi
           python3 -m compileall -q console/backend
           python3 -m pip install -r console/backend/requirements.txt
+          PYTHONPATH=console/backend python3 -m unittest discover -s console/backend/tests -v
           PYTHONPATH=console/backend python3 -c "
           from kin_console.app import app
           from kin_privhelper import protocol, rbac, commands

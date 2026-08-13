@@ -24,6 +24,8 @@ RestartSec=3
 # (It binds a Unix socket under /run/kin-mail only.)
 PrivateTmp=true
 ProtectHome=true
+# Peer zmcontrol during maintenance pre-flight uses root SSH keys.
+BindReadOnlyPaths=-/root/.ssh
 NoNewPrivileges=false
 # Root by design (Option B); capabilities left unrestricted for install scripts later.
 # Do not add a network ListenStream here.

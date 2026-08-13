@@ -348,6 +348,16 @@ async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
 
 async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     """Stream kin-mail.sh --full-install with KIN_CONSOLE_CONFIRMED=1 (dead-man still armed)."""
+    from .maintenance import gather_status
+
+    st = await gather_status()
+    if st.get("standby"):
+        yield proto.event_stderr(
+            "Refusing full install while a node is in maintenance "
+            f"(standby={st['standby']}). Exit maintenance first.\n"
+        )
+        yield proto.event_done(1)
+        return
     script = resolve_kin_mail()
     header = (
         f"Running fixed script: {script} --full-install "
@@ -520,6 +530,40 @@ async def cmd_clear_initial_console_password(
     yield proto.event_done(0)
 
 
+async def cmd_maintenance(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    from .maintenance import cmd_maintenance as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
+async def cmd_store_provisioning_secrets(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Encrypt host root + kin passwords at rest. Never echo values."""
+    from . import provisioning_secrets as vault
+
+    args = args or {}
+    updates = {
+        "host_root_pass": str(args.get("host_root_pass") or ""),
+        "kin_user_pass": str(args.get("kin_user_pass") or ""),
+    }
+    try:
+        meta = await asyncio.to_thread(vault.store_secrets, updates)
+    except ValueError as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(2)
+        return
+    except Exception as exc:  # noqa: BLE001
+        yield proto.event_stderr(f"cannot store provisioning secrets: {exc}\n")
+        yield proto.event_done(1)
+        return
+    yield proto.event_stdout(
+        f"provisioning secrets stored (encrypted); fields set; updated_at={meta.get('updated_at')}\n"
+    )
+    yield proto.event_done(0)
+
+
 CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]
 
 
@@ -548,6 +592,8 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),
     proto.CMD_CREATE_MAILBOX: _adapt(cmd_create_mailbox),
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
+    proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
+    proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
 }
 
 

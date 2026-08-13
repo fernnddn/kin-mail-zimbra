@@ -134,23 +134,23 @@ export default function WizardLayout() {
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
 
-  // Mid-install always stays on Deploy. Already-deployed hosts that land on
-  // Topology (stale bookmark / old SPA) get bounced to Deploy/progress.
-  if ((installInProgress || (deployed && active === "topology")) && !isDeploy) {
+  // Mid-install always stays on Deploy. After deploy the operator can still
+  // revisit topology (peer IP, Observability VM) and other steps.
+  if (installInProgress && !isDeploy) {
     return <Navigate to="/wizard/deploy" replace />;
   }
 
   // Full-screen log viewer (often opened in a new browser tab).
   if (isDeployLogs) {
     return (
-      <ConsoleChrome setupMode>
+      <ConsoleChrome setupMode={!deployed}>
         <Outlet />
       </ConsoleChrome>
     );
   }
 
   return (
-    <ConsoleChrome setupMode>
+    <ConsoleChrome setupMode={!deployed}>
       <Body>
         <Sidebar>
           <SideTitle>Setup steps</SideTitle>

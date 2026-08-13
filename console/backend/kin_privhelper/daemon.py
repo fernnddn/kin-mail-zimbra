@@ -117,7 +117,7 @@ def _role_for_username(username: str) -> str | None:
     return None
 
 
-def _authorize(username: str, cmd: str) -> tuple[str | None, str | None]:
+def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> tuple[str | None, str | None]:
     """Return (role, deny_audit_tag). role set means allowed; deny_audit_tag set means denied."""
     if username == deploy_state.SETUP_USERNAME:
         if deploy_state.is_mail_deployed():
@@ -130,7 +130,7 @@ def _authorize(username: str, cmd: str) -> tuple[str | None, str | None]:
     role = _role_for_username(username)
     if role is None:
         return None, "denied_no_user"
-    if not rbac.command_allowed(role, cmd):
+    if not rbac.command_allowed(role, cmd, args=args):
         return None, "denied_rbac"
     return role, None
 
@@ -160,7 +160,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
-        role, deny_tag = _authorize(username, cmd)
+        raw_args = req.get("args")
+        args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
+
+        role, deny_tag = _authorize(username, cmd, args)
         if role is None:
             if deny_tag == "denied_setup_after_deploy":
                 msg = (
@@ -185,14 +188,18 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
-        raw_args = req.get("args")
-        args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
         # Audit hint for mailbox create — never include password.
         audit_cmd = cmd
         if cmd == proto.CMD_CREATE_MAILBOX:
             op = str(args.get("op") or "create")
             lp = str(args.get("local_part") or "")[:64]
             audit_cmd = f"{cmd}:{op}" + (f":{lp}" if lp else "")
+        elif cmd == proto.CMD_MAINTENANCE:
+            mop = str(args.get("op") or "status")[:16]
+            tgt = str(args.get("target") or "")[:80]
+            audit_cmd = f"{cmd}:{mop}" + (f":{tgt}" if tgt else "")
+        elif cmd == proto.CMD_STORE_PROVISIONING_SECRETS:
+            audit_cmd = f"{cmd}:redacted"
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
@@ -206,6 +213,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         ) or (
             cmd == proto.CMD_CREATE_MAILBOX
             and str(args.get("op") or "").strip().lower() == "status"
+        ) or (
+            cmd == proto.CMD_MAINTENANCE
+            and str(args.get("op") or "").strip().lower() in ("status", "preflight")
         )
 
         if not bypass_busy:

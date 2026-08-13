@@ -41,6 +41,7 @@ _KEY_ORDER = [
     "TOPOLOGY",
     "PEER_HOST_IP",
     "PEER_HOST_NAME",
+    "OBSERVABILITY_VM_IP",
     "KIN_OS_USER",
     "HOST_ROOT_PASS",
     "KIN_USER_PASS",
@@ -318,15 +319,34 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     peer_ip = str(draft.get("peer_host_ip") or "").strip()
     if topology == "2vm" and not peer_ip:
         errs.append("peer_host_ip is required when topology is 2vm")
+    obs_ip = str(draft.get("observability_vm_ip") or existing.get("OBSERVABILITY_VM_IP") or "").strip()
+    if topology == "2vm" and not obs_ip:
+        errs.append("observability_vm_ip is required when topology is 2vm")
 
     host_root_pass = str(draft.get("host_root_pass") or "")
+    if not host_root_pass:
+        try:
+            from kin_privhelper.provisioning_secrets import load_secrets
+
+            vault = load_secrets()
+            host_root_pass = vault.get("host_root_pass") or ""
+        except Exception:  # noqa: BLE001
+            host_root_pass = ""
     if host_root_pass:
         if len(host_root_pass) < 8:
             errs.append("host_root_pass must be at least 8 characters")
     elif not existing.get("HOST_ROOT_PASS"):
-        errs.append("host_root_pass is required (draft empty and no existing HOST_ROOT_PASS)")
+        errs.append("host_root_pass is required (draft empty, vault empty, and no existing HOST_ROOT_PASS)")
 
     kin_user_pass = str(draft.get("kin_user_pass") or "")
+    if not kin_user_pass:
+        try:
+            from kin_privhelper.provisioning_secrets import load_secrets
+
+            vault = load_secrets()
+            kin_user_pass = vault.get("kin_user_pass") or ""
+        except Exception:  # noqa: BLE001
+            kin_user_pass = ""
     if kin_user_pass:
         if len(kin_user_pass) < 8:
             errs.append("kin_user_pass must be at least 8 characters")
@@ -410,12 +430,29 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     if topology == "2vm":
         out["PEER_HOST_IP"] = str(draft.get("peer_host_ip") or "").strip()
         out["PEER_HOST_NAME"] = str(draft.get("peer_host_name") or "").strip()
+        obs = str(draft.get("observability_vm_ip") or "").strip()
+        if obs:
+            out["OBSERVABILITY_VM_IP"] = obs
+        elif "OBSERVABILITY_VM_IP" not in out:
+            out["OBSERVABILITY_VM_IP"] = ""
     else:
         out["PEER_HOST_IP"] = ""
         out["PEER_HOST_NAME"] = ""
+        out["OBSERVABILITY_VM_IP"] = ""
 
     # OS admin identity for later host provisioning; passwords preserve-on-empty like ADMIN_PASS.
     out["KIN_OS_USER"] = "kin"
+    if not host_root_pass or not kin_user_pass:
+        try:
+            from kin_privhelper.provisioning_secrets import load_secrets
+
+            vault = load_secrets()
+            if not host_root_pass:
+                host_root_pass = vault.get("host_root_pass") or ""
+            if not kin_user_pass:
+                kin_user_pass = vault.get("kin_user_pass") or ""
+        except Exception:  # noqa: BLE001
+            pass
     if host_root_pass:
         out["HOST_ROOT_PASS"] = host_root_pass
     if kin_user_pass:

@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { isOpsRole, useAuth } from "../../auth";
 import { useSetup } from "../../setup";
+import { api } from "../../api";
 import {
   Button,
   Hint,
@@ -186,6 +188,14 @@ export default function DeployStep() {
   } = useDeploySession();
 
   const { current, total, label, complete, failed } = installProgress;
+  const [maintNodes, setMaintNodes] = useState<string[]>([]);
+  useEffect(() => {
+    if (!deployed) return;
+    void api<{ cluster?: { standby?: string[] } }>("/api/cluster/status")
+      .then((st) => setMaintNodes(st.cluster?.standby || []))
+      .catch(() => setMaintNodes([]));
+  }, [deployed]);
+  const inMaintenance = maintNodes.length > 0;
   const activeRun = pipelineBusy || installInProgress;
   const pct = complete ? 100 : current > 0 ? (current / total) * 100 : activeRun ? 4 : 0;
   const showProgress = activeRun || current > 0 || complete || failed;
@@ -205,6 +215,13 @@ export default function DeployStep() {
           </>
         )}
       </Lede>
+
+      {inMaintenance && (
+        <WarnBox>
+          A mail node is in maintenance ({maintNodes.join(", ")}). Deploy is blocked until you Exit
+          Maintenance on the Cluster page.
+        </WarnBox>
+      )}
 
       {showProgress && (
         <ProgressCard>
@@ -299,7 +316,7 @@ export default function DeployStep() {
             <ActionsRow style={{ marginTop: 0 }}>
               <Button
                 type="button"
-                disabled={!confirmFull}
+                disabled={!confirmFull || inMaintenance}
                 onClick={() => void runDeploy()}
               >
                 Deploy

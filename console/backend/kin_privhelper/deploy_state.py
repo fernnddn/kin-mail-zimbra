@@ -41,6 +41,7 @@ SETUP_ALLOWED_COMMANDS = frozenset(
         "run_full_install",
         "cancel_firewall_deadman",
         "get_deploy_log",
+        "store_provisioning_secrets",
     }
 )
 

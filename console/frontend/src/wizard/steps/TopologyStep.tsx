@@ -16,6 +16,13 @@ import {
 import { useWizard } from "../WizardContext";
 import type { WizardDraft } from "../types";
 
+const IPV4 =
+  /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function validIpv4(value: string): boolean {
+  return IPV4.test(value.trim());
+}
+
 export default function TopologyStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
   const navigate = useNavigate();
@@ -24,7 +31,7 @@ export default function TopologyStep() {
   async function pick(topology: WizardDraft["topology"]) {
     setFieldErr("");
     if (topology === "1vm") {
-      setLocal({ topology, peer_host_ip: "", peer_host_name: "", current_step: "topology" });
+      setLocal({ topology, peer_host_ip: "", peer_host_name: "", observability_vm_ip: "", current_step: "topology" });
     } else {
       setLocal({ topology, current_step: "topology" });
     }
@@ -39,13 +46,27 @@ export default function TopologyStep() {
       setFieldErr("Enter the second server IP to continue with a 2-server layout.");
       return;
     }
+    if (draft.topology === "2vm" && !validIpv4(draft.peer_host_ip)) {
+      setFieldErr("Second server IP must be an IPv4 address.");
+      return;
+    }
+    if (draft.topology === "2vm" && !draft.observability_vm_ip.trim()) {
+      setFieldErr("Enter the Observability VM IP (qdevice witness) to continue.");
+      return;
+    }
+    if (draft.topology === "2vm" && !validIpv4(draft.observability_vm_ip)) {
+      setFieldErr("Observability VM IP must be an IPv4 address.");
+      return;
+    }
     setFieldErr("");
     const peer_host_ip = draft.topology === "2vm" ? draft.peer_host_ip.trim() : "";
     const peer_host_name = draft.topology === "2vm" ? draft.peer_host_name.trim() : "";
+    const observability_vm_ip = draft.topology === "2vm" ? draft.observability_vm_ip.trim() : "";
     await save({
       topology: draft.topology,
       peer_host_ip,
       peer_host_name,
+      observability_vm_ip,
       current_step: "credentials",
     });
     navigate("/wizard/credentials");
@@ -113,6 +134,25 @@ export default function TopologyStep() {
               placeholder="mail2.example.co.id"
               autoComplete="off"
             />
+          </FieldRow>
+          <FieldRow>
+            <FieldLabel htmlFor="observability_vm_ip" required>
+              Observability VM IP
+            </FieldLabel>
+            <Input
+              id="observability_vm_ip"
+              value={draft.observability_vm_ip}
+              onChange={(e) => {
+                setFieldErr("");
+                setLocal({ observability_vm_ip: e.target.value });
+              }}
+              placeholder="10.10.40.12"
+              autoComplete="off"
+            />
+            <Hint>
+              Independent witness for quorum (qdevice) plus monitoring. Same step as the second
+              mail server because a 2-server HA pair is not complete without it.
+            </Hint>
           </FieldRow>
         </>
       ) : null}

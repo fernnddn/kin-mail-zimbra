@@ -27,8 +27,11 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "apply_wizard_draft",
         "run_full_install",
         "cancel_firewall_deadman",
+        "store_provisioning_secrets",
     }
 )
+
+MAINTENANCE_MUTATE_OPS = frozenset({"enter", "exit"})
 
 SUPER_ONLY_COMMANDS = frozenset(
     {
@@ -41,13 +44,17 @@ def role_label(role: str) -> str:
     return ROLE_LABELS.get(role, role)
 
 
-def command_allowed(role: str, cmd: str) -> bool:
+def command_allowed(role: str, cmd: str, *, args: dict | None = None) -> bool:
     if role not in ALL_ROLES:
         return False
     if cmd in SUPER_ONLY_COMMANDS:
         return role == ROLE_SUPER_ADMIN
     if cmd in SENSITIVE_OPS_COMMANDS:
         return role in OPS_ROLES
+    if cmd == "maintenance":
+        op = str((args or {}).get("op") or "status").strip().lower()
+        if op in MAINTENANCE_MUTATE_OPS:
+            return role in OPS_ROLES
     return True
 
 

@@ -72,6 +72,8 @@ export default function CreateMailboxPage() {
   const [message, setMessage] = useState("");
   const [createdEmail, setCreatedEmail] = useState("");
 
+  const [maintHint, setMaintHint] = useState("");
+
   async function refreshStatus() {
     const st = await api<StatusResp>("/api/mailbox/status");
     setStatusLog(st.log || "");
@@ -84,6 +86,16 @@ export default function CreateMailboxPage() {
     void refreshStatus().catch((err) =>
       setMessage(err instanceof Error ? err.message : "Failed to load seat status"),
     );
+    void api<{ cluster?: { standby?: string[]; maintenance_active?: boolean } }>("/api/cluster/status")
+      .then((st) => {
+        const nodes = st.cluster?.standby || [];
+        setMaintHint(
+          st.cluster?.maintenance_active
+            ? `A mail node is in maintenance (${nodes.join(", ") || "unknown"}). New mailboxes are blocked until Exit Maintenance.`
+            : "",
+        );
+      })
+      .catch(() => setMaintHint(""));
   }, []);
 
   async function onSubmit(e: FormEvent) {
@@ -137,6 +149,8 @@ export default function CreateMailboxPage() {
           within the contracted seats, but cannot raise the seat limit.
         </Lede>
 
+        {maintHint ? <WarnBox>{maintHint}</WarnBox> : null}
+
         {statusOk === false && (
           <WarnBox>
             <strong>New creates may be blocked.</strong> Seat status below — fix{" "}
@@ -182,7 +196,7 @@ export default function CreateMailboxPage() {
             onChange={(e) => setDisplayName(e.target.value)}
             autoComplete="off"
           />
-          <Button type="submit" variant="primary" disabled={busy}>
+          <Button type="submit" variant="primary" disabled={busy || !!maintHint}>
             {busy ? "Creating…" : "Create mailbox"}
           </Button>
         </FormGrid>

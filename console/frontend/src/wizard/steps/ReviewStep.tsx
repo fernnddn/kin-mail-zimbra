@@ -47,12 +47,14 @@ export default function ReviewStep() {
             <dd>{draft.peer_host_ip || "—"}</dd>
             <dt>Second server hostname</dt>
             <dd>{draft.peer_host_name || "—"}</dd>
+            <dt>Observability VM IP</dt>
+            <dd>{draft.observability_vm_ip || "—"}</dd>
           </>
         ) : null}
         <dt>Root password</dt>
-        <dd>{mask(draft.host_root_pass)}</dd>
+        <dd>{draft.host_credentials_set ? "Stored (encrypted)" : mask(draft.host_root_pass)}</dd>
         <dt>Admin password</dt>
-        <dd>{mask(draft.kin_user_pass)}</dd>
+        <dd>{draft.host_credentials_set ? "Stored (encrypted)" : mask(draft.kin_user_pass)}</dd>
         <dt>Mail domain</dt>
         <dd>{draft.mail_domain || "—"}</dd>
         <dt>Mail hostname</dt>

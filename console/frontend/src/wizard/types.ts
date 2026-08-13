@@ -7,10 +7,14 @@ export type WizardDraft = {
   peer_host_ip: string;
   /** Optional hostname for the second server. */
   peer_host_name: string;
-  /** Root password for host(s). Written to config; not used for SSH in this slice. */
+  /** Observability / qdevice witness VM IP. Required when topology is 2vm. */
+  observability_vm_ip: string;
+  /** Root password for host(s). Sent once to privhelper; never returned by GET. */
   host_root_pass: string;
-  /** Host admin password (sudo). Written to config; not used for SSH in this slice. */
+  /** Host admin password (sudo). Sent once to privhelper; never returned by GET. */
   kin_user_pass: string;
+  /** True when encrypted provisioning secrets exist (no plaintext in the API). */
+  host_credentials_set: boolean;
   mail_domain: string;
   mail_host: string;
   timezone: string;
@@ -70,8 +74,10 @@ export function emptyDraft(): WizardDraft {
     topology: "",
     peer_host_ip: "",
     peer_host_name: "",
+    observability_vm_ip: "",
     host_root_pass: "",
     kin_user_pass: "",
+    host_credentials_set: false,
     mail_domain: "",
     mail_host: "",
     timezone: "Asia/Jakarta",

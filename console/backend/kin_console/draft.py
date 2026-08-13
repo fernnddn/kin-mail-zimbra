@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,18 @@ from pydantic import BaseModel, Field
 
 from .settings import settings
 
+IPV4_RE = re.compile(
+    r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
+)
+
+
+def valid_ipv4(value: str) -> bool:
+    return bool(IPV4_RE.match((value or "").strip()))
+
 DRAFT_VERSION = 1
+
+# Host provisioning passwords must never sit in the console-readable draft.
+HOST_PROVISION_KEYS = frozenset({"host_root_pass", "kin_user_pass"})
 
 # Secrets are kept in the draft for review/redeploy later, but never echo'd in logs.
 SECRET_KEYS = frozenset(
@@ -40,10 +52,12 @@ class WizardDraft(BaseModel):
     topology: str = ""  # "1vm" | "2vm"
     peer_host_ip: str = ""
     peer_host_name: str = ""
+    observability_vm_ip: str = ""
 
-    # Host credentials (not used for SSH in this slice)
+    # Host credentials live in the privhelper vault, not in this JSON.
     host_root_pass: str = ""
     kin_user_pass: str = ""
+    host_credentials_set: bool = False
 
     # b. Domain & mail
     mail_domain: str = ""
@@ -100,6 +114,8 @@ def save_draft(draft: WizardDraft) -> WizardDraft:
     draft.version = DRAFT_VERSION
     draft.updated_at = datetime.now(timezone.utc).isoformat()
     payload = draft.model_dump()
+    for key in HOST_PROVISION_KEYS:
+        payload[key] = ""
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
@@ -108,8 +124,17 @@ def save_draft(draft: WizardDraft) -> WizardDraft:
 
 
 def public_draft(draft: WizardDraft) -> dict[str, Any]:
-    """Return draft for API; secrets included for authenticated operator review only."""
-    return draft.model_dump()
+    """Return draft for API. Host provisioning passwords are never included."""
+    data = draft.model_dump()
+    for key in HOST_PROVISION_KEYS:
+        data[key] = ""
+    try:
+        from kin_privhelper.provisioning_secrets import marker_present
+
+        data["host_credentials_set"] = marker_present()
+    except Exception:  # noqa: BLE001
+        data["host_credentials_set"] = False
+    return data
 
 
 class DraftPatch(BaseModel):
@@ -121,6 +146,7 @@ class DraftPatch(BaseModel):
     topology: str | None = None
     peer_host_ip: str | None = None
     peer_host_name: str | None = None
+    observability_vm_ip: str | None = None
     host_root_pass: str | None = None
     kin_user_pass: str | None = None
     mail_domain: str | None = None
@@ -146,7 +172,12 @@ class DraftPatch(BaseModel):
 def apply_patch(draft: WizardDraft, patch: DraftPatch) -> WizardDraft:
     data = draft.model_dump()
     updates = patch.model_dump(exclude_unset=True)
+    # Never persist host provisioning passwords in the console-readable draft.
+    updates.pop("host_root_pass", None)
+    updates.pop("kin_user_pass", None)
     data.update(updates)
+    data["host_root_pass"] = ""
+    data["kin_user_pass"] = ""
     return WizardDraft.model_validate(data)
 
 

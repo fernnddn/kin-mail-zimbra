@@ -15,7 +15,7 @@ import {
 import { useWizard } from "../WizardContext";
 
 export default function CredentialsStep() {
-  const { save, error, saving } = useWizard();
+  const { draft, save, error, saving } = useWizard();
   const navigate = useNavigate();
   const [rootPass, setRootPass] = useState("");
   const [rootConfirm, setRootConfirm] = useState("");
@@ -28,33 +28,39 @@ export default function CredentialsStep() {
   }
 
   async function next() {
-    const missing: string[] = [];
-    if (!rootPass) missing.push("Root password");
-    if (!adminPass) missing.push("Admin password");
-    if (missing.length) {
+    const replacing = !!(rootPass || adminPass);
+    if (!draft.host_credentials_set && (!rootPass || !adminPass)) {
+      const missing: string[] = [];
+      if (!rootPass) missing.push("Root password");
+      if (!adminPass) missing.push("Admin password");
       setFieldErr(`Please fill in: ${missing.join(", ")}.`);
       return;
     }
-    if (rootPass.length < 8) {
-      setFieldErr("Root password must be at least 8 characters.");
-      return;
-    }
-    if (adminPass.length < 8) {
-      setFieldErr("Admin password must be at least 8 characters.");
-      return;
-    }
-    if (rootPass !== rootConfirm) {
-      setFieldErr("Root password and confirmation do not match.");
-      return;
-    }
-    if (adminPass !== adminConfirm) {
-      setFieldErr("Admin password and confirmation do not match.");
-      return;
+    if (replacing) {
+      if (!rootPass || !adminPass) {
+        setFieldErr("Enter both passwords to replace the stored credentials.");
+        return;
+      }
+      if (rootPass.length < 8) {
+        setFieldErr("Root password must be at least 8 characters.");
+        return;
+      }
+      if (adminPass.length < 8) {
+        setFieldErr("Admin password must be at least 8 characters.");
+        return;
+      }
+      if (rootPass !== rootConfirm) {
+        setFieldErr("Root password and confirmation do not match.");
+        return;
+      }
+      if (adminPass !== adminConfirm) {
+        setFieldErr("Admin password and confirmation do not match.");
+        return;
+      }
     }
     setFieldErr("");
     await save({
-      host_root_pass: rootPass,
-      kin_user_pass: adminPass,
+      ...(replacing ? { host_root_pass: rootPass, kin_user_pass: adminPass } : {}),
       current_step: "domain",
     });
     navigate("/wizard/domain");
@@ -65,8 +71,14 @@ export default function CredentialsStep() {
       <Title>Host credentials</Title>
       <Lede>
         Set the root password and the admin password for the host(s) in this deployment. Both are
-        required.
+        required. They are stored encrypted for later provisioning and are never shown again.
       </Lede>
+      {draft.host_credentials_set ? (
+        <Hint>
+          Credentials are already stored. Leave the fields empty to keep them, or enter new values
+          to replace.
+        </Hint>
+      ) : null}
       <PairGrid>
         <FieldRow>
           <FieldLabel htmlFor="host_root_pass" required>

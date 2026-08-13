@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
 import { SetupProvider, useSetup, wizardHomePath } from "./setup";
 import AuditLogPage from "./pages/AuditLog";
+import ClusterPage from "./pages/Cluster";
 import CreateMailboxPage from "./pages/CreateMailbox";
 import EulaPage from "./pages/Eula";
 import LoginPage from "./pages/Login";
@@ -86,6 +87,16 @@ export default function App() {
               element={
                 <RequireEula>
                   <LoginPage />
+                </RequireEula>
+              }
+            />
+            <Route
+              path="/cluster"
+              element={
+                <RequireEula>
+                  <RequireAuth>
+                    <ClusterPage />
+                  </RequireAuth>
                 </RequireEula>
               }
             />

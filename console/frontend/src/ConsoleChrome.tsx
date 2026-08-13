@@ -85,6 +85,7 @@ export function ConsoleChrome({
           <div style={{ display: "flex", alignItems: "center", gap: "0.85rem", flexWrap: "wrap" }}>
             {hint}
             <NavLinks>
+              <Link to="/cluster">Cluster</Link>
               <Link to="/wizard">Wizard</Link>
               <Link to="/mailboxes">Mailboxes</Link>
               {isSuper && <Link to="/users">Users</Link>}

@@ -261,17 +261,40 @@ def get_wizard_draft(_actor: auth.WizardActor = Depends(auth.wizard_actor)) -> d
 
 
 @app.put("/api/wizard/draft")
-def put_wizard_draft(
+async def put_wizard_draft(
     body: draft.DraftPatch,
-    _actor: auth.WizardActor = Depends(auth.wizard_actor),
+    actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict:
     current = draft.load_draft()
+    # Host provisioning passwords go to the privhelper vault, never the draft file.
+    root_pass = (body.host_root_pass or "").strip() if body.host_root_pass is not None else ""
+    kin_pass = (body.kin_user_pass or "").strip() if body.kin_user_pass is not None else ""
+    if root_pass or kin_pass:
+        if not command_allowed(actor.role, proto.CMD_STORE_PROVISIONING_SECRETS):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=deny_message(actor.role, proto.CMD_STORE_PROVISIONING_SECRETS),
+            )
+        stored = await _collect_privhelper(
+            proto.CMD_STORE_PROVISIONING_SECRETS,
+            actor.username,
+            args={"host_root_pass": root_pass, "kin_user_pass": kin_pass},
+        )
+        if not stored.get("ok"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(stored.get("error") or stored.get("log") or "could not store credentials"),
+            )
     updated = draft.apply_patch(current, body)
-    # Light validation for known enums — store anyway if empty (in-progress draft).
     if updated.topology and updated.topology not in ("1vm", "2vm"):
         raise HTTPException(status_code=400, detail="topology must be 1vm or 2vm")
     if updated.tls_method and updated.tls_method not in ("cloudflare", "manual", "customer"):
         raise HTTPException(status_code=400, detail="tls_method invalid")
+    if updated.topology == "2vm":
+        if updated.peer_host_ip and not draft.valid_ipv4(updated.peer_host_ip):
+            raise HTTPException(status_code=400, detail="Second server IP must be an IPv4 address")
+        if updated.observability_vm_ip and not draft.valid_ipv4(updated.observability_vm_ip):
+            raise HTTPException(status_code=400, detail="Observability VM IP must be an IPv4 address")
     saved = draft.save_draft(updated)
     return draft.public_draft(saved)
 
@@ -288,6 +311,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "cancel_firewall_deadman": proto.CMD_CANCEL_FIREWALL_DEADMAN,
     "audit_log": proto.CMD_GET_AUDIT_LOG,
     "deploy_log": proto.CMD_GET_DEPLOY_LOG,
+    "maintenance": proto.CMD_MAINTENANCE,
 }
 
 
@@ -365,6 +389,17 @@ async def mailbox_create(
             status_code=400,
             detail="Enter the local part only — domain is fixed to the configured mail domain",
         )
+    maint = await _collect_privhelper(
+        proto.CMD_MAINTENANCE,
+        user.username,
+        args={"op": "status"},
+    )
+    parsed = _json_from_log(str(maint.get("log") or ""), "CLUSTER_STATUS_JSON:")
+    if parsed.get("maintenance_active"):
+        raise HTTPException(
+            status_code=409,
+            detail="A mail node is in maintenance. Finish Exit Maintenance before creating mailboxes.",
+        )
     result = await _collect_privhelper(
         proto.CMD_CREATE_MAILBOX,
         user.username,
@@ -404,7 +439,13 @@ async def wizard_deploy_stream(
             detail=f"unknown action {action!r}; allowed: {', '.join(sorted(_STREAM_ACTIONS))}",
         )
 
-    if not command_allowed(actor.role, cmd):
+    stream_args: dict | None = None
+    if cmd == proto.CMD_MAINTENANCE:
+        op = (request.query_params.get("op") or "status").strip().lower()
+        target = (request.query_params.get("target") or "").strip()
+        stream_args = {"op": op, "target": target}
+
+    if not command_allowed(actor.role, cmd, args=stream_args):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=deny_message(actor.role, cmd),
@@ -416,6 +457,7 @@ async def wizard_deploy_stream(
             cmd,
             actor.username,
             socket_path=settings.privhelper_socket,
+            args=stream_args,
         ):
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
@@ -440,6 +482,43 @@ async def wizard_deploy_hint(
         "message": "Use GET /api/wizard/deploy/stream?action=…",
         "actions": sorted(_STREAM_ACTIONS.keys()),
         "commands": {k: v for k, v in _STREAM_ACTIONS.items()},
+    }
+
+
+def _json_from_log(log: str, prefix: str) -> dict:
+    for line in (log or "").splitlines():
+        if line.startswith(prefix):
+            try:
+                data = json.loads(line[len(prefix) :])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
+    return {}
+
+
+@app.get("/api/cluster/status")
+async def cluster_status(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Live Pacemaker/DRBD snapshot for the Cluster page (no secrets)."""
+    if not command_allowed(user.role, proto.CMD_MAINTENANCE):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAINTENANCE),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAINTENANCE,
+        user.username,
+        args={"op": "status"},
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "CLUSTER_STATUS_JSON:")
+    return {
+        "ok": bool(result.get("ok")),
+        "exit_code": result.get("exit_code"),
+        "error": result.get("error"),
+        "log": result.get("log"),
+        "cluster": parsed,
     }
 
 

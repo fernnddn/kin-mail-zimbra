@@ -18,6 +18,8 @@ CMD_GET_AUDIT_LOG = "get_audit_log"
 CMD_GET_DEPLOY_LOG = "get_deploy_log"
 CMD_CREATE_MAILBOX = "create_mailbox"
 CMD_CLEAR_INITIAL_CONSOLE_PASSWORD = "clear_initial_console_password"
+CMD_MAINTENANCE = "maintenance"
+CMD_STORE_PROVISIONING_SECRETS = "store_provisioning_secrets"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -30,6 +32,8 @@ ALLOWED_COMMANDS = frozenset(
         CMD_GET_DEPLOY_LOG,
         CMD_CREATE_MAILBOX,
         CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
+        CMD_MAINTENANCE,
+        CMD_STORE_PROVISIONING_SECRETS,
     }
 )
 
