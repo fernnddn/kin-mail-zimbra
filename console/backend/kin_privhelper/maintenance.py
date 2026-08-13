@@ -251,7 +251,14 @@ def zimbra_started_on(crm: str, node: str) -> bool:
 
 
 async def _zmcontrol_on(node: str, addr: str, crm: str) -> tuple[bool, str]:
-    """zmcontrol on node: local if this host, else SSH, else crm+https evidence."""
+    """Local zmcontrol, or crm_mon for the peer — no inter-node SSH.
+
+    Pacemaker's kin-zimbra OCF monitor already runs ``zmcontrol status``.
+    Preflight also has an independent ``peer_https`` check. A dedicated SSH
+    key between mail nodes is intentionally not added: even a forced-command
+    key is permanent lateral-movement surface for a dump the monitor already
+    produces.
+    """
     me = this_hostname()
     short = me.split(".")[0]
     node_short = node.split(".")[0]
@@ -260,29 +267,14 @@ async def _zmcontrol_on(node: str, addr: str, crm: str) -> tuple[bool, str]:
         text = (out + err).strip()
         ok = c == 0 and "Stopped" not in text
         return ok, text or f"exit {c}"
-    for user in ("root", "cursor"):
-        argv = [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=8",
-            f"{user}@{addr or node}",
-            "su - zimbra -c 'zmcontrol status'",
-        ]
-        c, out, err = await _capture(argv, timeout=50)
-        text = (out + err).strip()
-        if c == 0:
-            return True, text
     started = zimbra_started_on(crm, node)
     if started:
+        where = addr or node
         return True, (
-            f"kin-zimbra Started on {node} (crm_mon); BatchMode SSH to peer is not configured "
-            f"so zmcontrol was not run remotely"
+            f"kin-zimbra Started on {node} ({where}; crm_mon; OCF monitor is zmcontrol status). "
+            "Remote SSH zmcontrol is intentionally not configured"
         )
-    return False, f"cannot run zmcontrol on {node} and kin-zimbra is not Started there"
+    return False, f"cannot confirm zmcontrol on {node}: kin-zimbra is not Started there"
 
 
 async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:

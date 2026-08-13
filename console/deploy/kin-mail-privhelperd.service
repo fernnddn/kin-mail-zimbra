@@ -24,9 +24,8 @@ RestartSec=3
 # (It binds a Unix socket under /run/kin-mail only.)
 PrivateTmp=true
 ProtectHome=true
-# Peer zmcontrol during maintenance pre-flight uses root SSH keys.
-BindReadOnlyPaths=-/root/.ssh
 # Ansible (HA orchestration) must not write under /root — ProtectHome makes it RO.
+# Do not bind /root/.ssh: maintenance preflight does not use inter-node SSH keys.
 Environment=HOME=/var/lib/kin-mail-privhelper
 NoNewPrivileges=false
 # Root by design (Option B); capabilities left unrestricted for install scripts later.
