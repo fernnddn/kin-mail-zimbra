@@ -6,7 +6,7 @@
 # guard against restoring onto live Host A / Host B.
 #
 #   kin-mail-restore.sh --set DIR --mode full|ldap|mysql|store \
-#       --i-understand-this-overwrites-zimbra
+#       --i-understand-this-overwrites-zimbra [--stop-after]
 #   kin-mail-restore.sh --set DIR --verify-only
 #
 # FOSS restore path: zmslapadd (LDAP), mysql import (mailbox metadata),
@@ -25,6 +25,7 @@ SET=""
 MODE=""
 CONFIRM=0
 VERIFY_ONLY=0
+STOP_AFTER=0
 MARKER="${KIN_MAIL_RESTORE_MARKER:-}"
 
 while [ $# -gt 0 ]; do
@@ -32,9 +33,11 @@ while [ $# -gt 0 ]; do
     --set) SET="${2:-}"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --verify-only) VERIFY_ONLY=1; shift ;;
+    --stop-after) STOP_AFTER=1; shift ;;
     --i-understand-this-overwrites-zimbra) CONFIRM=1; shift ;;
     -h|--help)
-      printf '%s\n' "Usage: $0 --set DIR [--mode full|ldap|mysql|store] [--verify-only] --i-understand-this-overwrites-zimbra"
+      printf '%s\n' "Usage: $0 --set DIR [--mode full|ldap|mysql|store] [--verify-only] [--stop-after] --i-understand-this-overwrites-zimbra"
+      printf '%s\n' "  --stop-after  zmcontrol stop when the restore finishes (scratch must not stay on the VLAN)"
       exit 0
       ;;
     *) fail "Unknown arg: $1"; exit 2 ;;
@@ -214,6 +217,30 @@ verify_functional() {
   return 0
 }
 
+finish_scratch() {
+  # Scratch Zimbra uses the production mail hostname. Leaving proxy/mta up
+  # puts a second mail.gits-it.site on the VLAN. Default is remind-only so a
+  # drill can still inspect; --stop-after turns it into zmcontrol stop.
+  if [ "$STOP_AFTER" = 1 ]; then
+    say "Stopping scratch Zimbra (--stop-after)"
+    zimbra_sh 'zmcontrol stop' || true
+  fi
+  local listeners
+  listeners=$(ss -lnt 2>/dev/null | awk '$4 ~ /:(443|25)$/ { print }' || true)
+  if [ -n "$listeners" ]; then
+    fail "scratch still has :443 or :25 listeners:"
+    printf '%s\n' "$listeners" | sed 's/^/      /'
+    warn "Stop before leaving: su - zimbra -c 'zmcontrol stop'"
+    warn "Or rerun this script with --stop-after."
+  else
+    ok "no :443/:25 listeners on this host"
+    if [ "$STOP_AFTER" != 1 ]; then
+      warn "If this drill started mailboxd/proxy/mta, stop them before leaving the VLAN:"
+      warn "  su - zimbra -c 'zmcontrol stop'   # or pass --stop-after"
+    fi
+  fi
+}
+
 need_root
 assert_scratch
 assert_set
@@ -273,6 +300,7 @@ case "$MODE" in
     if ! verify_functional; then
       warn "zmcontrol status:"
       zimbra_sh 'zmcontrol status' | sed 's/^/      /' || true
+      finish_scratch
       exit 1
     fi
     ok "full restore verified"
@@ -282,4 +310,5 @@ case "$MODE" in
     exit 2
     ;;
 esac
+finish_scratch
 exit 0
