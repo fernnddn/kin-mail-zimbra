@@ -174,6 +174,7 @@ fi
 # -----------------------------------------------------------------------------
 stage "6/8 Remove KIN Mail config, packages, and data paths"
 # Config AFTER services stopped (design: never rm while services run).
+# Includes /etc/kin-mail/brand/ (customer logo/theme; not inside /opt/zimbra).
 run_soft rm -rf /etc/kin-mail
 run_soft rm -rf /etc/kin-mail-console
 run_soft rm -rf /var/lib/kin-mail-console

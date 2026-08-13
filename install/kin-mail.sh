@@ -51,6 +51,7 @@ REQUIRED_SCRIPTS=(
   09-hardening.sh
   10-host-firewall.sh
   11-admin-path-lockdown.sh
+  12-branding.sh
   check-zimbra-foss-update.sh
   kin-mail.sh
 )
@@ -407,11 +408,12 @@ pick_one_stage() {
     printf '  %s%s%s  %s\n' "$BLD" "8)" "$RST" "09-hardening.sh          ${DIM}Part A + SMTP rate limits${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "9)" "$RST" "10-host-firewall.sh      ${DIM}ufw (dead-man; THIS host only)${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "10)" "$RST" "11-admin-path-lockdown.sh ${DIM}block /zimbraAdmin on :443${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "11)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
-    printf '  %s%s%s  %s\n' "$BLD" "12)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "11)" "$RST" "12-branding.sh          ${DIM}customer logo/theme (optional)${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "12)" "$RST" "05-healthcheck.sh        ${DIM}acceptance tests${RST}"
+    printf '  %s%s%s  %s\n' "$BLD" "13)" "$RST" "00-config.sh --reset     ${DIM}re-run configuration wizard${RST}"
     printf '  %s%s%s  %s\n' "$BLD" "0)" "$RST" "Back"
     hr
-    printf '  %sChoice%s [0-12]: ' "$BLD" "$RST"
+    printf '  %sChoice%s [0-13]: ' "$BLD" "$RST"
     read -r choice </dev/tty || return 0
     case "$choice" in
       1) run_stage 01-preflight.sh; return $? ;;
@@ -428,8 +430,9 @@ pick_one_stage() {
         return $?
         ;;
       10) run_stage 11-admin-path-lockdown.sh; return $? ;;
-      11) run_stage 05-healthcheck.sh; return $? ;;
-      12)
+      11) run_stage 12-branding.sh; return $? ;;
+      12) run_stage 05-healthcheck.sh; return $? ;;
+      13)
         echo
         say "Running 00-config.sh --reset"
         ./00-config.sh --reset
@@ -462,7 +465,7 @@ main_menu() {
     printf '      %s%s\n' "$DIM" "01→02→03→04→06→[07?]→09→[10?]→11→05  (firewall always prompted)${RST}"
     echo
     printf '  %s%s%s  %s\n' "$BLD" "2)" "$RST" "Run a specific stage"
-    printf '      %s%s\n' "$DIM" "submenu includes Z-Push, hardening, firewall, admin lockdown${RST}"
+    printf '      %s%s\n' "$DIM" "submenu includes Z-Push, branding, hardening, firewall, admin lockdown${RST}"
     echo
     printf '  %s%s%s  %s\n' "$BLD" "3)" "$RST" "Healthcheck only"
     printf '      %s%s\n' "$DIM" "05-healthcheck.sh${RST}"
