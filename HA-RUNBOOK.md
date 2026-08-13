@@ -1,240 +1,221 @@
 # KIN Mail — HA runbook (Pacemaker / DRBD / SBD)
 
-Operational reference for the **active–passive** KIN Mail lab/cluster proven in Phase 2
-(tasks 2.1–2.9, plus operator failover/failback observations in 2.13–2.14). Commands and
-behaviors below are taken from that work, not from unverified theory.
+Operational reference for the **active–passive** KIN Mail pair. Commands and
+behaviors below are taken from live lab work (Phase 2, HA rebuild 2026-08-12/13,
+ha-build-14/15, maintenance mode, Observability resize, backup/restore, KIN Sight,
+fail2ban OCF hooks) — not from unverified theory.
 
-Cluster name: `kin-mail`  
-Preferred production node: Host A (`mail.gits-it.site` / `10.10.40.13`)  
-Standby: Host B (`mail2.gits-it.site` / `10.10.40.12`)  
-Witness: Monitoring VM (`mon.gits-it.site` / `10.10.40.14`) — qnetd + iSCSI SBD target  
-Cluster VIP: `10.10.40.15/24` on `ens33` (Pacemaker `kin-vip`)
+Cluster name: `kin-mail`
+
+| Role | Host | IP | Notes |
+|---|---|---|---|
+| Mail A | `mail.gits-it.site` | `10.10.40.15` | Console `:9443`. Currently **Unpromoted**. |
+| Mail B | `mail2.gits-it.site` | `10.10.40.14` | Currently **Promoted** (serves mail + VIP). |
+| Observability | `mon.gits-it.site` | `10.10.40.12` | qnetd `:5403`, iSCSI SBD LUN `:3260`, Zabbix `:8080` |
+| Backup | `backup.gits-it.site` | `10.10.40.13` | Backup repo + Grafana `:3000`. Scratch restore target. |
+| Cluster VIP | Pacemaker `kin-vip` | **`10.10.40.16/24`** on `ens33` | FortiGate NAT targets this, **not** Host A `.15`. |
+
+There is **no** Pacemaker “preferred production node.” ha-build-15 removed the
+prefer-A=50 location pin (it caused automatic failback after the 14 fence test).
+`resource-stickiness=1000` / `promoted-resource-stickiness=1000` keep whoever is
+Promoted until that node is down or an operator moves it. Resting state as of
+2026-08-13: **B Promoted, A Unpromoted**, no location constraints.
 
 > **Audience:** anyone operating a KIN Mail HA pair.  
-> **Not covered here:** Zimbra first install (`install/kin-mail.sh` / stage scripts) — see `README.md`.
+> **Not covered here:** first Zimbra install (`install/kin-mail.sh`) — see `README.md`.  
+> **Console:** `https://10.10.40.15:9443` lives on Host A’s OS, not on the VIP. If A
+> is down, the console is down even when mail is healthy on B.
 
 ### Expectation: measured downtime, not zero-downtime
 
-This design is **active–passive**, not active–active. Only one node runs Zimbra and holds the
-VIP at a time. Every **failover** and every **failback** therefore causes a real service gap —
-mail/webmail are unavailable while the stack moves.
+This design is **active–passive**, not active–active. Only one node runs Zimbra and
+holds the VIP. Every **failover** and every **controlled move** causes a real service
+gap.
 
-**What operators measured in a full power-off / recover cycle (Host A OFF → B Primary → A
-rejoin → automatic failback to A):** roughly **~2–3 minutes of downtime each direction**
-(failover, then again on failback), on the order of **~5 minutes total** for the full cycle.
-Exact length varies with Zimbra start time and how long DRBD promotion / group start take.
+**Measured (hard-kill of the then-Promoted node, ha-build-14 Stage 2):** kill → VIP
+HTTP 200 again ≈ **3 min 19 s** (~80 s SBD msgwait fence, then DRBD promote/mount,
+then full `zmcontrol start`, then VIP). Graceful `pcs node standby` of the Promoted
+node is on the same order **minus** the fence wait (~2 min).
 
-**Why the gap exists (by design, for data safety):**
+**There is no automatic failback downtime** when the old node rejoins. Stickiness
+keeps the survivor. That is deliberate (ha-build-15). The old prefer-A pin would
+have moved the stack a second time as soon as A was UpToDate.
+
+**Why the gap exists (data safety):**
 
 1. DRBD must **promote** on the survivor before `/opt/zimbra` is mounted (never dual-Primary).
-2. The Filesystem resource mounts the shared store, then the Zimbra OCF runs a **full**
-   `zmcontrol start` on the new Master — not a hot hand-off of an already-running JVM.
-3. VIP (`kin-vip`) starts **after** Zimbra in the group order, so clients see the old VIP
-   disappear before the new side is ready.
+2. `ocf:kin:zimbra` runs a **full** `zmcontrol start` (and starts local slapd first when
+   `ldap_url` is `127.0.0.1`) — not a hot JVM hand-off.
+3. VIP starts **after** Zimbra in the group, so clients see the old VIP disappear
+   before the new side is ready.
 
-**What this HA actually buys you:** automatic (or controlled) recovery with **bounded,
-repeatable downtime**, fencing against split-brain, and a single consistent store — **not**
-continuous availability or zero-downtime cutover. Do not plan change windows or SLAs as if
-failover were transparent.
+**What this HA buys you:** automatic (or controlled) recovery with **bounded,
+repeatable downtime**, fencing against split-brain, and a single consistent store —
+**not** continuous availability. Do not plan SLAs as if failover were transparent.
 
 ---
 
 ## 1. Architecture (short)
 
 ```
-                    ┌─────────────────────┐
-                    │  mon.gits-it.site   │
-                    │  qnetd (vote)       │
-                    │  iSCSI → SBD LUN    │
-                    └──────────┬──────────┘
-                               │
-         ┌─────────────────────┼─────────────────────┐
-         │                     │                     │
-┌────────▼────────┐   Corosync/Pacemaker    ┌────────▼────────┐
-│ Host A          │◄───────────────────────►│ Host B          │
-│ mail.gits-it…   │                         │ mail2.gits-it…  │
-│ 10.10.40.13     │      DRBD kin-zimbra    │ 10.10.40.12     │
-│                 │◄═══════════════════════►│                 │
-│ Prefer score 50 │   /dev/drbd0 ↔ /opt/zimbra (when Master)  │
-└────────┬────────┘                         └─────────────────┘
-         │
-         │  when Promoted: group kin-mail-svc
-         ▼
-   kin-fs → kin-zimbra → kin-vip (10.10.40.15)
+                    ┌──────────────────────────┐
+                    │  mon.gits-it.site .12    │
+                    │  qnetd :5403  (vote)     │
+                    │  iSCSI → SBD LUN :3260   │
+                    │  Zabbix :8080            │
+                    └────────────┬─────────────┘
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         │                       │                       │
+┌────────▼────────┐    Corosync/Pacemaker     ┌────────▼────────┐
+│ Host A          │◄─────────────────────────►│ Host B          │
+│ mail  .15       │                           │ mail2 .14       │
+│ console :9443   │      DRBD kin-zimbra      │ (Promoted today)│
+│                 │◄═════════════════════════►│                 │
+│ stickiness 1000 │   /dev/drbd0 ↔ /opt/zimbra (when Master)    │
+└─────────────────┘     data /dev/sdb1  meta /dev/sdb2          └─────────────────┘
+                                 │
+                    when Promoted: group kin-mail-svc
+                                 ▼
+              kin-fs → kin-zimbra → kin-vip (10.10.40.16)
 ```
+
+Backup VM `.13` is **not** in the cluster. It pulls backups over SSH from whichever
+mail node currently has `/opt/zimbra` mounted, and hosts Grafana.
 
 | Layer | What | Notes (proven) |
 |---|---|---|
-| Quorum | Corosync + **qdevice/qnetd** on mon | Tie-break so one side keeps quorum under partition |
-| Fencing | **SBD** + softdog + `fence_sbd` | No ESXi/hypervisor fence in this lab |
-| Replication | DRBD resource **`kin-zimbra`** → `/dev/drbd0` | Protocol C; external meta on loop (`kin-drbd-meta-loop.service`) |
-| Pacemaker DRBD | Promotable clone **`kin-drbd-clone`** (`ocf:linbit:drbd`) | `promoted-max=1`, `notify=true` |
-| App stack | Group **`kin-mail-svc`**: `kin-fs` → `kin-zimbra` → `kin-vip` | Colocation + order with **Promoted** DRBD |
-| Zimbra RA | Custom **`ocf:kin:zimbra`** | Wraps `zmcontrol` (no official Zimbra OCF) |
+| Quorum | Corosync + **qdevice/qnetd** on `.12` | Expected votes **3**, quorum **2**. `no-quorum-policy=stop`. |
+| Fencing | **SBD** + softdog + `fence_sbd` | No ESXi/hypervisor fence. Live device `scsi-36001405794acfc6ef564471952d8017b`. |
+| Replication | DRBD **`kin-zimbra`** → `/dev/drbd0` | Protocol C; **`meta-disk /dev/sdb2`** (no `kin-drbd-meta-loop`). |
+| Pacemaker DRBD | Promotable clone **`kin-drbd-clone`** | `promoted-max=1`, `notify=true`, stickiness **1000**, **no** node-location prefer. |
+| App stack | Group **`kin-mail-svc`**: `kin-fs` → `kin-zimbra` → `kin-vip` | Colocation + order with **Promoted** DRBD. |
+| Zimbra RA | Custom **`ocf:kin:zimbra` v1.2** | `zmcontrol` wrapper. Start **600s**, stop **300s**, monitor 30s/60s. Starts local LDAP before `zmcontrol` when needed. Refreshes fail2ban jails on start/stop (section 10). |
 
-**Boot ownership (important):**
+**Boot ownership:**
 
 - `drbd.service` (systemd) must stay **disabled** — Pacemaker owns DRBD.
-- `kin-drbd-meta-loop.service` must stay **enabled** — attaches external meta before DRBD use.
-- `kin-softdog.service` must stay **enabled** — Ubuntu blacklists softdog; explicit modprobe is required for SBD.
+- `kin-softdog.service` must stay **enabled** — Ubuntu blacklists softdog; SBD needs it.
+- There is **no** `kin-drbd-meta-loop.service` on this rebuild (meta is a real partition).
+
+Ansible: `pacemaker_mail_stack_prefer_enabled: false` (default). Do not re-enable the
+prefer pin without an explicit operator decision — it will restore automatic failback.
 
 ---
 
 ## 2. Daily health checks
 
-Run on **either** cluster node (as root / sudo). Healthy resting state: stack on **A**.
+Run on **either** mail node (root / sudo). Healthy = one Promoted, one Unpromoted,
+VIP on the Promoted node, fail-count 0. Today that is **B**; tomorrow it is whoever
+stickiness last left Promoted.
 
 ### Cluster membership and resources
 
 ```bash
 pcs status
+pcs constraint location          # expect: empty (no prefer / no leftover ban)
 ```
 
-**Normal (resting on A):**
+**Normal (2026-08-13 resting state):**
 
 - `Online: [ mail.gits-it.site mail2.gits-it.site ]`
-- `kin-drbd-clone`: `Promoted: [ mail.gits-it.site ]`, `Unpromoted: [ mail2.gits-it.site ]`
-- `kin-mail-svc`: `kin-fs`, `kin-zimbra`, `kin-vip` all **Started** on `mail.gits-it.site`
+- `kin-drbd-clone`: `Promoted: [ mail2.gits-it.site ]`, `Unpromoted: [ mail.gits-it.site ]`
+- `kin-mail-svc`: `kin-fs`, `kin-zimbra`, `kin-vip` all **Started** on `mail2.gits-it.site`
 - `sbd` (stonith) Started on one of the nodes
-- No `Failed Resource Actions`, no `UNCLEAN`, no `Pending Fencing Actions`
+- Clone meta includes `resource-stickiness=1000` and `promoted-resource-stickiness=1000`
+- No location constraints, no `Failed Resource Actions`, no `UNCLEAN`, no pending fence
 
 **Not normal — investigate before changing anything:**
 
 - Only one node Online, or `pending` / `UNCLEAN`
-- Two Promoted entries, or DRBD role `Primary/Primary` (see assert below)
+- Two Promoted entries, or DRBD `Primary/Primary` (see assert below)
 - `kin-zimbra` Stopped/Failed while DRBD is Promoted on that node
 - VIP present on the wrong node or on both
+- A `cli-ban-kin-drbd-clone-on-…` location constraint left over from a controlled move
+- `stonith-enabled=false` outside an Observability maintenance window (section 7)
 
 ### DRBD
 
 ```bash
 drbdadm status kin-zimbra
 drbdadm role kin-zimbra
-```
-
-**Normal on A (Master):** `Primary/Secondary`, both disks `UpToDate`, replication `Established`.  
-**Normal on B (Standby):** `Secondary/Primary` (local/peer), peer Primary, disks `UpToDate`.
-
-Optional dual-primary guard (installed on lab nodes):
-
-```bash
 /usr/local/sbin/kin-assert-no-dual-primary.sh
 # expect: NO_DUAL_PRIMARY_OK
 ```
 
-### Mount and VIP (only on the Master)
+**Normal on the Promoted node:** `Primary/Secondary`, both disks `UpToDate`, `Established`.  
+**Normal on the Unpromoted node:** `Secondary/Primary` (local/peer), peer Primary, `UpToDate`.
+
+### Mount, VIP, Zimbra (Promoted node only)
 
 ```bash
-findmnt /opt/zimbra          # expect /dev/drbd0 on the Promoted node only
-ip -4 addr show ens33 | grep 10.10.40.15
-su - zimbra -c 'zmcontrol status'   # only works where /opt/zimbra is mounted
+findmnt /opt/zimbra                 # /dev/drbd0 on Promoted only; empty on Unpromoted
+ip -4 addr show ens33 | grep 10.10.40.16
+curl -skI -o /dev/null -w '%{http_code}\n' https://10.10.40.16/
+su - zimbra -c 'zmcontrol status'   # only where /opt/zimbra is mounted
+crm_failcount --query --resource kin-zimbra   # expect value=0
 ```
 
-### Soft prefer (should remain)
+### Stickiness (should remain; this replaced prefer-A)
 
 ```bash
+pcs resource config kin-drbd-clone | grep stickiness
+# expect: resource-stickiness=1000 and promoted-resource-stickiness=1000
 pcs constraint location
-# expect: kin-drbd-clone prefers mail.gits-it.site with score 50
+# expect: no output / no prefers / no leftover bans
 ```
+
+### fail2ban (Promoted vs Unpromoted)
+
+```bash
+fail2ban-client status
+systemctl is-active fail2ban      # must stay active on BOTH nodes
+```
+
+Promoted: `sshd, zimbra-auth, zpush-auth`. Unpromoted: `sshd` only. If Unpromoted
+fail2ban is **failed**, see section 10 — do not “fix” it by pointing jails at
+unmounted `/opt/zimbra` logs.
 
 ---
 
-## 3. Controlled failover / failback (maintenance)
+## 3. Controlled failover (maintenance move)
 
-Use this to **intentionally** move the Master (e.g. Host A maintenance). Proven in task 2.7; do **not** rely on plain `pcs resource move … --promoted` while soft prefer is set — it can bounce.
+Use this to **intentionally** move the Master (OS work on the current Promoted
+node, or a planned swap). Prefer the console Cluster page (section 6) when you
+are taking a node out of service. Use `pcs resource ban` when you only want to
+move the Master and leave both nodes Online.
 
-Expect **~2–3 minutes** of real downtime for each controlled move (same order of magnitude as
-automatic failover/failback) while Zimbra fully restarts on the target node.
+Expect **~2–3 minutes** of real downtime while Zimbra fully restarts on the target.
 
-### Move Master A → B
+Do **not** use `pcs resource move … --promoted`. Ban the **currently Promoted**
+node; stickiness holds the new Master after you clear the ban.
 
-```bash
-# On either node:
-pcs resource ban kin-drbd-clone mail.gits-it.site --promoted
+### Move Master off the current Promoted node
 
-# Wait until:
-#   Promoted: [ mail2.gits-it.site ]
-#   kin-mail-svc Started on mail2 (Zimbra start can take several minutes)
-pcs status
-
-# Safety:
-/usr/local/sbin/kin-assert-no-dual-primary.sh
-# On A: findmnt /opt/zimbra should be empty; VIP gone
-# On B: findmnt + VIP 10.10.40.15 present
-```
-
-Leave the ban in place only while you need B to stay Master. Soft prefer alone is not enough to keep B Master if you clear the ban **or** if A simply comes back healthy (see automatic failback below).
-
-### Return Master B → A (failback) — when you *do* want it
-
-**You do not always need `pcs resource clear` for failback.** That command only matters when a
-**ban** (or other location constraint from a controlled move) is still holding A off. If the
-only sticky preference is the default soft prefer A score 50 and there is no ban, failback can
-happen **without any operator command** as soon as A is Online and DRBD-ready (next subsection).
-
-If a ban on A is still present and you want to allow failback:
-
-```bash
-pcs resource clear kin-drbd-clone
-```
-
-With prefer A score 50, the stack should return to A. Wait for Promoted + full `kin-mail-svc` on `mail.gits-it.site`, then assert no dual-primary. Budget another **~2–3 minutes** of downtime for that move.
-
-If there is no ban and the stack is already on B without prefer, either restore prefer:
-
-```bash
-pcs constraint location kin-drbd-clone prefers mail.gits-it.site=50
-```
-
-or ban B’s promotion temporarily, then clear after A owns the stack:
+Example: stack is on B, move to A:
 
 ```bash
 pcs resource ban kin-drbd-clone mail2.gits-it.site --promoted
-# wait for A stack OK
+
+# Wait until:
+#   Promoted: [ mail.gits-it.site ]
+#   kin-mail-svc Started on mail (Zimbra start can take several minutes)
+#   https://10.10.40.16/ → 200
+pcs status
+/usr/local/sbin/kin-assert-no-dual-primary.sh
+# Old Master: findmnt /opt/zimbra empty; no VIP
+# New Master: findmnt + VIP 10.10.40.16
+```
+
+Then **clear the ban**. Stickiness 1000 keeps the new Master; you do **not**
+leave the ban in place to prevent failback (there is no prefer pin to fight):
+
+```bash
 pcs resource clear kin-drbd-clone
-pcs constraint location kin-drbd-clone prefers mail.gits-it.site=50
+pcs constraint location    # must be empty
 ```
 
-### Recovery of the preferred node triggers automatic failback
-
-**Default resting state** includes:
-
-```bash
-pcs constraint location
-# kin-drbd-clone prefers mail.gits-it.site with score 50
-```
-
-With that constraint still active (and **no** ban pinning Master on B):
-
-1. Host A boots, rejoins Corosync, brings up DRBD as Secondary, becomes eligible.
-2. Pacemaker **automatically** schedules promote on A and moves `kin-mail-svc` off B —
-   **no `pcs resource clear`, no manual promote**.
-3. Operators see a **second** downtime window (~2–3 minutes again), separate from the first
-   failover downtime, right after the failed/preferred node comes back.
-
-**Proven (operator-driven test, task 2.14):** after Host A rejoin ~12:07:48, Pacemaker scheduled
-automatic promote/move ~12:08:22; transition finished ~12:11:25 — without a new CIB edit or
-clear. External webmail showed `http_code=000` during the VIP/Zimbra gap.
-
-**If you do *not* want automatic failback yet** (e.g. keep observing Host B as Master after A
-is repaired):
-
-- Act **before** you power Host A back on (or before you let it rejoin with prefer intact).
-- Keep / re-apply a **ban** on promoting A, or temporarily remove/lower the prefer-A location
-  constraint, **then** bring A online.
-- Changing prefer **after** A is already Online is too late if the scheduler has already
-  started the move.
-
-Example — hold Master on B while A is allowed to rejoin as Secondary only:
-
-```bash
-# Before (or as soon as possible when) bringing A back, while B is still Master:
-pcs resource ban kin-drbd-clone mail.gits-it.site --promoted
-# Then power on / allow A. A should join Unpromoted; stack stays on B until you clear.
-```
-
-When ready to return to the normal resting state on A: `pcs resource clear kin-drbd-clone`
-(and ensure prefer A score 50 is present). Expect another measured downtime window.
+The inverse (A → B) is the same command with `mail.gits-it.site`.
 
 ### After any controlled move
 
@@ -242,40 +223,44 @@ When ready to return to the normal resting state on A: `pcs resource clear kin-d
 pcs resource cleanup kin-zimbra   # if fail-count / failed actions linger
 pcs status
 /usr/local/sbin/kin-assert-no-dual-primary.sh
+fail2ban-client status            # both nodes; see section 10
 ```
+
+If a move looks stuck, fail-count rises, or VIP stays `000` well past ~10 minutes
+(OCF start timeout is 600s): **stop**. Do not issue a second ban/move. Capture
+`pcs status`, `crm_failcount`, `drbdadm status`, `journalctl -u pacemaker`.
 
 ---
 
 ## 4. Automatic behavior on node failure vs still manual
 
-### What Pacemaker + SBD do automatically (proven 2.8 / 2.9)
+### What Pacemaker + SBD do automatically (proven ha-build-14)
 
-When the Master becomes unreachable (e.g. network partition from peer while qnetd still reachable):
+When the Master becomes unreachable (hard crash / `sysrq-b` / partition from peer
+while qnetd is still reachable):
 
 1. Survivor detects peer **UNCLEAN / offline**
-2. **Fencing** via `fence_sbd` (SBD poison → victim reboot / watchdog)
-3. After fence completes: promote **`kin-drbd-clone`** on the survivor
-4. Start **`kin-mail-svc`** in order: Filesystem mount → Zimbra → VIP `10.10.40.15`
-5. With **`SBD_DELAY_START=yes`**, the fenced node can **auto-rejoin as Secondary** after reboot (task 2.9) without manual `systemctl start pacemaker`
+2. **Fencing** via `fence_sbd` (SBD poison → victim reboot / watchdog). Promote
+   of DRBD on the survivor waits until the fence completes.
+3. After fence OK: promote **`kin-drbd-clone`** on the survivor
+4. Start **`kin-mail-svc`**: Filesystem mount → Zimbra → VIP `10.10.40.16`
+5. With **`SBD_DELAY_START=yes`**, the fenced node **auto-rejoins as Secondary**
+   after reboot without `systemctl start pacemaker`. Stickiness keeps the survivor
+   Promoted — **no second move**.
 
-Expect **minutes** of mail downtime while Zimbra starts on the survivor (~2–3 minutes in the
-operator cycle that also measured automatic failback).
-
-### Automatic failback when preferred node returns
-
-If soft prefer A (score 50) is still in place and nothing bans A from promotion, recovery of
-Host A as a healthy Online Secondary **also** triggers an **automatic** failback to A (section
-3). That is a second, separate downtime window — not only the failover to B. To stay on B for
-observation, ban/adjust prefer **before** bringing A back.
+Expect **minutes** of mail downtime on a Promoted-node crash (~3m19s in ha-build-14
+Stage 2). Crashing the Unpromoted node does **not** move the VIP (Stage 1: mail
+stayed on A the whole time).
 
 ### What is still manual / not automatic
 
 | Item | Status |
 |---|---|
-| **DNS / public NAT to VIP** | External path must target VIP `10.10.40.15`; fixed-node DNAT will miss the current Master after a move. Confirm with network ops. |
-| Controlled maintenance move | Operator runs `pcs resource ban` / `clear` (section 3) |
-| **Preventing** automatic failback after A recovers | Operator must ban A or change prefer **before** A rejoins (section 3) — failback itself is automatic when prefer is active |
+| **DNS / public NAT to VIP** | FortiGate NAT → VIP `.16`. `mail.gits-it.site` DNS may still be Host A `.15`. Fixed-node DNAT/DNS will miss the current Master. |
+| Controlled maintenance | Console Cluster page (section 6) or `pcs resource ban` / `pcs node standby` (section 3) |
+| Failback to a previously Promoted node | **Manual** — ban the current Master (or enter maintenance on it). Recovery of the old node does **not** pull the stack back. |
 | `pcs resource cleanup` after failed starts | Operator |
+| Observability VM power-off / disk grow | Operator — **must** disarm SBD first (section 7) |
 | Changing SBD timeouts | Operator — see section 5 (dangerous if incomplete) |
 
 Do **not** assume “VIP is live for all users” just because `kin-vip` is Started.
@@ -286,60 +271,387 @@ Do **not** assume “VIP is live for all users” just because `kin-vip` is Star
 
 ### Why delay exists
 
-If a fenced VM reboots **faster** than the survivor finishes fence acknowledgement, Pacemaker on the victim can start, then see `We were allegedly just fenced` and **stay down** (task 2.8). That stay-down is a safety feature; the fix is **not** to delete it.
+If a fenced VM reboots **faster** than the survivor finishes fence acknowledgement,
+Pacemaker on the victim can start, then see `We were allegedly just fenced` and
+**stay down** (Phase 2 task 2.8). That stay-down is a safety feature; the fix is
+**not** to delete it.
 
-Official pattern (SUSE HA / ClusterLabs): delay SBD (and thus Pacemaker) on boot until ~**msgwait** has elapsed.
+Official pattern (SUSE HA / ClusterLabs): delay SBD (and thus Pacemaker) on boot
+until ~**msgwait** has elapsed. ha-build-14 Stage 1: B’s kernel was pingable ~25s
+after kill; `SBD_DELAY_START` held Pacemaker until fence completed (~81s). That is
+the mechanism working.
 
 ### Lab settings (do not change casually)
 
 | Setting | Lab value | Where |
 |---|---|---|
-| SBD device `msgwait` | **70** s | `sbd … dump` on the iSCSI LUN |
-| SBD watchdog timeout | **35** s | same header / `SBD_WATCHDOG_TIMEOUT` |
-| `SBD_DELAY_START` | **yes** (≈ msgwait) | `/etc/default/sbd` on A and B |
+| SBD device | `/dev/disk/by-id/scsi-36001405794acfc6ef564471952d8017b` | `/etc/default/sbd` on A and B |
+| `msgwait` | **70** s | `sbd -d … dump` |
+| Watchdog timeout | **35** s | same header / `SBD_WATCHDOG_TIMEOUT` |
+| `SBD_DELAY_START` | **yes** (≈ msgwait) | `/etc/default/sbd` |
 | `TimeoutStartSec` for `sbd.service` | **180** | `/etc/systemd/system/sbd.service.d/kin-delay-start.conf` |
+| `RefuseManualStart` / `RefuseManualStop` | **yes** | Ubuntu `sbd.service` packaging |
 | `stonith-timeout` | **150** s | cluster property |
 | `pcmk_reboot_timeout` / `pcmk_off_timeout` | **120** s | `fence_sbd` attributes |
+| `SBD_TIMEOUT_ACTION` | `flush,reboot` | `/etc/default/sbd` |
+| softdog | `soft_margin=35`, `nowayout=0` | `kin-softdog.service` |
 
 **If you raise `msgwait`, you must also ensure:**
 
-1. `SBD_DELAY_START` still covers the new wait (`yes` tracks msgwait, or set an explicit seconds value ≥ msgwait), and  
-2. `TimeoutStartSec` for `sbd.service` stays **greater** than that delay, and  
-3. Pacemaker STONITH timeouts remain above the fence window (see 2.3: agent timeout was raised after msgwait 70s).
+1. `SBD_DELAY_START` still covers the new wait (`yes` tracks msgwait, or set seconds ≥ msgwait),
+2. `TimeoutStartSec` for `sbd.service` stays **greater** than that delay, and
+3. Pacemaker STONITH timeouts remain above the fence window.
 
-Otherwise you can recreate the 2.8 stay-down race or cause `sbd.service` start timeouts.
+Otherwise you recreate the 2.8 stay-down race or `sbd.service` start timeouts.
 
 ### If a node is stuck with Pacemaker inactive after fence
 
-1. Confirm survivor is healthy and **sole** Promoted (section 2).  
-2. On the victim, check journal for `allegedly just fenced` / stay-down.  
-3. Only after fencing is complete and DRBD on the survivor is Primary: start cluster stack on the victim (`systemctl start pacemaker` or site procedure), then verify it joins as **Unpromoted / Secondary** only.  
+1. Confirm survivor is healthy and **sole** Promoted (section 2).
+2. On the victim, check journal for `allegedly just fenced` / stay-down.
+3. Only after fencing is complete and DRBD on the survivor is Primary: start the
+   cluster stack on the victim (`systemctl start pacemaker` or site procedure),
+   then verify it joins as **Unpromoted / Secondary** only.
 4. Never promote manually on both sides.
 
 ---
 
-## 6. Known limitations
+## 6. Maintenance mode (console `/cluster`)
 
-1. **No hypervisor fencing** — lab has no ESXi/vCenter API access; fencing is **SBD + softdog** by design (2.1–2.3).  
-2. **SMTP AUTH via saslauthd** can fail after HA moves when URLs still target `mail.gits-it.site` resolved to a fixed node IP while slapd/mailbox listen paths differ (seen in 2.8/2.9). Functional proofs used local inject + SOAP; treat submission AUTH as a known fragile point until service hostname / sasl endpoints are HA-clean.  
-3. **Two separate Zimbra stores historically** — Host B was a standalone install (`mail2`) before production data lived on DRBD from Host A. Standby OS config under `/etc/kin-mail/` is not the shared store; shared data is `/opt/zimbra` on DRBD.  
-4. **LDAP bind / interprocess TLS** was adjusted for shared-store HA (localhost LDAP) so Zimbra can start on B; revisit if you split Pacemaker node name from mail service FQDN.  
-5. **VIP / DNS / NAT** — cluster VIP works inside the lab segment; external cutover is a separate change.  
-6. Soft prefer score **50** is sticky preference, not a hard pin; use **ban** for controlled moves **and** to suppress automatic failback when A returns (section 3). Prefer alone will pull Master back to A once A is healthy.
+HCI-style planned work on **one** mail node. It is a safety-gated
+`pcs node standby` / `unstandby` — not a new cluster mechanism.
+
+**Where:** admin console `https://10.10.40.15:9443/cluster` (nav after deploy).  
+**Who:** `kin_super_admin` / ops can Enter; `customer_admin` can view status only.  
+**Browser close:** the node **stays in standby** until someone hits Exit. No timeout.
+
+**Blocks while any node is standby:** Deploy (full install / Build HA pair) and
+Create mailbox. Users, audit, login, and wizard settings save stay available.
+
+### When to use it
+
+OS patches, a reboot, or hypervisor work on **one** mail node while the other
+keeps serving. Whole-cluster downtime (both nodes) is out of scope here.
+
+Prefer entering the **currently Unpromoted** node when you can — mail does not
+move (proven: A standby, B stayed Promoted, VIP 200). Entering the Promoted node
+**is** a graceful failover (~2–3 min downtime).
+
+### Pre-flight (Check must pass; Enter is refused if any check fails — no override)
+
+| Check | Meaning |
+|---|---|
+| `pacemaker_nodes` | Live nodelist parsed |
+| `drbd_uptodate` | Both replicas `UpToDate` (not mid-sync) |
+| `qdevice_voting` | qdevice reachable and voting |
+| `failcount_zero` | `kin-drbd-clone` / `kin-mail-svc` members value=0 on both nodes |
+| `peer_online` | The other mail node is in the nodelist |
+| `not_already_standby` | Target is not already in maintenance |
+| `peer_https` | Serving node `https://<ring0_addr>/` → HTTP 200 |
+| `peer_zmcontrol` | `kin-zimbra Started <peer>` in `crm_mon` (SSH `zmcontrol` on the peer is not always possible from the console host) |
+| `no_dual_primary` | Live `kin-assert-no-dual-primary.sh` → `NO_DUAL_PRIMARY_OK` |
+
+**“Safe to proceed”** means every check above is OK on **real command output**, not
+a UI inference. Run **Check** on that node; Enter stays disabled until it passes.
+
+### Enter / Exit
+
+Enter: `pcs node standby <target>`. If the target was Promoted, watch the stream
+until the peer is Promoted, `kin-mail-svc` Started, VIP 200.
+
+Exit: `pcs node unstandby <target>`, then the console **waits** (up to 180s) until:
+
+1. Target is **not** Promoted (Secondary only — stickiness must not steal the Master)
+2. DRBD `UpToDate`/`UpToDate`
+3. fail-count 0
+4. `NO_DUAL_PRIMARY_OK`
+
+Only then is Exit reported done. `unstandby` plus “still mid-resync” is **incomplete**,
+not success. A non-zero Exit means the node is Online again but verification failed —
+do not assume it is a healthy Secondary.
+
+CLI equivalent (when the console is down):
+
+```bash
+# pre-flight (same ideas as the console — do not skip)
+drbdadm status kin-zimbra
+pcs quorum status
+crm_failcount --query --resource kin-zimbra
+/usr/local/sbin/kin-assert-no-dual-primary.sh
+
+pcs node standby mail.gits-it.site     # example: Unpromoted A
+# … work …
+pcs node unstandby mail.gits-it.site
+# wait: Unpromoted, UpToDate, fail-count 0, NO_DUAL_PRIMARY_OK
+```
 
 ---
 
-## 7. Escalation
+## 7. Observability VM maintenance (SBD / qdevice disarm and re-arm)
 
-If this runbook is insufficient (split-brain suspicion, dual-primary, DRBD inconsistent after fence, or fencing loop):
+Observability (`.12`) is the **iSCSI SBD LUN** and the **qnetd vote**. Powering it
+off while SBD watchers are running will miss the device loop; `SBD_TIMEOUT_ACTION=flush,reboot`
+plus the 35s softdog can reboot **both** mail nodes. That is a dual self-fence.
+
+This procedure was executed 2026-08-13 (disk grow). Follow it under pressure; do
+not invent a shorter path. Naive `systemctl stop sbd` is **refused**
+(`RefuseManualStop=true`) and would also stop corosync/pacemaker via `RequiredBy=`.
+
+**Do this before any Observability power-off, resize, or long NIC outage.**
+
+### Disarm (mail stays up; fencing is paused on purpose)
+
+Confirm baseline: Promoted + VIP 200, fail-count 0, `NO_DUAL_PRIMARY_OK`, SBD slots
+clear, quorum expected 3 / total 3 / quorum 2.
+
+1. `pcs property set stonith-enabled=false` — Pacemaker will not issue `fence_sbd`.
+2. `pcs resource unmanage sbd` — monitor will not flap/recover the primitive.
+3. Runtime systemd drop-ins under `/run/systemd/system/` (gone on reboot) so sbd
+   can be started/stopped by hand (`RefuseManualStart/Stop` overridden) and so
+   unit-file `Requires=` is not enough on its own.
+4. **`systemctl disable sbd`** on **both** mail nodes (does **not** stop it). This
+   is what actually removes the `.requires/` symlinks from corosync + pacemaker.
+   Empty `Requires=` drop-ins alone were **not** enough.
+5. Stop sbd on the **Unpromoted** node first. Wait **>35s** (watchdog timeout).
+   Prove: no reboot (`boot_id` unchanged), pacemaker still up, mail still on the
+   Promoted node, VIP 200.
+6. Stop sbd on the **Promoted** node. Same wait. VIP/HTTPS unchanged. Watchdog
+   `state=inactive` on both (`nowayout=0` + SIGTERM did disarm).
+7. `systemctl mask --runtime sbd` so nothing restarts it this boot.
+8. Optional proof (then start qnetd again until the actual power-off): stop
+   `corosync-qnetd` briefly. Expected votes stay **3**; **total** drops to **2**;
+   quorum 2 is still met **iff both mail nodes keep Corosync**. Flags stay
+   `Quorate Qdevice` with Qdevice votes 0 / Connect failed. Mail HTTPS 200.
+
+**While Observability is down, do not:**
+
+1. **Reboot or power-off either mail node.** One mail node + no qdevice = 1 vote
+   < quorum 2 → `no-quorum-policy=stop` **stops Zimbra/VIP on the survivor**.
+2. Start `sbd` or set `stonith-enabled=true`.
+3. Partition A↔B (same quorum reason).
+
+Runtime drop-ins and the sbd mask live in `/run` (lost on reboot).
+`systemctl disable sbd` **is persistent** — re-arm **must** `systemctl enable sbd`
+or RequiredBy / fencing-on-boot stays broken.
+
+### After the VM is back — IP first
+
+A hypervisor resize left Observability on **DHCP**. It came back as `10.10.40.11`
+with qnetd/iSCSI running on the wrong address; mail ARP for `.12` failed; qdevice
+votes 0. Before re-arm:
+
+- Guest `/` grown if that was the point of the window (`growpart` + `resize2fs`).
+- **Static** `10.10.40.12/24` on `ens33` (`dhcp4: false`), default via `10.10.40.1`.
+- `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` → `network: {config: disabled}`
+  so cloud-init does not rewrite DHCP on the next boot.
+- `corosync-qnetd` active `:5403`, iSCSI `:3260`, `fileio/kin-sbd` LUN present.
+- From both mail nodes: iSCSI session `10.10.40.12:3260`, SBD by-id present,
+  `sbd -d … dump` + `list` (slots still **clear**).
+- Quorum: qdevice **Connected**, expected 3, total 3, quorum 2.
+
+### Re-arm
+
+Mail nodes must **not** have rebooted (runtime mask still in `/run`). If they did,
+recreate the allow-manual drop-ins before `systemctl start sbd`.
+
+1. `systemctl unmask --runtime sbd`. If `enable` still fails, `rm /run/systemd/system/sbd.service`
+   (plain `unmask` left the `/run` mask in place once).
+2. `systemctl enable sbd` — restores `.requires/` on corosync + pacemaker.
+   Confirm `systemctl show pacemaker -p Requires` includes `sbd.service`.
+3. Remove pacemaker/corosync disarm drop-ins; **keep** the allow-manual drop-in
+   until after start (`RefuseManualStart` would otherwise block `systemctl start`).
+4. `systemctl start sbd` on **Unpromoted first**. Expect **~70s** (`SBD_DELAY_START`
+   ≈ msgwait; `TimeoutStartSec=180`). Watchdog `state=active`. VIP 200.
+5. Start sbd on **Promoted**. Same ~70s. VIP must not move.
+6. Remove allow-manual drop-ins; packaging `RefuseManualStart=yes` again.
+7. `pcs resource cleanup sbd`; `pcs resource manage sbd`; **`pcs property set stonith-enabled=true`**.
+8. `pcs stonith sbd status` — from B, A may show N/A (pcsd 401, pre-existing).
+   Confirm on **A locally**: both `YES | YES | YES`, plus `systemctl is-active sbd` and `sbd list`.
+9. Full health: quorum 3/2, slots clear, fail-count 0, HTTPS VIP 200, DRBD
+   Established/UpToDate, `NO_DUAL_PRIMARY_OK`, VIP still on the same Promoted node.
+
+---
+
+## 8. Backup / restore
+
+Backup **repository** is the Backup VM (`10.10.40.13`), not a mail node. Cron
+survives a dual-mail-node event. The script SSHs to every `MAIL_NODES` entry,
+finds which host has `/opt/zimbra` mounted (the Promoted replica), and collects
+there. Node identity is not hardcoded.
+
+FOSS has **no** `zmbackup` / `zmrestore` (Network Edition). Collector uses
+`zmslapcat`, `mysqldump --single-transaction`, read-only rsync of store/index/redolog
+onto `/var/tmp` (root fs, never DRBD), config tarballs, and per-account
+`zmmailbox getRestURL '//?fmt=tgz'`.
+
+### Where backups live / retention
+
+On the Backup VM:
+
+| What | Path / value |
+|---|---|
+| Config | `/etc/kin-mail-backup/config` (mode 0600; not in git) |
+| Daily sets | `/var/lib/kin-mail-backup/daily/<UTC timestamp>` |
+| Weekly | `/var/lib/kin-mail-backup/weekly/<ISO week>` (`cp -al` of the first daily of that week) |
+| Keep | `DAILY_KEEP=7`, `WEEKLY_KEEP=4` |
+| Cron | `/etc/cron.d/kin-mail-backup` → `15 2 * * * root /usr/local/sbin/kin-mail-backup.sh` |
+| Log | `/var/log/kin-mail-backup.log` |
+| Scripts | `/usr/local/sbin/kin-mail-backup.sh` (orchestrator), `kin-mail-backup-remote.sh` (collector on mail nodes), `kin-mail-restore.sh` |
+
+Manual run (Backup VM):
+
+```bash
+sudo /usr/local/sbin/kin-mail-backup.sh
+```
+
+### Restore drills — scratch only, never A/B
+
+`kin-mail-restore.sh` **refuses** to run if Pacemaker is active or `/opt/zimbra` is
+on DRBD. That is the guard against restoring onto live Host A/B.
+
+Scratch target in this lab: Backup VM itself (isolated Zimbra FOSS, same version).
+It answers as `mail.gits-it.site` while running — **it must not stay up on the VLAN**.
+
+Always pass **`--stop-after`** so the script `zmcontrol stop`s when the drill
+finishes. If you omit it, stop by hand immediately after proof:
+
+```bash
+su - zimbra -c 'zmcontrol stop'
+ss -lntp | grep -E ':443 |:25 ' || echo NO_MAIL_LISTENERS
+```
+
+**Full restore:**
+
+```bash
+# On Backup VM only. --set is a daily directory from the repo.
+sudo /usr/local/sbin/kin-mail-restore.sh \
+  --set /var/lib/kin-mail-backup/daily/<timestamp> \
+  --mode full \
+  --i-understand-this-overwrites-zimbra \
+  --stop-after
+```
+
+Optional: `KIN_MAIL_RESTORE_MARKER=…` to search for an injected Inbox marker
+(the 3.4 proof used `KIN-BACKUP-MARKER-20260813T0315Z` on `test1@`, never restored
+onto live DRBD).
+
+**Partial:**
+
+```bash
+# LDAP-only (e.g. after a forced zmprov -l da on scratch)
+sudo /usr/local/sbin/kin-mail-restore.sh --set DIR --mode ldap \
+  --i-understand-this-overwrites-zimbra --stop-after
+
+# MySQL mailbox metadata only
+sudo /usr/local/sbin/kin-mail-restore.sh --set DIR --mode mysql \
+  --i-understand-this-overwrites-zimbra --stop-after
+
+# store/index rsync (--mode store) also exists; 3.5 proved mysql row restore.
+```
+
+`--verify-only` checks SHA256SUMS / MANIFEST without writing Zimbra.
+
+Live cluster must stay Promoted on the current Master with VIP 200 throughout a
+drill. Never point this script at A or B.
+
+---
+
+## 9. Monitoring (KIN Sight — Zabbix / Grafana)
+
+Packages come from [kin-sight-monitoring](https://github.com/azana-nisaa/kin-sight-monitoring)
+v1.9.3. Custom keys live in this repo (`monitoring/zabbix/`).
+
+| Piece | Where | URL |
+|---|---|---|
+| Zabbix Server | Observability `.12` | `http://10.10.40.12:8080/` (not Grafana) |
+| Grafana | **Backup** `.13` (not Observability) | `https://10.10.40.13:3000/` |
+| Dashboard | Grafana uid `kin-mail-ha` | “KIN Mail HA” |
+| Datasource | `kinsight-zabbix` | Zabbix API `http://10.10.40.12:8080/api_jsonrpc.php` |
+
+Hosts: `obser`, `mail.gits-it.site`, `mail2.gits-it.site`, `backup.gits-it.site`
+(+ installer default `Zabbix server` @ 127.0.0.1). Mail nodes: template **KIN Mail HA**.
+Backup: **KIN Mail Backup**. All: **Linux by Zabbix agent**.
+
+### Custom items — what an alert should prompt
+
+| Key | Where | Good | Alert → do this |
+|---|---|---|---|
+| `kin.drbd.ok` | A/B | `1` (Established + both disks UpToDate) | **High if 0.** Section 2: `drbdadm status`, dual-primary assert. Do not promote blindly. If Unpromoted is `Connecting`/`Inconsistent`, wait for resync; if both Primary, **stop** (escalation). |
+| `kin.qdevice.votes` | A/B | `1` | **High if &lt;1.** Observability qnetd `:5403` / IP still `.12` (DHCP regression to `.11` already happened once). Section 7 if the VM is down. Two mail nodes can remain quorate; **do not** reboot a mail node until the vote is back. |
+| `kin.stonith.new_events` | A/B | `0` | **High if &gt;0.** A `pcs stonith history` event completed after **2026-08-13 09:05:00** (the morning fence-test is excluded). Treat as a real fence: section 2 + 4. Confirm one Promoted, slots clear, victim rejoined Secondary. |
+| `kin.backup.age_seconds` | Backup | newest daily dir age | **Warning if &gt;93600 (26h).** Cron `15 2 * * *` missed. Check `/var/log/kin-mail-backup.log`, SSH to Promoted, disk on `.13`. Do not restore onto A/B. |
+| `kin.mailbox.active_count` | Promoted only | gauge (lab last **2**) | No trigger. Unpromoted is `ZBX_NOTSUPPORTED` (expected — no fake zero). Same rules as `install/lib/quota-gate.sh` (excludes admin + system accounts). LDAP-only; does not write `/opt/zimbra`. |
+| `kin.mailbox.contracted_seats` | A/B | `CONTRACTED_SEATS` or **0** if unset/`PLACEHOLDER_UNSET` | No trigger. `0` means the quota gate will not create mailboxes — set a real seat count in `/etc/kin-mail/config` on both mail nodes. |
+
+Agent `Timeout` on mail nodes is **30s** so the mailbox listing can finish.
+
+Grafana panels that must show real data (not just “service up”): Mail B CPU idle,
+`KIN DRBD replication OK` (`kin.drbd.ok`), Active mailboxes, Contracted seats.
+
+---
+
+## 10. fail2ban across promote / demote
+
+Jail file `/etc/fail2ban/jail.d/kin-mail.conf` is rewritten by
+`/usr/local/sbin/kin-fail2ban-jails` (source: `install/lib/kin-fail2ban-jails.sh`).
+`ocf:kin:zimbra` v1.2 calls it:
+
+- **stop** (before `zmcontrol stop`, while `/opt/zimbra` is still mounted): `unmounted`
+  → **sshd only**, so fail2ban is not watching paths that DRBD is about to unmount.
+- **start** (after Zimbra is Running): `mounted` → add `zimbra-auth` / `zpush-auth`
+  iff `mailbox.log` / `nginx.access.log` exist.
+
+A fail2ban hiccup is logged (`fail2ban jails mounted|unmounted: …`) and **cannot**
+fail the OCF start/stop (best-effort, `timeout 15`). Ansible `os_hardening` and
+`09-hardening.sh` use the same script.
+
+**Expected:** Unpromoted `Jail list: sshd` and unit **active**. Promoted
+`sshd, zimbra-auth, zpush-auth`. If Unpromoted fail2ban is dead with
+`Have not found any log file for zimbra-auth jail`, the OCF hook did not run
+(old agent) or failed open — run `/usr/local/sbin/kin-fail2ban-jails unmounted`
+on that node; do not leave it watching `/opt/zimbra/log` while unmounted.
+
+---
+
+## 11. Known limitations
+
+1. **No hypervisor fencing** — no ESXi/vCenter API; fencing is **SBD + softdog**.
+2. **SMTP AUTH via saslauthd** can fail after HA moves when URLs still target
+   `mail.gits-it.site` resolved to a **fixed node IP**. Functional proofs used
+   local inject + SOAP; treat submission AUTH as fragile until service hostname /
+   sasl endpoints are HA-clean.
+3. **DNS vs VIP** — cluster VIP `.16` works on the lab segment and is what
+   FortiGate NAT should hit. Public DNS may still point `mail.gits-it.site` at
+   Host A `.15`. Confirm with network ops after a Master move.
+4. **LDAP bind** is localhost (`ldap://127.0.0.1:389`) plus
+   `zimbra_require_interprocess_security=0` so Zimbra can start on either node
+   from the shared store. Revisit if you split Pacemaker node name from mail FQDN.
+5. **Console is not HA** — `:9443` is Host A only.
+6. **Grafana is not on Observability** — it is on Backup `.13`. Probing `.12:3000`
+   will look like “Grafana disappeared.”
+7. **Scratch Zimbra on Backup** remains installed but **must stay stopped** so it
+   does not listen as `mail.gits-it.site` on `:443`/`:25`.
+8. **`pcs stonith sbd status` from B** may show A as N/A (pcsd 401). Check from A
+   (local) for both `YES|YES|YES`.
+9. Stickiness is **not** a hard pin. A Promoted node that is fenced or put in
+   standby will move. A healthy returning node will **not** steal the Master
+   unless an operator bans the current one or re-enables prefer (do not).
+
+---
+
+## 12. Escalation
+
+If this runbook is insufficient (split-brain suspicion, dual-primary, DRBD
+inconsistent after fence, or fencing loop):
 
 | Role | Contact | Notes |
 |---|---|---|
 | Primary on-call / platform | _TBD — operator fill_ | Prefer call before any `drbdadm --discard-my-data` |
-| Network / firewall (DNAT, VIP) | _TBD_ | Required before assuming client traffic follows VIP |
+| Network / firewall (DNAT, VIP) | _TBD_ | Required before assuming client traffic follows VIP `.16` |
 | Vendor / upstream HA questions | ClusterLabs / SUSE HA SBD docs | Cite msgwait + `SBD_DELAY_START` together |
 
-**Stop rule:** any hint of **two Primaries** or unexpected dual mount of `/opt/zimbra` → stop automated recovery, preserve logs (`pcs status`, `drbdadm status`, `journalctl -u pacemaker -u sbd`), escalate.
+**Stop rule:** any hint of **two Primaries** or unexpected dual mount of
+`/opt/zimbra` → stop automated recovery, preserve logs (`pcs status`,
+`drbdadm status`, `journalctl -u pacemaker -u sbd`), escalate.
 
 ---
 
@@ -347,18 +659,27 @@ If this runbook is insufficient (split-brain suspicion, dual-primary, DRBD incon
 
 ```bash
 pcs status
+pcs constraint location                          # must be empty (no prefer, no leftover ban)
+pcs resource config kin-drbd-clone | grep stickiness
 drbdadm status kin-zimbra
 /usr/local/sbin/kin-assert-no-dual-primary.sh
+curl -skI -o /dev/null -w '%{http_code}\n' https://10.10.40.16/
+fail2ban-client status                           # Promoted: 3 jails; Unpromoted: sshd; both active
 
-# Controlled move Master off A:
-pcs resource ban kin-drbd-clone mail.gits-it.site --promoted
-
-# Allow A again / clear move constraint (triggers failback if prefer A=50):
+# Controlled move (example: off B onto A), then clear — stickiness keeps the new Master:
+pcs resource ban kin-drbd-clone mail2.gits-it.site --promoted
+# wait Promoted + kin-mail-svc + VIP 200
 pcs resource clear kin-drbd-clone
 
-# Hold Master on B while bringing A back (prevent auto-failback):
-#   ban A BEFORE powering A on; clear later when ready to return to A
+# Planned OS work on one node (same as console /cluster Enter/Exit):
+pcs node standby mail.gits-it.site
+pcs node unstandby mail.gits-it.site
 
 # Cleanup failed Zimbra starts:
 pcs resource cleanup kin-zimbra
+
+# Backup (Backup VM) / restore drill (Backup VM scratch ONLY, then stop):
+/usr/local/sbin/kin-mail-backup.sh
+/usr/local/sbin/kin-mail-restore.sh --set DIR --mode full \
+  --i-understand-this-overwrites-zimbra --stop-after
 ```
