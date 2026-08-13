@@ -14,8 +14,13 @@ pacemaker_mail_stack_fs_options: noatime
 pacemaker_mail_stack_vip_ip: 10.10.40.15
 pacemaker_mail_stack_vip_cidr: "24"
 pacemaker_mail_stack_vip_nic: ens33
+# After a fence the survivor must stay Promoted; a node location score
+# (prefer A=50) caused automatic failback in ha-build-14. Leave disabled
+# unless an operator explicitly pins the Master to one host.
 pacemaker_mail_stack_prefer_node: mail.gits-it.site
 pacemaker_mail_stack_prefer_score: 50
+pacemaker_mail_stack_prefer_enabled: false
+pacemaker_mail_stack_clone_stickiness: 1000
 # Shared Zimbra server identity (LDAP cn / zimbraServiceHostname). Active-passive
 # HA remaps this name to 127.0.0.1 on every mail node so nginx/memcached/zmlookup
 # talk to the co-located instance. Corosync ring0_addr must be IPs first.

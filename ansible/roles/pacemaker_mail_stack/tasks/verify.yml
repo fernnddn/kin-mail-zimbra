@@ -32,15 +32,40 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
-- name: Verify the soft location preference for Host A
+- name: Verify DRBD clone location is not pinned to a preferred node
   ansible.builtin.command:
     cmd: pcs constraint location
   register: pacemaker_mail_stack_loc_verify
   changed_when: false
   failed_when: >-
     pacemaker_mail_stack_loc_verify.rc != 0
-    or (pacemaker_mail_stack_prefer_node not in pacemaker_mail_stack_loc_verify.stdout)
-    or ((pacemaker_mail_stack_prefer_score | string) not in pacemaker_mail_stack_loc_verify.stdout)
+    or (
+      not (pacemaker_mail_stack_prefer_enabled | bool)
+      and pacemaker_mail_stack_drbd_clone in pacemaker_mail_stack_loc_verify.stdout
+      and 'prefers' in pacemaker_mail_stack_loc_verify.stdout
+    )
+    or (
+      (pacemaker_mail_stack_prefer_enabled | bool)
+      and (
+        pacemaker_mail_stack_prefer_node not in pacemaker_mail_stack_loc_verify.stdout
+        or ((pacemaker_mail_stack_prefer_score | string) not in pacemaker_mail_stack_loc_verify.stdout)
+      )
+    )
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Verify Promoted stickiness on the DRBD clone
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_drbd_clone }}
+  register: pacemaker_mail_stack_stick_verify
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_stick_verify.rc != 0
+    or (('resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_stick_verify.stdout
+        and ('resource-stickiness: ' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_stick_verify.stdout)
   check_mode: false
   run_once: true
   tags: [pacemaker, stack, verify]

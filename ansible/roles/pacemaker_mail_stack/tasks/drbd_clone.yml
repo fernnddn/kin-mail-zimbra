@@ -35,6 +35,8 @@
       op monitor interval=31s role=Unpromoted timeout=20s
       promotable promoted-max=1 promoted-node-max=1
       clone-max=2 clone-node-max=1 notify=true
+      meta resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
+      promoted-resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
   # SAFETY: never check_mode: false — create must not run during --check.
   run_once: true
   when:
@@ -42,9 +44,9 @@
     - not ansible_check_mode
   tags: [pacemaker, stack, drbd]
 
-- name: Check the soft location preference for the DRBD Master
+- name: List location constraints with ids
   ansible.builtin.command:
-    cmd: pcs constraint location
+    cmd: pcs constraint location --full
   register: pacemaker_mail_stack_location
   changed_when: false
   failed_when: false
@@ -52,7 +54,25 @@
   run_once: true
   tags: [pacemaker, stack, drbd]
 
-- name: Add the soft Master location preference on Host A
+- name: Extract location constraint ids that pin the DRBD clone to a node
+  ansible.builtin.set_fact:
+    pacemaker_mail_stack_prefer_ids: "{{ pacemaker_mail_stack_location.stdout_lines | select('search', pacemaker_mail_stack_drbd_clone) | select('search', 'prefers node') | map('regex_replace', '.*\\(id: ([^)]+)\\).*', '\\1') | list }}"
+  run_once: true
+  tags: [pacemaker, stack, drbd]
+
+- name: Remove DRBD clone node-location preferences
+  ansible.builtin.command:
+    cmd: pcs constraint location remove {{ item }}
+  # SAFETY: never check_mode: false.
+  loop: "{{ pacemaker_mail_stack_prefer_ids }}"
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - not pacemaker_mail_stack_prefer_enabled
+    - item | length > 0
+  tags: [pacemaker, stack, drbd]
+
+- name: Add the optional Master location preference
   ansible.builtin.command:
     cmd: >-
       pcs constraint location {{ pacemaker_mail_stack_drbd_clone }}
@@ -61,11 +81,41 @@
   run_once: true
   when:
     - not ansible_check_mode
+    - pacemaker_mail_stack_prefer_enabled | bool
+    - pacemaker_mail_stack_prefer_node | length > 0
     - >-
       not (
         pacemaker_mail_stack_prefer_node in pacemaker_mail_stack_location.stdout
         and (pacemaker_mail_stack_prefer_score | string) in pacemaker_mail_stack_location.stdout
       )
+  tags: [pacemaker, stack, drbd]
+
+- name: Read the DRBD clone meta for stickiness
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_drbd_clone }}
+  register: pacemaker_mail_stack_clone_meta
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, drbd]
+
+- name: Set Promoted stickiness so a fence survivor is not auto-failed-back
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource meta {{ pacemaker_mail_stack_drbd_clone }}
+      resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
+      promoted-resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
+  # SAFETY: never check_mode: false.
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_clone_meta.rc == 0
+    - >-
+      ('resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+      not in pacemaker_mail_stack_clone_meta.stdout
+      or ('promoted-resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+      not in pacemaker_mail_stack_clone_meta.stdout
   tags: [pacemaker, stack, drbd]
 
 - name: Note that DRBD clone creation is skipped during a dry-run or already exists
