@@ -121,19 +121,38 @@ jobs:
 
       # These scripts were written against a live customer environment. This
       # gate exists so no address, key or token can be reintroduced by accident.
+      # Includes cover installer scripts, markdown, NOTICE, and Ansible YAML /
+      # Jinja — ansible/ was previously unscanned.
       - name: Scan for leaked deployment data
         run: |
           fail=0
+          includes=(
+            --include='*.sh' --include='*.md' --include='NOTICE'
+            --include='*.yml' --include='*.yaml' --include='*.j2'
+          )
           scan() {
-            if grep -RInE "$1" --include='*.sh' --include='*.md' --include='NOTICE' . ; then
+            if grep -RInE "$1" "${includes[@]}" . ; then
               echo ">>> $2"; fail=1
             fi
           }
-          # Private IPs: same scope as scan(), but HA-RUNBOOK.md is excluded.
-          # That file is the operational runbook and must name this lab's
-          # 10.10.40.x addresses; other *.sh / *.md stay fully gated.
+          # Private IPs: same includes as scan(), with carve-outs for files that
+          # must name this lab's 10.10.40.x addresses (same rationale as the
+          # HA-RUNBOOK.md exception). Token/key scan() still covers them.
+          #   HA-RUNBOOK.md          — operational runbook
+          #   *.example.yml          — committed example inventories (real lab
+          #                            IPs, not RFC5737 placeholders)
+          #   checks.yml             — this workflow; the 10.x / 192.168 /
+          #                            172.16 regex lines self-match
+          #   defaults/              — role defaults/main.yml ship lab IPs as
+          #                            documented examples; playbooks/tasks/j2
+          #                            stay fully gated
           scan_private_ip() {
-            if grep -RInE "$1" --include='*.sh' --include='*.md' --include='NOTICE' --exclude='HA-RUNBOOK.md' . ; then
+            if grep -RInE "$1" "${includes[@]}" \
+                 --exclude='HA-RUNBOOK.md' \
+                 --exclude='*.example.yml' \
+                 --exclude='checks.yml' \
+                 --exclude-dir=defaults \
+                 . ; then
               echo ">>> $2"; fail=1
             fi
           }
@@ -160,3 +179,104 @@ jobs:
             fi
           done
           exit $fail
+
+  # Catch playbook YAML/Jinja syntax errors. Not ansible-lint: default/galaxy
+  # profiles fail on cosmetic nits (var-naming, meta author) already reviewed.
+  ansible:
+    name: Ansible syntax
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ansible-core and yamllint
+        run: pip install 'ansible-core>=2.16,<2.19' yamllint
+
+      - name: Playbook syntax-check
+        working-directory: ansible
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          lab_plays=(
+            playbooks/mail-os-hardening.yml
+            playbooks/mail-drbd.yml
+            playbooks/mail-fencing.yml
+            playbooks/mail-qdevice.yml
+            playbooks/mail-pacemaker.yml
+            playbooks/mail-zpush.yml
+            playbooks/mon-iscsi-target.yml
+            playbooks/mon-qnetd.yml
+          )
+          if [ ${#lab_plays[@]} -eq 0 ]; then
+            echo "ERROR: no ansible playbooks found — refusing silent pass"
+            exit 1
+          fi
+          fail=0
+          check() {
+            local inv=$1 play=$2
+            echo "=== $play  (-i $inv)"
+            if ansible-playbook --syntax-check -i "$inv" "$play"; then
+              echo "ok  $play"
+            else
+              echo "FAILED  $play"; fail=1
+            fi
+          }
+          for p in "${lab_plays[@]}"; do
+            check inventory/lab.example.yml "$p"
+          done
+          check inventory/add-host.example.yml playbooks/mail-add-host.yml
+          check inventory/remove-host.example.yml playbooks/mail-remove-host.yml
+          exit $fail
+
+      # Relaxed profile, warnings do not fail. Catches broken YAML; skips
+      # line-length / document-start / truthy / comment nits.
+      - name: yamllint (errors only)
+        working-directory: ansible
+        run: |
+          set -euo pipefail
+          yamllint -d '{extends: relaxed, rules: {line-length: disable, comments: disable, comments-indentation: disable, document-start: disable, truthy: disable}}' .
+
+  console:
+    name: Console build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: console/frontend/package-lock.json
+
+      - name: Frontend production build
+        working-directory: console/frontend
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "ERROR: console/frontend/package.json missing — refusing silent pass"
+            exit 1
+          fi
+          npm ci
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Backend syntax and import check
+        run: |
+          set -euo pipefail
+          if [ ! -d console/backend/kin_console ]; then
+            echo "ERROR: console/backend missing — refusing silent pass"
+            exit 1
+          fi
+          python3 -m compileall -q console/backend
+          python3 -m pip install -r console/backend/requirements.txt
+          PYTHONPATH=console/backend python3 -c "
+          from kin_console.app import app
+          from kin_privhelper import protocol, rbac, commands
+          print('imports ok', app.title)
+          "
