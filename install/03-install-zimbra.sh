@@ -316,6 +316,11 @@ tmux new-session -d -s "$SESS" -x 200 -y 50
 # Run install.sh on a real TTY (the tmux pane). Piping stdout breaks the driver:
 # bash fully-buffers when stdout is a pipe, so prompts never reach capture-pane
 # and the installer blocks forever on read. Log via pipe-pane instead (redact then tee).
+# See docs/progress/1.6-hosta-03-pipepane-fix.md — do not revert to piping install.sh.
+#
+# pipe-pane writes to $LOG only; this script's stdout is just driver messages
+# ("apply", prompt answers). Console SSE follows $LOG separately so the wizard
+# log viewer matches `tail -f $LOG` without attaching to tmux.
 #
 # Security trade-off: before this change, both the live tmux pane and $LOG went
 # through the redactor, so ADMIN_PASS never appeared in either place. With

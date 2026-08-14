@@ -234,6 +234,84 @@ class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(secret, joined)
             self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
 
+    async def test_follow_log_includes_sidecar_detail_live(self) -> None:
+        """Mimic 03: parent stdout stays quiet while zmsetup writes a sidecar log."""
+        import asyncio
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.commands import _stream_subprocess, _watch_log_file
+
+        secret = "ZZSECRET_7c2e_TEST"
+        with tempfile.TemporaryDirectory() as td:
+            sidecar = Path(td) / "zimbra-install.log"
+            sidecar.write_text("OLD RUN MUST NOT APPEAR\n", encoding="utf-8")
+            queue: asyncio.Queue = asyncio.Queue()
+            stop = asyncio.Event()
+            task = asyncio.create_task(
+                _watch_log_file(sidecar, queue, stop, poll_s=0.05)
+            )
+            await asyncio.sleep(0.2)
+            sidecar.write_text("", encoding="utf-8")
+            with sidecar.open("a", encoding="utf-8") as fh:
+                fh.write(f"Configuring SMTP port {secret}\n")
+                fh.flush()
+            await asyncio.sleep(0.08)
+            for name in ("IMAP", "POP", "web"):
+                with sidecar.open("a", encoding="utf-8") as fh:
+                    fh.write(f"Configuring {name} port {secret}\n")
+                    fh.flush()
+                await asyncio.sleep(0.08)
+            stop.set()
+            await task
+            chunks: list[str] = []
+            while not queue.empty():
+                item = queue.get_nowait()
+                if item is None:
+                    break
+                chunks.append(item[1])
+            followed = "".join(chunks)
+            self.assertNotIn("OLD RUN MUST NOT APPEAR", followed)
+            for name in ("SMTP", "IMAP", "POP", "web"):
+                self.assertIn(f"Configuring {name} port {secret}", followed)
+
+            transcript = Path(td) / "deploy-last.log"
+            child = (
+                "import time, pathlib\n"
+                "p = pathlib.Path(%r)\n"
+                "secret = %r\n"
+                "time.sleep(0.2)\n"
+                "p.parent.mkdir(parents=True, exist_ok=True)\n"
+                "p.write_text('')\n"
+                "for name in ('SMTP', 'IMAP', 'POP', 'web'):\n"
+                "    with p.open('a', encoding='utf-8') as fh:\n"
+                "        fh.write('Configuring ' + name + ' port ' + secret + '\\n')\n"
+                "        fh.flush()\n"
+                "    time.sleep(0.08)\n"
+                "print('driver: apply', flush=True)\n"
+                "time.sleep(0.35)\n"
+            ) % (str(sidecar.with_name("live.log")), secret)
+            live = sidecar.with_name("live.log")
+            events: list[dict] = []
+            async for ev in _stream_subprocess(
+                ["python3", "-c", child],
+                transcript=transcript,
+                secrets=[secret],
+                follow_logs=[live],
+                follow_poll_s=0.05,
+            ):
+                events.append(ev)
+            joined = "".join(str(e.get("data") or "") for e in events)
+            body = transcript.read_text(encoding="utf-8")
+            for name in ("SMTP", "IMAP", "POP", "web"):
+                self.assertIn(f"Configuring {name} port", joined)
+                self.assertIn(f"Configuring {name} port", body)
+            self.assertIn("driver: apply", joined)
+            self.assertNotIn(secret, joined)
+            self.assertNotIn(secret, body)
+            self.assertIn("***", joined)
+            self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
+
 
 if __name__ == "__main__":
     unittest.main()

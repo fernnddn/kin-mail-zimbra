@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol as proto
-from .deploy_state import DEPLOY_LAST_LOG
+from .deploy_state import DEPLOY_LAST_LOG, ZIMBRA_INSTALL_LOG
 
 # Deploy tree on appliance (kin-mail.sh default). Override via env for lab clones.
 DEPLOY_DIR = Path(os.environ.get("KIN_MAIL_DEPLOY_DIR", "/opt/kin-mail-deploy"))
@@ -154,6 +154,109 @@ def _redact_secrets(text: str, secrets: list[str] | None) -> str:
     return out
 
 
+async def _watch_log_file(
+    path: Path,
+    queue: asyncio.Queue[tuple[str, str] | None],
+    stop: asyncio.Event,
+    *,
+    poll_s: float = 0.2,
+) -> None:
+    """Follow new bytes on path (like tail -F) onto the SSE queue.
+
+    Starts at EOF so a leftover log from a prior run is not dumped. In-place
+    truncate (03's `: > $LOG`) resets to offset 0. If truncate and the first
+    new writes happen between polls, the file head no longer matches — restart
+    from offset 0 rather than seeking into the middle of zmsetup output. A
+    replaced inode (perl -i scrub) is treated as already-seen (new EOF) so the
+    wizard does not replay the whole apply phase.
+    """
+    pos = 0
+    inode: int | None = None
+    started = False
+    buf = ""
+    announced = False
+    existed_at_start = path.is_file()
+    head = b""
+
+    def _head() -> bytes:
+        try:
+            with path.open("rb") as fh:
+                return fh.read(128)
+        except OSError:
+            return b""
+
+    async def _read_available() -> None:
+        nonlocal pos, inode, started, buf, announced, head
+        try:
+            st = path.stat()
+        except OSError:
+            return
+        cur_head = _head()
+        if not started:
+            inode = st.st_ino
+            started = True
+            pos = st.st_size if existed_at_start else 0
+            head = cur_head
+        elif st.st_ino != inode:
+            # perl -i scrub replaces the inode with the already-streamed text.
+            inode = st.st_ino
+            pos = st.st_size
+            buf = ""
+            head = cur_head
+            return
+        elif st.st_size < pos:
+            pos = 0
+            buf = ""
+            head = cur_head
+        elif (
+            head
+            and cur_head
+            and not cur_head.startswith(head[: len(cur_head)])
+            and not head.startswith(cur_head)
+        ):
+            # Truncate+rewrite in one poll (size never sampled at 0). GNU tail
+            # misses this too; we cannot seek(old_pos) into a new log.
+            pos = 0
+            buf = ""
+            head = cur_head
+        elif len(cur_head) >= len(head):
+            head = cur_head[:128]
+        if st.st_size <= pos:
+            return
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(pos)
+                chunk = fh.read()
+                pos = fh.tell()
+        except OSError:
+            return
+        if not chunk:
+            return
+        chunk = chunk.replace("\r\n", "\n").replace("\r", "\n")
+        buf += chunk
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            if not announced:
+                announced = True
+                await queue.put(("stdout", f"=== {path} (redacted installer output) ===\n"))
+            await queue.put(("stdout", line + "\n"))
+
+    while True:
+        await _read_available()
+        if stop.is_set():
+            await _read_available()
+            if buf:
+                if not announced:
+                    await queue.put(("stdout", f"=== {path} (redacted installer output) ===\n"))
+                await queue.put(("stdout", buf if buf.endswith("\n") else buf + "\n"))
+                buf = ""
+            break
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=max(0.05, poll_s))
+        except TimeoutError:
+            continue
+
+
 async def _stream_subprocess(
     argv: list[str],
     *,
@@ -162,6 +265,8 @@ async def _stream_subprocess(
     transcript: Path | None = None,
     transcript_reset: bool = False,
     secrets: list[str] | None = None,
+    follow_logs: list[Path] | None = None,
+    follow_poll_s: float = 0.2,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
@@ -210,13 +315,24 @@ async def _stream_subprocess(
                 break
             await queue.put((kind, line.decode("utf-8", errors="replace")))
 
-    tasks = [
+    pump_tasks = [
         asyncio.create_task(_pump(proc.stdout, "stdout")),
         asyncio.create_task(_pump(proc.stderr, "stderr")),
     ]
+    stop_follow = asyncio.Event()
+    follow_tasks = [
+        asyncio.create_task(
+            _watch_log_file(path, queue, stop_follow, poll_s=follow_poll_s)
+        )
+        for path in (follow_logs or [])
+        if path
+    ]
 
     async def _waiter() -> None:
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*pump_tasks)
+        stop_follow.set()
+        if follow_tasks:
+            await asyncio.gather(*follow_tasks)
         await queue.put(None)
 
     waiter = asyncio.create_task(_waiter())
@@ -233,6 +349,7 @@ async def _stream_subprocess(
             else:
                 yield proto.event_stderr(text)
     finally:
+        stop_follow.set()
         await waiter
         if log_fh is not None:
             try:
@@ -376,6 +493,7 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     header = (
         f"Running fixed script: {script} --full-install "
         f"(KIN_CONSOLE_CONFIRMED=1; dead-man NOT auto-cancelled)\n"
+        f"Following redacted installer log: {ZIMBRA_INSTALL_LOG}\n"
     )
     yield proto.event_stdout(header)
     # Persist for View logs in a separate browser tab / after the run ends.
@@ -395,6 +513,7 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
         extra_env={"KIN_CONSOLE_CONFIRMED": "1"},
         transcript=DEPLOY_LAST_LOG,
         transcript_reset=False,
+        follow_logs=[ZIMBRA_INSTALL_LOG],
     ):
         yield ev
 

@@ -28,6 +28,12 @@ DEPLOY_LAST_LOG = Path(
     os.environ.get("KIN_DEPLOY_LAST_LOG", "/var/log/kin-mail/deploy-last.log")
 )
 
+# Redacted tmux pipe-pane capture from 03-install-zimbra.sh. Not the same as
+# kin-mail.sh stdout — zmsetup.pl detail lands only here. Console SSE follows it.
+ZIMBRA_INSTALL_LOG = Path(
+    os.environ.get("KIN_ZIMBRA_INSTALL_LOG", "/var/log/kin-mail-install.log")
+)
+
 # Audit / privhelper identity when wizard runs without a session (pre-deploy only).
 SETUP_USERNAME = "setup"
 
