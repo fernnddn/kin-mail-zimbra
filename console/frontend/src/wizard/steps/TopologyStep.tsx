@@ -202,6 +202,12 @@ export default function TopologyStep() {
               {draft.local_host_ip ? ` This server is ${draft.local_host_ip}.` : ""}
             </Hint>
           </FieldRow>
+          <Hint>
+            Each mail VM also needs a second disk partitioned before Build HA pair: /dev/sdb1
+            (Zimbra data, ≥20 GiB) and /dev/sdb2 (~256 MiB DRBD meta, no filesystem). This wizard
+            will not partition disks — wrong-disk selection is destructive. If Zimbra is already on
+            the root volume, migrate /opt/zimbra onto sdb1 first.
+          </Hint>
         </>
       ) : null}
       <Hint>Larger topologies are not offered in this wizard yet.</Hint>

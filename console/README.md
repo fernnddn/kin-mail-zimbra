@@ -39,8 +39,8 @@ Sensitive commands are denied in **both** the FastAPI stream endpoint and privhe
 |---|---|
 | Socket | `/run/kin-mail/privhelper.sock` (no TCP/UDP) |
 | Audit log | `/var/log/kin-mail/privhelper.log` (root-owned, not writable by `kin-console`) |
-| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log`, `create_mailbox`, `clear_initial_console_password` |
-| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`**, **`get_audit_log`**, **`get_deploy_log`**, **`clear_initial_console_password`**, and mailbox **`--status`** bypass busy |
+| Whitelist | `get_status`, hardening status/full, `apply_wizard_draft`, `run_full_install`, `cancel_firewall_deadman`, `get_audit_log`, `create_mailbox`, `clear_initial_console_password`, `store_provisioning_secrets`, `run_ha_orchestration`, `ha_disk_preflight` |
+| Concurrency | Second request while busy → `busy` (no silent queue); **`cancel_firewall_deadman`**, **`get_audit_log`**, **`get_deploy_log`**, **`clear_initial_console_password`**, mailbox **`--status`**, maintenance **status/preflight**, and **`ha_disk_preflight`** bypass busy |
 
 First-boot local admin password is printed on SSH stdout **and** stored at
 `/etc/kin-mail-console/initial-admin-password` (`root:root` `0600`) until the first successful

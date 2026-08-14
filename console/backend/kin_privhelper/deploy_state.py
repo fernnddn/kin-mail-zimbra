@@ -43,6 +43,7 @@ SETUP_ALLOWED_COMMANDS = frozenset(
         "get_deploy_log",
         "store_provisioning_secrets",
         "run_ha_orchestration",
+        "ha_disk_preflight",
     }
 )
 

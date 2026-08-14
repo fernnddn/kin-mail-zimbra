@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import grp
 import os
 import re
@@ -586,6 +587,135 @@ async def cmd_store_provisioning_secrets(
     yield proto.event_done(0)
 
 
+async def cmd_ha_disk_preflight(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Read-only DRBD disk layout check (local + wizard peer). Never partitions."""
+    from .ha_disk import (
+        REMOTE_PROBE,
+        collect_local_facts,
+        combine_results,
+        evaluate_facts,
+        parse_remote_probe,
+    )
+    from .orchestration import (
+        _load_config,
+        _load_draft,
+        _ssh_run,
+        redact_text,
+        resolve_topology,
+    )
+    from .provisioning_secrets import load_secrets
+
+    del args
+    nodes: list[dict[str, Any]] = []
+    local_res = evaluate_facts(
+        collect_local_facts(),
+        label="this server",
+        require_zimbra_on_data=True,
+    )
+    nodes.append(local_res)
+    for line in local_res.get("errors") or []:
+        yield proto.event_stderr(f"{line}\n")
+    if local_res.get("ok"):
+        yield proto.event_stdout(
+            f"this server: {local_res.get('data_disk')} + {local_res.get('meta_disk')} ok\n"
+        )
+
+    try:
+        draft = _load_draft()
+        config = _load_config()
+        topology = str(draft.get("topology") or config.get("TOPOLOGY") or "").strip()
+    except Exception:  # noqa: BLE001
+        topology = ""
+        draft, config = {}, {}
+
+    if topology in ("2vm", "2"):
+        secrets_map = load_secrets()
+        root_pass = secrets_map.get("host_root_pass") or ""
+        kin_pass = secrets_map.get("kin_user_pass") or ""
+        if not root_pass or not kin_pass:
+            nodes.append(
+                {
+                    "ok": False,
+                    "label": "second server",
+                    "errors": [
+                        "second server: store host credentials in the wizard to inspect its disks"
+                    ],
+                    "seen": [],
+                }
+            )
+        else:
+            try:
+                _local, peer, _mon = resolve_topology(draft=draft, config=config)
+            except Exception as exc:  # noqa: BLE001
+                nodes.append(
+                    {
+                        "ok": False,
+                        "label": "second server",
+                        "errors": [f"second server: {exc}"],
+                        "seen": [],
+                    }
+                )
+            else:
+                secrets = [root_pass, kin_pass]
+                ssh_user = ""
+                ssh_pass = ""
+                for user, pwd in (("cursor", kin_pass), ("kin", kin_pass), ("root", root_pass)):
+                    code, _ident = await _ssh_run(
+                        peer, user, pwd, secrets, "hostname -f || hostname", timeout=10
+                    )
+                    if code == 0:
+                        ssh_user, ssh_pass = user, pwd
+                        break
+                if not ssh_user:
+                    nodes.append(
+                        {
+                            "ok": False,
+                            "label": f"second server ({peer.name})",
+                            "errors": [
+                                f"second server ({peer.ip}): could not SSH with stored credentials"
+                            ],
+                            "seen": [],
+                        }
+                    )
+                else:
+                    code, blob = await _ssh_run(
+                        peer, ssh_user, ssh_pass, secrets, REMOTE_PROBE, timeout=15
+                    )
+                    blob = redact_text(blob, secrets)
+                    if code != 0:
+                        nodes.append(
+                            {
+                                "ok": False,
+                                "label": f"second server ({peer.name})",
+                                "errors": [
+                                    f"second server ({peer.name}): disk inspect failed "
+                                    f"(ssh exit {code})"
+                                ],
+                                "seen": [],
+                            }
+                        )
+                    else:
+                        peer_res = evaluate_facts(
+                            parse_remote_probe(blob),
+                            label=f"second server ({peer.name})",
+                            require_zimbra_on_data=True,
+                        )
+                        nodes.append(peer_res)
+                        for line in peer_res.get("errors") or []:
+                            yield proto.event_stderr(f"{line}\n")
+                        if peer_res.get("ok"):
+                            yield proto.event_stdout(
+                                f"second server: {peer_res.get('data_disk')} + "
+                                f"{peer_res.get('meta_disk')} ok\n"
+                            )
+
+    result = combine_results(*nodes)
+    yield proto.event_stdout("HA_DISK_JSON:" + json.dumps(result, separators=(",", ":")) + "\n")
+    yield proto.event_done(0 if result.get("ok") else 2)
+
+
 CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]
 
 
@@ -617,6 +747,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
     proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
     proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
+    proto.CMD_HA_DISK_PREFLIGHT: _adapt(cmd_ha_disk_preflight),
 }
 
 

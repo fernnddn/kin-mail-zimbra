@@ -510,6 +510,40 @@ async def wizard_deploy_hint(
     }
 
 
+@app.get("/api/wizard/ha-disk-preflight")
+async def wizard_ha_disk_preflight(
+    actor: auth.WizardActor = Depends(auth.wizard_actor),
+) -> dict[str, object]:
+    """Read-only DRBD disk check. Never partitions. Fail-closed for Build HA pair."""
+    if not command_allowed(actor.role, proto.CMD_HA_DISK_PREFLIGHT):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(actor.role, proto.CMD_HA_DISK_PREFLIGHT),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_HA_DISK_PREFLIGHT,
+        actor.username,
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "HA_DISK_JSON:")
+    errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
+    errors = [str(e) for e in errors]
+    ok = bool(parsed.get("ok")) if parsed else False
+    if not ok and not errors:
+        err = result.get("error")
+        errors = [
+            str(err)
+            if err
+            else "Could not complete the second-disk check. Build HA pair stays blocked."
+        ]
+    return {
+        "ok": ok,
+        "errors": errors,
+        "instructions": parsed.get("instructions") or "",
+        "nodes": parsed.get("nodes") or [],
+        "exit_code": result.get("exit_code"),
+    }
+
+
 def _json_from_log(log: str, prefix: str) -> dict:
     for line in (log or "").splitlines():
         if line.startswith(prefix):

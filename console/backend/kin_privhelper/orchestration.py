@@ -92,6 +92,9 @@ def render_inventory(
         "    iscsi_initiator_portal: \"" + monitoring.ip + ":3260\"",
         "    cluster_node_base_hacluster_password: '{{ lookup(\"env\", \"KIN_HACLUSTER_PASSWORD\") }}'",
         "    cluster_setup_name: kin-mail",
+        # Proven HA layout — not the old loop-meta default. Preflight checks these.
+        "    drbd_resource_disk: /dev/sdb1",
+        "    drbd_resource_meta_disk: /dev/sdb2",
     ]
     if vip_ip:
         lines.append(f"    pacemaker_mail_stack_vip_ip: {vip_ip}")
@@ -437,13 +440,16 @@ def _playbook_path(rel: str) -> Path:
     return path
 
 
-async def _ssh_probe(
+async def _ssh_run(
     host: OrchHost,
     user: str,
     password: str,
     secrets: list[str],
+    remote_cmd: str,
+    *,
+    timeout: int = 12,
 ) -> tuple[int, str]:
-    """Return (exit, hostname) for a password SSH probe. Password never in argv."""
+    """Password SSH with a fixed remote command. Password never in argv."""
     sshpass = shutil.which("sshpass")
     if not sshpass:
         return 127, "sshpass not installed"
@@ -458,9 +464,9 @@ async def _ssh_probe(
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
-        "ConnectTimeout=12",
+        f"ConnectTimeout={timeout}",
         f"{user}@{host.ip}",
-        "hostname -f || hostname",
+        remote_cmd,
     ]
     env = {**os.environ, "SSHPASS": password}
     proc = await asyncio.create_subprocess_exec(
@@ -474,6 +480,16 @@ async def _ssh_probe(
     err = redact_text(err_b.decode("utf-8", errors="replace"), secrets)
     text = (out or err).strip()
     return int(proc.returncode or 0), text
+
+
+async def _ssh_probe(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> tuple[int, str]:
+    """Return (exit, hostname) for a password SSH probe. Password never in argv."""
+    return await _ssh_run(host, user, password, secrets, "hostname -f || hostname")
 
 
 async def cmd_run_ha_orchestration(
@@ -645,6 +661,51 @@ async def cmd_run_ha_orchestration(
         )
         yield proto.event_done(1)
         return
+
+    from .ha_disk import (
+        REMOTE_PROBE,
+        collect_local_facts,
+        combine_results,
+        evaluate_facts,
+        parse_remote_probe,
+    )
+
+    yield emit_line("Checking DRBD backing disks (read-only lsblk)…")
+    local_res = evaluate_facts(
+        collect_local_facts(),
+        label=f"this server ({local.name})",
+        require_zimbra_on_data=True,
+    )
+    peer_code, peer_blob = await _ssh_run(
+        peer, ssh_user, ssh_pass, secrets, REMOTE_PROBE, timeout=15
+    )
+    if peer_code != 0:
+        peer_res = {
+            "ok": False,
+            "label": f"second server ({peer.name})",
+            "errors": [
+                f"second server ({peer.name}): could not inspect disks "
+                f"(ssh exit {peer_code})"
+            ],
+            "seen": [],
+        }
+    else:
+        peer_res = evaluate_facts(
+            parse_remote_probe(peer_blob),
+            label=f"second server ({peer.name})",
+            require_zimbra_on_data=True,
+        )
+    disk = combine_results(local_res, peer_res)
+    if not disk["ok"]:
+        for err in disk["errors"]:
+            yield emit_line(f"Refusing: {err}", err=True)
+        yield emit_line(str(disk.get("instructions") or ""), err=True)
+        yield proto.event_done(2)
+        return
+    yield emit_line(
+        f"DRBD disk preflight ok data={local_res.get('data_disk')} "
+        f"meta={local_res.get('meta_disk')}"
+    )
 
     ansible_env = {
         "HOME": str(WORK_DIR),

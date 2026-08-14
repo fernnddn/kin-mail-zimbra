@@ -153,6 +153,8 @@ const ActionsRow = styled.div`
   margin-top: 0.85rem;
 `;
 
+type HaDisk = { ok: boolean; errors: string[]; instructions?: string };
+
 function stageState(
   index: number,
   current: number,
@@ -206,6 +208,34 @@ export default function DeployStep() {
   const showProgress = activeRun || current > 0 || complete || failed;
   // Hide setup cards while any install is active on this host (SSE or server-side).
   const showSetupCards = canOps && !activeRun;
+
+  const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
+  const [haDiskLoading, setHaDiskLoading] = useState(false);
+  useEffect(() => {
+    if (draft.topology !== "2vm" || !canOps || activeRun) return;
+    let cancelled = false;
+    setHaDiskLoading(true);
+    api<HaDisk>("/api/wizard/ha-disk-preflight")
+      .then((r) => {
+        if (!cancelled) setHaDisk(r);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setHaDisk({
+            ok: false,
+            errors: [err instanceof Error ? err.message : "Could not check disks"],
+            instructions: "",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHaDiskLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.topology, canOps, activeRun]);
+  const haDiskBlocked = draft.topology === "2vm" && haDisk?.ok !== true;
 
   return (
     <>
@@ -349,6 +379,29 @@ export default function DeployStep() {
                 failure stops there — nothing is retried or rolled back automatically. After a
                 manual fix, run this again from the top; the playbooks are idempotent.
               </StepBody>
+              {haDiskLoading && (
+                <Hint style={{ marginTop: 0 }}>Checking second-disk partitions on both mail servers…</Hint>
+              )}
+              {haDisk && !haDisk.ok && (
+                <WarnBox>
+                  <strong>Second disk not ready for DRBD.</strong> Build HA pair stays blocked until
+                  both mail VMs have a partitioned data disk.
+                  <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+                    {(haDisk.errors || []).map((e) => (
+                      <li key={e}>{e}</li>
+                    ))}
+                  </ul>
+                  {haDisk.instructions ? (
+                    <p style={{ margin: "0.65rem 0 0" }}>{haDisk.instructions}</p>
+                  ) : null}
+                </WarnBox>
+              )}
+              {haDisk?.ok && (
+                <Hint style={{ marginTop: 0 }}>
+                  DRBD disks look ready ({"/dev/sdb1"} data, {"/dev/sdb2"} meta) on the servers we
+                  could inspect.
+                </Hint>
+              )}
               <label
                 style={{
                   display: "flex",
@@ -372,13 +425,34 @@ export default function DeployStep() {
                   {draft.cluster_vip_ip || "unset"}).
                 </span>
               </label>
-              <Button
-                type="button"
-                disabled={!confirmHa || inMaintenance || pipelineBusy}
-                onClick={() => void runHaOrchestration()}
-              >
-                Build HA pair
-              </Button>
+              <ActionsRow>
+                <Button
+                  type="button"
+                  disabled={!confirmHa || inMaintenance || pipelineBusy || haDiskBlocked || haDiskLoading}
+                  onClick={() => void runHaOrchestration()}
+                >
+                  Build HA pair
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={haDiskLoading || pipelineBusy}
+                  onClick={() => {
+                    setHaDiskLoading(true);
+                    void api<HaDisk>("/api/wizard/ha-disk-preflight")
+                      .then(setHaDisk)
+                      .catch((err) =>
+                        setHaDisk({
+                          ok: false,
+                          errors: [err instanceof Error ? err.message : "Could not check disks"],
+                        }),
+                      )
+                      .finally(() => setHaDiskLoading(false));
+                  }}
+                >
+                  Recheck disks
+                </Button>
+              </ActionsRow>
             </StepCard>
           )}
         </>
@@ -415,19 +489,22 @@ export default function DeployStep() {
       {activeRun && (
         <Hint>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
-            <Spinner /> Working… open View logs in a new tab for the live stream.
+            <Spinner /> Working… open View logs in a new tab for the live stream. Stay on this page
+            until the stage finishes — leaving does not stop the server-side job.
           </span>
         </Hint>
       )}
 
       {message && <Hint>{message}</Hint>}
 
-      <NavRow>
-        <Button type="button" variant="ghost" onClick={() => navigate("/wizard/review")}>
-          Back
-        </Button>
-        <span />
-      </NavRow>
+      {!activeRun && (
+        <NavRow>
+          <Button type="button" variant="ghost" onClick={() => navigate("/wizard/review")}>
+            Back
+          </Button>
+          <span />
+        </NavRow>
+      )}
     </>
   );
 }

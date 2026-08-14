@@ -3,6 +3,7 @@ import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { useSetup } from "../setup";
 import { theme } from "../styles/theme";
+import { useDeploySession } from "./DeploySession";
 import { useWizard } from "./WizardContext";
 import { WIZARD_STEPS, stepIndex, type StepId } from "./types";
 
@@ -60,6 +61,21 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
     background: ${(p) => (p.$active ? theme.accentSoft : "rgba(0, 97, 255, 0.05)")};
     box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
   }
+`;
+
+const StepLock = styled.div<{ $active?: boolean; $done?: boolean }>`
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.2rem;
+  border-radius: ${theme.radius};
+  color: ${theme.muted};
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 0.9rem;
+  opacity: 0.55;
+  cursor: not-allowed;
 `;
 
 const StepNum = styled.span<{ $active?: boolean; $done?: boolean }>`
@@ -127,16 +143,18 @@ function currentStepId(pathname: string): StepId {
 export default function WizardLayout() {
   const { loading } = useWizard();
   const { deployed, installInProgress } = useSetup();
+  const { pipelineBusy } = useDeploySession();
   const location = useLocation();
   const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
   const isDeploy = /\/wizard\/deploy\/?$/.test(location.pathname) || isDeployLogs;
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
+  const navLocked = installInProgress || pipelineBusy;
 
-  // Mid-install always stays on Deploy. After deploy the operator can still
-  // revisit topology (peer IP, Observability VM) and other steps.
-  if (installInProgress && !isDeploy) {
+  // Mid-install / mid-orchestration always stays on Deploy. Leaving does not
+  // stop the server-side job.
+  if (navLocked && !isDeploy) {
     return <Navigate to="/wizard/deploy" replace />;
   }
 
@@ -157,6 +175,17 @@ export default function WizardLayout() {
           {WIZARD_STEPS.map((step, idx) => {
             const done = idx < activeIdx;
             const isActive = step.id === active;
+            const lockThis = navLocked && step.id !== "deploy";
+            if (lockThis) {
+              return (
+                <StepLock key={step.id} $active={isActive} $done={done} title="Stay on Deploy until the current stage finishes">
+                  <StepNum $active={isActive} $done={done}>
+                    {done ? "✓" : idx + 1}
+                  </StepNum>
+                  {step.label}
+                </StepLock>
+              );
+            }
             return (
               <StepLink
                 key={step.id}
@@ -174,7 +203,11 @@ export default function WizardLayout() {
         </Sidebar>
         <Main>
           <CrumbBar>
-            <Link to="/wizard/topology">Setup</Link>
+            {navLocked ? (
+              <span>Setup</span>
+            ) : (
+              <Link to="/wizard/topology">Setup</Link>
+            )}
             {" / "}
             <strong>{activeDef.crumb}</strong>
           </CrumbBar>

@@ -1,4 +1,8 @@
 ---
+- name: Include DRBD backing-disk detection
+  ansible.builtin.import_tasks: detect.yml
+  tags: [drbd, resource, detect]
+
 - name: Include the DRBD external meta file steps
   ansible.builtin.import_tasks: meta_loop.yml
   tags: [drbd, resource, meta]

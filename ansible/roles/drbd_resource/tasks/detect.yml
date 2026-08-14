@@ -1,0 +1,39 @@
+---
+# Read-only. Fail closed if the DRBD backing partition is missing.
+# This role never partitions a raw disk.
+- name: Check the DRBD data backing device
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_disk }}"
+  register: drbd_resource_disk_stat
+  tags: [drbd, resource, detect]
+
+- name: Check the DRBD meta device
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_meta_disk }}"
+  register: drbd_resource_meta_stat
+  tags: [drbd, resource, detect]
+
+- name: Require the DRBD data partition to exist
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_disk_stat.stat.exists | default(false)
+      - drbd_resource_disk_stat.stat.isblk | default(false)
+    fail_msg: >-
+      {{ drbd_resource_disk }} is not a block device. Partition a second disk
+      before DRBD (GPT: data partition {{ drbd_resource_disk }} for /opt/zimbra,
+      meta {{ drbd_resource_meta_disk }} ~256 MiB, no mkfs on meta). This role
+      never creates partition tables.
+  tags: [drbd, resource, detect]
+
+- name: Require the DRBD meta device to exist (skip loop images)
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_meta_stat.stat.exists | default(false)
+    fail_msg: >-
+      DRBD meta {{ drbd_resource_meta_disk }} does not exist. Proven layout is
+      a small partition (~256 MiB) on the second disk. This role never
+      partitions disks.
+  when:
+    - drbd_resource_meta_disk is match('^/dev/')
+    - drbd_resource_meta_disk is not search('loop')
+  tags: [drbd, resource, detect]

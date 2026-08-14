@@ -21,6 +21,7 @@ CMD_CLEAR_INITIAL_CONSOLE_PASSWORD = "clear_initial_console_password"
 CMD_MAINTENANCE = "maintenance"
 CMD_STORE_PROVISIONING_SECRETS = "store_provisioning_secrets"
 CMD_RUN_HA_ORCHESTRATION = "run_ha_orchestration"
+CMD_HA_DISK_PREFLIGHT = "ha_disk_preflight"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -36,6 +37,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_MAINTENANCE,
         CMD_STORE_PROVISIONING_SECRETS,
         CMD_RUN_HA_ORCHESTRATION,
+        CMD_HA_DISK_PREFLIGHT,
     }
 )
 

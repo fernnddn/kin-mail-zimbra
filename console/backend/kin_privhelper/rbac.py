@@ -30,6 +30,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "cancel_firewall_deadman",
         "store_provisioning_secrets",
         "run_ha_orchestration",
+        "ha_disk_preflight",
     }
 )
 

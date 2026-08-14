@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
 import { SetupProvider, useSetup, wizardHomePath } from "./setup";
@@ -24,14 +24,6 @@ import TopologyStep from "./wizard/steps/TopologyStep";
 import ZpushStep from "./wizard/steps/ZpushStep";
 import { DeploySessionProvider } from "./wizard/DeploySession";
 import { Lede, Shell } from "./ui";
-
-function DeployOutlet() {
-  return (
-    <DeploySessionProvider>
-      <Outlet />
-    </DeploySessionProvider>
-  );
-}
 
 function LoadingShell({ text }: { text: string }) {
   return (
@@ -136,7 +128,9 @@ export default function App() {
                 <RequireEula>
                   <RequireAuthIfDeployed>
                     <WizardProvider>
-                      <WizardLayout />
+                      <DeploySessionProvider>
+                        <WizardLayout />
+                      </DeploySessionProvider>
                     </WizardProvider>
                   </RequireAuthIfDeployed>
                 </RequireEula>
@@ -152,9 +146,7 @@ export default function App() {
               <Route path="licensing" element={<LicensingStep />} />
               <Route path="firewall" element={<FirewallStep />} />
               <Route path="review" element={<ReviewStep />} />
-              <Route path="deploy" element={<DeployOutlet />}>
-                <Route index element={<DeployStep />} />
-              </Route>
+              <Route path="deploy" element={<DeployStep />} />
               <Route path="deploy/logs" element={<DeployLogsPage />} />
             </Route>
             <Route path="/" element={<Navigate to="/wizard" replace />} />

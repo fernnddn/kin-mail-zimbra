@@ -42,6 +42,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("drbd_resource_node_a_address: 192.0.2.15", inv)
         self.assertIn("drbd_resource_node_b_address: 192.0.2.14", inv)
         self.assertIn("pacemaker_mail_stack_vip_ip: 192.0.2.16", inv)
+        self.assertIn("drbd_resource_disk: /dev/sdb1", inv)
+        self.assertIn("drbd_resource_meta_disk: /dev/sdb2", inv)
         self.assertNotIn("10.10.40.", inv)
 
     def test_empty_vip_is_omitted_from_inventory(self) -> None:
@@ -158,6 +160,9 @@ class OrchRbacTests(unittest.TestCase):
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "run_ha_orchestration"))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "run_ha_orchestration"))
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "run_ha_orchestration"))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "ha_disk_preflight"))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "ha_disk_preflight"))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "ha_disk_preflight"))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "store_provisioning_secrets"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "store_provisioning_secrets"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "run_hardening"))

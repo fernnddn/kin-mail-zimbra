@@ -219,7 +219,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         ) or (
             cmd == proto.CMD_MAINTENANCE
             and str(args.get("op") or "").strip().lower() in ("status", "preflight")
-        )
+        ) or cmd == proto.CMD_HA_DISK_PREFLIGHT
 
         if not bypass_busy:
             async with _gate:
