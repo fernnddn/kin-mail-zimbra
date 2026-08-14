@@ -14,6 +14,10 @@ Bootstrap also copies sibling `install/` into **`/opt/kin-mail-deploy/install/`*
 (not a symlink into `/home`). `kin-mail-privhelperd` runs with `ProtectHome=true`, so a
 `/opt/kin-mail-deploy → /home/...` symlink makes Deploy fail instantly with "file not found".
 
+The wizard stays login-free until a **successful** full install (`/etc/kin-mail/setup-complete`,
+or a running mailboxd on legacy CLI labs). A leftover `/opt/zimbra` from a failed Deploy does
+not require login and does not show Cluster/Users.
+
 ## Local users + RBAC
 
 | Role | ID | Notes |

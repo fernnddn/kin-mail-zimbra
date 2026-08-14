@@ -258,8 +258,9 @@ run_wizard() {
   ask NET_IFACE   "Network interface name"     "${DEF_IFACE}"
   ask TIMEZONE    "System timezone"             "${DEF_TZ}"
 
-  # Zimbra's timezone list has no Asia/Jakarta entry. Asia/Bangkok is the same
-  # UTC+7 with no DST, so it is the correct equivalent for WIB.
+  # Zimbra's installer timezone list historically omitted Asia/Jakarta; Asia/Bangkok
+  # is the same UTC+7 with no DST. Current timezones.ics may list Jakarta — 03
+  # prefers the live zmsetup number for TIMEZONE, then this fallback.
   case "$TIMEZONE" in
     Asia/Jakarta|Asia/Pontianak) ZIMBRA_TZ_NAME="Asia/Bangkok" ;;
     *)                           ZIMBRA_TZ_NAME="$TIMEZONE" ;;

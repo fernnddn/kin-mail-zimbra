@@ -66,8 +66,8 @@ def setup_status() -> dict[str, object]:
 
     installing = full_install_in_progress()
     return {
-        # Auth gate: false during first-time setup AND while full-install runs
-        # (even after /opt/zimbra appears mid-install).
+        # Auth gate: false during first-time setup, failed/partial installs, AND
+        # while full-install runs (even after /opt/zimbra appears mid-install).
         "deployed": is_mail_deployed(),
         "busy": installing,
         "install_in_progress": installing,

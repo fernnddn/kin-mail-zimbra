@@ -201,8 +201,11 @@ restarts them before asserting DNS.
 - **`/etc/resolv.conf` is a managed symlink** and must be replaced with `ln -sf`.
 - **The default mail domain follows the hostname** (`user@mail.example.com`);
   it is set explicitly instead.
-- **Zimbra's timezone list has no `Asia/Jakarta`.** `Asia/Bangkok` is the UTC+7
-  equivalent without DST.
+- **Zimbra's timezone list does not mark `Asia/Jakarta` as primary.** `Asia/Bangkok` is the
+  UTC+7 fallback (same offset, no DST). The numbered slot moves when `timezones.ics`
+  gains or loses primary zones — do not hardcode it. The installer driver reads the live
+  zmsetup list after the timezone prompt and fails immediately on `Invalid selection`
+  instead of waiting 1h.
 - **`zmsetup.pl` reads resolver configuration once at startup.** Fixing DNS
   afterwards requires restarting the process.
 - **The telemetry prompt transmits the administrator email.** Answered No.

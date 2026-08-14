@@ -167,8 +167,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         if role is None:
             if deny_tag == "denied_setup_after_deploy":
                 msg = (
-                    f"setup identity not allowed after mail is deployed "
-                    f"({deploy_state.ZIMBRA_ROOT} present) — sign in"
+                    "setup identity not allowed after mail is deployed — sign in"
                 )
             elif deny_tag == "denied_setup_cmd":
                 msg = f"setup identity cannot run {cmd!r}"

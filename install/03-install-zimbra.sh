@@ -248,7 +248,7 @@ if [ $MANUAL -eq 1 ]; then
     The system will be modified. Continue? ...  Y
     Change hostname ..........................  No
     Change domain name? ......................  Yes -> ${MAIL_DOMAIN}
-    Menu 1 -> 7 TimeZone .....................  ${ZIMBRA_TZ_NAME}
+    Menu 1 -> TimeZone (number from live menu)  ${TIMEZONE} / ${ZIMBRA_TZ_NAME}
     Menu 6 -> 4 Admin Password ...............  (your password)
     a -> Yes -> Enter -> Yes .................  apply
     Notify Zimbra of your installation? ......  No  <- sends admin email to Zimbra
@@ -344,6 +344,57 @@ DEADLINE=$(( $(date +%s) + 3600 ))
 INSTALL_STARTED=1
 
 installer_pane() { tmux capture-pane -p -S -80 -t "$SESS" 2>/dev/null || true; }
+installer_hist() { tmux capture-pane -p -S - -t "$SESS" 2>/dev/null || true; }
+
+# Visible pane only — do not grep 400 lines of timezone dump for menu numbers.
+menu_item_number() {
+  local label="$1"
+  tmux capture-pane -p -t "$SESS" 2>/dev/null \
+    | grep -E "^[[:space:]]*[0-9]+\)[[:space:]]+${label}" \
+    | tail -1 \
+    | sed -E 's/^[[:space:]]*([0-9]+)\).*/\1/'
+}
+
+dump_installer_and_exit() {
+  info "Last line: $(lastln)"
+  printf '%s\n' "$(installer_pane)" | tail -n 40 | sed 's/^/    /'
+  scrub_install_log "$LOG"
+  tmux kill-session -t "$SESS" 2>/dev/null || true
+  exit 1
+}
+
+abort_invalid_selection() {
+  fail "Zimbra installer rejected a menu input (Invalid selection)."
+  info "The driver sent a key the current menu does not accept — often a stale timezone index."
+  dump_installer_and_exit
+}
+
+wait_for_pane() {
+  local pat="$1" timeout="${2:-60}"
+  local start now
+  start=$(date +%s)
+  while true; do
+    now=$(date +%s)
+    PANE="$(installer_pane)"
+    if printf '%s\n' "$PANE" | grep -q "Invalid selection"; then
+      abort_invalid_selection
+    fi
+    if printf '%s\n' "$PANE" | grep -qE -- "$pat"; then
+      return 0
+    fi
+    if [ $((now - start)) -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+tz_list_index() {
+  # Numbered list is printed then scrolls off a 50-row pane; read full history
+  # only AFTER "Enter the number for the local timezone" is on screen.
+  local name="$1"
+  installer_hist | grep -E "^[0-9]+ ${name}$" | tail -1 | awk '{print $1}'
+}
 
 installer_failed_hard() {
   # install.sh exited with a fatal message — do not keep sleeping on prompts.
@@ -366,6 +417,10 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep 4
   L="$(lastln)"
   PANE="$(installer_pane)"
+
+  if printf '%s\n' "$PANE" | grep -q "Invalid selection"; then
+    abort_invalid_selection
+  fi
 
   if installer_failed_hard; then
     fail "Zimbra install.sh aborted (see pane / ${LOG})."
@@ -406,31 +461,90 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     *"Create domain:"*)                    info "domain -> ${MAIL_DOMAIN}"; send "$MAIL_DOMAIN" 12 ;;
     *"Notify Zimbra of your installation"*) info "telemetry -> No";       send No 10 ;;
     *"press return to exit"*)              info "done";                send "" 5; break ;;
+    *"Invalid selection"*)                 abort_invalid_selection ;;
 
     *"Address unconfigured"*|*"press 'a' to apply"*)
         if [ "$STAGE" = "packages" ]; then
           STAGE="menus"
           info "Configuration menu reached - setting timezone, domain, password"
 
-          # --- timezone (Common Configuration -> 7) ---
+          # --- timezone: resolve the Common Configuration item by label (not hardcoded 7).
+          # Zimbra 10.1 createCommonMenu() inserts LDAP Base DN / ephemeral URL
+          # conditionally, so TimeZone is 7 only on a typical ldap+ephemeral=no host.
           send 1 4
-          send 7 4
-          TZIDX=$(tmux capture-pane -p -S -400 -t "$SESS" \
-                  | grep -E "^[0-9]+ ${ZIMBRA_TZ_NAME}$" | tail -1 | awk '{print $1}')
+          if ! wait_for_pane '[0-9]+\)[[:space:]]+TimeZone:' 45; then
+            fail "Timed out waiting for Common configuration / TimeZone"
+            dump_installer_and_exit
+          fi
+          TZMENU="$(menu_item_number "TimeZone:")"
+          if [ -z "$TZMENU" ]; then
+            fail "Could not read the TimeZone menu number from the installer pane"
+            dump_installer_and_exit
+          fi
+          info "Common configuration -> TimeZone is item ${TZMENU}"
+          send "$TZMENU" 3
+          if ! wait_for_pane "Enter the number for the local timezone" 90; then
+            fail "Timed out waiting for the timezone numbered list"
+            dump_installer_and_exit
+          fi
+          # Prefer the OS/wizard timezone if zmsetup lists it. Asia/Jakarta is a
+          # real TZID but is not X-ZIMBRA-TZ-PRIMARY, so the menu usually omits
+          # it; Asia/Bangkok is the UTC+7 fallback (same offset, no DST). Never
+          # hardcode the index — primary slots shift when timezones.ics changes.
+          TZIDX=""
+          TZCHOSEN=""
+          for cand in "$TIMEZONE" "$ZIMBRA_TZ_NAME" "Asia/Jakarta" "Asia/Bangkok"; do
+            [ -n "$cand" ] || continue
+            TZIDX="$(tz_list_index "$cand")"
+            if [ -n "$TZIDX" ]; then
+              TZCHOSEN="$cand"
+              break
+            fi
+          done
           if [ -n "$TZIDX" ]; then
-            info "timezone ${ZIMBRA_TZ_NAME} -> option ${TZIDX}"; send "$TZIDX" 5
+            info "timezone ${TZCHOSEN} -> option ${TZIDX} (from live zmsetup list)"
+            send "$TZIDX" 5
           else
-            warn "Timezone ${ZIMBRA_TZ_NAME} not in list, skipped"; send "" 3
+            warn "No Asia/Jakarta or Asia/Bangkok in the live timezone list; keeping default"
+            send "" 3
+          fi
+          if ! wait_for_pane '[0-9]+\)[[:space:]]+TimeZone:' 45; then
+            fail "Did not return to Common configuration after timezone"
+            dump_installer_and_exit
           fi
           send r 4
 
-          # --- admin password (Store -> 4) ---
-          send 6 4
-          send 4 3
+          # --- admin password: find zimbra-store by label (package list order varies).
+          if ! wait_for_pane "zimbra-store:" 45; then
+            fail "Timed out waiting for Main menu / zimbra-store"
+            dump_installer_and_exit
+          fi
+          STOREMENU="$(menu_item_number "zimbra-store:")"
+          if [ -z "$STOREMENU" ]; then
+            fail "Could not read the zimbra-store menu number"
+            dump_installer_and_exit
+          fi
+          info "Main menu -> zimbra-store is item ${STOREMENU}"
+          send "$STOREMENU" 4
+          if ! wait_for_pane "Admin Password" 45; then
+            fail "Timed out waiting for Store configuration / Admin Password"
+            dump_installer_and_exit
+          fi
+          APWMENU="$(menu_item_number "Admin Password")"
+          if [ -z "$APWMENU" ]; then
+            fail "Could not read the Admin Password menu number"
+            dump_installer_and_exit
+          fi
+          info "Store -> Admin Password is item ${APWMENU}"
+          send "$APWMENU" 3
           tmux send-keys -t "$SESS" "$ADMIN_PASS" Enter; sleep 5
           send r 4
 
-          # --- apply ---
+          # --- apply only from the main menu ---
+          if ! wait_for_pane "press 'a' to apply|Address unconfigured" 45; then
+            fail "Did not return to Main menu before apply"
+            dump_installer_and_exit
+          fi
           info "apply"
           send a 6
           send Yes 6      # save config to file
@@ -443,8 +557,7 @@ done
 
 if [ "$(date +%s)" -ge "$DEADLINE" ]; then
   fail "Timed out waiting for Zimbra installer (1h). Last line: ${L:-empty}"
-  scrub_install_log "$LOG"
-  exit 1
+  dump_installer_and_exit
 fi
 fi
 

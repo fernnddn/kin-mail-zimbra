@@ -390,6 +390,9 @@ run_full_install() {
   echo
   say "Full install complete"
   ok "All selected pipeline stages exited 0"
+  mkdir -p /etc/kin-mail
+  printf 'complete %s\n' "$(date -Is 2>/dev/null || date)" > /etc/kin-mail/setup-complete
+  chmod 644 /etc/kin-mail/setup-complete
 }
 
 pick_one_stage() {
