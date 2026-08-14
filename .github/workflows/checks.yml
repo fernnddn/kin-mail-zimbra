@@ -280,6 +280,28 @@ jobs:
           fi
           npm run build
 
+      # bootstrap.sh rsyncs the committed dist/, not a fresh Vite build. A
+      # source-only commit ships a stale UI (df7d469: Topology VIP missing).
+      - name: Committed dist must match this build
+        working-directory: console/frontend
+        run: |
+          set -euo pipefail
+          dirty=$(git status --porcelain -- dist)
+          if [ -n "$dirty" ]; then
+            echo "ERROR: console/frontend/dist does not match npm run build."
+            echo "bootstrap.sh deploys this tree. Rebuild and commit:"
+            echo "  (cd console/frontend && npm ci && npm run build)"
+            echo "$dirty"
+            git diff --stat -- dist || true
+            exit 1
+          fi
+          js=(dist/assets/*.js)
+          if [ ! -f "${js[0]:-}" ]; then
+            echo "ERROR: no dist/assets/*.js after build — refusing silent pass"
+            exit 1
+          fi
+          echo "ok  committed dist matches npm run build (${js[*]})"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
