@@ -203,10 +203,12 @@ export default function TopologyStep() {
             </Hint>
           </FieldRow>
           <Hint>
-            Each mail VM also needs a second disk partitioned before Build HA pair: /dev/sdb1
-            (Zimbra data, ≥20 GiB) and /dev/sdb2 (~256 MiB DRBD meta, no filesystem). This wizard
-            will not partition disks — wrong-disk selection is destructive. If Zimbra is already on
-            the root volume, migrate /opt/zimbra onto sdb1 first.
+            Each mail VM needs a second unused disk (≥20 GiB, not the OS disk, no partition table).
+            Build HA pair will GPT-partition it automatically when exactly one such disk is
+            present: /dev/sdb1 (Zimbra data) and /dev/sdb2 (~256 MiB DRBD meta, no filesystem).
+            Zero or multiple spare disks stay fail-closed — specify the disk instead of guessing.
+            If Zimbra is already on the root volume, migrate /opt/zimbra onto sdb1 after that
+            partition exists.
           </Hint>
         </>
       ) : null}

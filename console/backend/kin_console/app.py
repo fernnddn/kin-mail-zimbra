@@ -514,7 +514,7 @@ async def wizard_deploy_hint(
 async def wizard_ha_disk_preflight(
     actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
-    """Read-only DRBD disk check. Never partitions. Fail-closed for Build HA pair."""
+    """Read-only DRBD disk check. Partitioning is Ansible drbd_disk_prep during Build HA."""
     if not command_allowed(actor.role, proto.CMD_HA_DISK_PREFLIGHT):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -528,7 +528,9 @@ async def wizard_ha_disk_preflight(
     errors = parsed.get("errors") if isinstance(parsed.get("errors"), list) else []
     errors = [str(e) for e in errors]
     ok = bool(parsed.get("ok")) if parsed else False
-    if not ok and not errors:
+    build_allowed = bool(parsed.get("build_allowed")) if parsed else ok
+    will_auto = parsed.get("will_auto_partition") if isinstance(parsed.get("will_auto_partition"), list) else []
+    if not ok and not build_allowed and not errors:
         err = result.get("error")
         errors = [
             str(err)
@@ -537,6 +539,8 @@ async def wizard_ha_disk_preflight(
         ]
     return {
         "ok": ok,
+        "build_allowed": build_allowed,
+        "will_auto_partition": will_auto,
         "errors": errors,
         "instructions": parsed.get("instructions") or "",
         "nodes": parsed.get("nodes") or [],

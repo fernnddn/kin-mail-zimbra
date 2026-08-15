@@ -736,6 +736,9 @@ async def cmd_ha_disk_preflight(
     nodes.append(local_res)
     for line in local_res.get("errors") or []:
         yield proto.event_stderr(f"{line}\n")
+    auto = local_res.get("will_auto_partition")
+    if isinstance(auto, dict) and auto.get("message"):
+        yield proto.event_stdout(f"{auto['message']}\n")
     if local_res.get("ok"):
         yield proto.event_stdout(
             f"this server: {local_res.get('data_disk')} + {local_res.get('meta_disk')} ok\n"
@@ -762,6 +765,7 @@ async def cmd_ha_disk_preflight(
                         "second server: store host credentials in the wizard to inspect its disks"
                     ],
                     "seen": [],
+                    "build_allowed": False,
                 }
             )
         else:
@@ -774,6 +778,7 @@ async def cmd_ha_disk_preflight(
                         "label": "second server",
                         "errors": [f"second server: {exc}"],
                         "seen": [],
+                        "build_allowed": False,
                     }
                 )
             else:
@@ -796,6 +801,7 @@ async def cmd_ha_disk_preflight(
                                 f"second server ({peer.ip}): could not SSH with stored credentials"
                             ],
                             "seen": [],
+                            "build_allowed": False,
                         }
                     )
                 else:
@@ -813,6 +819,7 @@ async def cmd_ha_disk_preflight(
                                     f"(ssh exit {code})"
                                 ],
                                 "seen": [],
+                                "build_allowed": False,
                             }
                         )
                     else:
@@ -824,6 +831,9 @@ async def cmd_ha_disk_preflight(
                         nodes.append(peer_res)
                         for line in peer_res.get("errors") or []:
                             yield proto.event_stderr(f"{line}\n")
+                        auto_p = peer_res.get("will_auto_partition")
+                        if isinstance(auto_p, dict) and auto_p.get("message"):
+                            yield proto.event_stdout(f"{auto_p['message']}\n")
                         if peer_res.get("ok"):
                             yield proto.event_stdout(
                                 f"second server: {peer_res.get('data_disk')} + "
@@ -832,7 +842,7 @@ async def cmd_ha_disk_preflight(
 
     result = combine_results(*nodes)
     yield proto.event_stdout("HA_DISK_JSON:" + json.dumps(result, separators=(",", ":")) + "\n")
-    yield proto.event_done(0 if result.get("ok") else 2)
+    yield proto.event_done(0 if result.get("ok") or result.get("build_allowed") else 2)
 
 
 CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]

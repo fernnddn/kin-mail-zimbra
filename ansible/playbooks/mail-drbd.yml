@@ -15,5 +15,7 @@
   roles:
     - role: drbd_install
       tags: [drbd, install]
+    - role: drbd_disk_prep
+      tags: [drbd, disk_prep]
     - role: drbd_resource
       tags: [drbd, resource]

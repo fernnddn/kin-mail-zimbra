@@ -1,0 +1,135 @@
+---
+# =============================================================================
+# DRBD second-disk GPT prep — fail closed unless the candidate is unambiguous.
+#
+# --check must NEVER write a partition table (no check_mode: false on parted).
+# The selector is read-only and may use check_mode: false so dry-run still
+# reports which disk it would use.
+# =============================================================================
+
+- name: Collect lsblk JSON for DRBD disk selection
+  ansible.builtin.command:
+    argv:
+      - lsblk
+      - -J
+      - -b
+      - -o
+      - NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,PTTYPE
+  register: drbd_disk_prep_lsblk
+  changed_when: false
+  check_mode: false
+  tags: [drbd, disk_prep]
+
+- name: Collect the block device backing /
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, SOURCE, /]
+  register: drbd_disk_prep_root
+  changed_when: false
+  check_mode: false
+  tags: [drbd, disk_prep]
+
+- name: Require lsblk JSON
+  ansible.builtin.assert:
+    that:
+      - drbd_disk_prep_lsblk.rc == 0
+      - drbd_disk_prep_lsblk.stdout | length > 0
+    fail_msg: Could not read lsblk JSON — refusing to partition anything.
+  tags: [drbd, disk_prep]
+
+- name: Select a safe DRBD backing disk
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/select_drbd_disk.py"
+    stdin: "{{ {'lsblk': drbd_disk_prep_lsblk.stdout | from_json, 'root_source': drbd_disk_prep_root.stdout | trim, 'data_disk': drbd_disk_prep_data, 'meta_disk': drbd_disk_prep_meta} | to_json }}"
+  register: drbd_disk_prep_select
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [drbd, disk_prep]
+
+- name: Parse the DRBD disk plan
+  ansible.builtin.set_fact:
+    drbd_disk_prep_plan: "{{ drbd_disk_prep_select.stdout | from_json }}"
+  tags: [drbd, disk_prep]
+
+- name: Show the DRBD disk decision
+  ansible.builtin.debug:
+    msg: "{{ drbd_disk_prep_plan.message | default('no disk plan') }}"
+  tags: [drbd, disk_prep]
+
+- name: Fail closed when no unique blank spare disk is available
+  ansible.builtin.fail:
+    msg: "{{ (drbd_disk_prep_plan.errors | default(['no spare unpartitioned disk found'])) | join(' ') }}"
+  when: (drbd_disk_prep_plan.action | default('fail')) == 'fail'
+  tags: [drbd, disk_prep]
+
+- name: Record whether this host would be partitioned
+  ansible.builtin.set_fact:
+    drbd_disk_prep_would_partition: "{{ (drbd_disk_prep_plan.action | default('')) == 'partition' }}"
+  tags: [drbd, disk_prep]
+
+- name: Skip when the proven GPT layout already exists
+  ansible.builtin.debug:
+    msg: "{{ drbd_disk_prep_plan.message }}"
+  when: (drbd_disk_prep_plan.action | default('')) == 'skip'
+  tags: [drbd, disk_prep]
+
+- name: Note check-mode would partition (no write)
+  ansible.builtin.debug:
+    msg: >-
+      CHECK MODE: would run {{ drbd_disk_prep_plan.parted_argv | default([]) | join(' ') }}
+      — not writing a partition table.
+  changed_when: true
+  when:
+    - ansible_check_mode | bool
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+  tags: [drbd, disk_prep]
+
+- name: Ensure parted is installed before writing a GPT table
+  ansible.builtin.apt:
+    name: parted
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - not ansible_check_mode
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+  tags: [drbd, disk_prep]
+
+- name: Refuse if wipefs sees a signature on the selected disk
+  ansible.builtin.command:
+    argv: [wipefs, -n, "{{ drbd_disk_prep_plan.disk }}"]
+  register: drbd_disk_prep_wipefs
+  changed_when: false
+  check_mode: false
+  failed_when: (drbd_disk_prep_wipefs.stdout | default('') | trim | length) > 0
+  when:
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+    - (drbd_disk_prep_plan.disk | default('')) | length > 0
+  tags: [drbd, disk_prep]
+
+- name: GPT-partition the unique blank spare disk (data + 256 MiB meta)
+  ansible.builtin.command:
+    argv: "{{ drbd_disk_prep_plan.parted_argv }}"
+  when:
+    - not ansible_check_mode
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+    - (drbd_disk_prep_plan.parted_argv | default([])) | length > 0
+  tags: [drbd, disk_prep]
+
+- name: Probe the new partitions
+  ansible.builtin.command:
+    argv: [partprobe, "{{ drbd_disk_prep_plan.disk }}"]
+  when:
+    - not ansible_check_mode
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+  tags: [drbd, disk_prep]
+
+- name: Wait for udev to create the new partition nodes
+  ansible.builtin.command:
+    argv: [udevadm, settle]
+  when:
+    - not ansible_check_mode
+    - (drbd_disk_prep_plan.action | default('')) == 'partition'
+  tags: [drbd, disk_prep]

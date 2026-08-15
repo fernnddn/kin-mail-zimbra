@@ -1,6 +1,5 @@
 ---
-# Read-only. Fail closed if the DRBD backing partition is missing.
-# This role never partitions a raw disk.
+# Fail closed if the DRBD backing partition is missing after drbd_disk_prep.
 - name: Check the DRBD data backing device
   ansible.builtin.stat:
     path: "{{ drbd_resource_disk }}"
@@ -21,8 +20,19 @@
     fail_msg: >-
       {{ drbd_resource_disk }} is not a block device. Partition a second disk
       before DRBD (GPT: data partition {{ drbd_resource_disk }} for /opt/zimbra,
-      meta {{ drbd_resource_meta_disk }} ~256 MiB, no mkfs on meta). This role
-      never creates partition tables.
+      meta {{ drbd_resource_meta_disk }} ~256 MiB, no mkfs on meta). Role
+      drbd_disk_prep only creates that table when exactly one blank spare disk
+      matches {{ drbd_resource_disk }}.
+  when: not (ansible_check_mode | bool and (drbd_disk_prep_would_partition | default(false) | bool))
+  tags: [drbd, resource, detect]
+
+- name: Note check-mode would create the data partition
+  ansible.builtin.debug:
+    msg: >-
+      --check: {{ drbd_resource_disk }} is not present yet; drbd_disk_prep would
+      create it. Skipping the existence assert so dry-run does not fail closed
+      on a disk it is not allowed to write.
+  when: ansible_check_mode | bool and (drbd_disk_prep_would_partition | default(false) | bool)
   tags: [drbd, resource, detect]
 
 - name: Require the DRBD meta device to exist (skip loop images)
@@ -31,9 +41,9 @@
       - drbd_resource_meta_stat.stat.exists | default(false)
     fail_msg: >-
       DRBD meta {{ drbd_resource_meta_disk }} does not exist. Proven layout is
-      a small partition (~256 MiB) on the second disk. This role never
-      partitions disks.
+      a small partition (~256 MiB) on the second disk.
   when:
     - drbd_resource_meta_disk is match('^/dev/')
     - drbd_resource_meta_disk is not search('loop')
+    - not (ansible_check_mode | bool and (drbd_disk_prep_would_partition | default(false) | bool))
   tags: [drbd, resource, detect]

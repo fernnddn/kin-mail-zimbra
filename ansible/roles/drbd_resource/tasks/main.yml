@@ -5,6 +5,7 @@
 
 - name: Include the DRBD external meta file steps
   ansible.builtin.import_tasks: meta_loop.yml
+  when: drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, meta]
 
 - name: Include the kin-zimbra resource definition steps

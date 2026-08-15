@@ -1,16 +1,18 @@
-"""Read-only DRBD backing-disk preflight for wizard HA build.
+"""DRBD backing-disk preflight + fail-closed auto-partition plan.
 
-The Ansible drbd_resource role assumes {{ drbd_resource_disk }} (default
-/dev/sdb1) already exists. Nothing in this repo partitions a raw second disk.
-This module only inspects; it never writes a partition table, mkfs, or mount.
+The console preflight is still read-only. Partitioning happens only in the
+Ansible drbd_disk_prep role, and only when plan_auto_partition() selects
+exactly one blank spare disk.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 # Proven HA layout (ha-build-03 / HA-RUNBOOK): data + small external meta.
@@ -21,6 +23,51 @@ MIN_META_BYTES = 128 * 1024**2
 MAX_META_BYTES = 2 * 1024**3
 
 _DEV_RE = re.compile(r"^/dev/[a-zA-Z0-9/._+-]+$")
+
+
+def _selector_paths() -> list[Path]:
+    here = Path(__file__).resolve()
+    paths = [
+        here.parents[3] / "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py",
+    ]
+    env = os.environ.get("KIN_ANSIBLE_DIR", "").strip()
+    if env:
+        paths.append(Path(env) / "roles/drbd_disk_prep/files/select_drbd_disk.py")
+    paths.append(
+        Path("/opt/kin-mail-console/ansible/roles/drbd_disk_prep/files/select_drbd_disk.py")
+    )
+    return paths
+
+
+def _load_selector() -> Any:
+    for path in _selector_paths():
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("kin_select_drbd_disk", path)
+        if spec is None or spec.loader is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    raise RuntimeError(
+        "select_drbd_disk.py missing — re-run console/bootstrap.sh so ansible/ is installed"
+    )
+
+
+def plan_auto_partition(
+    lsblk: dict[str, Any],
+    *,
+    root_source: str,
+    data_disk: str = DEFAULT_DATA_DISK,
+    meta_disk: str = DEFAULT_META_DISK,
+) -> dict[str, Any]:
+    """Return skip / partition / fail. Never writes a partition table."""
+    return _load_selector().plan_auto_partition(
+        lsblk,
+        root_source=root_source,
+        data_disk=data_disk,
+        meta_disk=meta_disk,
+    )
 
 
 def data_disk_path() -> str:
@@ -139,23 +186,46 @@ def evaluate_node(
             "label": label,
             "errors": ["internal: DRBD disk path is not a /dev/ device"],
             "seen": [],
+            "can_auto_partition": False,
+            "will_auto_partition": None,
+            "build_allowed": False,
         }
 
     nodes = {_dev_path(n): n for n in flatten_lsblk(lsblk) if _dev_path(n)}
     seen = summarize_disks(lsblk, root_source=root_source)
     errors: list[str] = []
+    plan = plan_auto_partition(
+        lsblk, root_source=root_source, data_disk=data_disk, meta_disk=meta_disk
+    )
+    can_auto = plan.get("action") == "partition"
+    will_auto = (
+        {
+            "label": label,
+            "disk": plan.get("disk"),
+            "data_disk": plan.get("data_disk"),
+            "meta_disk": plan.get("meta_disk"),
+            "size_human": plan.get("size_human"),
+            "message": plan.get("message"),
+        }
+        if can_auto
+        else None
+    )
 
     data_parent = f"/dev/{_parent_disk_name(data_disk.removeprefix('/dev/'))}"
     data_node = nodes.get(data_disk)
     parent_node = nodes.get(data_parent)
 
     if data_node is None:
-        if parent_node is not None and str(parent_node.get("type") or "") == "disk":
+        if can_auto:
+            pass
+        elif plan.get("action") == "fail":
+            for err in plan.get("errors") or []:
+                errors.append(f"{label}: {err}")
+        elif parent_node is not None and str(parent_node.get("type") or "") == "disk":
             errors.append(
                 f"{label}: second disk not partitioned — found {data_parent} but not {data_disk}. "
                 f"Create GPT partitions {data_disk} (Zimbra/DRBD data, ≥{_fmt_bytes(MIN_DATA_BYTES)}) "
-                f"and {meta_disk} (~256 MiB DRBD meta). Do not mkfs the meta partition. "
-                "This console will not partition disks (wrong-disk selection is destructive)."
+                f"and {meta_disk} (~256 MiB DRBD meta). Do not mkfs the meta partition."
             )
         else:
             extra = f" Seen: {'; '.join(seen)}." if seen else " No extra disk was visible to lsblk."
@@ -184,7 +254,9 @@ def evaluate_node(
 
     meta_node = nodes.get(meta_disk)
     if meta_node is None:
-        if data_node is not None or parent_node is not None:
+        if can_auto:
+            pass
+        elif data_node is not None or parent_node is not None:
             errors.append(
                 f"{label}: DRBD meta partition {meta_disk} not found (~256 MiB, no filesystem). "
                 "The proven layout is data + small external meta on the same second disk."
@@ -220,8 +292,9 @@ def evaluate_node(
                 f"{data_disk} first (stop Zimbra, rsync, fstab UUID, start — see HA-RUNBOOK)."
             )
 
+    ok = not errors and not can_auto
     return {
-        "ok": not errors,
+        "ok": ok,
         "label": label,
         "data_disk": data_disk,
         "meta_disk": meta_disk,
@@ -230,24 +303,46 @@ def evaluate_node(
         "zimbra_exists": zimbra_exists,
         "seen": seen,
         "errors": errors,
+        "can_auto_partition": can_auto,
+        "will_auto_partition": will_auto,
+        "build_allowed": (not errors) or can_auto,
     }
 
 
 def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
+    will: list[dict[str, Any]] = []
     for node in nodes:
         errors.extend(str(e) for e in (node.get("errors") or []))
+        auto = node.get("will_auto_partition")
+        if isinstance(auto, dict) and auto.get("disk"):
+            will.append(auto)
+    ok = all(bool(n.get("ok")) for n in nodes) if nodes else False
+    build_allowed = (
+        all(bool(n.get("build_allowed") or n.get("ok")) for n in nodes) if nodes else False
+    )
+    if will:
+        instructions = (
+            "Build HA pair will GPT-partition the unique blank spare disk on each "
+            "server that still needs it (not the OS disk; no existing table). "
+            "It then re-checks before DRBD. If /opt/zimbra is still on the root "
+            "volume after that, it stops — migrate onto the data partition first."
+        )
+    else:
+        instructions = (
+            "On each mail VM: attach exactly one unused blank disk ≥20 GiB (not the "
+            f"OS disk). Build HA pair will GPT-partition {data_disk_path()} (data) and "
+            f"{meta_disk_path()} (~256 MiB meta, no mkfs) when that disk is unambiguous. "
+            "Zero or multiple spare disks stay fail-closed. If Zimbra is already on "
+            "the root volume, migrate /opt/zimbra onto the data partition before DRBD."
+        )
     return {
-        "ok": all(bool(n.get("ok")) for n in nodes) if nodes else False,
+        "ok": ok,
+        "build_allowed": build_allowed,
         "nodes": list(nodes),
         "errors": errors,
-        "instructions": (
-            "On each mail VM: attach a second unused disk, then GPT-partition "
-            f"{data_disk_path()} (ext4 Zimbra data, ≥{_fmt_bytes(MIN_DATA_BYTES)}) and "
-            f"{meta_disk_path()} (~256 MiB, no mkfs). If Zimbra is already on the root "
-            "volume, migrate /opt/zimbra onto the data partition before Build HA pair. "
-            "This wizard will not partition or format disks."
-        ),
+        "will_auto_partition": will,
+        "instructions": instructions,
     }
 
 
@@ -350,6 +445,9 @@ def evaluate_facts(
             "label": label,
             "errors": [f"{label}: could not read lsblk JSON (lsblk -J)."],
             "seen": [],
+            "can_auto_partition": False,
+            "will_auto_partition": None,
+            "build_allowed": False,
         }
     return evaluate_node(
         lsblk=facts.get("lsblk") or {},

@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: drbd_disk_prep
+  description: >-
+    Fail-closed GPT partition of a unique blank spare disk for DRBD data+meta.
+    Never touches the OS disk, a mounted disk, or a disk with an existing table.
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

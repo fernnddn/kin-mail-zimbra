@@ -429,6 +429,50 @@ def _live_drbd_meta_disk() -> str:
     return disk
 
 
+async def _probe_ha_disks(
+    *,
+    local: OrchHost,
+    peer: OrchHost,
+    ssh_user: str,
+    ssh_pass: str,
+    secrets: list[str],
+) -> dict[str, Any]:
+    from .ha_disk import (
+        REMOTE_PROBE,
+        collect_local_facts,
+        combine_results,
+        evaluate_facts,
+        parse_remote_probe,
+    )
+
+    local_res = evaluate_facts(
+        collect_local_facts(),
+        label=f"this server ({local.name})",
+        require_zimbra_on_data=True,
+    )
+    peer_code, peer_blob = await _ssh_run(
+        peer, ssh_user, ssh_pass, secrets, REMOTE_PROBE, timeout=15
+    )
+    if peer_code != 0:
+        peer_res: dict[str, Any] = {
+            "ok": False,
+            "label": f"second server ({peer.name})",
+            "errors": [
+                f"second server ({peer.name}): could not inspect disks "
+                f"(ssh exit {peer_code})"
+            ],
+            "seen": [],
+            "build_allowed": False,
+        }
+    else:
+        peer_res = evaluate_facts(
+            parse_remote_probe(peer_blob),
+            label=f"second server ({peer.name})",
+            require_zimbra_on_data=True,
+        )
+    return combine_results(local_res, peer_res)
+
+
 def _playbook_path(rel: str) -> Path:
     path = (ANSIBLE_DIR / rel).resolve()
     try:
@@ -662,50 +706,32 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(1)
         return
 
-    from .ha_disk import (
-        REMOTE_PROBE,
-        collect_local_facts,
-        combine_results,
-        evaluate_facts,
-        parse_remote_probe,
-    )
-
     yield emit_line("Checking DRBD backing disks (read-only lsblk)…")
-    local_res = evaluate_facts(
-        collect_local_facts(),
-        label=f"this server ({local.name})",
-        require_zimbra_on_data=True,
+    disk = await _probe_ha_disks(
+        local=local,
+        peer=peer,
+        ssh_user=ssh_user,
+        ssh_pass=ssh_pass,
+        secrets=secrets,
     )
-    peer_code, peer_blob = await _ssh_run(
-        peer, ssh_user, ssh_pass, secrets, REMOTE_PROBE, timeout=15
-    )
-    if peer_code != 0:
-        peer_res = {
-            "ok": False,
-            "label": f"second server ({peer.name})",
-            "errors": [
-                f"second server ({peer.name}): could not inspect disks "
-                f"(ssh exit {peer_code})"
-            ],
-            "seen": [],
-        }
-    else:
-        peer_res = evaluate_facts(
-            parse_remote_probe(peer_blob),
-            label=f"second server ({peer.name})",
-            require_zimbra_on_data=True,
-        )
-    disk = combine_results(local_res, peer_res)
-    if not disk["ok"]:
-        for err in disk["errors"]:
+    for item in disk.get("will_auto_partition") or []:
+        yield emit_line(str(item.get("message") or item))
+    if not disk.get("build_allowed"):
+        for err in disk.get("errors") or []:
             yield emit_line(f"Refusing: {err}", err=True)
         yield emit_line(str(disk.get("instructions") or ""), err=True)
         yield proto.event_done(2)
         return
-    yield emit_line(
-        f"DRBD disk preflight ok data={local_res.get('data_disk')} "
-        f"meta={local_res.get('meta_disk')}"
-    )
+    need_disk_prep = bool(disk.get("will_auto_partition")) and not bool(disk.get("ok"))
+    if disk.get("ok"):
+        yield emit_line(
+            f"DRBD disk preflight ok data={local.name} / {peer.name}"
+        )
+    else:
+        yield emit_line(
+            "DRBD data partition missing — unique blank spare disk identified; "
+            "will auto-partition, then re-check before DRBD."
+        )
 
     ansible_env = {
         "HOME": str(WORK_DIR),
@@ -742,6 +768,58 @@ async def cmd_run_ha_orchestration(
             return
 
     _write_work_files(peer_inv if join_mode == "check" else full_inv)
+
+    if need_disk_prep:
+        play = _playbook_path("playbooks/mail-drbd.yml")
+        inv_path = WORK_DIR / "inventory.yml"
+        argv = [ansible_playbook, "-i", str(inv_path), "--tags", "disk_prep"]
+        if join_mode == "check":
+            argv.append("--check")
+        argv.append(str(play))
+        yield emit_line(
+            "Auto-partition: unique blank spare disk — "
+            + ("dry-run only (--check), no writes" if join_mode == "check" else "writing GPT")
+        )
+        yield emit_line(f"RUN {' '.join(argv)}")
+        prep_exit = 0
+        async for ev in _stream_redacted(
+            argv,
+            cwd=ANSIBLE_DIR,
+            extra_env=ansible_env,
+            secrets=secrets,
+            transcript=DEPLOY_LAST_LOG,
+        ):
+            if ev.get("type") == "done":
+                prep_exit = _event_exit_code(ev)
+            else:
+                yield ev
+        if prep_exit != 0:
+            yield emit_line(
+                f"Refusing: DRBD disk prep exited {prep_exit}. No auto-retry.",
+                err=True,
+            )
+            yield proto.event_done(prep_exit or 1)
+            return
+        if join_mode == "apply":
+            yield emit_line("Re-checking DRBD backing disks after auto-partition…")
+            disk = await _probe_ha_disks(
+                local=local,
+                peer=peer,
+                ssh_user=ssh_user,
+                ssh_pass=ssh_pass,
+                secrets=secrets,
+            )
+            if not disk.get("ok"):
+                for err in disk.get("errors") or []:
+                    yield emit_line(f"Refusing: {err}", err=True)
+                yield emit_line(str(disk.get("instructions") or ""), err=True)
+                yield proto.event_done(2)
+                return
+            yield emit_line("DRBD disk preflight ok after auto-partition")
+        else:
+            yield emit_line(
+                "check mode did not write partitions; continuing dry-run with the planned disk."
+            )
 
     failed_step = ""
     exit_code = 0

@@ -153,7 +153,13 @@ const ActionsRow = styled.div`
   margin-top: 0.85rem;
 `;
 
-type HaDisk = { ok: boolean; errors: string[]; instructions?: string };
+type HaDisk = {
+  ok: boolean;
+  build_allowed?: boolean;
+  errors: string[];
+  instructions?: string;
+  will_auto_partition?: { label?: string; disk?: string; message?: string; size_human?: string }[];
+};
 
 function stageState(
   index: number,
@@ -235,7 +241,8 @@ export default function DeployStep() {
       cancelled = true;
     };
   }, [draft.topology, canOps, activeRun]);
-  const haDiskBlocked = draft.topology === "2vm" && haDisk?.ok !== true;
+  const haDiskBlocked =
+    draft.topology === "2vm" && haDisk != null && !haDisk.ok && haDisk.build_allowed !== true;
 
   return (
     <>
@@ -382,10 +389,10 @@ export default function DeployStep() {
               {haDiskLoading && (
                 <Hint style={{ marginTop: 0 }}>Checking second-disk partitions on both mail servers…</Hint>
               )}
-              {haDisk && !haDisk.ok && (
+              {haDisk && !haDisk.ok && haDisk.build_allowed !== true && (
                 <WarnBox>
                   <strong>Second disk not ready for DRBD.</strong> Build HA pair stays blocked until
-                  both mail VMs have a partitioned data disk.
+                  both mail VMs have a unique blank spare disk (or the proven GPT layout).
                   <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
                     {(haDisk.errors || []).map((e) => (
                       <li key={e}>{e}</li>
@@ -396,6 +403,34 @@ export default function DeployStep() {
                   ) : null}
                 </WarnBox>
               )}
+              {haDisk?.will_auto_partition && haDisk.will_auto_partition.length > 0 ? (
+                <WarnBox>
+                  <strong>Build HA pair will partition a blank spare disk.</strong> The selector
+                  found exactly one unused disk that is not the OS disk, has no partition table,
+                  and is ≥20 GiB. GPT: partition 1 = Zimbra/DRBD data, partition 2 ≈ 256 MiB meta
+                  (no mkfs). --check / dry-run will not write.
+                  <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+                    {haDisk.will_auto_partition.map((p) => (
+                      <li key={`${p.label || ""}-${p.disk || p.message || ""}`}>
+                        {p.message || `${p.label || "server"}: ${p.disk} (${p.size_human || ""})`}
+                      </li>
+                    ))}
+                  </ul>
+                  {(haDisk.errors || []).length > 0 ? (
+                    <p style={{ margin: "0.65rem 0 0" }}>
+                      After partitioning, Build HA re-checks. Remaining issues (for example Zimbra
+                      still on the OS volume) still stop DRBD:
+                    </p>
+                  ) : null}
+                  {(haDisk.errors || []).length > 0 ? (
+                    <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+                      {haDisk.errors.map((e) => (
+                        <li key={e}>{e}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </WarnBox>
+              ) : null}
               {haDisk?.ok && (
                 <Hint style={{ marginTop: 0 }}>
                   DRBD disks look ready ({"/dev/sdb1"} data, {"/dev/sdb2"} meta) on the servers we

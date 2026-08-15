@@ -1,0 +1,10 @@
+---
+# Fail-closed GPT layout for DRBD: partition 1 = data, partition 2 = ~256 MiB meta.
+# Only runs when select_drbd_disk.py finds exactly one blank spare disk that is
+# the parent of drbd_disk_prep_data. --check never writes a partition table.
+#
+# Loop-backed meta (/dev/loop21) is not a partition — still carve the proven
+# sdb2-style meta slice so console preflight and rebuild layout match.
+drbd_disk_prep_data: "{{ drbd_resource_disk | default('/dev/sdb1') }}"
+drbd_disk_prep_meta: "{{ '/dev/sdb2' if (drbd_resource_meta_disk | default('') is search('loop')) else (drbd_resource_meta_disk | default('/dev/sdb2')) }}"
+drbd_disk_prep_meta_mib: 256

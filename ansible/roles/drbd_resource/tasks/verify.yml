@@ -34,6 +34,7 @@
     drbd_resource_losetup.rc != 0 or
     (drbd_resource_meta_disk not in drbd_resource_losetup.stdout)
   check_mode: false
+  when: drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, verify]
 
 - name: Verify the DRBD meta-loop service is active
@@ -43,6 +44,7 @@
   changed_when: false
   failed_when: drbd_resource_meta_active.stdout | trim != "active"
   check_mode: false
+  when: drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, verify]
 
 - name: Note the proof limits for create-md on production
