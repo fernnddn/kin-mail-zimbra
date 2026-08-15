@@ -62,7 +62,7 @@ type DeploySessionCtx = {
   setConfirmHa: (v: boolean) => void;
   runApply: () => Promise<void>;
   runDeploy: () => Promise<void>;
-  runHaOrchestration: () => Promise<void>;
+  runHaOrchestration: (opts?: { confirmed?: boolean }) => Promise<void>;
   runCancelDeadman: () => Promise<void>;
   openLogsTab: () => void;
 };
@@ -431,9 +431,10 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     save,
   ]);
 
-  const runHaOrchestration = useCallback(async () => {
+  const runHaOrchestration = useCallback(async (opts?: { confirmed?: boolean }) => {
     if (pipelineBusy) return;
-    if (!confirmHa) {
+    if (opts?.confirmed) setConfirmHa(true);
+    if (!(opts?.confirmed || confirmHa)) {
       setMessage("Tick the confirmation box before starting HA orchestration.");
       return;
     }

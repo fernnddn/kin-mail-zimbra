@@ -17,7 +17,7 @@ import {
 import { theme } from "../../styles/theme";
 import { useWizard } from "../WizardContext";
 import { useDeploySession } from "../DeploySession";
-import { FULL_INSTALL_STAGES } from "../deployPipeline";
+import { FULL_INSTALL_STAGES, shouldOfferHaContinue } from "../deployPipeline";
 
 const StepCard = styled.div`
   border: 1px solid ${theme.line};
@@ -153,6 +153,20 @@ const ActionsRow = styled.div`
   margin-top: 0.85rem;
 `;
 
+const ContinueBox = styled.div`
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, ${theme.accent} 40%, ${theme.line});
+  background: ${theme.accentSoft};
+  border-radius: ${theme.radius};
+`;
+
+const ContinueHeading = styled.p`
+  margin: 0 0 0.35rem;
+  font-weight: 650;
+  font-size: 0.92rem;
+`;
+
 type HaDisk = {
   ok: boolean;
   build_allowed?: boolean;
@@ -160,6 +174,64 @@ type HaDisk = {
   instructions?: string;
   will_auto_partition?: { label?: string; disk?: string; message?: string; size_human?: string }[];
 };
+
+function HaDiskStatus({ haDisk, haDiskLoading }: { haDisk: HaDisk | null; haDiskLoading: boolean }) {
+  return (
+    <>
+      {haDiskLoading && (
+        <Hint style={{ marginTop: 0 }}>Checking second-disk partitions on both mail servers…</Hint>
+      )}
+      {haDisk && !haDisk.ok && haDisk.build_allowed !== true && (
+        <WarnBox>
+          <strong>Second disk not ready for DRBD.</strong> Build HA pair stays blocked until
+          both mail VMs have a unique blank spare disk (or the proven GPT layout).
+          <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+            {(haDisk.errors || []).map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+          {haDisk.instructions ? (
+            <p style={{ margin: "0.65rem 0 0" }}>{haDisk.instructions}</p>
+          ) : null}
+        </WarnBox>
+      )}
+      {haDisk?.will_auto_partition && haDisk.will_auto_partition.length > 0 ? (
+        <WarnBox>
+          <strong>Build HA pair will partition a blank spare disk.</strong> The selector
+          found exactly one unused disk that is not the OS disk, has no partition table,
+          and is ≥20 GiB. GPT: partition 1 = Zimbra/DRBD data, partition 2 ≈ 256 MiB meta
+          (no mkfs). --check / dry-run will not write.
+          <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+            {haDisk.will_auto_partition.map((p) => (
+              <li key={`${p.label || ""}-${p.disk || p.message || ""}`}>
+                {p.message || `${p.label || "server"}: ${p.disk} (${p.size_human || ""})`}
+              </li>
+            ))}
+          </ul>
+          {(haDisk.errors || []).length > 0 ? (
+            <p style={{ margin: "0.65rem 0 0" }}>
+              After partitioning, Build HA re-checks. Remaining issues (for example Zimbra
+              still on the OS volume) still stop DRBD:
+            </p>
+          ) : null}
+          {(haDisk.errors || []).length > 0 ? (
+            <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
+              {haDisk.errors.map((e) => (
+                <li key={e}>{e}</li>
+              ))}
+            </ul>
+          ) : null}
+        </WarnBox>
+      ) : null}
+      {haDisk?.ok && (
+        <Hint style={{ marginTop: 0 }}>
+          DRBD disks look ready ({"/dev/sdb1"} data, {"/dev/sdb2"} meta) on the servers we
+          could inspect.
+        </Hint>
+      )}
+    </>
+  );
+}
 
 function stageState(
   index: number,
@@ -185,6 +257,7 @@ export default function DeployStep() {
     message,
     okMessage,
     pipelineBusy,
+    log,
     cancelBusy,
     deadmanHint,
     applyDone,
@@ -202,6 +275,7 @@ export default function DeployStep() {
 
   const { current, total, label, complete, failed } = installProgress;
   const [maintNodes, setMaintNodes] = useState<string[]>([]);
+  const [haContinueDismissed, setHaContinueDismissed] = useState(false);
   useEffect(() => {
     if (!deployed) return;
     void api<{ cluster?: { standby?: string[] } }>("/api/cluster/status")
@@ -218,7 +292,10 @@ export default function DeployStep() {
   const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
   const [haDiskLoading, setHaDiskLoading] = useState(false);
   useEffect(() => {
-    if (draft.topology !== "2vm" || !canOps || activeRun) return;
+    if (draft.topology !== "2vm" || !canOps) return;
+    // Fetch after a successful Deploy even if the 5s install-in-progress poll has not
+    // cleared yet — the continue-to-HA prompt needs disk status on the same page.
+    if (activeRun && !(complete && !failed)) return;
     let cancelled = false;
     setHaDiskLoading(true);
     api<HaDisk>("/api/wizard/ha-disk-preflight")
@@ -240,9 +317,31 @@ export default function DeployStep() {
     return () => {
       cancelled = true;
     };
-  }, [draft.topology, canOps, activeRun]);
+  }, [draft.topology, canOps, activeRun, complete, failed]);
   const haDiskBlocked =
     draft.topology === "2vm" && haDisk != null && !haDisk.ok && haDisk.build_allowed !== true;
+  const showHaContinue = shouldOfferHaContinue({
+    topology: draft.topology,
+    complete,
+    failed,
+    log,
+    dismissed: haContinueDismissed,
+  });
+  const haContinueBlocked =
+    inMaintenance || pipelineBusy || haDiskBlocked || haDiskLoading || haDisk == null;
+  const haSummary = `I confirm HA orchestration should run for ${draft.peer_host_ip || "the second server"} (observability ${draft.observability_vm_ip || "unset"}, VIP ${draft.cluster_vip_ip || "unset"}).`;
+  const recheckHaDisk = () => {
+    setHaDiskLoading(true);
+    void api<HaDisk>("/api/wizard/ha-disk-preflight")
+      .then(setHaDisk)
+      .catch((err) =>
+        setHaDisk({
+          ok: false,
+          errors: [err instanceof Error ? err.message : "Could not check disks"],
+        }),
+      )
+      .finally(() => setHaDiskLoading(false));
+  };
 
   return (
     <>
@@ -311,6 +410,38 @@ export default function DeployStep() {
               View logs
             </Button>
           </ActionsRow>
+          {showHaContinue && canOps && (
+            <ContinueBox>
+              <ContinueHeading>Continue to Build HA pair?</ContinueHeading>
+              <StepBody style={{ marginBottom: "0.65rem" }}>{haSummary}</StepBody>
+              <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
+              <ActionsRow style={{ marginTop: "0.65rem" }}>
+                <Button
+                  type="button"
+                  disabled={haContinueBlocked}
+                  onClick={() => void runHaOrchestration({ confirmed: true })}
+                >
+                  Build HA pair
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={haDiskLoading || pipelineBusy}
+                  onClick={recheckHaDisk}
+                >
+                  Recheck disks
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={pipelineBusy}
+                  onClick={() => setHaContinueDismissed(true)}
+                >
+                  Not now
+                </Button>
+              </ActionsRow>
+            </ContinueBox>
+          )}
         </ProgressCard>
       )}
 
@@ -386,57 +517,7 @@ export default function DeployStep() {
                 failure stops there — nothing is retried or rolled back automatically. After a
                 manual fix, run this again from the top; the playbooks are idempotent.
               </StepBody>
-              {haDiskLoading && (
-                <Hint style={{ marginTop: 0 }}>Checking second-disk partitions on both mail servers…</Hint>
-              )}
-              {haDisk && !haDisk.ok && haDisk.build_allowed !== true && (
-                <WarnBox>
-                  <strong>Second disk not ready for DRBD.</strong> Build HA pair stays blocked until
-                  both mail VMs have a unique blank spare disk (or the proven GPT layout).
-                  <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
-                    {(haDisk.errors || []).map((e) => (
-                      <li key={e}>{e}</li>
-                    ))}
-                  </ul>
-                  {haDisk.instructions ? (
-                    <p style={{ margin: "0.65rem 0 0" }}>{haDisk.instructions}</p>
-                  ) : null}
-                </WarnBox>
-              )}
-              {haDisk?.will_auto_partition && haDisk.will_auto_partition.length > 0 ? (
-                <WarnBox>
-                  <strong>Build HA pair will partition a blank spare disk.</strong> The selector
-                  found exactly one unused disk that is not the OS disk, has no partition table,
-                  and is ≥20 GiB. GPT: partition 1 = Zimbra/DRBD data, partition 2 ≈ 256 MiB meta
-                  (no mkfs). --check / dry-run will not write.
-                  <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
-                    {haDisk.will_auto_partition.map((p) => (
-                      <li key={`${p.label || ""}-${p.disk || p.message || ""}`}>
-                        {p.message || `${p.label || "server"}: ${p.disk} (${p.size_human || ""})`}
-                      </li>
-                    ))}
-                  </ul>
-                  {(haDisk.errors || []).length > 0 ? (
-                    <p style={{ margin: "0.65rem 0 0" }}>
-                      After partitioning, Build HA re-checks. Remaining issues (for example Zimbra
-                      still on the OS volume) still stop DRBD:
-                    </p>
-                  ) : null}
-                  {(haDisk.errors || []).length > 0 ? (
-                    <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
-                      {haDisk.errors.map((e) => (
-                        <li key={e}>{e}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </WarnBox>
-              ) : null}
-              {haDisk?.ok && (
-                <Hint style={{ marginTop: 0 }}>
-                  DRBD disks look ready ({"/dev/sdb1"} data, {"/dev/sdb2"} meta) on the servers we
-                  could inspect.
-                </Hint>
-              )}
+              <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
               <label
                 style={{
                   display: "flex",
@@ -454,11 +535,7 @@ export default function DeployStep() {
                   onChange={(e) => setConfirmHa(e.target.checked)}
                   style={{ marginTop: "0.2rem" }}
                 />
-                <span>
-                  I confirm HA orchestration should run for {draft.peer_host_ip || "the second server"}{" "}
-                  (observability {draft.observability_vm_ip || "unset"}, VIP{" "}
-                  {draft.cluster_vip_ip || "unset"}).
-                </span>
+                <span>{haSummary}</span>
               </label>
               <ActionsRow>
                 <Button
@@ -472,18 +549,7 @@ export default function DeployStep() {
                   type="button"
                   variant="ghost"
                   disabled={haDiskLoading || pipelineBusy}
-                  onClick={() => {
-                    setHaDiskLoading(true);
-                    void api<HaDisk>("/api/wizard/ha-disk-preflight")
-                      .then(setHaDisk)
-                      .catch((err) =>
-                        setHaDisk({
-                          ok: false,
-                          errors: [err instanceof Error ? err.message : "Could not check disks"],
-                        }),
-                      )
-                      .finally(() => setHaDiskLoading(false));
-                  }}
+                  onClick={recheckHaDisk}
                 >
                   Recheck disks
                 </Button>
@@ -521,7 +587,7 @@ export default function DeployStep() {
         </StepCard>
       )}
 
-      {activeRun && (
+      {activeRun && !(complete && !failed) && (
         <Hint>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
             <Spinner /> Working… open View logs in a new tab for the live stream. Stay on this page

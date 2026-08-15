@@ -44,13 +44,35 @@ export function emptyInstallProgress(): InstallProgress {
   };
 }
 
-/** Derive install progress from streamed kin-mail.sh output. */
-export function parseInstallProgress(log: string): InstallProgress {
-  if (
+/** True when the deploy transcript has entered the Ansible HA sequence. */
+export function isHaOrchestrationLog(log: string): boolean {
+  return (
     /HA orchestration Slice 2/i.test(log) ||
     /\bORCH_(DONE|FAILED)\b/.test(log) ||
     /\[\d+\/\d+\] START /.test(log)
-  ) {
+  );
+}
+
+/** Same-page continue after a successful Primary full-install on 2-server topology. */
+export function shouldOfferHaContinue(opts: {
+  topology: string;
+  complete: boolean;
+  failed: boolean;
+  log: string;
+  dismissed: boolean;
+}): boolean {
+  return (
+    opts.topology === "2vm" &&
+    opts.complete &&
+    !opts.failed &&
+    !opts.dismissed &&
+    !isHaOrchestrationLog(opts.log)
+  );
+}
+
+/** Derive install progress from streamed kin-mail.sh output. */
+export function parseInstallProgress(log: string): InstallProgress {
+  if (isHaOrchestrationLog(log)) {
     return parseHaOrchProgress(log);
   }
 
