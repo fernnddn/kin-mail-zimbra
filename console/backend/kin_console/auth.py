@@ -118,9 +118,10 @@ class WizardActor:
 def wizard_actor(request: Request) -> WizardActor:
     """Allow anonymous wizard access only until mail is genuinely deployed.
 
-    After deploy (setup-complete marker, or legacy mailboxd running), always
-    requires a normal console session. A leftover /opt/zimbra tree from a
-    failed installer is not enough.
+    After deploy (1vm: setup-complete; 2vm: setup-complete and ha-setup-complete;
+    or legacy mailboxd running), always requires a normal console session. A
+    leftover /opt/zimbra tree from a failed installer is not enough, and a
+    2-server host that has only finished single-node install is not enough.
     """
     from kin_privhelper.deploy_state import SETUP_USERNAME, is_mail_deployed
     from kin_privhelper.rbac import ROLE_SUPER_ADMIN

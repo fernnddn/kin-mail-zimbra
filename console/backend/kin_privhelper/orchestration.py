@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from . import protocol as proto
-from .deploy_state import DEPLOY_LAST_LOG
+from .deploy_state import DEPLOY_LAST_LOG, record_ha_orchestration_success
 from .provisioning_secrets import load_secrets
 
 ANSIBLE_DIR = Path(
@@ -1026,4 +1026,6 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(exit_code or 1)
         return
     yield emit_line(f"ORCH_DONE join_mode={join_mode}")
+    if record_ha_orchestration_success(join_mode=join_mode):
+        yield emit_line("ha-setup-complete marker written")
     yield proto.event_done(0)
