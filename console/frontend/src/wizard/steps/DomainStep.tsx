@@ -14,6 +14,19 @@ import {
 } from "../../ui";
 import { useWizard } from "../WizardContext";
 
+/** zmsetup rejects $ & | < > / ; ` and whitespace; also block ! * and quotes. */
+const ZIMBRA_ADMIN_PASS_BAD = /[\s!$&*|<>\/;`'"\\]/;
+
+function zimbraAdminPassIssue(pass: string): string {
+  if (pass.length < 8) {
+    return "Admin password must be at least 8 characters.";
+  }
+  if (ZIMBRA_ADMIN_PASS_BAD.test(pass)) {
+    return "Admin password rejected by Zimbra — avoid characters like ! * & $, use letters/digits and simple symbols only.";
+  }
+  return "";
+}
+
 export default function DomainStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
   const navigate = useNavigate();
@@ -32,7 +45,11 @@ export default function DomainStep() {
     if (!tz) missing.push("Timezone");
     const typedPass = draft.admin_pass;
     if (typedPass) {
-      if (typedPass.length < 8) missing.push("Admin password (min 8 characters)");
+      const pwErr = zimbraAdminPassIssue(typedPass);
+      if (pwErr) {
+        setFieldErr(pwErr);
+        return;
+      }
     } else if (!draft.admin_pass_set) {
       missing.push("Admin password (min 8 characters)");
     }
@@ -116,8 +133,8 @@ export default function DomainStep() {
         />
         <Hint>
           {draft.admin_pass_set
-            ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace."
-            : "At least 8 characters. Used for the mail system administrator account."}
+            ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace. Avoid ! * & $ and similar punctuation — Zimbra rejects them."
+            : "At least 8 characters. Used for the mail system administrator account. Avoid ! * & $ and similar punctuation — Zimbra rejects them."}
         </Hint>
       </FieldRow>
       <FieldRow>

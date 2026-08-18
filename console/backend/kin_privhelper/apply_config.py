@@ -22,6 +22,10 @@ _IPV4_RE = re.compile(
     r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
 )
 
+# zmsetup.pl checkPasswordStrength rejects $ & | < > / ; ` and whitespace
+# ("Invalid metacharater used."). Also block ! * and quotes that break tmux.
+_ZIMBRA_ADMIN_PASS_META_RE = re.compile(r"""[\s!$&*|<>/;`'"\\]""")
+
 
 def valid_ipv4(value: str) -> bool:
     return bool(_IPV4_RE.match((value or "").strip()))
@@ -393,8 +397,16 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     if admin_pass:
         if len(admin_pass) < 8:
             errs.append("admin_pass must be at least 8 characters")
+        if _ZIMBRA_ADMIN_PASS_META_RE.search(admin_pass):
+            errs.append(
+                "admin_pass cannot use characters like ! * & $ | < > / ; ` or spaces"
+            )
     elif not existing.get("ADMIN_PASS"):
         errs.append("admin_pass is required (draft empty and no existing ADMIN_PASS)")
+    elif _ZIMBRA_ADMIN_PASS_META_RE.search(str(existing.get("ADMIN_PASS") or "")):
+        errs.append(
+            "admin_pass cannot use characters like ! * & $ | < > / ; ` or spaces"
+        )
 
     le = str(draft.get("le_email") or "").strip()
     if not le:

@@ -540,6 +540,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           info "Store -> Admin Password is item ${APWMENU}"
           send "$APWMENU" 3
           tmux send-keys -t "$SESS" "$ADMIN_PASS" Enter; sleep 5
+          # Visible pane only — do not match an old error still in capture-pane history.
+          PANE="$(tmux capture-pane -p -t "$SESS" 2>/dev/null || true)"
+          if printf '%s\n' "$PANE" | grep -qE 'Invalid metacharater used|Invalid metacharacter used|Minimum length of'; then
+            fail 'Admin password rejected by Zimbra installer -- avoid characters like ! * & $, use letters/digits and simple symbols only'
+            dump_installer_and_exit
+          fi
           send r 4
 
           # --- apply only from the main menu ---
