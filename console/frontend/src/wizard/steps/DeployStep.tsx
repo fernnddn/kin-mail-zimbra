@@ -16,7 +16,11 @@ import {
 import { theme } from "../../styles/theme";
 import { useWizard } from "../WizardContext";
 import { useDeploySession } from "../DeploySession";
-import { FULL_INSTALL_STAGES, shouldOfferHaContinue } from "../deployPipeline";
+import {
+  FULL_INSTALL_STAGES,
+  hasFullInstallCompleted,
+  shouldOfferHaContinue,
+} from "../deployPipeline";
 
 const StepCard = styled.div`
   border: 1px solid ${theme.line};
@@ -484,7 +488,7 @@ export default function DeployStep() {
             </ActionsRow>
           </StepCard>
 
-          {draft.topology === "2vm" && (
+          {draft.topology === "2vm" && hasFullInstallCompleted(log) && (
             <StepCard>
               <StepHeading>2. Build the 2-server HA pair</StepHeading>
               <StepBody>

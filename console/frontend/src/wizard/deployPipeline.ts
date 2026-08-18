@@ -53,6 +53,16 @@ export function isHaOrchestrationLog(log: string): boolean {
   );
 }
 
+/** True if this transcript ever recorded a successful Primary full-install.
+
+  Independent of current installProgress: after HA orchestration starts,
+  parseInstallProgress switches to HA stages and `complete` no longer means
+  the single-node install succeeded.
+ */
+export function hasFullInstallCompleted(log: string): boolean {
+  return /Full install complete/i.test(log) || /All selected pipeline stages exited 0/i.test(log);
+}
+
 /** Same-page continue after a successful Primary full-install on 2-server topology. */
 export function shouldOfferHaContinue(opts: {
   topology: string;
@@ -92,8 +102,7 @@ export function parseInstallProgress(log: string): InstallProgress {
   }
 
   const failed = /Pipeline stopped at /i.test(log);
-  const complete =
-    /Full install complete/i.test(log) || /All selected pipeline stages exited 0/i.test(log);
+  const complete = hasFullInstallCompleted(log);
 
   if (complete) {
     return {
