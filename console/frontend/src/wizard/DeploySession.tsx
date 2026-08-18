@@ -82,10 +82,12 @@ async function fetchLastLog(): Promise<LastLogResponse> {
   return api<LastLogResponse>("/api/wizard/deploy/last-log");
 }
 
+const LOG_BASELINE = "# Deployment activity\n";
+
 export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { draft, save } = useWizard();
   const { installInProgress, refresh: refreshSetup } = useSetup();
-  const [log, setLog] = useState("# Deployment activity\n");
+  const [log, setLog] = useState(LOG_BASELINE);
   const [message, setMessage] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -95,7 +97,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const [installProgress, setInstallProgress] = useState<InstallProgress>(emptyInstallProgress);
   const pipelineEsRef = useRef<EventSource | null>(null);
   const cancelEsRef = useRef<EventSource | null>(null);
-  const logBufRef = useRef("# Deployment activity\n");
+  const logBufRef = useRef(LOG_BASELINE);
   /** True only while this tab's EventSource is healthy and delivering events. */
   const localStreamRef = useRef(false);
   /** Last action that owned the pipeline EventSource (for messaging). */
@@ -279,6 +281,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       };
 
       es.onerror = () => {
+        if (pipelineEsRef.current !== es) return;
         // EventSource drops on background tabs / brief network blips. Do NOT treat as finished
         // until the server confirms the install is no longer running.
         append(`[stream] disconnected — checking server status…\n`);
@@ -317,10 +320,9 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}${qs}`,
       );
       const wrapped = (exit?: number, reason?: "done" | "error" | "disconnect") => {
+        if (pipelineEsRef.current !== es) return;
         localStreamRef.current = false;
-        if (pipelineEsRef.current === es) {
-          pipelineEsRef.current = null;
-        }
+        pipelineEsRef.current = null;
         onFinished(exit, reason);
       };
       attachStream(action, es, wrapped);
@@ -333,6 +335,17 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     window.open("/wizard/deploy/logs", "_blank", "noopener,noreferrer");
   }, []);
 
+  const resetLogBuffer = useCallback(() => {
+    // Drop the previous run's transcript so parseInstallProgress cannot keep
+    // matching "Pipeline stopped at" / ORCH_FAILED from a failed attempt.
+    logBufRef.current = LOG_BASELINE;
+    setLog(LOG_BASELINE);
+    setInstallProgress(emptyInstallProgress());
+    // Polling hydrate would restore the old last-log until privhelper truncates
+    // it; treat this tab as owning the stream from this moment.
+    localStreamRef.current = true;
+  }, []);
+
   const runDeploy = useCallback(async () => {
     if (pipelineBusy) return;
     if (!confirmFull) {
@@ -340,7 +353,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     setMessage("");
-    setInstallProgress(emptyInstallProgress());
 
     try {
       await save({ current_step: "deploy" });
@@ -349,15 +361,16 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    if (pipelineEsRef.current) {
+      const prev = pipelineEsRef.current;
+      pipelineEsRef.current = null;
+      prev.close();
+    }
+    resetLogBuffer();
     append(
       `\n[${new Date().toISOString()}] Deploy (save settings, then install)\n` +
         `# topology=${draft.topology || "unset"} domain=${draft.mail_domain || "unset"}\n`,
     );
-
-    if (pipelineEsRef.current) {
-      pipelineEsRef.current.close();
-      pipelineEsRef.current = null;
-    }
     setLocalBusy(true);
 
     const onInstallFinished = (_exit?: number, reason?: "done" | "error" | "disconnect") => {
@@ -400,6 +413,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     openStream,
     pipelineBusy,
     refreshSetup,
+    resetLogBuffer,
     save,
   ]);
 
@@ -411,15 +425,17 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     setMessage("");
+    if (pipelineEsRef.current) {
+      const prev = pipelineEsRef.current;
+      pipelineEsRef.current = null;
+      prev.close();
+    }
+    resetLogBuffer();
     append(
       `\n[${new Date().toISOString()}] HA orchestration (Ansible sequence)\n` +
         `# topology=${draft.topology || "unset"} peer=${draft.peer_host_ip || "unset"} ` +
         `obs=${draft.observability_vm_ip || "unset"} vip=${draft.cluster_vip_ip || "unset"}\n`,
     );
-    if (pipelineEsRef.current) {
-      pipelineEsRef.current.close();
-      pipelineEsRef.current = null;
-    }
     setLocalBusy(true);
     pipelineEsRef.current = openStream(
       "ha_orchestration",
@@ -443,6 +459,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     hydrateFromServer,
     openStream,
     pipelineBusy,
+    resetLogBuffer,
   ]);
 
   const runCancelDeadman = useCallback(async () => {
