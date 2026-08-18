@@ -20,6 +20,14 @@ ExecStart=/opt/kin-mail-console/venv/bin/python -m kin_privhelper
 Restart=on-failure
 RestartSec=3
 
+# Full-install is a child of this service. Default KillMode=control-group
+# silently killed kin-mail.sh --full-install (and zmsetup) whenever this unit
+# restarted — including on-failure auto-restart — with no [FAIL] in the
+# transcript. Kill only the daemon; the installer keeps writing the log.
+KillMode=process
+# Prefer to OOM-kill something else before the install tree.
+OOMScoreAdjust=-500
+
 # Network isolation — this service must never listen on a TCP/UDP port.
 # (It binds a Unix socket under /run/kin-mail only.)
 PrivateTmp=true

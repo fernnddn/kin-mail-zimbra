@@ -312,6 +312,28 @@ class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("***", joined)
             self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
 
+    async def test_file_backed_child_writes_transcript_directly(self) -> None:
+        """Full-install stdio is a file, not a pipe, so a dying parent cannot SIGPIPE it."""
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.commands import _stream_subprocess
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "deploy-last.log"
+            events: list[dict] = []
+            async for ev in _stream_subprocess(
+                ["python3", "-c", "print('telemetry -> No', flush=True)"],
+                transcript=path,
+                file_backed=True,
+            ):
+                events.append(ev)
+            body = path.read_text(encoding="utf-8")
+            self.assertIn("telemetry -> No", body)
+            self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
+            joined = "".join(str(e.get("data") or "") for e in events)
+            self.assertIn("telemetry -> No", joined)
+
 
 if __name__ == "__main__":
     unittest.main()

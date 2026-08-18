@@ -448,6 +448,8 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           scrub_install_log "$LOG"
           exit 1
         fi
+        fail "Zimbra installer process ended unexpectedly during configuration/apply (last line: ${L:-empty})"
+        dump_installer_and_exit
         ;;
     esac
   fi
@@ -461,7 +463,14 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     *"Change hostname"*)                   info "hostname kept"; send No 6 ;;
     *"Change domain name"*)                info "change domain -> Yes";    send Yes 5 ;;
     *"Create domain:"*)                    info "domain -> ${MAIL_DOMAIN}"; send "$MAIL_DOMAIN" 12 ;;
-    *"Notify Zimbra of your installation"*) info "telemetry -> No";       send No 10 ;;
+    *"Notify Zimbra of your installation"*)
+        info "telemetry -> No"
+        send No 10
+        if ! wait_for_pane "press return to exit" 120; then
+          fail "After declining telemetry, did not see 'press return to exit' (installer may have died)"
+          dump_installer_and_exit
+        fi
+        ;;
     *"press return to exit"*)              info "done";                send "" 5; break ;;
     *"Invalid selection"*)                 abort_invalid_selection ;;
 

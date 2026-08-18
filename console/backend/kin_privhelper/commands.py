@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from . import protocol as proto
-from .deploy_state import DEPLOY_LAST_LOG, ZIMBRA_INSTALL_LOG
+from .deploy_state import (
+    DEPLOY_LAST_LOG,
+    ZIMBRA_INSTALL_LOG,
+    append_unexpected_stop_if_needed,
+    full_install_in_progress,
+    mark_full_install_finished,
+    mark_full_install_started,
+    reclaim_stale_full_install_marker,
+)
 
 # Deploy tree on appliance (kin-mail.sh default). Override via env for lab clones.
 DEPLOY_DIR = Path(os.environ.get("KIN_MAIL_DEPLOY_DIR", "/opt/kin-mail-deploy"))
@@ -160,6 +168,9 @@ async def _watch_log_file(
     stop: asyncio.Event,
     *,
     poll_s: float = 0.2,
+    announce: bool = True,
+    event_kind: str = "stdout",
+    start_at: int | None = None,
 ) -> None:
     """Follow new bytes on path (like tail -F) onto the SSE queue.
 
@@ -195,7 +206,10 @@ async def _watch_log_file(
         if not started:
             inode = st.st_ino
             started = True
-            pos = st.st_size if existed_at_start else 0
+            if start_at is not None:
+                pos = max(0, start_at)
+            else:
+                pos = st.st_size if existed_at_start else 0
             head = cur_head
         elif st.st_ino != inode:
             # perl -i scrub replaces the inode with the already-streamed text.
@@ -238,8 +252,9 @@ async def _watch_log_file(
             line, buf = buf.split("\n", 1)
             if not announced:
                 announced = True
-                await queue.put(("stdout", f"=== {path} (redacted installer output) ===\n"))
-            await queue.put(("stdout", line + "\n"))
+                if announce:
+                    await queue.put((event_kind, f"=== {path} (redacted installer output) ===\n"))
+            await queue.put((event_kind, line + "\n"))
 
     while True:
         await _read_available()
@@ -247,8 +262,10 @@ async def _watch_log_file(
             await _read_available()
             if buf:
                 if not announced:
-                    await queue.put(("stdout", f"=== {path} (redacted installer output) ===\n"))
-                await queue.put(("stdout", buf if buf.endswith("\n") else buf + "\n"))
+                    announced = True
+                    if announce:
+                        await queue.put((event_kind, f"=== {path} (redacted installer output) ===\n"))
+                await queue.put((event_kind, buf if buf.endswith("\n") else buf + "\n"))
                 buf = ""
             break
         try:
@@ -267,18 +284,11 @@ async def _stream_subprocess(
     secrets: list[str] | None = None,
     follow_logs: list[Path] | None = None,
     follow_poll_s: float = 0.2,
+    file_backed: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
         env.update(extra_env)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-    )
-    assert proc.stdout is not None and proc.stderr is not None
 
     queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
     log_fh = None
@@ -308,6 +318,36 @@ async def _stream_subprocess(
         except OSError:
             pass
 
+    use_file = bool(file_backed and transcript is not None)
+    tail_from: int | None = None
+    if use_file and transcript is not None:
+        try:
+            tail_from = transcript.stat().st_size
+        except OSError:
+            tail_from = 0
+    if use_file:
+        raw_out = os.open(str(transcript), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=raw_out,
+                stderr=raw_out,
+                cwd=str(cwd) if cwd else None,
+                env=env,
+                start_new_session=True,
+            )
+        finally:
+            os.close(raw_out)
+    else:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+
     async def _pump(stream: asyncio.StreamReader, kind: str) -> None:
         while True:
             line = await stream.readline()
@@ -315,21 +355,48 @@ async def _stream_subprocess(
                 break
             await queue.put((kind, line.decode("utf-8", errors="replace")))
 
-    pump_tasks = [
-        asyncio.create_task(_pump(proc.stdout, "stdout")),
-        asyncio.create_task(_pump(proc.stderr, "stderr")),
-    ]
+    pump_tasks: list[asyncio.Task[None]] = []
+    if not use_file:
+        assert proc.stdout is not None and proc.stderr is not None
+        pump_tasks = [
+            asyncio.create_task(_pump(proc.stdout, "stdout")),
+            asyncio.create_task(_pump(proc.stderr, "stderr")),
+        ]
     stop_follow = asyncio.Event()
     follow_tasks = [
         asyncio.create_task(
-            _watch_log_file(path, queue, stop_follow, poll_s=follow_poll_s)
+            _watch_log_file(
+                path,
+                queue,
+                stop_follow,
+                poll_s=follow_poll_s,
+                announce=not use_file,
+                event_kind="tee_only" if use_file else "stdout",
+            )
         )
         for path in (follow_logs or [])
         if path
     ]
+    if use_file and transcript is not None:
+        # Child stdout is the transcript. Tail it for SSE; do not tee (already on disk).
+        follow_tasks.append(
+            asyncio.create_task(
+                _watch_log_file(
+                    transcript,
+                    queue,
+                    stop_follow,
+                    poll_s=follow_poll_s,
+                    announce=False,
+                    start_at=tail_from,
+                )
+            )
+        )
 
     async def _waiter() -> None:
-        await asyncio.gather(*pump_tasks)
+        if pump_tasks:
+            await asyncio.gather(*pump_tasks)
+        else:
+            await proc.wait()
         stop_follow.set()
         if follow_tasks:
             await asyncio.gather(*follow_tasks)
@@ -343,7 +410,11 @@ async def _stream_subprocess(
                 break
             kind, text = item
             text = _redact_secrets(text, secrets)
-            _tee(text if kind == "stdout" else f"[stderr] {text}")
+            if kind == "tee_only":
+                _tee(text)
+                continue
+            if not use_file:
+                _tee(text if kind == "stdout" else f"[stderr] {text}")
             if kind == "stdout":
                 yield proto.event_stdout(text)
             else:
@@ -358,7 +429,7 @@ async def _stream_subprocess(
                 pass
 
     code = await proc.wait()
-    yield proto.event_done(int(code))
+    yield proto.event_done(int(code or 0))
 
 
 async def _run_capture(argv: list[str]) -> tuple[int, str, str]:
@@ -507,15 +578,26 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     argv = [str(script), "--full-install"]
     if shutil.which("stdbuf"):
         argv = ["stdbuf", "-oL", "-eL", *argv]
-    async for ev in _stream_subprocess(
-        argv,
-        cwd=script.parent,
-        extra_env={"KIN_CONSOLE_CONFIRMED": "1"},
-        transcript=DEPLOY_LAST_LOG,
-        transcript_reset=False,
-        follow_logs=[ZIMBRA_INSTALL_LOG],
-    ):
-        yield ev
+    mark_full_install_started()
+    try:
+        async for ev in _stream_subprocess(
+            argv,
+            cwd=script.parent,
+            extra_env={"KIN_CONSOLE_CONFIRMED": "1"},
+            transcript=DEPLOY_LAST_LOG,
+            transcript_reset=False,
+            follow_logs=[ZIMBRA_INSTALL_LOG],
+            file_backed=True,
+        ):
+            yield ev
+    finally:
+        if full_install_in_progress():
+            # Child survived this privhelperd process (KillMode=process). Leave
+            # the marker so a later start/log fetch can stamp FAIL if it dies.
+            pass
+        else:
+            append_unexpected_stop_if_needed()
+            mark_full_install_finished()
 
 
 async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
@@ -536,6 +618,7 @@ async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
 
 async def cmd_get_deploy_log(_args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     """Read-only last deploy/install transcript for the console log viewer."""
+    reclaim_stale_full_install_marker()
     yield proto.event_stdout(f"=== last deploy log: {DEPLOY_LAST_LOG} ===\n")
     if not DEPLOY_LAST_LOG.is_file():
         yield proto.event_stdout(

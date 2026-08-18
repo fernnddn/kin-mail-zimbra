@@ -101,7 +101,10 @@ export function parseInstallProgress(log: string): InstallProgress {
     }
   }
 
-  const failed = /Pipeline stopped at /i.test(log);
+  const failed =
+    /Pipeline stopped at /i.test(log) ||
+    /Install stopped unexpectedly/i.test(log) ||
+    /\[FAIL\]/.test(log);
   const complete = hasFullInstallCompleted(log);
 
   if (complete) {

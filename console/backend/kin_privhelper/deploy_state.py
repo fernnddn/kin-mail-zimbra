@@ -42,6 +42,21 @@ DEPLOY_LAST_LOG = Path(
     os.environ.get("KIN_DEPLOY_LAST_LOG", "/var/log/kin-mail/deploy-last.log")
 )
 
+# Written when console full-install starts; removed only after a terminal
+# outcome (success, Pipeline stopped, or explicit unexpected-stop stamp).
+# Survives a privhelperd crash so the next start can tell the operator.
+FULL_INSTALL_RUNNING_MARKER = Path(
+    os.environ.get(
+        "KIN_FULL_INSTALL_RUNNING_MARKER",
+        "/var/lib/kin-mail-console/full-install.running",
+    )
+)
+
+UNEXPECTED_STOP_LINE = (
+    "[FAIL] Install stopped unexpectedly -- process ended without a success "
+    "or failure marker. Check journalctl -u kin-mail-privhelperd for crashes/OOM.\n"
+)
+
 # Redacted tmux pipe-pane capture from 03-install-zimbra.sh. Not the same as
 # kin-mail.sh stdout — zmsetup.pl detail lands only here. Console SSE follows it.
 ZIMBRA_INSTALL_LOG = Path(
@@ -231,3 +246,74 @@ def is_mail_deployed() -> bool:
     # Legacy hosts (CLI install before the marker existed): only if mailboxd
     # is actually running. A menus-timeout leftover tree must not flip the gate.
     return mailboxd_running()
+
+
+def transcript_has_terminal_outcome(text: str) -> bool:
+    """True if the deploy transcript already records success or a clear failure."""
+    if not text:
+        return False
+    if re.search(r"Full install complete", text, re.I):
+        return True
+    if re.search(r"All selected pipeline stages exited 0", text, re.I):
+        return True
+    if re.search(r"Pipeline stopped at ", text, re.I):
+        return True
+    if re.search(r"Install stopped unexpectedly", text, re.I):
+        return True
+    if re.search(r"\[FAIL\]", text):
+        return True
+    return False
+
+
+def mark_full_install_started() -> None:
+    FULL_INSTALL_RUNNING_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    FULL_INSTALL_RUNNING_MARKER.write_text(f"started {stamp}\n", encoding="utf-8")
+    try:
+        os.chmod(FULL_INSTALL_RUNNING_MARKER, 0o640)
+    except OSError:
+        pass
+
+
+def mark_full_install_finished() -> None:
+    try:
+        FULL_INSTALL_RUNNING_MARKER.unlink()
+    except FileNotFoundError:
+        return
+
+
+def append_unexpected_stop_if_needed(log_path: Path | None = None) -> bool:
+    """Stamp the transcript if it has no success/fail marker. Returns True if written."""
+    path = log_path or DEPLOY_LAST_LOG
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    except OSError:
+        text = ""
+    if transcript_has_terminal_outcome(text):
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(UNEXPECTED_STOP_LINE)
+        try:
+            os.chmod(path, 0o640)
+        except OSError:
+            pass
+    except OSError:
+        return False
+    return True
+
+
+def reclaim_stale_full_install_marker() -> bool:
+    """If a previous full-install left a marker and nothing is running, stamp FAIL.
+
+    Call on privhelperd startup and when serving the last-log API so an operator
+    opening View logs after a crash never sees Idle with no explanation.
+    """
+    if not FULL_INSTALL_RUNNING_MARKER.is_file():
+        return False
+    if full_install_in_progress():
+        return False
+    append_unexpected_stop_if_needed()
+    mark_full_install_finished()
+    return True

@@ -286,6 +286,11 @@ async def run() -> None:
     _prepare_socket_dir()
     log = logging.getLogger("kin_privhelper")
     log.info("starting kin-mail-privhelperd socket=%s log=%s", SOCKET_PATH, LOG_PATH)
+    try:
+        if deploy_state.reclaim_stale_full_install_marker():
+            log.warning("stamped unexpected-stop on leftover full-install marker")
+    except OSError:
+        log.exception("failed to reclaim leftover full-install marker")
 
     server = await asyncio.start_unix_server(_handle, path=str(SOCKET_PATH))
     await _chmod_socket()

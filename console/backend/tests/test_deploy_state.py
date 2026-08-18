@@ -155,5 +155,53 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertFalse(ds.is_mail_deployed())
 
 
+class UnexpectedInstallStopTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+        self.running = self.root / "full-install.running"
+        self.log = self.root / "deploy-last.log"
+        self._old_m = ds.FULL_INSTALL_RUNNING_MARKER
+        self._old_l = ds.DEPLOY_LAST_LOG
+        ds.FULL_INSTALL_RUNNING_MARKER = self.running
+        ds.DEPLOY_LAST_LOG = self.log
+
+    def tearDown(self) -> None:
+        ds.FULL_INSTALL_RUNNING_MARKER = self._old_m
+        ds.DEPLOY_LAST_LOG = self._old_l
+
+    def test_transcript_detects_success_and_fail(self) -> None:
+        self.assertFalse(ds.transcript_has_terminal_outcome("telemetry -> No\n"))
+        self.assertTrue(ds.transcript_has_terminal_outcome("Full install complete\n"))
+        self.assertTrue(ds.transcript_has_terminal_outcome("Pipeline stopped at 03-install-zimbra.sh\n"))
+        self.assertTrue(ds.transcript_has_terminal_outcome("[FAIL] something\n"))
+
+    def test_reclaim_stamps_fail_when_process_gone(self) -> None:
+        self.running.write_text("started\n", encoding="utf-8")
+        self.log.write_text("        telemetry -> No\n", encoding="utf-8")
+        with patch.object(ds, "full_install_in_progress", return_value=False):
+            self.assertTrue(ds.reclaim_stale_full_install_marker())
+        body = self.log.read_text(encoding="utf-8")
+        self.assertIn("Install stopped unexpectedly", body)
+        self.assertFalse(self.running.exists())
+
+    def test_reclaim_leaves_marker_if_install_still_running(self) -> None:
+        self.running.write_text("started\n", encoding="utf-8")
+        self.log.write_text("apply\n", encoding="utf-8")
+        with patch.object(ds, "full_install_in_progress", return_value=True):
+            self.assertFalse(ds.reclaim_stale_full_install_marker())
+        self.assertTrue(self.running.exists())
+        self.assertNotIn("unexpectedly", self.log.read_text(encoding="utf-8"))
+
+    def test_reclaim_does_not_overwrite_successful_transcript(self) -> None:
+        self.running.write_text("started\n", encoding="utf-8")
+        self.log.write_text("Full install complete\n", encoding="utf-8")
+        with patch.object(ds, "full_install_in_progress", return_value=False):
+            self.assertTrue(ds.reclaim_stale_full_install_marker())
+        self.assertNotIn("Install stopped unexpectedly", self.log.read_text(encoding="utf-8"))
+        self.assertFalse(self.running.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
