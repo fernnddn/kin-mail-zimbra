@@ -549,9 +549,25 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           fi
           info "apply"
           send a 6
+          if ! wait_for_pane "Save configuration data to a file" 45; then
+            fail "Apply step 1/4 failed: after sending 'a', did not see 'Save configuration data to a file'"
+            dump_installer_and_exit
+          fi
           send Yes 6      # save config to file
+          if ! wait_for_pane "Save config in file" 45; then
+            fail "Apply step 2/4 failed: after sending Yes (save config), did not see 'Save config in file'"
+            dump_installer_and_exit
+          fi
           send "" 6       # accept default filename
+          if ! wait_for_pane "The system will be modified - continue|system will be modified" 45; then
+            fail "Apply step 3/4 failed: after accepting the default config filename, did not see 'The system will be modified'"
+            dump_installer_and_exit
+          fi
           send Yes 30     # the system will be modified
+          if ! wait_for_pane "Operations logged|Setting local config" 90; then
+            fail "Apply step 4/4 failed: after sending Yes (modify system), installer did not start applying"
+            dump_installer_and_exit
+          fi
         fi
         ;;
   esac
