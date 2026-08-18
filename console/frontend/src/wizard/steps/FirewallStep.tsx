@@ -42,7 +42,7 @@ export default function FirewallStep() {
           placeholder="203.0.113.10 198.51.100.0/24"
         />
         <Hint>
-          Space-separated IPs or networks. Not required to continue setup — configure after
+          Space-separated IPs or networks. Not required to continue setup, configure after
           deployment if you prefer.
         </Hint>
       </FieldRow>

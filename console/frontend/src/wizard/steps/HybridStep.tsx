@@ -71,7 +71,7 @@ export default function HybridStep() {
       <Title>Company directory login (optional)</Title>
       <Lede>
         You can let users sign in with their company Active Directory accounts. Skip this if AD is
-        not ready — local mail passwords will be used instead.
+        not ready; local mail passwords will be used instead.
       </Lede>
       <CheckRow>
         <input

@@ -3,13 +3,13 @@ export type WizardDraft = {
   updated_at: string | null;
   current_step: string;
   topology: "" | "1vm" | "2vm";
-  /** Required when topology is 2vm — second server IP (no reachability check in this slice). */
+  /** Required when topology is 2vm; second server IP (no reachability check in this slice). */
   peer_host_ip: string;
   /** Optional hostname for the second server. */
   peer_host_name: string;
   /** Observability / qdevice witness VM IP. Required when topology is 2vm. */
   observability_vm_ip: string;
-  /** Floating mail VIP. Required when topology is 2vm — must not be a node NIC. */
+  /** Floating mail VIP. Required when topology is 2vm; must not be a node NIC. */
   cluster_vip_ip: string;
   /** This console host's IPv4 (from config or autodetection). Not stored in the draft. */
   local_host_ip?: string;

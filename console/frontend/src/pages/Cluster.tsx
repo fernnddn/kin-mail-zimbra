@@ -206,7 +206,7 @@ export default function ClusterPage() {
         <Title>Cluster</Title>
         <Lede>
           Take one mail node out of service for planned work. Pre-flight must pass before Enter
-          is allowed. Closing this browser does not take the node out of maintenance — use Exit.
+          is allowed. Closing this browser does not take the node out of maintenance; use Exit.
         </Lede>
         {cluster.maintenance_active ? (
           <WarnBox>

@@ -66,7 +66,7 @@ type DeploySessionCtx = {
 
 const Ctx = createContext<DeploySessionCtx | null>(null);
 
-/** Real firewall dead-man signals — not the banner "dead-man NOT auto-cancelled". */
+/** Real firewall dead-man signals, not the banner "dead-man NOT auto-cancelled". */
 function looksLikeDeadmanArmed(chunk: string): boolean {
   if (/dead-man NOT auto-cancelled/i.test(chunk)) return false;
   return /Leaving dead-man ARMED|dead-man timer|Dead-man is ARMED|DEADMAN_ARMED|cancel-deadman after/i.test(
@@ -258,8 +258,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
           if (parsed.code === "busy") {
-            // Another job owns the install — follow server state, do not look "idle".
-            setMessage("Install already running on the server — showing live progress.");
+            // Another job owns the install; follow server state, do not look "idle".
+            setMessage("Install already running on the server, showing live progress.");
             onFinished(undefined, "error");
             es.close();
             void hydrateFromServer();
@@ -275,7 +275,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           es.close();
           if (action === "cancel_firewall_deadman" && parsed.exit_code === 0) {
             setDeadmanHint(false);
-            setMessage("Firewall confirmation recorded — temporary safety timer cancelled.");
+            setMessage("Firewall confirmation recorded, temporary safety timer cancelled.");
           }
         }
       };
@@ -284,14 +284,14 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         if (pipelineEsRef.current !== es) return;
         // EventSource drops on background tabs / brief network blips. Do NOT treat as finished
         // until the server confirms the install is no longer running.
-        append(`[stream] disconnected — checking server status…\n`);
+        append(`[stream] disconnected, checking server status…\n`);
         es.close();
         onFinished(undefined, "disconnect");
         void (async () => {
           await refreshSetup();
           const still = await hydrateFromServer();
           if (still) {
-            setMessage("Live stream disconnected — following server progress…");
+            setMessage("Live stream disconnected, following server progress…");
             setLocalBusy(true);
           } else {
             setMessage((m) =>
@@ -398,7 +398,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       if (applyExit !== 0) {
         setLocalBusy(false);
         pipelineEsRef.current = null;
-        setMessage("Could not save settings — Deploy stopped before install.");
+        setMessage("Could not save settings, Deploy stopped before install.");
         return;
       }
       append(`\n[${new Date().toISOString()}] Starting mail system install…\n`);
@@ -475,7 +475,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       setCancelBusy(false);
       cancelEsRef.current = null;
       if (reason === "disconnect") {
-        setMessage("Stream interrupted while confirming access — try again if needed.");
+        setMessage("Stream interrupted while confirming access, try again if needed.");
       }
     });
   }, [append, cancelBusy, openStream]);

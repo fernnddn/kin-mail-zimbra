@@ -147,7 +147,7 @@ export default function TopologyStep() {
               autoComplete="off"
             />
             <Hint>
-              IP of the peer host for this HA pair. Connectivity is not checked here — that comes
+              IP of the peer host for this HA pair. Connectivity is not checked here; that comes
               later during orchestration.
             </Hint>
           </FieldRow>
@@ -206,7 +206,7 @@ export default function TopologyStep() {
             Each mail VM needs a second unused disk (≥20 GiB, not the OS disk, no partition table).
             Build HA pair will GPT-partition it automatically when exactly one such disk is
             present: /dev/sdb1 (Zimbra data) and /dev/sdb2 (~256 MiB DRBD meta, no filesystem).
-            Zero or multiple spare disks stay fail-closed — specify the disk instead of guessing.
+            Zero or multiple spare disks stay fail-closed; specify the disk instead of guessing.
             If Zimbra is already on the root volume, migrate /opt/zimbra onto sdb1 after that
             partition exists.
           </Hint>

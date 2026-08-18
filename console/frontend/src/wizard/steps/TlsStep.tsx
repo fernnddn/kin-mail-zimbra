@@ -44,7 +44,7 @@ export default function TlsStep() {
         >
           <strong>Manual DNS record</strong>
           <span>
-            Works with any DNS provider — someone creates a one-time TXT record when issuing the
+            Works with any DNS provider; someone creates a one-time TXT record when issuing the
             certificate.
           </span>
         </Choice>

@@ -131,7 +131,7 @@ export default function DomainStep() {
           onChange={(e) => setLocal({ le_email: e.target.value })}
           placeholder={draft.mail_domain ? `admin@${draft.mail_domain}` : "admin@example.co.id"}
         />
-        <Hint>Optional — defaults to admin@&lt;domain&gt; if left blank.</Hint>
+        <Hint>Optional, defaults to admin@&lt;domain&gt; if left blank.</Hint>
       </FieldRow>
       <Err>{fieldErr || error}</Err>
       <NavRow>

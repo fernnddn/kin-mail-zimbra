@@ -159,7 +159,7 @@ export default function UsersPage() {
           Per-account auth: <strong>local</strong> (bcrypt in{" "}
           <code>users.json</code>) or <strong>AD</strong> (LDAP bind using the same{" "}
           <code>/etc/kin-mail/config</code> AD settings as hybrid mail auth). Role is assigned
-          here — no AD group mapping in this slice.
+          here; no AD group mapping in this slice.
         </Lede>
         {ad && (
           <Hint>
@@ -167,7 +167,7 @@ export default function UsersPage() {
             {ad.ldap_url ? ` · ${ad.ldap_url}` : ""}
             {ad.search_base ? ` · base ${ad.search_base}` : ""}
             {!ad.enabled &&
-              " — AD-backed console logins will fail closed until Hybrid AD is configured."}
+              " (AD-backed console logins will fail closed until Hybrid AD is configured)."}
           </Hint>
         )}
         {error && <Hint>{error}</Hint>}

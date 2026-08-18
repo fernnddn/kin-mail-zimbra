@@ -25,7 +25,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   if (!eulaLoading && !accepted) return <Navigate to="/eula" replace />;
-  // Pre-deploy / mid-install: no login gate — send operators to the right wizard step.
+  // Pre-deploy / mid-install: no login gate; send operators to the right wizard step.
   if (!setupLoading && !deployed && !user) {
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }

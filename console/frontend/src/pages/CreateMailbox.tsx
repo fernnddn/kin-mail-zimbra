@@ -127,8 +127,8 @@ export default function CreateMailboxPage() {
           res.exit_code === 1;
         setMessage(
           quota
-            ? "Mailbox was not created (quota gate). See log — no zmprov ca ran if seats are full or unset."
-            : "Create failed — see log.",
+            ? "Mailbox was not created (quota gate). See log; no zmprov ca ran if seats are full or unset."
+            : "Create failed, see log.",
         );
       }
       await refreshStatus().catch(() => undefined);
@@ -145,7 +145,7 @@ export default function CreateMailboxPage() {
         <Title>Create mailbox</Title>
         <Lede>
           Creates one mailbox on the configured mail domain only. Seat limits use the same quota
-          gate as the CLI (<code>kin_quota_gate_allow_new_mailbox</code>) — Customer Admin can create
+          gate as the CLI (<code>kin_quota_gate_allow_new_mailbox</code>); Customer Admin can create
           within the contracted seats, but cannot raise the seat limit.
         </Lede>
 
@@ -153,7 +153,7 @@ export default function CreateMailboxPage() {
 
         {statusOk === false && (
           <WarnBox>
-            <strong>New creates may be blocked.</strong> Seat status below — fix{" "}
+            <strong>New creates may be blocked.</strong> Seat status below, fix{" "}
             <code>CONTRACTED_SEATS</code> via KIN Super Admin / Support-Ops (wizard apply), not from
             this form.
           </WarnBox>
@@ -205,7 +205,7 @@ export default function CreateMailboxPage() {
         {createdEmail && (
           <Hint>
             Credentials: <code>{createdEmail}</code> + the password you typed (shown only here as a
-            reminder — the console does not store it).
+            reminder; the console does not store it).
           </Hint>
         )}
         {resultLog && (

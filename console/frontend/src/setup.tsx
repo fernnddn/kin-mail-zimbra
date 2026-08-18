@@ -74,6 +74,6 @@ export function wizardHomePath(
   deployed = false,
 ): string {
   // Fresh hosts start at Topology. Mid-install and already-deployed hosts go
-  // straight to Deploy/progress — do not reset the operator to step 1.
+  // straight to Deploy/progress; do not reset the operator to step 1.
   return installInProgress || deployed ? "/wizard/deploy" : "/wizard/topology";
 }

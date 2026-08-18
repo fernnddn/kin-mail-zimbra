@@ -67,7 +67,7 @@ export function ConsoleChrome({
   subtitle?: string;
   hint?: ReactNode;
   children: ReactNode;
-  /** Initial wizard setup: brand only — hide nav / account chrome until deploy is done. */
+  /** Initial wizard setup: brand only; hide nav / account chrome until deploy is done. */
   setupMode?: boolean;
 }) {
   const { user, logout } = useAuth();

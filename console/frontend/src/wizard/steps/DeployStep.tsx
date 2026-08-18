@@ -294,7 +294,7 @@ export default function DeployStep() {
   useEffect(() => {
     if (draft.topology !== "2vm" || !canOps) return;
     // Fetch after a successful Deploy even if the 5s install-in-progress poll has not
-    // cleared yet — the continue-to-HA prompt needs disk status on the same page.
+    // cleared yet; the continue-to-HA prompt needs disk status on the same page.
     if (activeRun && !(complete && !failed)) return;
     let cancelled = false;
     setHaDiskLoading(true);
@@ -351,7 +351,7 @@ export default function DeployStep() {
         {!canOps && (
           <>
             {" "}
-            Your role (<strong>{user?.role_label || "Customer Admin"}</strong>) cannot run deploy —
+            Your role (<strong>{user?.role_label || "Customer Admin"}</strong>) cannot run deploy;
             ask a KIN Super Admin or Support-Ops.
           </>
         )}
@@ -451,7 +451,7 @@ export default function DeployStep() {
             <StepHeading>1. Deploy the mail system</StepHeading>
             <StepBody>
               Saves settings again if needed, then installs and configures mail on this host. This
-              can take a long time — use View logs for the live stream (opens in a new tab).
+              can take a long time; use View logs for the live stream (opens in a new tab).
             </StepBody>
             <label
               style={{
@@ -495,7 +495,7 @@ export default function DeployStep() {
                 After this host has mail installed, run the Ansible sequence against the second
                 server (OS hardening, qnetd, Corosync cluster setup, qdevice, fencing, DRBD,
                 Pacemaker). Progress streams into View logs with a checkpoint per playbook. A
-                failure stops there — nothing is retried or rolled back automatically. After a
+                failure stops there; nothing is retried or rolled back automatically. After a
                 manual fix, run this again from the top; the playbooks are idempotent.
               </StepBody>
               <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
@@ -572,7 +572,7 @@ export default function DeployStep() {
         <Hint>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
             <Spinner /> Working… open View logs in a new tab for the live stream. Stay on this page
-            until the stage finishes — leaving does not stop the server-side job.
+            until the stage finishes; leaving does not stop the server-side job.
           </span>
         </Hint>
       )}

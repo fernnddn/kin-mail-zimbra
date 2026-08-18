@@ -3,7 +3,7 @@ import { Button, Err, Lede, NavRow, SummaryTable, Title } from "../../ui";
 import { useWizard } from "../WizardContext";
 
 function mask(value: string): string {
-  if (!value) return "—";
+  if (!value) return "-";
   return "••••••••";
 }
 
@@ -17,7 +17,7 @@ export default function ReviewStep() {
   }
 
   const topologyLabel =
-    draft.topology === "1vm" ? "1 server" : draft.topology === "2vm" ? "2 servers (HA)" : "—";
+    draft.topology === "1vm" ? "1 server" : draft.topology === "2vm" ? "2 servers (HA)" : "-";
   const tlsLabel =
     draft.tls_method === "cloudflare"
       ? "Automatic (Cloudflare)"
@@ -25,7 +25,7 @@ export default function ReviewStep() {
         ? "Manual DNS record"
         : draft.tls_method === "customer"
           ? "Customer-provided"
-          : "—";
+          : "-";
   const seatsLabel =
     !draft.contracted_seats || draft.contracted_seats === "PLACEHOLDER_UNSET"
       ? "Not set yet (optional)"
@@ -35,7 +35,7 @@ export default function ReviewStep() {
     <>
       <Title>Review</Title>
       <Lede>
-        Confirm these choices. Nothing is installed yet — the next step saves them to this server
+        Confirm these choices. Nothing is installed yet; the next step saves them to this server
         and starts deployment.
       </Lede>
       <SummaryTable>
@@ -44,13 +44,13 @@ export default function ReviewStep() {
         {draft.topology === "2vm" ? (
           <>
             <dt>Second server IP</dt>
-            <dd>{draft.peer_host_ip || "—"}</dd>
+            <dd>{draft.peer_host_ip || "-"}</dd>
             <dt>Second server hostname</dt>
-            <dd>{draft.peer_host_name || "—"}</dd>
+            <dd>{draft.peer_host_name || "-"}</dd>
             <dt>Observability VM IP</dt>
-            <dd>{draft.observability_vm_ip || "—"}</dd>
+            <dd>{draft.observability_vm_ip || "-"}</dd>
             <dt>Cluster VIP</dt>
-            <dd>{draft.cluster_vip_ip || "—"}</dd>
+            <dd>{draft.cluster_vip_ip || "-"}</dd>
           </>
         ) : null}
         <dt>Root password</dt>
@@ -58,15 +58,15 @@ export default function ReviewStep() {
         <dt>Admin password</dt>
         <dd>{draft.host_credentials_set ? "Stored (encrypted)" : mask(draft.kin_user_pass)}</dd>
         <dt>Mail domain</dt>
-        <dd>{draft.mail_domain || "—"}</dd>
+        <dd>{draft.mail_domain || "-"}</dd>
         <dt>Mail hostname</dt>
-        <dd>{draft.mail_host || "—"}</dd>
+        <dd>{draft.mail_host || "-"}</dd>
         <dt>Timezone</dt>
-        <dd>{draft.timezone || "—"}</dd>
+        <dd>{draft.timezone || "-"}</dd>
         <dt>Mail admin password</dt>
-        <dd>{draft.admin_pass_set || draft.admin_pass ? mask(draft.admin_pass || "stored") : "—"}</dd>
+        <dd>{draft.admin_pass_set || draft.admin_pass ? mask(draft.admin_pass || "stored") : "-"}</dd>
         <dt>Certificate email</dt>
-        <dd>{draft.le_email || "—"}</dd>
+        <dd>{draft.le_email || "-"}</dd>
         <dt>HTTPS certificates</dt>
         <dd>{tlsLabel}</dd>
         <dt>Company directory</dt>

@@ -37,8 +37,8 @@ export default function LicensingStep() {
     <>
       <Title>Contracted mailboxes</Title>
       <Lede>
-        Optionally set how many mailboxes this customer has purchased. Leave blank to decide later
-        — until a number is set, the quota gate blocks new mailbox creates.
+        Optionally set how many mailboxes this customer has purchased. Leave blank to decide later;
+        until a number is set, the quota gate blocks new mailbox creates.
       </Lede>
       <FieldRow>
         <FieldLabel htmlFor="contracted_seats" optional>

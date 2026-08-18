@@ -148,7 +148,7 @@ export default function DeployLogsPage() {
         failStreakRef.current += 1;
         // One hiccup while install is healthy must not look like a hard failure.
         if (opts?.manual || failStreakRef.current >= 3) {
-          setSoftHint("Could not refresh log — retrying in the background.");
+          setSoftHint("Could not refresh log, retrying in the background.");
         }
       }
     },
@@ -182,11 +182,11 @@ export default function DeployLogsPage() {
           <h1>Deployment logs</h1>
           <p>
             {failed
-              ? `Failed — ${label}`
+              ? `Failed: ${label}`
               : complete
                 ? "Install finished"
                 : current > 0
-                  ? `Step ${current}/${total} — ${label}`
+                  ? `Step ${current}/${total}: ${label}`
                   : live
                     ? "Install in progress"
                     : log
