@@ -155,7 +155,7 @@ function LoadingPage({ text }: { text: string }) {
 }
 
 export default function WizardLayout() {
-  const { loading: draftLoading, draft } = useWizard();
+  const { loading: draftLoading, savedCurrentStep } = useWizard();
   const { deployed, installInProgress, loading: setupLoading } = useSetup();
   const { pipelineBusy } = useDeploySession();
   const location = useLocation();
@@ -164,7 +164,7 @@ export default function WizardLayout() {
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
-  const furthestIdx = furthestReachedIndex(draft.current_step);
+  const furthestIdx = furthestReachedIndex(savedCurrentStep);
   const navLocked = installInProgress || pipelineBusy;
 
   // Do not render Topology (or any step) until we know whether an install is
@@ -189,8 +189,8 @@ export default function WizardLayout() {
     );
   }
 
-  // Linear-step gating needs the server draft. Do not flash a clickable sidebar
-  // from emptyDraft() (current_step=topology) before the real furthest step arrives.
+  // Linear-step gating needs the server-confirmed furthest step. Do not flash
+  // a clickable sidebar from the empty draft before GET /api/wizard/draft returns.
   if (!navLocked && draftLoading) {
     return <LoadingPage text="Loading draft…" />;
   }

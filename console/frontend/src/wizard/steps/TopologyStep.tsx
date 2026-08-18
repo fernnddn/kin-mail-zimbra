@@ -31,9 +31,9 @@ export default function TopologyStep() {
   async function pick(topology: WizardDraft["topology"]) {
     setFieldErr("");
     if (topology === "1vm") {
-      setLocal({ topology, peer_host_ip: "", peer_host_name: "", observability_vm_ip: "", cluster_vip_ip: "", current_step: "topology" });
+      setLocal({ topology, peer_host_ip: "", peer_host_name: "", observability_vm_ip: "", cluster_vip_ip: "" });
     } else {
-      setLocal({ topology, current_step: "topology" });
+      setLocal({ topology });
     }
   }
 
