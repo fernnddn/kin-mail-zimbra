@@ -2,6 +2,7 @@ import styled from "@emotion/styled";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { useSetup } from "../setup";
+import { Lede, Shell } from "../ui";
 import { theme } from "../styles/theme";
 import { useDeploySession } from "./DeploySession";
 import { useWizard } from "./WizardContext";
@@ -140,9 +141,22 @@ function currentStepId(pathname: string): StepId {
   return found ? found.id : "topology";
 }
 
+function furthestReachedIndex(currentStep: string): number {
+  const idx = stepIndex(currentStep);
+  return idx < 0 ? 0 : idx;
+}
+
+function LoadingPage({ text }: { text: string }) {
+  return (
+    <Shell>
+      <Lede>{text}</Lede>
+    </Shell>
+  );
+}
+
 export default function WizardLayout() {
-  const { loading } = useWizard();
-  const { deployed, installInProgress } = useSetup();
+  const { loading: draftLoading, draft } = useWizard();
+  const { deployed, installInProgress, loading: setupLoading } = useSetup();
   const { pipelineBusy } = useDeploySession();
   const location = useLocation();
   const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
@@ -150,7 +164,15 @@ export default function WizardLayout() {
   const active = currentStepId(location.pathname);
   const activeIdx = stepIndex(active);
   const activeDef = WIZARD_STEPS[activeIdx] || WIZARD_STEPS[0];
+  const furthestIdx = furthestReachedIndex(draft.current_step);
   const navLocked = installInProgress || pipelineBusy;
+
+  // Do not render Topology (or any step) until we know whether an install is
+  // already running — installInProgress defaults to false before the first
+  // /api/setup/status response.
+  if (setupLoading) {
+    return <LoadingPage text="Checking setup…" />;
+  }
 
   // Mid-install / mid-orchestration always stays on Deploy. Leaving does not
   // stop the server-side job.
@@ -167,6 +189,17 @@ export default function WizardLayout() {
     );
   }
 
+  // Linear-step gating needs the server draft. Do not flash a clickable sidebar
+  // from emptyDraft() (current_step=topology) before the real furthest step arrives.
+  if (!navLocked && draftLoading) {
+    return <LoadingPage text="Loading draft…" />;
+  }
+
+  if (!navLocked && activeIdx > furthestIdx) {
+    const dest = WIZARD_STEPS[furthestIdx]?.id || "topology";
+    return <Navigate to={`/wizard/${dest}`} replace />;
+  }
+
   return (
     <ConsoleChrome setupMode={!deployed}>
       <Body>
@@ -175,10 +208,22 @@ export default function WizardLayout() {
           {WIZARD_STEPS.map((step, idx) => {
             const done = idx < activeIdx;
             const isActive = step.id === active;
-            const lockThis = navLocked && step.id !== "deploy";
+            // navLocked is a separate override: only Deploy stays reachable
+            // while install/orchestration is running. Otherwise lock steps
+            // the operator has never reached (Arcfra-style linear wizard).
+            const lockThis = navLocked ? step.id !== "deploy" : idx > furthestIdx;
             if (lockThis) {
               return (
-                <StepLock key={step.id} $active={isActive} $done={done} title="Stay on Deploy until the current stage finishes">
+                <StepLock
+                  key={step.id}
+                  $active={isActive}
+                  $done={done}
+                  title={
+                    navLocked && step.id !== "deploy"
+                      ? "Stay on Deploy until the current stage finishes"
+                      : "Complete the previous step first"
+                  }
+                >
                   <StepNum $active={isActive} $done={done}>
                     {done ? "✓" : idx + 1}
                   </StepNum>
@@ -203,16 +248,12 @@ export default function WizardLayout() {
         </Sidebar>
         <Main>
           <CrumbBar>
-            {navLocked ? (
-              <span>Setup</span>
-            ) : (
-              <Link to="/wizard/topology">Setup</Link>
-            )}
+            {navLocked ? <span>Setup</span> : <Link to="/wizard/topology">Setup</Link>}
             {" / "}
             <strong>{activeDef.crumb}</strong>
           </CrumbBar>
           <Content key={active}>
-            {loading ? <p style={{ color: theme.muted }}>Loading draft…</p> : <Outlet />}
+            {draftLoading ? <p style={{ color: theme.muted }}>Loading draft…</p> : <Outlet />}
           </Content>
         </Main>
       </Body>
