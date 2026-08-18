@@ -9,7 +9,6 @@ import {
   Hint,
   Lede,
   NavRow,
-  OkMsg,
   Spinner,
   Title,
   WarnBox,
@@ -255,18 +254,15 @@ export default function DeployStep() {
   const canOps = !deployed || isOpsRole(user?.role);
   const {
     message,
-    okMessage,
     pipelineBusy,
     log,
     cancelBusy,
     deadmanHint,
-    applyDone,
     installProgress,
     confirmFull,
     setConfirmFull,
     confirmHa,
     setConfirmHa,
-    runApply,
     runDeploy,
     runHaOrchestration,
     runCancelDeadman,
@@ -448,21 +444,7 @@ export default function DeployStep() {
       {showSetupCards && (
         <>
           <StepCard>
-            <StepHeading>1. Save your wizard settings</StepHeading>
-            <StepBody>
-              Writes the choices from this wizard to the server. Safe to run more than once — you
-              will see whether anything actually changed.
-            </StepBody>
-            <Button type="button" variant="ghost" onClick={() => void runApply()}>
-              Save settings
-            </Button>
-            {okMessage && (
-              <OkMsg style={{ marginTop: "0.75rem", marginBottom: 0 }}>{okMessage}</OkMsg>
-            )}
-          </StepCard>
-
-          <StepCard>
-            <StepHeading>2. Deploy the mail system</StepHeading>
+            <StepHeading>1. Deploy the mail system</StepHeading>
             <StepBody>
               Saves settings again if needed, then installs and configures mail on this host. This
               can take a long time — use View logs for the live stream (opens in a new tab).
@@ -500,16 +482,11 @@ export default function DeployStep() {
                 </Button>
               )}
             </ActionsRow>
-            {!applyDone && !showProgress && (
-              <Hint style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-                Tip: you can Save settings alone first, or just press Deploy (it saves automatically).
-              </Hint>
-            )}
           </StepCard>
 
           {draft.topology === "2vm" && (
             <StepCard>
-              <StepHeading>3. Build the 2-server HA pair</StepHeading>
+              <StepHeading>2. Build the 2-server HA pair</StepHeading>
               <StepBody>
                 After this host has mail installed, run the Ansible sequence against the second
                 server (OS hardening, qnetd, Corosync cluster setup, qdevice, fencing, DRBD,

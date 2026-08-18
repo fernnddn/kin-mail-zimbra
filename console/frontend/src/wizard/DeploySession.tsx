@@ -49,18 +49,15 @@ type LastLogResponse = {
 type DeploySessionCtx = {
   log: string;
   message: string;
-  okMessage: string;
   /** True while this tab owns an SSE *or* the server still reports an active install. */
   pipelineBusy: boolean;
   cancelBusy: boolean;
   deadmanHint: boolean;
-  applyDone: boolean;
   installProgress: InstallProgress;
   confirmFull: boolean;
   setConfirmFull: (v: boolean) => void;
   confirmHa: boolean;
   setConfirmHa: (v: boolean) => void;
-  runApply: () => Promise<void>;
   runDeploy: () => Promise<void>;
   runHaOrchestration: (opts?: { confirmed?: boolean }) => Promise<void>;
   runCancelDeadman: () => Promise<void>;
@@ -68,19 +65,6 @@ type DeploySessionCtx = {
 };
 
 const Ctx = createContext<DeploySessionCtx | null>(null);
-
-function summarizeApply(logChunk: string): string | null {
-  if (/Apply result: created/i.test(logChunk)) {
-    return "Settings saved — created the first config on this server.";
-  }
-  if (/Apply result: changed/i.test(logChunk)) {
-    return "Settings saved — changes were applied.";
-  }
-  if (/Apply result: unchanged/i.test(logChunk)) {
-    return "Settings already up to date — nothing changed.";
-  }
-  return null;
-}
 
 /** Real firewall dead-man signals — not the banner "dead-man NOT auto-cancelled". */
 function looksLikeDeadmanArmed(chunk: string): boolean {
@@ -103,11 +87,9 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { installInProgress, refresh: refreshSetup } = useSetup();
   const [log, setLog] = useState("# Deployment activity\n");
   const [message, setMessage] = useState("");
-  const [okMessage, setOkMessage] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [deadmanHint, setDeadmanHint] = useState(false);
-  const [applyDone, setApplyDone] = useState(false);
   const [confirmFull, setConfirmFull] = useState(false);
   const [confirmHa, setConfirmHa] = useState(false);
   const [installProgress, setInstallProgress] = useState<InstallProgress>(emptyInstallProgress);
@@ -118,6 +100,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const localStreamRef = useRef(false);
   /** Last action that owned the pipeline EventSource (for messaging). */
   const pipelineActionRef = useRef<DeployActionId | null>(null);
+  /** Date.now() of the last SSE message. Used to detect a hung-open stream. */
+  const lastSseAtRef = useRef(0);
 
   const pipelineBusy = localBusy || installInProgress;
 
@@ -130,22 +114,46 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const hydrateFromServer = useCallback(async (): Promise<boolean> => {
+  const hydrateFromServer = useCallback(async (opts?: { preserveLiveLog?: boolean }): Promise<boolean> => {
     try {
       const [st, res] = await Promise.all([fetchSetupStatus(), fetchLastLog()]);
       const installing = Boolean(st.install_in_progress || st.busy || res.install_in_progress);
       const cleaned = formatDeployLog(res.text || "");
+      const live = logBufRef.current;
+      const pDisk = parseInstallProgress(cleaned);
+      const pLive = parseInstallProgress(live);
+      const terminal = pDisk.complete || pDisk.failed || pLive.complete || pLive.failed;
+
+      if (opts?.preserveLiveLog && localStreamRef.current) {
+        // Stall check while EventSource is still open: never shrink/replace a
+        // live buffer with a shorter last-log (that flickers the viewer).
+        if (cleaned.trim() && cleaned.length > live.length + 64) {
+          logBufRef.current = cleaned;
+          setLog(cleaned);
+          setInstallProgress(pDisk);
+        } else if ((pDisk.failed || pDisk.complete) && !(pLive.failed || pLive.complete)) {
+          setInstallProgress(pDisk);
+        }
+        if (installing) {
+          setLocalBusy(true);
+          return true;
+        }
+        if (terminal) {
+          setLocalBusy(false);
+        }
+        return false;
+      }
+
       if (cleaned.trim()) {
         logBufRef.current = cleaned;
         setLog(cleaned);
-        setInstallProgress(parseInstallProgress(cleaned));
+        setInstallProgress(pDisk);
       }
       if (installing) {
         setLocalBusy(true);
         return true;
       }
-      const p = parseInstallProgress(cleaned);
-      if (p.complete || p.failed) {
+      if (pDisk.complete || pDisk.failed) {
         setLocalBusy(false);
       }
       return false;
@@ -179,6 +187,20 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     };
   }, [hydrateFromServer, installInProgress]);
 
+  // EventSource can stay "open" after the job has exited if the terminal
+  // `done`/`error` event was buffered or dropped (nginx, tab freeze). Polling
+  // above skips while localStreamRef is true, so the spinner never clears.
+  // Independently re-read last-log + setup status without closing the socket.
+  useEffect(() => {
+    const stallMs = 35_000;
+    const id = window.setInterval(() => {
+      if (!localStreamRef.current) return;
+      if (Date.now() - lastSseAtRef.current < stallMs) return;
+      void hydrateFromServer({ preserveLiveLog: true });
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [hydrateFromServer]);
+
   // Keep localBusy aligned with setup provider when install finishes elsewhere.
   useEffect(() => {
     if (!installInProgress && !localStreamRef.current) {
@@ -190,16 +212,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   }, [installInProgress, hydrateFromServer]);
 
   const append = useCallback((chunk: string) => {
+    lastSseAtRef.current = Date.now();
     logBufRef.current += chunk;
     setLog(logBufRef.current);
     setInstallProgress(parseInstallProgress(logBufRef.current));
     if (looksLikeDeadmanArmed(chunk)) {
       setDeadmanHint(true);
-    }
-    const summary = summarizeApply(chunk);
-    if (summary) {
-      setOkMessage(summary);
-      setApplyDone(true);
     }
   }, []);
 
@@ -210,6 +228,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
     ) => {
       es.onmessage = (ev) => {
+        lastSseAtRef.current = Date.now();
         let parsed: StreamEvent;
         try {
           parsed = JSON.parse(ev.data) as StreamEvent;
@@ -239,7 +258,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           if (parsed.code === "busy") {
             // Another job owns the install — follow server state, do not look "idle".
             setMessage("Install already running on the server — showing live progress.");
-            setOkMessage("");
             onFinished(undefined, "error");
             es.close();
             void hydrateFromServer();
@@ -247,7 +265,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
             return;
           }
           setMessage(msg);
-          setOkMessage("");
           return;
         }
         if (parsed.type === "done") {
@@ -256,7 +273,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           es.close();
           if (action === "cancel_firewall_deadman" && parsed.exit_code === 0) {
             setDeadmanHint(false);
-            setOkMessage("Firewall confirmation recorded — temporary safety timer cancelled.");
+            setMessage("Firewall confirmation recorded — temporary safety timer cancelled.");
           }
         }
       };
@@ -293,6 +310,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       extraQuery?: string,
     ) => {
       localStreamRef.current = true;
+      lastSseAtRef.current = Date.now();
       pipelineActionRef.current = action;
       const qs = extraQuery ? `&${extraQuery}` : "";
       const es = new EventSource(
@@ -315,51 +333,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     window.open("/wizard/deploy/logs", "_blank", "noopener,noreferrer");
   }, []);
 
-  const runApply = useCallback(async () => {
-    if (pipelineBusy) return;
-    setMessage("");
-    setOkMessage("");
-    try {
-      await save({ current_step: "deploy" });
-      append(`[info] Draft saved before apply\n`);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to save draft");
-      return;
-    }
-    append(
-      `\n[${new Date().toISOString()}] Save settings\n` +
-        `# topology=${draft.topology || "unset"} domain=${draft.mail_domain || "unset"}\n`,
-    );
-    if (pipelineEsRef.current) {
-      pipelineEsRef.current.close();
-      pipelineEsRef.current = null;
-    }
-    setLocalBusy(true);
-    pipelineEsRef.current = openStream("apply_draft", (exit, reason) => {
-      if (reason === "disconnect") {
-        // hydrateFromServer will keep busy if install somehow started; apply alone:
-        void hydrateFromServer().then((still) => {
-          if (!still) setLocalBusy(false);
-        });
-        return;
-      }
-      if (reason === "error") {
-        // busy → follow server
-        return;
-      }
-      setLocalBusy(false);
-      if (exit === 0) setApplyDone(true);
-    });
-  }, [
-    append,
-    draft.mail_domain,
-    draft.topology,
-    hydrateFromServer,
-    openStream,
-    pipelineBusy,
-    save,
-  ]);
-
   const runDeploy = useCallback(async () => {
     if (pipelineBusy) return;
     if (!confirmFull) {
@@ -367,7 +340,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     setMessage("");
-    setOkMessage("");
     setInstallProgress(emptyInstallProgress());
 
     try {
@@ -439,7 +411,6 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     setMessage("");
-    setOkMessage("");
     append(
       `\n[${new Date().toISOString()}] HA orchestration (Ansible sequence)\n` +
         `# topology=${draft.topology || "unset"} peer=${draft.peer_host_ip || "unset"} ` +
@@ -496,17 +467,14 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     () => ({
       log,
       message,
-      okMessage,
       pipelineBusy,
       cancelBusy,
       deadmanHint,
-      applyDone,
       installProgress,
       confirmFull,
       setConfirmFull,
       confirmHa,
       setConfirmHa,
-      runApply,
       runDeploy,
       runHaOrchestration,
       runCancelDeadman,
@@ -515,15 +483,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     [
       log,
       message,
-      okMessage,
       pipelineBusy,
       cancelBusy,
       deadmanHint,
-      applyDone,
       installProgress,
       confirmFull,
       confirmHa,
-      runApply,
       runDeploy,
       runHaOrchestration,
       runCancelDeadman,

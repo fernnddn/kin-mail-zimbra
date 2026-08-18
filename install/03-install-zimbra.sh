@@ -347,12 +347,14 @@ installer_pane() { tmux capture-pane -p -S -80 -t "$SESS" 2>/dev/null || true; }
 installer_hist() { tmux capture-pane -p -S - -t "$SESS" 2>/dev/null || true; }
 
 # Visible pane only — do not grep 400 lines of timezone dump for menu numbers.
+# zmsetup marks unconfigured items with a "** " prefix (Admin Password is always
+# UNSET on a fresh install). TimeZone / zimbra-store are usually already set.
 menu_item_number() {
   local label="$1"
   tmux capture-pane -p -t "$SESS" 2>/dev/null \
-    | grep -E "^[[:space:]]*[0-9]+\)[[:space:]]+${label}" \
+    | grep -E "^[[:space:]]*(\*\*)?[[:space:]]*[0-9]+\)[[:space:]]+${label}" \
     | tail -1 \
-    | sed -E 's/^[[:space:]]*([0-9]+)\).*/\1/'
+    | sed -E 's/^[[:space:]]*(\*\*)?[[:space:]]*([0-9]+)\).*/\2/'
 }
 
 dump_installer_and_exit() {
