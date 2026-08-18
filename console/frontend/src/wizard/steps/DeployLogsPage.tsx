@@ -130,11 +130,7 @@ export default function DeployLogsPage() {
     const cleaned = formatDeployLog(raw);
     setLog(cleaned);
     writeCachedLog(cleaned);
-    const progress = parseInstallProgress(cleaned);
-    setLive(
-      Boolean(installing) ||
-        (!progress.complete && !progress.failed && /Running /i.test(cleaned)),
-    );
+    setLive(Boolean(installing));
   }, []);
 
   const refresh = useCallback(
