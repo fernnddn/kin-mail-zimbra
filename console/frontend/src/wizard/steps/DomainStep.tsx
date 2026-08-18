@@ -11,6 +11,7 @@ import {
   NavRow,
   PasswordInput,
   Title,
+  WarnBox,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
 
@@ -18,11 +19,11 @@ import { useWizard } from "../WizardContext";
 const ZIMBRA_ADMIN_PASS_BAD = /[\s!$&*|<>\/;`'"\\]/;
 
 function zimbraAdminPassIssue(pass: string): string {
-  if (pass.length < 8) {
-    return "Admin password must be at least 8 characters.";
-  }
   if (ZIMBRA_ADMIN_PASS_BAD.test(pass)) {
     return "Admin password rejected by Zimbra — avoid characters like ! * & $, use letters/digits and simple symbols only.";
+  }
+  if (pass.length < 8) {
+    return "Admin password must be at least 8 characters.";
   }
   return "";
 }
@@ -31,6 +32,9 @@ export default function DomainStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
   const navigate = useNavigate();
   const [fieldErr, setFieldErr] = useState("");
+  const [passLiveErr, setPassLiveErr] = useState(() =>
+    draft.admin_pass ? zimbraAdminPassIssue(draft.admin_pass) : "",
+  );
 
   async function next() {
     const domain = draft.mail_domain.trim();
@@ -127,11 +131,16 @@ export default function DomainStep() {
           autoComplete="new-password"
           value={draft.admin_pass}
           onChange={(e) => {
+            const value = e.target.value;
             setFieldErr("");
-            setLocal({ admin_pass: e.target.value });
+            setLocal({ admin_pass: value });
+            setPassLiveErr(value ? zimbraAdminPassIssue(value) : "");
           }}
         />
-        <Hint>
+        {passLiveErr ? (
+          <WarnBox style={{ margin: "0.35rem 0 0.5rem" }}>{passLiveErr}</WarnBox>
+        ) : null}
+        <Hint style={passLiveErr ? { marginTop: 0 } : undefined}>
           {draft.admin_pass_set
             ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace. Avoid ! * & $ and similar punctuation — Zimbra rejects them."
             : "At least 8 characters. Used for the mail system administrator account. Avoid ! * & $ and similar punctuation — Zimbra rejects them."}
