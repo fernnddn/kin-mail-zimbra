@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { Button, Err, Lede, NavRow, SummaryTable, Title } from "../../ui";
+import { DnsRecordsPanel } from "../DnsRecordsPanel";
 import { useWizard } from "../WizardContext";
 
 function mask(value: string): string {
@@ -78,6 +79,7 @@ export default function ReviewStep() {
         <dt>Trusted admin IPs</dt>
         <dd>{draft.kin_admin_ips || "Not set (can configure later)"}</dd>
       </SummaryTable>
+      <DnsRecordsPanel mailDomain={draft.mail_domain} mailHost={draft.mail_host} />
       <Err>{error}</Err>
       <NavRow>
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/firewall")}>

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { DnsRecordsPanel, DkimPublishBox } from "../DnsRecordsPanel";
+import { parseDkimFromInstallLog, type DkimDnsRecord } from "../mailDns";
 import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { isOpsRole, useAuth } from "../../auth";
@@ -276,6 +278,11 @@ export default function DeployStep() {
   const { current, total, label, complete, failed } = installProgress;
   const [maintNodes, setMaintNodes] = useState<string[]>([]);
   const [haContinueDismissed, setHaContinueDismissed] = useState(false);
+  const [dkim, setDkim] = useState<DkimDnsRecord | null>(null);
+  useEffect(() => {
+    const parsed = parseDkimFromInstallLog(log);
+    if (parsed) setDkim(parsed);
+  }, [log]);
   useEffect(() => {
     if (!deployed) return;
     void api<{ cluster?: { standby?: string[] } }>("/api/cluster/status")
@@ -356,6 +363,13 @@ export default function DeployStep() {
           </>
         )}
       </Lede>
+
+      <DnsRecordsPanel
+        mailDomain={draft.mail_domain}
+        mailHost={draft.mail_host}
+        dkimPendingNote={!dkim}
+      />
+      <DkimPublishBox dkim={dkim} />
 
       {inMaintenance && (
         <WarnBox>
