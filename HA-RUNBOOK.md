@@ -729,8 +729,12 @@ sudo KIN_DRBD_DATA_DISK=/dev/nvme0n1p1 KIN_DRBD_META_DISK=/dev/nvme0n1p2 \
 1. Refuses: missing `/opt/zimbra`, data disk on the OS parent, Pacemaker KIN
    resources, live `kin-zimbra` DRBD, extra mounts under `/opt/zimbra`, data
    disk already mounted, unexpected filesystem, too-small partition.
-2. `mkfs.ext4` on the data slice **only when it has no TYPE**.
-3. `zmcontrol stop`, waits until **no** service is `Running`.
+2. `mkfs.ext4` on the data slice **only when it has no TYPE**. An existing
+   ext4 (including after a failed run that already formatted `sdb1`) is reused,
+   never reformatted.
+3. `zmcontrol stop`, then `zmconfigdctl stop`, then poll `zmcontrol status`
+   (and leftover daemons) until nothing is `Running`. "Stopping X...Done" is
+   not enough; mailboxd/onlyoffice can still be up after that line.
 4. Mounts the data slice on `/mnt/kin-zimbra-data`, `rsync -aHAX --numeric-ids
    --sparse` of `/opt/zimbra/` onto it, then a dry-run itemize that must show
    **no** pending copies/deletes, plus an entry-count check. Original tree is
@@ -741,15 +745,16 @@ sudo KIN_DRBD_DATA_DISK=/dev/nvme0n1p1 KIN_DRBD_META_DISK=/dev/nvme0n1p2 \
    `/dev/sdX`). Backs up fstab. Renames `/opt/zimbra` →
    `/opt/zimbra.root-<timestamp>` on the **same** root filesystem (rename, not
    a second full copy). `mkdir` + `mount /opt/zimbra` from fstab. Verifies UUID.
-6. `zmcontrol start`, waits until **all services Running** (same gate as
-   `install/03-install-zimbra.sh`).
+6. `zmcontrol start`, waits until **all listed services are Running** (up to
+   15 minutes, with progress). Empty status is not treated as success.
 7. **Does not delete** `/opt/zimbra.root-*`. Operator removes it later, after
    mail is healthy **and** preferably after Build HA pair has wrapped the disk
    in DRBD.
 
 Any failure after stop attempts rollback (restore fstab, restore the renamed
-tree, `zmcontrol start`). Treat a rollback as “check `zmcontrol status` before
-continuing.”
+tree, `zmcontrol start`) and **refuses to call rollback finished unless every
+service is Running**. If rollback cannot prove that, it prints `[FAIL]` and
+dumps status; treat that as mail down until you fix it.
 
 ### After success — Build HA pair
 

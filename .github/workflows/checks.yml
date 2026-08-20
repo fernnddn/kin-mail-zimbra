@@ -37,6 +37,9 @@ jobs:
           done
           exit $fail
 
+      - name: migrate-zimbra status parser tests
+        run: bash install/lib/test-migrate-zimbra-to-drbd-disk.sh
+
       - name: Install shellcheck
         run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
 

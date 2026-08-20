@@ -57,6 +57,8 @@ Environment:
   KIN_DRBD_DATA_DISK     data partition (default /dev/sdb1)
   KIN_DRBD_META_DISK     meta partition — never formatted (default /dev/sdb2)
   KIN_MIGRATE_CHECKSUM=1 extra rsync --checksum verify (slow; optional)
+  KIN_MIGRATE_STOP_WAIT_SEC   max seconds to wait after zmcontrol stop (default 300)
+  KIN_MIGRATE_START_WAIT_SEC  max seconds to wait after zmcontrol start (default 900)
 
 See HA-RUNBOOK.md §13.
 EOF
@@ -85,11 +87,149 @@ die() {
   exit 1
 }
 
+# zmcontrol status text. Tests set KIN_ZMCONTROL_STATUS_TEXT / _FILE.
+zimbra_status_text() {
+  if [ -n "${KIN_ZMCONTROL_STATUS_TEXT+x}" ]; then
+    printf '%s\n' "$KIN_ZMCONTROL_STATUS_TEXT"
+    return 0
+  fi
+  if [ -n "${KIN_ZMCONTROL_STATUS_FILE:-}" ]; then
+    cat "$KIN_ZMCONTROL_STATUS_FILE" 2>/dev/null || true
+    return 0
+  fi
+  su - zimbra -c "zmcontrol status" 2>&1 || true
+}
+
+# Service names whose last field is Running or Stopped (stdin = zmcontrol status).
+# Ignores Host, blank, and Connect: noise. "service webapp" stays one name.
+zimbra_status_names() {
+  local want="$1"
+  awk -v want="$want" '
+    /^[[:space:]]*$/ { next }
+    $1 == "Host" { next }
+    /Connect:/ { next }
+    NF >= 2 && $NF == want {
+      n = $1
+      for (i = 2; i < NF; i++) n = n " " $i
+      print n
+    }
+  '
+}
+
+zimbra_status_service_count() {
+  awk '
+    /^[[:space:]]*$/ { next }
+    $1 == "Host" { next }
+    /Connect:/ { next }
+    NF >= 2 && ($NF == "Running" || $NF == "Stopped") { n++ }
+    END { print n + 0 }
+  '
+}
+
+count_nonempty_lines() {
+  awk 'NF { n++ } END { print n + 0 }'
+}
+
+names_on_one_line() {
+  tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
+
+# Daemons that must be gone before rsync. Ignores shells and the status check.
+zimbra_lingering_daemons() {
+  [ "${KIN_MIGRATE_SKIP_PS_CHECK:-0}" = "1" ] && return 0
+  ps -u zimbra -ww -o comm=,args= 2>/dev/null | awk '
+    $1 ~ /^(bash|sh|dash|su|ps|awk|sed|grep|cat|head|tr|wc)$/ { next }
+    $0 ~ /zmcontrol/ { next }
+    $1 ~ /^(java|mysqld|mysqld_safe|slapd|nginx|master|amavisd|clamd|clamdscan|memcached|opendkim|httpd|node|beam\.smp|epmd|god)$/ { print; next }
+    $0 ~ /zmconfigd/ { print; next }
+    $0 ~ /onlyoffice/ { print; next }
+    $0 ~ /soffice/ { print; next }
+  ' || true
+}
+
+dump_zimbra_status() {
+  info "zmcontrol status:"
+  zimbra_status_text | sed 's/^/    /' || true
+}
+
+dump_zimbra_lingering() {
+  local linger
+  linger=$(zimbra_lingering_daemons || true)
+  if [ -n "$linger" ]; then
+    info "lingering zimbra daemons:"
+    printf '%s\n' "$linger" | sed 's/^/    /'
+  fi
+}
+
+# zmcontrol stop prints "Stopping X...Done" when each ctl script returns, which
+# is before mailboxd/onlyoffice/java have always fully exited. Poll status plus
+# the process table, with backoff, until it is actually down.
+wait_none_running() {
+  local budget="${KIN_MIGRATE_STOP_WAIT_SEC:-300}"
+  local slept=0 delay=2 max_delay=8
+  local text running linger svc nrunning
+  while [ "$slept" -le "$budget" ]; do
+    text=$(zimbra_status_text)
+    running=$(printf '%s\n' "$text" | zimbra_status_names Running)
+    linger=$(zimbra_lingering_daemons || true)
+    svc=$(printf '%s\n' "$text" | zimbra_status_service_count)
+    nrunning=$(printf '%s\n' "$running" | count_nonempty_lines)
+    if [ "${svc:-0}" -ge 1 ] && [ "${nrunning:-0}" -eq 0 ] && [ -z "$linger" ]; then
+      return 0
+    fi
+    if [ -n "$running" ]; then
+      info "stop wait ${slept}s/${budget}s: still Running: $(printf '%s\n' "$running" | names_on_one_line)"
+    elif [ "${svc:-0}" -eq 0 ]; then
+      info "stop wait ${slept}s/${budget}s: zmcontrol status has no service lines yet"
+    fi
+    if [ -n "$linger" ]; then
+      info "stop wait ${slept}s/${budget}s: lingering daemons:"
+      printf '%s\n' "$linger" | sed 's/^/    /'
+    fi
+    [ "$slept" -ge "$budget" ] && break
+    sleep "$delay"
+    slept=$((slept + delay))
+    if [ "$delay" -lt "$max_delay" ]; then
+      delay=$((delay + 1))
+    fi
+  done
+  return 1
+}
+
+wait_all_running() {
+  local budget="${KIN_MIGRATE_START_WAIT_SEC:-900}"
+  local slept=0 delay=2 max_delay=8
+  local text running stopped svc nrunning nstopped
+  while [ "$slept" -le "$budget" ]; do
+    text=$(zimbra_status_text)
+    running=$(printf '%s\n' "$text" | zimbra_status_names Running)
+    stopped=$(printf '%s\n' "$text" | zimbra_status_names Stopped)
+    svc=$(printf '%s\n' "$text" | zimbra_status_service_count)
+    nrunning=$(printf '%s\n' "$running" | count_nonempty_lines)
+    nstopped=$(printf '%s\n' "$stopped" | count_nonempty_lines)
+    if [ "${svc:-0}" -ge 1 ] && [ "${nstopped:-0}" -eq 0 ] && [ "${nrunning:-0}" -ge 1 ]; then
+      return 0
+    fi
+    if [ -n "$stopped" ]; then
+      info "start wait ${slept}s/${budget}s: still Stopped: $(printf '%s\n' "$stopped" | names_on_one_line)"
+    elif [ "${svc:-0}" -eq 0 ]; then
+      info "start wait ${slept}s/${budget}s: zmcontrol status has no service lines yet"
+    fi
+    [ "$slept" -ge "$budget" ] && break
+    sleep "$delay"
+    slept=$((slept + delay))
+    if [ "$delay" -lt "$max_delay" ]; then
+      delay=$((delay + 1))
+    fi
+  done
+  return 1
+}
+
 rollback() {
   trap - INT TERM HUP
   [ "$DRY_RUN" -eq 1 ] && return 0
   case "$STAGE" in
-    init|preflight) return 0 ;;
+    init|preflight|done) return 0 ;;
   esac
   warn "Attempting rollback from stage=${STAGE}"
   if [ "$OPT_MOUNTED_NEW" -eq 1 ]; then
@@ -110,48 +250,22 @@ rollback() {
     umount_retry "$TMP_MNT" 2>/dev/null || umount "$TMP_MNT" 2>/dev/null || true
     TMP_MOUNTED=0
   fi
-  if [ -d "$ZIMBRA_DIR/bin" ]; then
-    su - zimbra -c "zmcontrol start" >/dev/null 2>&1 || true
-    warn "Rollback finished — check: su - zimbra -c 'zmcontrol status'"
+  if [ ! -d "$ZIMBRA_DIR/bin" ]; then
+    fail "Rollback: ${ZIMBRA_DIR}/bin missing, cannot start Zimbra. Mail may be down."
+    return 1
   fi
-}
-
-zimbra_running_lines() {
-  su - zimbra -c "zmcontrol status" 2>/dev/null \
-    | grep -vE "^Host|^$" \
-    | grep -c Running || true
-}
-
-zimbra_stopped_count() {
-  # Same gate as 03-install-zimbra.sh: non-Running, non-Host, non-empty lines.
-  local status
-  status=$(su - zimbra -c "zmcontrol status" 2>&1) || true
-  printf '%s' "$status" | grep -v Running | grep -vE "^Host|^$" | wc -l | tr -d ' '
-}
-
-wait_all_running() {
-  local i=0 stopped
-  while [ "$i" -lt 90 ]; do
-    stopped=$(zimbra_stopped_count)
-    if [ "${stopped:-1}" -eq 0 ]; then
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 2
-  done
-  return 1
-}
-
-wait_none_running() {
-  local i=0
-  while [ "$i" -lt 60 ]; do
-    if [ "$(zimbra_running_lines)" -eq 0 ]; then
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 2
-  done
-  return 1
+  say "Rollback: starting Zimbra"
+  if ! su - zimbra -c "zmcontrol start"; then
+    fail "Rollback zmcontrol start failed. Mail may be down."
+    dump_zimbra_status
+    return 1
+  fi
+  if ! wait_all_running; then
+    fail "Rollback started Zimbra but not all services are Running. Mail may be down."
+    dump_zimbra_status
+    return 1
+  fi
+  ok "Rollback: all Zimbra services Running"
 }
 
 parent_name() {
@@ -183,6 +297,10 @@ umount_retry() {
   umount "$target"
 }
 
+if [ "${KIN_MIGRATE_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   fail "Run as root: sudo $0"
   exit 1
@@ -212,7 +330,7 @@ if [ ! -x "$ZIMBRA_DIR/bin/zmcontrol" ] && [ ! -x /opt/zimbra/bin/zmcontrol ]; t
   exit 1
 fi
 
-for bin in findmnt lsblk blkid blockdev mount umount rmdir mv mkdir cp awk grep find basename du date head sed sync su; do
+for bin in findmnt lsblk blkid blockdev mount umount rmdir mv mkdir cp awk grep find basename du date head sed sync su ps; do
   command -v "$bin" >/dev/null 2>&1 || { fail "Required command not found: ${bin}"; exit 1; }
 done
 
@@ -296,7 +414,7 @@ case "$FSTYPE" in
     info "${DATA_DISK} has no filesystem — will mkfs.ext4 -L zimbra-data (plan_auto_partition does not mkfs data)"
     ;;
   ext4)
-    ok "${DATA_DISK} is already ext4"
+    ok "${DATA_DISK} is already ext4 (will not mkfs again)"
     ;;
   *)
     fail "${DATA_DISK} has TYPE=${FSTYPE} — refusing to reuse/reformat an unexpected filesystem"
@@ -368,7 +486,13 @@ UUID=$(blkid -s UUID -o value "$DATA_DISK" 2>/dev/null || true)
 STAGE=stopped
 say "Stopping Zimbra"
 su - zimbra -c "zmcontrol stop" || die "zmcontrol stop failed"
-wait_none_running || die "Zimbra still has Running services after stop"
+# zmcontrol stop can print Done while zmconfigd's watcher is still up.
+su - zimbra -c "zmconfigdctl stop" >/dev/null 2>&1 || true
+if ! wait_none_running; then
+  dump_zimbra_status
+  dump_zimbra_lingering
+  die "Zimbra still has Running services after stop"
+fi
 ok "Zimbra is stopped"
 
 STAGE=rsync
@@ -442,11 +566,10 @@ STAGE=started
 say "Starting Zimbra on the data partition"
 su - zimbra -c "zmcontrol start" || die "zmcontrol start failed"
 if ! wait_all_running; then
-  su - zimbra -c "zmcontrol status" 2>&1 | sed 's/^/    /' || true
-  die "Zimbra did not reach all-services Running (same gate as 03-install-zimbra.sh)"
+  dump_zimbra_status
+  die "Zimbra did not reach all-services Running"
 fi
-STATUS=$(su - zimbra -c "zmcontrol status" 2>&1)
-printf '%s\n' "$STATUS" | sed 's/^/    /'
+dump_zimbra_status
 ok "All services running"
 
 STAGE='done'
