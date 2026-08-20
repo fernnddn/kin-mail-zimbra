@@ -180,7 +180,6 @@ run_soft rm -rf /etc/kin-mail-console
 run_soft rm -rf /var/lib/kin-mail-console
 run_soft rm -f /var/log/kin-mail/deploy-last.log /var/log/kin-mail-install.log
 run_soft rm -rf /opt/kin-mail-console
-run_soft rm -rf /opt/kin-mail-console
 run_soft rm -rf /opt/kin-mail-deploy
 run_soft rm -f /run/kin-mail/privhelper.sock
 run_soft rm -rf /run/kin-mail
