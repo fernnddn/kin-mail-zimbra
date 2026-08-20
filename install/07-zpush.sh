@@ -46,13 +46,77 @@ echo
 say "Z-Push ${ZPUSH_VERSION} (Zimbra backend Release 75)"
 
 # -----------------------------------------------------------------------------
+# Ubuntu 24.04 ships php8.3 in universe; 22.04 (jammy) does not — only 8.1.
+# Add ppa:ondrej/php only when php8.3-fpm is still absent from apt.
+php83_apt_available() {
+  local cand
+  cand=$(apt-cache policy php8.3-fpm 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+  [ -n "$cand" ] && [ "$cand" != "(none)" ]
+}
+
+ondrej_php_ppa_present() {
+  grep -RqsE 'ppa\.launchpad(content)?\.net/ondrej/php' \
+    /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null
+}
+
+ensure_php83_apt_source() {
+  if php83_apt_available; then
+    info "php8.3-fpm already in apt"
+    return 0
+  fi
+
+  info "php8.3-fpm not in current apt sources (expected on Ubuntu 22.04) — adding ppa:ondrej/php"
+  if ! command -v add-apt-repository >/dev/null 2>&1; then
+    if ! apt-get -y install software-properties-common ca-certificates gnupg >/dev/null; then
+      fail "Could not install software-properties-common (needed to add ppa:ondrej/php)"
+      exit 1
+    fi
+  fi
+
+  if ondrej_php_ppa_present; then
+    info "ppa:ondrej/php already configured"
+  else
+    # -y is idempotent if the PPA was added by another path; do not treat
+    # a second add as fatal when the list file is already present.
+    if ! add-apt-repository -y ppa:ondrej/php; then
+      if ondrej_php_ppa_present; then
+        warn "add-apt-repository returned non-zero but ppa:ondrej/php is present — continuing"
+      else
+        fail "Could not add ppa:ondrej/php (required for PHP 8.3 on Ubuntu 22.04)"
+        exit 1
+      fi
+    fi
+  fi
+
+  if ! apt-get -qq update; then
+    fail "apt-get update failed after adding ppa:ondrej/php"
+    exit 1
+  fi
+  if ! php83_apt_available; then
+    fail "php8.3-fpm still not available after adding ppa:ondrej/php"
+    exit 1
+  fi
+  info "php8.3-fpm available via ppa:ondrej/php"
+}
+
 install_packages() {
   say "1. Packages (PHP 8.3-FPM + helpers)"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get -qq update
-  apt-get -y install \
+  if ! apt-get -qq update; then
+    fail "apt-get update failed"
+    exit 1
+  fi
+  ensure_php83_apt_source
+  if ! apt-get -y install \
     php8.3-fpm php8.3-cli php8.3-curl php8.3-xml php8.3-mbstring \
-    php8.3-intl php8.3-soap php8.3-zip unzip curl ca-certificates >/dev/null
+    php8.3-intl php8.3-soap php8.3-zip unzip curl ca-certificates >/dev/null; then
+    fail "apt-get failed to install PHP 8.3-FPM and dependencies"
+    exit 1
+  fi
+  if ! dpkg -s php8.3-fpm >/dev/null 2>&1; then
+    fail "php8.3-fpm is not installed after apt-get (refusing to print OK)"
+    exit 1
+  fi
   ok "PHP 8.3-FPM and dependencies present"
 }
 
