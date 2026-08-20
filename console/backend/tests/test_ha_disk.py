@@ -519,6 +519,24 @@ class HaDiskTests(unittest.TestCase):
         self.assertEqual(peer["action"], "partition")
         self.assertEqual(peer["disk"], "/dev/sdb")
 
+    def test_selector_stdin_stays_quoted_oneline(self) -> None:
+        """ansible-core 2.12 turns a >- folded to_json expr into str(dict)."""
+        from pathlib import Path
+
+        tasks = (
+            Path(__file__).resolve().parents[3]
+            / "ansible/roles/drbd_disk_prep/tasks/main.yml"
+        )
+        text = tasks.read_text()
+        self.assertNotIn("stdin: >-", text)
+        self.assertIn(
+            'stdin: "{{ {\'lsblk\': drbd_disk_prep_lsblk.stdout | from_json, '
+            "'root_source': drbd_disk_prep_root.stdout | trim, "
+            "'data_disk': drbd_disk_prep_data, "
+            "'meta_disk': drbd_disk_prep_meta} | to_json }}\"",
+            text,
+        )
+
     def test_selector_emits_json_even_on_bad_stdin(self) -> None:
         """Empty stdout means the process never ran, not a selector logic miss."""
         import subprocess
