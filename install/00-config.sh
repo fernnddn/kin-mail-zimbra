@@ -5,12 +5,17 @@
 # Sourced by every numbered script. On first run it asks for the few settings
 # that differ per deployment and stores them in /etc/kin-mail/config.
 # Later runs read that file and ask nothing.
+# Remote/console installs must pre-stage this file; without a usable TTY the
+# wizard exits instead of looping.
 #
 # To reconfigure from scratch:  sudo ./00-config.sh --reset
 # =============================================================================
 
-CONF_DIR="/etc/kin-mail"
-CONF_FILE="${CONF_DIR}/config"
+CONF_DIR="${KIN_MAIL_CONF_DIR:-/etc/kin-mail}"
+CONF_FILE="${KIN_MAIL_CONFIG:-${CONF_DIR}/config}"
+if [ -n "${KIN_MAIL_CONFIG:-}" ]; then
+  CONF_DIR=$(dirname "$CONF_FILE")
+fi
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[36m'
 BLD=$'\033[1m'; DIM=$'\033[2m'; RST=$'\033[0m'
@@ -197,31 +202,61 @@ dns_ns_provider_count() {
 
 # ask VARNAME "Question" "default"        -> normal input
 # ask_secret VARNAME "Question"           -> hidden input, no default
+# /dev/tty can exist and be permission-readable while a non-TTY SSH session
+# still gets immediate EOF from read (that pinned a CPU on a fresh HA peer).
+# Opening it as stdin is the real usability check; a failed read is fatal.
+kin_tty_usable() {
+  { : </dev/tty; } 2>/dev/null
+}
+
+kin_require_tty() {
+  local why="${1:-interactive prompt}"
+  if ! kin_tty_usable; then
+    fail "cannot read /dev/tty (no controlling terminal); refusing to prompt"
+    info "Refused ${why}."
+    exit 1
+  fi
+}
+
 ask() {
   local __var="$1" __prompt="$2" __default="${3:-}" __reply=""
+  kin_require_tty "prompt ${__var}"
   if [ -n "$__default" ]; then
     printf '  %s %s[%s]%s: ' "$__prompt" "$DIM" "$__default" "$RST"
   else
     printf '  %s: ' "$__prompt"
   fi
-  read -r __reply </dev/tty
+  if ! read -r __reply </dev/tty; then
+    fail "read from /dev/tty failed for ${__var}; cannot run interactively here"
+    exit 1
+  fi
   [ -z "$__reply" ] && __reply="$__default"
   printf -v "$__var" '%s' "$__reply"
 }
 
 ask_secret() {
   local __var="$1" __prompt="$2" __reply=""
+  kin_require_tty "prompt ${__var}"
   printf '  %s: ' "$__prompt"
-  read -rs __reply </dev/tty; echo
+  if ! read -rs __reply </dev/tty; then
+    echo
+    fail "read from /dev/tty failed for ${__var}; cannot run interactively here"
+    exit 1
+  fi
+  echo
   printf -v "$__var" '%s' "$__reply"
 }
 
 ask_yn() {
   local __prompt="$1" __default="${2:-y}" __reply=""
+  kin_require_tty "yes/no prompt"
   printf '  %s %s[%s/%s]%s: ' "$__prompt" "$DIM" \
     "$([ "$__default" = y ] && echo Y || echo y)" \
     "$([ "$__default" = y ] && echo n || echo N)" "$RST"
-  read -r __reply </dev/tty
+  if ! read -r __reply </dev/tty; then
+    fail "read from /dev/tty failed; cannot run interactively here"
+    exit 1
+  fi
   [ -z "$__reply" ] && __reply="$__default"
   case "$__reply" in [Yy]*) return 0;; *) return 1;; esac
 }
@@ -241,6 +276,7 @@ detect_defaults() {
 
 # --- interactive wizard ------------------------------------------------------
 run_wizard() {
+  kin_require_tty "initial configuration wizard"
   detect_defaults
   echo
   printf '%s\n' "${BLD}  KIN Mail - initial configuration${RST}"
@@ -249,8 +285,15 @@ run_wizard() {
 
   say "Mail server identity"
   ask MAIL_DOMAIN "Email domain (part after @)" "${DEF_DOMAIN}"
+  _domain_tries=0
   while [ -z "$MAIL_DOMAIN" ]; do
+    _domain_tries=$((_domain_tries + 1))
+    if [ "$_domain_tries" -ge 5 ]; then
+      fail "MAIL_DOMAIN is required; giving up (no usable answer)"
+      exit 1
+    fi
     warn "Domain is required. Example: example.co.id"
+    sleep 1
     ask MAIL_DOMAIN "Email domain" ""
   done
   ask MAIL_HOST   "Mail server hostname (FQDN)" "mail.${MAIL_DOMAIN}"
@@ -303,10 +346,17 @@ run_wizard() {
   fi
 
   echo; say "Credentials"
+  _pass_tries=0
   while :; do
     ask_secret ADMIN_PASS "Zimbra admin password (min 8 characters)"
     [ ${#ADMIN_PASS} -ge 8 ] && break
+    _pass_tries=$((_pass_tries + 1))
+    if [ "$_pass_tries" -ge 5 ]; then
+      fail "ADMIN_PASS is required (min 8 characters); giving up"
+      exit 1
+    fi
     warn "Too short."
+    sleep 1
   done
   ask LE_EMAIL "Email for Let's Encrypt notifications" "admin@${MAIL_DOMAIN}"
 
@@ -315,14 +365,26 @@ run_wizard() {
   info "2) Manual DNS-01      — any provider; operator creates TXT once in DNS panel"
   info "3) Customer-provided  — skip certbot; install customer cert/key via zmcertmgr"
   TLS_METHOD=""
+  _tls_tries=0
   while [ -z "$TLS_METHOD" ]; do
+    _tls_tries=$((_tls_tries + 1))
+    if [ "$_tls_tries" -gt 8 ]; then
+      fail "TLS_METHOD was not chosen; cannot run interactively here"
+      exit 1
+    fi
     printf '  Choice [1/2/3]: '
-    read -r __tls </dev/tty
+    if ! read -r __tls </dev/tty; then
+      fail "no controlling terminal and no /etc/kin-mail/config present, cannot run interactively here"
+      exit 1
+    fi
     case "$__tls" in
       1) TLS_METHOD=cloudflare ;;
       2) TLS_METHOD=manual ;;
       3) TLS_METHOD=customer ;;
-      *) warn "Choose 1, 2, or 3." ;;
+      *)
+        warn "Choose 1, 2, or 3."
+        sleep 1
+        ;;
     esac
   done
   ok "TLS_METHOD=${TLS_METHOD}"
@@ -486,6 +548,7 @@ detect_latest_zcs() {
 
 # --- entry point -------------------------------------------------------------
 if [ "${1:-}" = "--reset" ]; then
+  kin_require_tty "00-config.sh --reset"
   need_root
   [ -f "$CONF_FILE" ] && mv "$CONF_FILE" "${CONF_FILE}.bak.$(date +%s)"
   run_wizard
@@ -496,6 +559,10 @@ if [ -f "$CONF_FILE" ]; then
   # shellcheck disable=SC1090
   . "$CONF_FILE"
 else
+  if ! kin_tty_usable; then
+    fail "no controlling terminal and no /etc/kin-mail/config present, cannot run interactively here"
+    exit 1
+  fi
   need_root
   run_wizard
   # shellcheck disable=SC1090

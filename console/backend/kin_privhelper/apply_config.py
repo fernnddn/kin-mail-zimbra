@@ -163,6 +163,29 @@ def format_config(values: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def parse_ip_dash_o_v4(text: str) -> list[tuple[str, str]]:
+    """Parse `ip -4 -o addr show scope global` into (ipv4, iface) pairs."""
+    rows: list[tuple[str, str]] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        # e.g. "2: ens33    inet 192.0.2.15/24 brd ..." (RFC 5737; not a lab address)
+        if len(parts) >= 4 and parts[2] == "inet":
+            iface = parts[1]
+            ip = parts[3].split("/", 1)[0]
+            if iface and valid_ipv4(ip):
+                rows.append((ip, iface))
+    return rows
+
+
+def iface_for_ipv4(text: str, ipv4: str) -> str:
+    """Return the iface that owns ipv4 in `ip -4 -o addr` text, else empty."""
+    want = (ipv4 or "").strip()
+    for ip, iface in parse_ip_dash_o_v4(text):
+        if ip == want:
+            return iface
+    return ""
+
+
 def detect_host_network() -> tuple[str, str]:
     """Auto-detect (SERVER_IP, NET_IFACE) like install/00-config.sh detect_defaults."""
     try:
@@ -173,15 +196,54 @@ def detect_host_network() -> tuple[str, str]:
         )
     except (OSError, subprocess.CalledProcessError):
         return "", ""
-    for line in out.splitlines():
-        parts = line.split()
-        # e.g. "2: ens33    inet 192.0.2.15/24 brd ..." (RFC 5737; not a lab address)
-        if len(parts) >= 4 and parts[2] == "inet":
-            iface = parts[1]
-            ip = parts[3].split("/", 1)[0]
-            if iface and ip:
-                return ip, iface
-    return "", ""
+    rows = parse_ip_dash_o_v4(out)
+    if not rows:
+        return "", ""
+    return rows[0][0], rows[0][1]
+
+
+def peer_install_config(
+    primary: dict[str, str],
+    *,
+    peer_host: str,
+    peer_ip: str,
+    peer_iface: str,
+) -> dict[str, str]:
+    """Config for a fresh HA peer full-install.
+
+    Cluster-identical keys (domain, TLS, AD, seats, ZCS artefact, admin
+    password) are copied from the primary. Host identity is not: 02-prepare-os
+    runs hostnamectl set-hostname MAIL_HOST and writes SERVER_IP into
+    /etc/hosts, so those must be this machine, not the primary's values.
+    """
+    peer_host = (peer_host or "").strip()
+    peer_ip = (peer_ip or "").strip()
+    peer_iface = (peer_iface or "").strip()
+    if not peer_host:
+        raise ValueError("peer hostname is required")
+    if not valid_ipv4(peer_ip):
+        raise ValueError("peer SERVER_IP must be IPv4")
+    if not peer_iface or any(ch in peer_iface for ch in ("/", " ", "\n", "\t")):
+        raise ValueError("peer NET_IFACE is missing or invalid")
+    primary_host = str(primary.get("MAIL_HOST") or "").strip()
+    primary_ip = str(primary.get("SERVER_IP") or "").strip()
+    if not str(primary.get("MAIL_DOMAIN") or "").strip():
+        raise ValueError("primary config missing MAIL_DOMAIN")
+    if not str(primary.get("ADMIN_PASS") or "").strip():
+        raise ValueError("primary config missing ADMIN_PASS")
+    if peer_host == primary_host:
+        raise ValueError("peer hostname must differ from the primary MAIL_HOST")
+    if peer_ip == primary_ip:
+        raise ValueError("peer SERVER_IP must differ from the primary SERVER_IP")
+    out = dict(primary)
+    out["MAIL_HOST"] = peer_host
+    out["SERVER_IP"] = peer_ip
+    out["NET_IFACE"] = peer_iface
+    if primary_ip:
+        out["PEER_HOST_IP"] = primary_ip
+    if primary_host:
+        out["PEER_HOST_NAME"] = primary_host
+    return out
 
 
 def _os_version_id() -> str:

@@ -18,6 +18,7 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -545,6 +546,257 @@ async def _ssh_probe(
     return await _ssh_run(host, user, password, secrets, "hostname -f || hostname")
 
 
+# Inlined on the peer so this does not depend on a script already being there.
+PEER_OS_PREP_READINESS_CMD = (
+    "missing=\"\"; "
+    '[ -x /opt/kin-mail-deploy/install/kin-mail.sh ] || missing="${missing}deploy-tree "; '
+    'sudo -n true >/dev/null 2>&1 || missing="${missing}sudo-n "; '
+    'if [ -n "$missing" ]; then echo "KIN_PEER_NOT_READY:${missing}"; exit 4; fi; '
+    "echo KIN_PEER_READY"
+)
+
+_PEER_READY_LABELS = {
+    "deploy-tree": (
+        "missing /opt/kin-mail-deploy/install/kin-mail.sh "
+        "(run console/bootstrap.sh on the peer)"
+    ),
+    "sudo-n": "cannot sudo -n (NOPASSWD sudo for this SSH user)",
+}
+
+_SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
+_INSTALL_DEST_RE = re.compile(
+    r"^/(etc/kin-mail/config|etc/letsencrypt/[A-Za-z0-9._-]+)$"
+)
+
+
+def parse_peer_prep_readiness(text: str, exit_code: int) -> tuple[bool, list[str]]:
+    """Parse the inlined peer readiness probe. Returns (ok, human missing items)."""
+    blob = (text or "").strip()
+    tokens: list[str] = []
+    for line in blob.splitlines():
+        line = line.strip()
+        if line.startswith("KIN_PEER_NOT_READY:"):
+            tokens.extend(t for t in line.split(":", 1)[1].split() if t)
+    if exit_code == 0 and "KIN_PEER_READY" in blob and not tokens:
+        return True, []
+    if not tokens:
+        tokens = ["unknown"]
+    labels = [_PEER_READY_LABELS.get(t, t) for t in tokens]
+    return False, labels
+
+
+async def _scp_put(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+    local_path: Path,
+    remote_tmp: str,
+    *,
+    timeout: int = 30,
+) -> tuple[int, str]:
+    """Password scp of a local file to a fixed /tmp name on the peer."""
+    sshpass = shutil.which("sshpass")
+    if not sshpass:
+        return 127, "sshpass not installed"
+    if not _SCP_TMP_RE.match(remote_tmp):
+        return 2, "refusing unsafe scp destination"
+    argv = [
+        sshpass,
+        "-e",
+        "scp",
+        "-o",
+        "PreferredAuthentications=password",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"ConnectTimeout={timeout}",
+        str(local_path),
+        f"{user}@{host.ip}:{remote_tmp}",
+    ]
+    env = {**os.environ, "SSHPASS": password}
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    out_b, err_b = await proc.communicate()
+    out = redact_text(out_b.decode("utf-8", errors="replace"), secrets)
+    err = redact_text(err_b.decode("utf-8", errors="replace"), secrets)
+    text = (out or err).strip()
+    return int(proc.returncode or 0), text
+
+
+async def _install_staged_peer_file(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+    *,
+    remote_tmp: str,
+    dest: str,
+) -> tuple[int, str]:
+    """sudo-install a staged /tmp file to dest, then remove the temp copy."""
+    if not _SCP_TMP_RE.match(remote_tmp) or not _INSTALL_DEST_RE.match(dest):
+        return 2, "refusing unsafe install path"
+    dest_dir = str(Path(dest).parent)
+    cmd = (
+        f"sudo -n mkdir -p {dest_dir} && "
+        f"sudo -n install -m 600 -o root -g root {remote_tmp} {dest} && "
+        f"rm -f {remote_tmp}"
+    )
+    return await _ssh_run(host, user, password, secrets, cmd, timeout=20)
+
+
+def _write_secure_temp(body: str) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="kin-mail-peer-",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        os.chmod(handle.name, 0o600)
+        handle.write(body)
+        handle.flush()
+    finally:
+        handle.close()
+    return Path(handle.name)
+
+
+async def _push_peer_install_files(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+    payload: dict[str, str],
+) -> tuple[int, str]:
+    """scp + sudo install of staged config (and Cloudflare creds when present)."""
+    local_cfg = _write_secure_temp(payload["body"])
+    try:
+        code, text = await _scp_put(
+            host, user, password, secrets, local_cfg, "/tmp/kin-mail-peer-config"
+        )
+        if code != 0:
+            return code, text or "scp of peer config failed"
+        code, text = await _install_staged_peer_file(
+            host,
+            user,
+            password,
+            secrets,
+            remote_tmp="/tmp/kin-mail-peer-config",
+            dest="/etc/kin-mail/config",
+        )
+        if code != 0:
+            return code, text or "install of /etc/kin-mail/config failed"
+    finally:
+        try:
+            local_cfg.unlink()
+        except OSError:
+            pass
+    cf_body = payload.get("cf_body")
+    if not cf_body:
+        return 0, ""
+    cf_dest = payload.get("cf_dest") or "/etc/letsencrypt/cloudflare.ini"
+    local_cf = _write_secure_temp(cf_body)
+    try:
+        code, text = await _scp_put(
+            host, user, password, secrets, local_cf, "/tmp/kin-mail-peer-cf.ini"
+        )
+        if code != 0:
+            return code, text or "scp of Cloudflare creds failed"
+        code, text = await _install_staged_peer_file(
+            host,
+            user,
+            password,
+            secrets,
+            remote_tmp="/tmp/kin-mail-peer-cf.ini",
+            dest=cf_dest,
+        )
+        if code != 0:
+            return code, text or f"install of {cf_dest} failed"
+    finally:
+        try:
+            local_cf.unlink()
+        except OSError:
+            pass
+    return 0, ""
+
+
+def build_peer_install_payload(
+    *,
+    primary: dict[str, str],
+    peer: OrchHost,
+    ip_addr_text: str,
+    cloudflare_text: str | None,
+) -> tuple[int, list[str], dict[str, str]]:
+    """Build the peer /etc/kin-mail/config body (and optional CF creds).
+
+    ip_addr_text is `ip -4 -o addr show scope global` from the peer.
+    cloudflare_text is the primary CF creds file, or None when unused.
+    On success payload keys: body, MAIL_HOST, SERVER_IP, NET_IFACE, TLS_METHOD,
+    cf_dest, cf_body (cf_body only when TLS_METHOD=cloudflare).
+    Log lines never include passwords or API tokens.
+    """
+    from .apply_config import format_config, iface_for_ipv4, peer_install_config
+
+    lines: list[str] = []
+    iface = iface_for_ipv4(ip_addr_text, peer.ip)
+    if not iface:
+        lines.append(
+            f"Could not detect NET_IFACE on the peer for SERVER_IP={peer.ip} "
+            "(ip -4 -o addr had no matching inet line)."
+        )
+        return 2, lines, {}
+    try:
+        values = peer_install_config(
+            primary,
+            peer_host=peer.name,
+            peer_ip=peer.ip,
+            peer_iface=iface,
+        )
+    except ValueError as exc:
+        lines.append(f"Refusing to stage peer config: {exc}")
+        return 2, lines, {}
+    tls = str(values.get("TLS_METHOD") or "cloudflare").strip()
+    cf_dest = str(values.get("CF_CREDS") or "/etc/letsencrypt/cloudflare.ini").strip()
+    payload: dict[str, str] = {
+        "body": format_config(values),
+        "MAIL_HOST": values["MAIL_HOST"],
+        "SERVER_IP": values["SERVER_IP"],
+        "NET_IFACE": values["NET_IFACE"],
+        "MAIL_DOMAIN": str(values.get("MAIL_DOMAIN") or ""),
+        "TLS_METHOD": tls,
+        "cf_dest": cf_dest,
+    }
+    if tls == "cloudflare":
+        if not _INSTALL_DEST_RE.match(cf_dest):
+            lines.append(f"Refusing CF_CREDS path {cf_dest}")
+            return 2, lines, {}
+        if cloudflare_text is None or not str(cloudflare_text).strip():
+            lines.append(
+                "TLS_METHOD=cloudflare but this host has no usable "
+                f"{cf_dest}; 04-tls-dkim.sh would prompt for a token on the peer."
+            )
+            return 2, lines, {}
+        if "PASTE" in cloudflare_text:
+            lines.append(
+                f"{cf_dest} still contains PASTE; 04-tls-dkim.sh would prompt on the peer."
+            )
+            return 2, lines, {}
+        payload["cf_body"] = cloudflare_text
+    lines.append(
+        f"peer config MAIL_HOST={payload['MAIL_HOST']} "
+        f"SERVER_IP={payload['SERVER_IP']} NET_IFACE={payload['NET_IFACE']} "
+        f"MAIL_DOMAIN={payload['MAIL_DOMAIN']} TLS_METHOD={tls}"
+    )
+    return 0, lines, payload
+
+
 async def cmd_run_ha_orchestration(
     args: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -879,6 +1131,107 @@ async def cmd_run_ha_orchestration(
         )
 
         if step.kind == "remote_install":
+            ready_code, ready_text = await _ssh_run(
+                peer,
+                ssh_user,
+                ssh_pass,
+                secrets,
+                PEER_OS_PREP_READINESS_CMD,
+                timeout=20,
+            )
+            ready_ok, ready_missing = parse_peer_prep_readiness(ready_text, ready_code)
+            if not ready_ok:
+                yield emit_line(
+                    "Peer is not ready for remote full-install. Fix all of these, then retry:",
+                    err=True,
+                )
+                for item in ready_missing:
+                    yield emit_line(f"  - {item}", err=True)
+                failed_step = step.step_id
+                exit_code = ready_code or 4
+                yield emit_line(
+                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; stopping. "
+                    "No auto-retry, no auto-rollback.",
+                    err=True,
+                )
+                break
+
+            ip_code, ip_text = await _ssh_run(
+                peer,
+                ssh_user,
+                ssh_pass,
+                secrets,
+                "ip -4 -o addr show scope global",
+                timeout=15,
+            )
+            if ip_code != 0:
+                yield emit_line(
+                    f"Could not read peer addresses (ssh exit {ip_code}): {ip_text}",
+                    err=True,
+                )
+                failed_step = step.step_id
+                exit_code = ip_code or 1
+                yield emit_line(
+                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; stopping. "
+                    "No auto-retry, no auto-rollback.",
+                    err=True,
+                )
+                break
+
+            cf_path = str(config.get("CF_CREDS") or "/etc/letsencrypt/cloudflare.ini")
+            cf_text: str | None = None
+            if str(config.get("TLS_METHOD") or "cloudflare").strip() == "cloudflare":
+                try:
+                    cf_text = Path(cf_path).read_text(encoding="utf-8")
+                except OSError:
+                    cf_text = None
+
+            stage_code, stage_lines, payload = build_peer_install_payload(
+                primary=config,
+                peer=peer,
+                ip_addr_text=ip_text,
+                cloudflare_text=cf_text,
+            )
+            for line in stage_lines:
+                yield emit_line(line, err=stage_code != 0)
+            if stage_code != 0:
+                failed_step = step.step_id
+                exit_code = stage_code
+                yield emit_line(
+                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; stopping. "
+                    "No auto-retry, no auto-rollback.",
+                    err=True,
+                )
+                break
+
+            yield emit_line(
+                "Staging /etc/kin-mail/config on the peer "
+                "(host identity detected on that machine; domain/TLS/AD copied)."
+            )
+            push_code, push_text = await _push_peer_install_files(
+                peer,
+                ssh_user,
+                ssh_pass,
+                secrets,
+                payload,
+            )
+            if push_code != 0:
+                yield emit_line(
+                    f"Failed to install staged config on the peer (exit {push_code}): {push_text}",
+                    err=True,
+                )
+                failed_step = step.step_id
+                exit_code = push_code
+                yield emit_line(
+                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; stopping. "
+                    "No auto-retry, no auto-rollback.",
+                    err=True,
+                )
+                break
+            yield emit_line(
+                "Peer /etc/kin-mail/config is in place; starting remote full-install."
+            )
+
             # Stream a remote full-install if the deploy tree already exists on the peer.
             remote_cmd = (
                 "if [ -x /opt/kin-mail-deploy/install/kin-mail.sh ]; then "

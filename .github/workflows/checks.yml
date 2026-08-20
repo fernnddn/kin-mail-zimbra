@@ -40,6 +40,9 @@ jobs:
       - name: migrate-zimbra status parser tests
         run: bash install/lib/test-migrate-zimbra-to-drbd-disk.sh
 
+      - name: 00-config TTY fail-closed tests
+        run: bash install/lib/test-00-config-tty.sh
+
       - name: Install shellcheck
         run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
 
