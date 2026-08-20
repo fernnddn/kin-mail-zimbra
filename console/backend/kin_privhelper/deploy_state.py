@@ -212,6 +212,20 @@ def record_ha_orchestration_success(*, join_mode: str) -> bool:
     return True
 
 
+def is_full_install_complete() -> bool:
+    """True when kin-mail.sh wrote /etc/kin-mail/setup-complete.
+
+    Independent of last-log text (HA orchestration truncates that file) and
+    independent of is_mail_deployed() (2vm stays false until HA apply succeeds).
+    """
+    return SETUP_COMPLETE_MARKER.is_file()
+
+
+def is_ha_setup_complete() -> bool:
+    """True when join_mode=apply reached ORCH_DONE and wrote ha-setup-complete."""
+    return HA_SETUP_COMPLETE_MARKER.is_file()
+
+
 def is_mail_deployed() -> bool:
     """True when the console should require login (setup finished).
 

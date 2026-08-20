@@ -104,6 +104,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const pipelineActionRef = useRef<DeployActionId | null>(null);
   /** Date.now() of the last SSE message. Used to detect a hung-open stream. */
   const lastSseAtRef = useRef(0);
+  /** Sync lock so a second click cannot start another stream before React re-renders. */
+  const pipelineStartRef = useRef(false);
 
   const pipelineBusy = localBusy || installInProgress;
 
@@ -347,7 +349,10 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const runDeploy = useCallback(async () => {
-    if (pipelineBusy) return;
+    if (pipelineStartRef.current || pipelineBusy) {
+      setMessage("A deploy or HA job is already running.");
+      return;
+    }
     if (!confirmFull) {
       setMessage("Tick the confirmation box before starting Deploy.");
       return;
@@ -360,6 +365,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       setMessage(err instanceof Error ? err.message : "Failed to save draft");
       return;
     }
+
+    if (pipelineStartRef.current) {
+      setMessage("A deploy or HA job is already running.");
+      return;
+    }
+    pipelineStartRef.current = true;
 
     if (pipelineEsRef.current) {
       const prev = pipelineEsRef.current;
@@ -374,6 +385,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     setLocalBusy(true);
 
     const onInstallFinished = (_exit?: number, reason?: "done" | "error" | "disconnect") => {
+      pipelineStartRef.current = false;
       void refreshSetup();
       void hydrateFromServer().then((still) => {
         if (reason === "disconnect" || reason === "error") {
@@ -387,15 +399,18 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
 
     pipelineEsRef.current = openStream("apply_draft", (applyExit, reason) => {
       if (reason === "disconnect") {
+        pipelineStartRef.current = false;
         void hydrateFromServer();
         void refreshSetup();
         return;
       }
       if (reason === "error") {
+        pipelineStartRef.current = false;
         void hydrateFromServer();
         return;
       }
       if (applyExit !== 0) {
+        pipelineStartRef.current = false;
         setLocalBusy(false);
         pipelineEsRef.current = null;
         setMessage("Could not save settings, Deploy stopped before install.");
@@ -418,13 +433,17 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   ]);
 
   const runHaOrchestration = useCallback(async (opts?: { confirmed?: boolean }) => {
-    if (pipelineBusy) return;
+    if (pipelineStartRef.current || pipelineBusy) {
+      setMessage("A deploy or HA job is already running.");
+      return;
+    }
     if (opts?.confirmed) setConfirmHa(true);
     if (!(opts?.confirmed || confirmHa)) {
       setMessage("Tick the confirmation box before starting HA orchestration.");
       return;
     }
     setMessage("");
+    pipelineStartRef.current = true;
     if (pipelineEsRef.current) {
       const prev = pipelineEsRef.current;
       pipelineEsRef.current = null;
@@ -440,6 +459,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     pipelineEsRef.current = openStream(
       "ha_orchestration",
       (_exit, reason) => {
+        pipelineStartRef.current = false;
+        void refreshSetup();
         void hydrateFromServer().then((still) => {
           if (reason === "disconnect" || reason === "error") {
             setLocalBusy(still);
@@ -459,6 +480,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     hydrateFromServer,
     openStream,
     pipelineBusy,
+    refreshSetup,
     resetLogBuffer,
   ]);
 

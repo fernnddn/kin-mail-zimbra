@@ -55,29 +55,25 @@ export function isHaOrchestrationLog(log: string): boolean {
 
 /** True if this transcript ever recorded a successful Primary full-install.
 
-  Independent of current installProgress: after HA orchestration starts,
-  parseInstallProgress switches to HA stages and `complete` no longer means
-  the single-node install succeeded.
+  Use only for parsing the live progress bar during a full-install run.
+  Do not gate Build HA pair on this: HA orchestration truncates last-log and
+  resetLogBuffer wipes the viewer, so the success lines disappear forever.
+  UI must use the persisted setup-complete flag from /api/setup/status.
  */
 export function hasFullInstallCompleted(log: string): boolean {
   return /Full install complete/i.test(log) || /All selected pipeline stages exited 0/i.test(log);
 }
 
-/** Same-page continue after a successful Primary full-install on 2-server topology. */
-export function shouldOfferHaContinue(opts: {
+/** Offer Build HA pair after a successful Primary full-install on 2-server topology.
+
+  `fullInstallComplete` is the server-side /etc/kin-mail/setup-complete marker,
+  not a grep of the live log buffer.
+ */
+export function shouldOfferHaPair(opts: {
   topology: string;
-  complete: boolean;
-  failed: boolean;
-  log: string;
-  dismissed: boolean;
+  fullInstallComplete: boolean;
 }): boolean {
-  return (
-    opts.topology === "2vm" &&
-    opts.complete &&
-    !opts.failed &&
-    !opts.dismissed &&
-    !isHaOrchestrationLog(opts.log)
-  );
+  return opts.topology === "2vm" && opts.fullInstallComplete;
 }
 
 /** Derive install progress from streamed kin-mail.sh output. */

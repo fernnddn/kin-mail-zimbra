@@ -806,6 +806,7 @@ async def cmd_ha_disk_preflight(
         _ssh_run,
         redact_text,
         resolve_topology,
+        ssh_password_candidates,
     )
     from .provisioning_secrets import load_secrets
 
@@ -868,7 +869,7 @@ async def cmd_ha_disk_preflight(
                 secrets = [root_pass, kin_pass]
                 ssh_user = ""
                 ssh_pass = ""
-                for user, pwd in (("cursor", kin_pass), ("kin", kin_pass), ("root", root_pass)):
+                for user, pwd in ssh_password_candidates(kin_pass, root_pass):
                     code, _ident = await _ssh_run(
                         peer, user, pwd, secrets, "hostname -f || hostname", timeout=10
                     )

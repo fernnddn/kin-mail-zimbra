@@ -65,6 +65,15 @@ def redact_text(text: str, secrets: list[str]) -> str:
     return out
 
 
+def ssh_password_candidates(kin_pass: str, root_pass: str) -> tuple[tuple[str, str], ...]:
+    """SSH (username, password) pairs in try order.
+
+    ``kin`` is the only default automation account. ``root`` is last-resort.
+    Do not add extra usernames: a missing account fails first and trips fail2ban.
+    """
+    return (("kin", kin_pass), ("root", root_pass))
+
+
 def _iqn_suffix(hostname: str) -> str:
     short = hostname.split(".")[0].lower()
     short = re.sub(r"[^a-z0-9-]", "", short) or "mail"
@@ -673,11 +682,11 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(2)
         return
 
-    # Prefer the standing lab OS admin (cursor), then kin, then root.
-    # Trying a missing user first trips fail2ban on a freshly hardened peer.
+    # kin first, root last. A missing username first trips fail2ban on a
+    # freshly hardened peer.
     ssh_user = "root"
     ssh_pass = root_pass
-    for user, pwd in (("cursor", kin_pass), ("kin", kin_pass), ("root", root_pass)):
+    for user, pwd in ssh_password_candidates(kin_pass, root_pass):
         code, ident = await _ssh_probe(peer, user, pwd, secrets)
         yield emit_line(f"ssh_probe user={user} exit={code} ident={ident.splitlines()[0] if ident else ''}")
         if code == 0:

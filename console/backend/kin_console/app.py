@@ -61,6 +61,8 @@ def setup_status() -> dict[str, object]:
     from kin_privhelper.deploy_state import (
         ZIMBRA_ROOT,
         full_install_in_progress,
+        is_full_install_complete,
+        is_ha_setup_complete,
         is_mail_deployed,
     )
 
@@ -69,6 +71,11 @@ def setup_status() -> dict[str, object]:
         # Auth gate: false during first-time setup, failed/partial installs, AND
         # while full-install runs (even after /opt/zimbra appears mid-install).
         "deployed": is_mail_deployed(),
+        # Single-node kin-mail.sh --full-install finished. Survives HA log
+        # truncation. 2vm Build HA pair must key off this, not deployed and
+        # not the live log buffer.
+        "full_install_complete": is_full_install_complete(),
+        "ha_setup_complete": is_ha_setup_complete(),
         "busy": installing,
         "install_in_progress": installing,
         "marker": str(ZIMBRA_ROOT),

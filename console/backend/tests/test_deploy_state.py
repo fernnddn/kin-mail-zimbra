@@ -62,6 +62,8 @@ class MailDeployedGateTests(unittest.TestCase):
     def test_no_zimbra_tree_is_not_deployed(self) -> None:
         self.assertFalse(self.zimbra.exists())
         self.assertFalse(ds.is_mail_deployed())
+        self.assertFalse(ds.is_full_install_complete())
+        self.assertFalse(ds.is_ha_setup_complete())
 
     def test_partial_zimbra_tree_without_mailboxd_is_not_deployed(self) -> None:
         """Failed 03 leaves /opt/zimbra; that must not flip the login gate."""
@@ -98,6 +100,15 @@ class MailDeployedGateTests(unittest.TestCase):
         self._write_topology("2vm")
         self.marker.write_text("complete\n", encoding="utf-8")
         self.assertFalse(ds.is_mail_deployed())
+        self.assertTrue(ds.is_full_install_complete())
+        self.assertFalse(ds.is_ha_setup_complete())
+
+    def test_full_install_complete_ignores_last_log_text(self) -> None:
+        """HA orchestration truncates deploy-last.log; the marker still stands."""
+        self._write_topology("2vm")
+        self.marker.write_text("complete\n", encoding="utf-8")
+        self.assertTrue(ds.is_full_install_complete())
+        self.assertFalse(ds.transcript_has_terminal_outcome("HA orchestration Slice 2\nORCH_FAILED\n"))
 
     def test_2vm_mailboxd_is_not_a_proxy_for_ha_complete(self) -> None:
         self._write_topology("2vm")

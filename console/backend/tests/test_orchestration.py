@@ -335,5 +335,46 @@ class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("telemetry -> No", joined)
 
 
+class SshLoginCandidateTests(unittest.TestCase):
+    def test_candidates_are_kin_then_root_never_cursor(self) -> None:
+        from kin_privhelper.orchestration import ssh_password_candidates
+
+        pairs = ssh_password_candidates("kin-secret", "root-secret")
+        users = [u for u, _ in pairs]
+        self.assertEqual(users, ["kin", "root"])
+        self.assertNotIn("cursor", users)
+        self.assertEqual(pairs[0], ("kin", "kin-secret"))
+        self.assertEqual(pairs[1], ("root", "root-secret"))
+
+    def test_privhelper_sources_have_no_cursor_ssh_username(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1] / "kin_privhelper"
+        for name in ("orchestration.py", "commands.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            self.assertNotIn('"cursor"', text, msg=name)
+            self.assertNotIn("'cursor'", text, msg=name)
+            self.assertIn("ssh_password_candidates", text)
+
+    def test_backup_and_inventory_defaults_use_kin(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        backup = (repo / "backup" / "kin-mail-backup.sh").read_text(encoding="utf-8")
+        self.assertIn('SSH_USER="kin"', backup)
+        self.assertNotIn('SSH_USER="cursor"', backup)
+        example = (repo / "backup" / "kin-mail-backup.conf.example").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('SSH_USER="kin"', example)
+        self.assertNotIn('SSH_USER="cursor"', example)
+        inv_dir = repo / "ansible" / "inventory"
+        for path in sorted(inv_dir.glob("*.example.yml")):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("ansible_user: cursor", text, msg=str(path))
+            if "ansible_user:" in text:
+                self.assertIn("ansible_user: kin", text, msg=str(path))
+
+
 if __name__ == "__main__":
     unittest.main()

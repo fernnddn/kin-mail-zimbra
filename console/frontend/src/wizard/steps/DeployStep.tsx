@@ -20,8 +20,8 @@ import { useWizard } from "../WizardContext";
 import { useDeploySession } from "../DeploySession";
 import {
   FULL_INSTALL_STAGES,
-  hasFullInstallCompleted,
-  shouldOfferHaContinue,
+  isHaOrchestrationLog,
+  shouldOfferHaPair,
 } from "../deployPipeline";
 
 const StepCard = styled.div`
@@ -158,18 +158,19 @@ const ActionsRow = styled.div`
   margin-top: 0.85rem;
 `;
 
-const ContinueBox = styled.div`
-  margin-top: 1rem;
-  padding: 0.9rem 1rem;
-  border: 1px solid color-mix(in srgb, ${theme.accent} 40%, ${theme.line});
-  background: ${theme.accentSoft};
+const DnsReference = styled.details`
+  margin: 0 0 1rem;
+  border: 1px solid ${theme.line};
+  background: ${theme.bgElev};
   border-radius: ${theme.radius};
+  padding: 0.65rem 0.9rem;
 `;
 
-const ContinueHeading = styled.p`
-  margin: 0 0 0.35rem;
-  font-weight: 650;
-  font-size: 0.92rem;
+const DnsReferenceSummary = styled.summary`
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: ${theme.muted};
 `;
 
 type HaDisk = {
@@ -255,7 +256,7 @@ function stageState(
 export default function DeployStep() {
   const { draft } = useWizard();
   const { user } = useAuth();
-  const { deployed, installInProgress } = useSetup();
+  const { deployed, installInProgress, fullInstallComplete, loading } = useSetup();
   const navigate = useNavigate();
   const canOps = !deployed || isOpsRole(user?.role);
   const {
@@ -276,8 +277,8 @@ export default function DeployStep() {
   } = useDeploySession();
 
   const { current, total, label, complete, failed } = installProgress;
+  const haLog = isHaOrchestrationLog(log);
   const [maintNodes, setMaintNodes] = useState<string[]>([]);
-  const [haContinueDismissed, setHaContinueDismissed] = useState(false);
   const [dkim, setDkim] = useState<DkimDnsRecord | null>(null);
   useEffect(() => {
     const parsed = parseDkimFromInstallLog(log);
@@ -327,15 +328,12 @@ export default function DeployStep() {
   }, [draft.topology, canOps, activeRun, complete, failed]);
   const haDiskBlocked =
     draft.topology === "2vm" && haDisk != null && !haDisk.ok && haDisk.build_allowed !== true;
-  const showHaContinue = shouldOfferHaContinue({
+  const showHaPair = canOps && shouldOfferHaPair({
     topology: draft.topology,
-    complete,
-    failed,
-    log,
-    dismissed: haContinueDismissed,
+    fullInstallComplete,
   });
-  const haContinueBlocked =
-    inMaintenance || pipelineBusy || haDiskBlocked || haDiskLoading || haDisk == null;
+  const haPairBlocked =
+    !confirmHa || inMaintenance || pipelineBusy || haDiskBlocked || haDiskLoading || haDisk == null;
   const haSummary = `I confirm HA orchestration should run for ${draft.peer_host_ip || "the second server"} (observability ${draft.observability_vm_ip || "unset"}, VIP ${draft.cluster_vip_ip || "unset"}).`;
   const recheckHaDisk = () => {
     setHaDiskLoading(true);
@@ -364,12 +362,28 @@ export default function DeployStep() {
         )}
       </Lede>
 
-      <DnsRecordsPanel
-        mailDomain={draft.mail_domain}
-        mailHost={draft.mail_host}
-        dkimPendingNote={!dkim}
-      />
-      <DkimPublishBox dkim={dkim} />
+      {loading ? null : fullInstallComplete ? (
+        <DnsReference>
+          <DnsReferenceSummary>DNS records (already configured, click to view again)</DnsReferenceSummary>
+          <div style={{ marginTop: "0.75rem" }}>
+            <DnsRecordsPanel
+              mailDomain={draft.mail_domain}
+              mailHost={draft.mail_host}
+              dkimPendingNote={!dkim}
+            />
+            <DkimPublishBox dkim={dkim} />
+          </div>
+        </DnsReference>
+      ) : (
+        <>
+          <DnsRecordsPanel
+            mailDomain={draft.mail_domain}
+            mailHost={draft.mail_host}
+            dkimPendingNote={!dkim}
+          />
+          <DkimPublishBox dkim={dkim} />
+        </>
+      )}
 
       {inMaintenance && (
         <WarnBox>
@@ -383,11 +397,17 @@ export default function DeployStep() {
           <ProgressHead>
             <ProgressLabel>
               {failed
-                ? "Deployment failed"
+                ? haLog
+                  ? "HA sequence failed"
+                  : "Deployment failed"
                 : complete
-                  ? "Deployment complete"
+                  ? haLog
+                    ? "HA sequence complete"
+                    : "Deployment complete"
                   : activeRun
-                    ? "Deployment in progress"
+                    ? haLog
+                      ? "HA sequence in progress"
+                      : "Deployment in progress"
                     : "Deployment status"}
             </ProgressLabel>
             <ProgressCounter>
@@ -401,7 +421,9 @@ export default function DeployStep() {
             {failed
               ? `Stopped at: ${label}`
               : complete
-                ? "All install stages finished."
+                ? haLog
+                  ? "HA playbooks finished."
+                  : "All install stages finished."
                 : current > 0
                   ? `Current: ${label}`
                   : "Preparing install…"}
@@ -424,38 +446,6 @@ export default function DeployStep() {
               View logs
             </Button>
           </ActionsRow>
-          {showHaContinue && canOps && (
-            <ContinueBox>
-              <ContinueHeading>Continue to Build HA pair?</ContinueHeading>
-              <StepBody style={{ marginBottom: "0.65rem" }}>{haSummary}</StepBody>
-              <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
-              <ActionsRow style={{ marginTop: "0.65rem" }}>
-                <Button
-                  type="button"
-                  disabled={haContinueBlocked}
-                  onClick={() => void runHaOrchestration({ confirmed: true })}
-                >
-                  Build HA pair
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={haDiskLoading || pipelineBusy}
-                  onClick={recheckHaDisk}
-                >
-                  Recheck disks
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={pipelineBusy}
-                  onClick={() => setHaContinueDismissed(true)}
-                >
-                  Not now
-                </Button>
-              </ActionsRow>
-            </ContinueBox>
-          )}
         </ProgressCard>
       )}
 
@@ -501,57 +491,64 @@ export default function DeployStep() {
               )}
             </ActionsRow>
           </StepCard>
-
-          {draft.topology === "2vm" && hasFullInstallCompleted(log) && (
-            <StepCard>
-              <StepHeading>2. Build the 2-server HA pair</StepHeading>
-              <StepBody>
-                After this host has mail installed, run the Ansible sequence against the second
-                server (OS hardening, qnetd, Corosync cluster setup, qdevice, fencing, DRBD,
-                Pacemaker). Progress streams into View logs with a checkpoint per playbook. A
-                failure stops there; nothing is retried or rolled back automatically. After a
-                manual fix, run this again from the top; the playbooks are idempotent.
-              </StepBody>
-              <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
-              <label
-                style={{
-                  display: "flex",
-                  gap: "0.55rem",
-                  alignItems: "flex-start",
-                  margin: "0 0 0.75rem",
-                  fontSize: "0.88rem",
-                  lineHeight: 1.4,
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={confirmHa}
-                  onChange={(e) => setConfirmHa(e.target.checked)}
-                  style={{ marginTop: "0.2rem" }}
-                />
-                <span>{haSummary}</span>
-              </label>
-              <ActionsRow>
-                <Button
-                  type="button"
-                  disabled={!confirmHa || inMaintenance || pipelineBusy || haDiskBlocked || haDiskLoading}
-                  onClick={() => void runHaOrchestration()}
-                >
-                  Build HA pair
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={haDiskLoading || pipelineBusy}
-                  onClick={recheckHaDisk}
-                >
-                  Recheck disks
-                </Button>
-              </ActionsRow>
-            </StepCard>
-          )}
         </>
+      )}
+
+      {showHaPair && (
+        <StepCard>
+          <StepHeading>Build the 2-server HA pair</StepHeading>
+          <StepBody>
+            After this host has mail installed, run the Ansible sequence against the second
+            server (OS hardening, qnetd, Corosync cluster setup, qdevice, fencing, DRBD,
+            Pacemaker). Progress streams into View logs with a checkpoint per playbook. A
+            failure stops there; nothing is retried or rolled back automatically. After a
+            manual fix, run this again from the top; the playbooks are idempotent.
+          </StepBody>
+          <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
+          <label
+            style={{
+              display: "flex",
+              gap: "0.55rem",
+              alignItems: "flex-start",
+              margin: "0 0 0.75rem",
+              fontSize: "0.88rem",
+              lineHeight: 1.4,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={confirmHa}
+              onChange={(e) => setConfirmHa(e.target.checked)}
+              style={{ marginTop: "0.2rem" }}
+            />
+            <span>{haSummary}</span>
+          </label>
+          <ActionsRow>
+            <Button
+              type="button"
+              disabled={haPairBlocked}
+              onClick={() => void runHaOrchestration()}
+            >
+              Build HA pair
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={haDiskLoading || pipelineBusy}
+              onClick={recheckHaDisk}
+            >
+              Recheck disks
+            </Button>
+          </ActionsRow>
+          {pipelineBusy ? (
+            <Hint style={{ marginTop: "0.65rem" }}>A job is already running. Wait for it to finish.</Hint>
+          ) : haDiskLoading || haDisk == null ? (
+            <Hint style={{ marginTop: "0.65rem" }}>Disk check is still running. Build HA pair stays disabled until it finishes.</Hint>
+          ) : !confirmHa ? (
+            <Hint style={{ marginTop: "0.65rem" }}>Tick the confirmation box to enable Build HA pair.</Hint>
+          ) : null}
+        </StepCard>
       )}
 
       {canOps && (deadmanHint || cancelBusy) && (

@@ -19,9 +19,9 @@ all:
       hosts:
         mon.gits-it.site:
           ansible_host: 10.10.40.12
-          ansible_user: cursor
+          ansible_user: kin
     mail_survivor:
       hosts:
         mail.gits-it.site:
           ansible_host: 10.10.40.15
-          ansible_user: cursor
+          ansible_user: kin

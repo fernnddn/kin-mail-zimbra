@@ -26,20 +26,20 @@ all:
       hosts:
         mon.gits-it.site:
           ansible_host: 10.10.40.12
-          ansible_user: cursor
+          ansible_user: kin
           # ansible_password: "..."
     mail_survivor:
       hosts:
         mail.gits-it.site:
           ansible_host: 10.10.40.15
-          ansible_user: cursor
+          ansible_user: kin
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
           # ansible_password: "..."
     mail_new_node:
       hosts:
         mail3.gits-it.site:
           ansible_host: 10.10.40.17
-          ansible_user: cursor
+          ansible_user: kin
           iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail3"
           # ansible_password: "..."
     # Convenience parent for roles that historically expect mail_nodes.

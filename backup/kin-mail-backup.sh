@@ -26,7 +26,7 @@ REMOTE_SCRIPT_SRC="$(cd "$(dirname "$0")" && pwd)/kin-mail-backup-remote.sh"
 REMOTE_SCRIPT_DST="/usr/local/sbin/kin-mail-backup-remote.sh"
 
 MAIL_NODES=""
-SSH_USER="cursor"
+SSH_USER="kin"
 SSH_IDENTITY="/etc/kin-mail-backup/id_ed25519"
 BACKUP_ROOT="/var/lib/kin-mail-backup"
 REMOTE_STAGING="/var/tmp/kin-mail-backup-staging"

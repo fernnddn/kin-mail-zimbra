@@ -13,6 +13,8 @@ type SetupStatus = {
   deployed: boolean;
   busy?: boolean;
   install_in_progress?: boolean;
+  full_install_complete?: boolean;
+  ha_setup_complete?: boolean;
   marker: string;
   zimbra_tree_present?: boolean;
 };
@@ -21,6 +23,8 @@ type SetupCtx = {
   deployed: boolean;
   /** Full-install (or stage 03) appears to be running on this host. */
   installInProgress: boolean;
+  /** /etc/kin-mail/setup-complete exists. Independent of the live log buffer. */
+  fullInstallComplete: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
 };
@@ -31,6 +35,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
   // Fail closed until loaded: require login if we cannot tell (safer for post-deploy).
   const [deployed, setDeployed] = useState(true);
   const [installInProgress, setInstallInProgress] = useState(false);
+  const [fullInstallComplete, setFullInstallComplete] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -38,9 +43,11 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       const st = await api<SetupStatus>("/api/setup/status");
       setDeployed(Boolean(st.deployed));
       setInstallInProgress(Boolean(st.install_in_progress || st.busy));
+      setFullInstallComplete(Boolean(st.full_install_complete));
     } catch {
       setDeployed(true);
       setInstallInProgress(false);
+      setFullInstallComplete(false);
     } finally {
       setLoading(false);
     }
@@ -55,8 +62,8 @@ export function SetupProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ deployed, installInProgress, loading, refresh }),
-    [deployed, installInProgress, loading, refresh],
+    () => ({ deployed, installInProgress, fullInstallComplete, loading, refresh }),
+    [deployed, installInProgress, fullInstallComplete, loading, refresh],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
