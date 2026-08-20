@@ -199,6 +199,8 @@ class HaDiskTests(unittest.TestCase):
             label="this server",
         )
         self.assertFalse(r["ok"])
+        self.assertFalse(r["build_allowed"])
+        self.assertEqual(r["plan_action"], "skip")
         self.assertTrue(any("Zimbra is on" in e for e in r["errors"]))
         self.assertTrue(
             any(
@@ -218,6 +220,7 @@ class HaDiskTests(unittest.TestCase):
         )
         self.assertEqual(r["errors"], [])
         self.assertTrue(r["ok"])
+        self.assertTrue(r["build_allowed"])
         self.assertEqual(r["data_disk"], DEFAULT_DATA_DISK)
 
     def test_peer_without_zimbra_passes_when_partitioned(self) -> None:
@@ -265,6 +268,123 @@ class HaDiskTests(unittest.TestCase):
         self.assertFalse(comb["ok"])
         self.assertFalse(comb["build_allowed"])
         self.assertIn("fail-closed", comb["instructions"])
+
+    def test_asymmetric_gpt_plus_blank_peer_allows_disk_prep(self) -> None:
+        """Live nisaroti: local already GPT, Zimbra still on root; peer still blank."""
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/sda2",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="mail.nisaroti.my.id",
+        )
+        peer = evaluate_node(
+            lsblk=_lsblk(sdb="unpartitioned"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=False,
+            require_zimbra_on_data=True,
+            label="mail2.nisaroti.my.id",
+        )
+        comb = combine_results(local, peer)
+        self.assertFalse(local["ok"])
+        self.assertFalse(local["build_allowed"])
+        self.assertEqual(local["plan_action"], "skip")
+        self.assertTrue(any("Zimbra is on" in e for e in local["errors"]))
+        self.assertTrue(peer["can_auto_partition"])
+        self.assertTrue(peer["build_allowed"])
+        self.assertFalse(comb["ok"])
+        self.assertTrue(comb["build_allowed"])
+        self.assertEqual(len(comb["will_auto_partition"]), 1)
+        self.assertEqual(comb["will_auto_partition"][0]["disk"], "/dev/sdb")
+
+    def test_both_gpt_zimbra_on_root_blocks_drbd(self) -> None:
+        """After both disks are GPT, Zimbra still on root must block Build HA."""
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/sda2",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="mail.nisaroti.my.id",
+        )
+        peer = evaluate_node(
+            lsblk=_lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=False,
+            require_zimbra_on_data=True,
+            label="mail2.nisaroti.my.id",
+        )
+        comb = combine_results(local, peer)
+        self.assertFalse(local["ok"])
+        self.assertTrue(peer["ok"])
+        self.assertEqual(comb["will_auto_partition"], [])
+        self.assertFalse(comb["ok"])
+        self.assertFalse(comb["build_allowed"])
+        self.assertTrue(any("Zimbra is on" in e for e in comb["errors"]))
+
+        peer_zimbra = evaluate_node(
+            lsblk=_lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/sda2",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="mail2.nisaroti.my.id",
+        )
+        comb_both = combine_results(local, peer_zimbra)
+        self.assertFalse(peer_zimbra["ok"])
+        self.assertFalse(peer_zimbra["build_allowed"])
+        self.assertEqual(comb_both["will_auto_partition"], [])
+        self.assertFalse(comb_both["ok"])
+        self.assertFalse(comb_both["build_allowed"])
+
+    def test_both_ready_zimbra_on_data_allows_build(self) -> None:
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="ready"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/sdb1",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="a",
+        )
+        peer = evaluate_node(
+            lsblk=_lsblk(sdb="ready"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=False,
+            require_zimbra_on_data=True,
+            label="b",
+        )
+        comb = combine_results(local, peer)
+        self.assertTrue(local["ok"])
+        self.assertTrue(peer["ok"])
+        self.assertEqual(comb["will_auto_partition"], [])
+        self.assertTrue(comb["ok"])
+        self.assertTrue(comb["build_allowed"])
+
+    def test_pending_gpt_plus_inspect_failure_stays_blocked(self) -> None:
+        """A blank local disk must not override a peer we could not inspect."""
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="unpartitioned"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/sda2",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server",
+        )
+        peer = {
+            "ok": False,
+            "label": "second server",
+            "errors": ["second server: could not inspect disks (ssh exit 255)"],
+            "seen": [],
+            "build_allowed": False,
+        }
+        comb = combine_results(local, peer)
+        self.assertTrue(local["can_auto_partition"])
+        self.assertFalse(comb["ok"])
+        self.assertFalse(comb["build_allowed"])
 
     def test_data_partition_on_os_disk_fails(self) -> None:
         lsblk = _lsblk(sdb=None)

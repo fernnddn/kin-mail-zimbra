@@ -188,6 +188,7 @@ def evaluate_node(
             "seen": [],
             "can_auto_partition": False,
             "will_auto_partition": None,
+            "plan_action": "fail",
             "build_allowed": False,
         }
 
@@ -306,8 +307,24 @@ def evaluate_node(
         "errors": errors,
         "can_auto_partition": can_auto,
         "will_auto_partition": will_auto,
+        "plan_action": str(plan.get("action") or "fail"),
+        # Per node: False once GPT exists but Zimbra is still on the OS volume.
+        # Pair-level allow lives in combine_results (a sibling may still need GPT).
         "build_allowed": (not errors) or can_auto,
     }
+
+
+def _node_blocks_pair_prep(node: dict[str, Any]) -> bool:
+    """True if this node must stop Build HA even while a sibling still needs GPT.
+
+    Skip-layout (already partitioned) plus Zimbra-still-on-root must not veto
+    remaining disk_prep. Inspect failures and layout fail-closed plans must.
+    """
+    if node.get("ok") or node.get("can_auto_partition"):
+        return False
+    if str(node.get("plan_action") or "") == "skip":
+        return False
+    return True
 
 
 def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
@@ -319,9 +336,16 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
         if isinstance(auto, dict) and auto.get("disk"):
             will.append(auto)
     ok = all(bool(n.get("ok")) for n in nodes) if nodes else False
-    build_allowed = (
-        all(bool(n.get("build_allowed") or n.get("ok")) for n in nodes) if nodes else False
-    )
+    # Pair-level allow: every node is ready for DRBD, OR at least one host still
+    # needs GPT and no host is an inspect/layout hard-fail.
+    # Do not use all(per-node build_allowed): a finished GPT host with Zimbra
+    # still on the OS volume has build_allowed False, and that must not block
+    # disk_prep on a blank peer. After every disk is GPT and Zimbra is still
+    # on root, `will` is empty and this becomes False so DRBD cannot start.
+    # Orchestration also re-checks combined `ok` after disk_prep before DRBD.
+    pending = bool(will)
+    blocked = any(_node_blocks_pair_prep(n) for n in nodes) if nodes else True
+    build_allowed = ok or (pending and not blocked)
     if will:
         instructions = (
             "Build HA pair will GPT-partition the unique blank spare disk on each "
@@ -450,6 +474,7 @@ def evaluate_facts(
             "seen": [],
             "can_auto_partition": False,
             "will_auto_partition": None,
+            "plan_action": "fail",
             "build_allowed": False,
         }
     return evaluate_node(
