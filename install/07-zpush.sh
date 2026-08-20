@@ -47,46 +47,156 @@ say "Z-Push ${ZPUSH_VERSION} (Zimbra backend Release 75)"
 
 # -----------------------------------------------------------------------------
 # Ubuntu 24.04 ships php8.3 in universe; 22.04 (jammy) does not — only 8.1.
-# Add ppa:ondrej/php only when php8.3-fpm is still absent from apt.
+# When the package is missing, pin ppa:ondrej/php by writing the deb line and
+# GPG key ourselves. Do NOT call add-apt-repository: modern launchpadlib talks
+# to Launchpad OAuth/API endpoints that time out even when curl to
+# launchpad.net itself returns 200 (seen on operator VMs, 2026-08-20).
+#
+# Same pattern as 03-install-zimbra.sh (HTTPS keyserver, not HKP :11371,
+# fingerprint gate, bundled install/lib fallback).
+#
+# Signing key from https://launchpad.net/~ondrej/+archive/ubuntu/php
+# (2026-08-20): 4096R fingerprint B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6
+# (rsa4096, 2024-04-24, uid "Launchpad PPA for Ondřej Surý"). Cross-checked
+# against keyserver.ubuntu.com before commit. Refresh:
+#   curl -fsSL -o install/lib/ondrej-php.asc \
+#     "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
+#   gpg --show-keys install/lib/ondrej-php.asc
+ONDREJ_PHP_APT_FPR="B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
+ONDREJ_PHP_KEYRING="/etc/apt/keyrings/ondrej-php.gpg"
+ONDREJ_PHP_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${ONDREJ_PHP_APT_FPR}"
+ONDREJ_PHP_KEY_LOCAL="${PWD}/lib/ondrej-php.asc"
+
 php83_apt_available() {
   local cand
   cand=$(apt-cache policy php8.3-fpm 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
   [ -n "$cand" ] && [ "$cand" != "(none)" ]
 }
 
-ondrej_php_ppa_present() {
-  grep -RqsE 'ppa\.launchpad(content)?\.net/ondrej/php' \
-    /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null
+fetch_ondrej_php_key_asc() {
+  local dest="$1"
+  ONDREJ_PHP_KEY_SOURCE=""
+
+  if curl -fsSL -m 60 -o "$dest" "$ONDREJ_PHP_KEY_URL" \
+    && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$dest"; then
+    ONDREJ_PHP_KEY_SOURCE="official remote (${ONDREJ_PHP_KEY_URL})"
+    return 0
+  fi
+  warn "Official ondrej/php key URL failed (404/timeout/invalid body):"
+  info "  ${ONDREJ_PHP_KEY_URL}"
+  rm -f "$dest"
+
+  if [ -f "$ONDREJ_PHP_KEY_LOCAL" ] \
+    && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$ONDREJ_PHP_KEY_LOCAL"; then
+    cp -f "$ONDREJ_PHP_KEY_LOCAL" "$dest"
+    ONDREJ_PHP_KEY_SOURCE="bundled fallback (${ONDREJ_PHP_KEY_LOCAL})"
+    warn "Using bundled key copy — refresh install/lib/ondrej-php.asc if Ondřej rotates keys"
+    return 0
+  fi
+
+  fail "Could not obtain ondrej/php PPA GPG key from any source."
+  info "  Tried official:  ${ONDREJ_PHP_KEY_URL}"
+  info "  Tried fallback:  ${ONDREJ_PHP_KEY_LOCAL}"
+  info "Fix HTTPS to keyserver.ubuntu.com, or restore install/lib/ondrej-php.asc, then re-run Deploy."
+  return 1
+}
+
+install_ondrej_php_keyring() {
+  local tmp_home tmp_asc tmp_kr gpg_err
+  if [ -f "$ONDREJ_PHP_KEYRING" ] \
+    && gpg --batch --show-keys "$ONDREJ_PHP_KEYRING" 2>/dev/null \
+         | grep -qw "$ONDREJ_PHP_APT_FPR"; then
+    info "ondrej/php signing key already in ${ONDREJ_PHP_KEYRING}"
+    return 0
+  fi
+
+  command -v curl >/dev/null || { fail "curl required to fetch ondrej/php GPG key"; exit 1; }
+  if ! command -v gpg >/dev/null 2>&1; then
+    if ! apt-get -y install gnupg ca-certificates >/dev/null; then
+      fail "gpg is required to import the ondrej/php PPA key (apt-get install gnupg failed)"
+      exit 1
+    fi
+  fi
+
+  tmp_home=$(mktemp -d "${TMPDIR:-/tmp}/kin-ondrej-gnupg.XXXXXX")
+  chmod 700 "$tmp_home"
+  tmp_asc=$(mktemp "${TMPDIR:-/tmp}/kin-ondrej-php.XXXXXX.asc")
+  tmp_kr=$(mktemp "${TMPDIR:-/tmp}/kin-ondrej-php.XXXXXX.krring")
+  rm -f "$tmp_kr"
+  gpg_err=$(mktemp "${TMPDIR:-/tmp}/kin-ondrej-php.XXXXXX.err")
+
+  if ! fetch_ondrej_php_key_asc "$tmp_asc"; then
+    rm -rf "$tmp_home"
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
+    exit 1
+  fi
+  info "ondrej/php key material from: ${ONDREJ_PHP_KEY_SOURCE}"
+
+  if ! gpg --homedir "$tmp_home" --batch --no-default-keyring --keyring "$tmp_kr" \
+        --import "$tmp_asc" >/dev/null 2>"$gpg_err"; then
+    fail "gpg --import failed for ondrej/php PPA key"
+    info "  Source: ${ONDREJ_PHP_KEY_SOURCE}"
+    sed 's/^/    /' "$gpg_err" | tail -n 20
+    rm -rf "$tmp_home"
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
+    exit 1
+  fi
+  if ! gpg --homedir "$tmp_home" --batch --no-default-keyring --keyring "$tmp_kr" \
+        --list-keys 2>/dev/null | grep -qw "$ONDREJ_PHP_APT_FPR"; then
+    fail "ondrej/php key does not contain expected fingerprint ${ONDREJ_PHP_APT_FPR}"
+    info "  Source: ${ONDREJ_PHP_KEY_SOURCE}"
+    info "  Refusing to install an unverified key."
+    rm -rf "$tmp_home"
+    rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$ONDREJ_PHP_KEYRING")"
+  rm -f "$ONDREJ_PHP_KEYRING"
+  gpg --homedir "$tmp_home" --batch --no-default-keyring --keyring "$tmp_kr" \
+    --export --output "$ONDREJ_PHP_KEYRING"
+  chmod 644 "$ONDREJ_PHP_KEYRING"
+  rm -rf "$tmp_home"
+  rm -f "$tmp_asc" "$tmp_kr" "${tmp_kr}~" "$gpg_err"
+
+  if ! gpg --batch --show-keys "$ONDREJ_PHP_KEYRING" 2>/dev/null \
+       | grep -qw "$ONDREJ_PHP_APT_FPR"; then
+    fail "Installed ${ONDREJ_PHP_KEYRING} but fingerprint check failed"
+    exit 1
+  fi
+  info "Installed ondrej/php signing key → ${ONDREJ_PHP_KEYRING}"
+}
+
+write_ondrej_php_list() {
+  local codename="$1" list
+  list="/etc/apt/sources.list.d/ondrej-ubuntu-php-${codename}.list"
+  cat > "$list" <<EOF
+# KIN Mail — ppa:ondrej/php (written by 07-zpush.sh; not add-apt-repository).
+# Signing key ${ONDREJ_PHP_APT_FPR} (Launchpad PPA for Ondřej Surý).
+deb [signed-by=${ONDREJ_PHP_KEYRING}] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${codename} main
+EOF
+  chmod 644 "$list"
+  info "Wrote ${list}"
 }
 
 ensure_php83_apt_source() {
+  local codename
   if php83_apt_available; then
     info "php8.3-fpm already in apt"
     return 0
   fi
 
   info "php8.3-fpm not in current apt sources (expected on Ubuntu 22.04) — adding ppa:ondrej/php"
-  if ! command -v add-apt-repository >/dev/null 2>&1; then
-    if ! apt-get -y install software-properties-common ca-certificates gnupg >/dev/null; then
-      fail "Could not install software-properties-common (needed to add ppa:ondrej/php)"
-      exit 1
-    fi
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  codename="${VERSION_CODENAME:-}"
+  if [ -z "$codename" ]; then
+    fail "Ubuntu VERSION_CODENAME is empty — cannot add ppa:ondrej/php"
+    exit 1
   fi
 
-  if ondrej_php_ppa_present; then
-    info "ppa:ondrej/php already configured"
-  else
-    # -y is idempotent if the PPA was added by another path; do not treat
-    # a second add as fatal when the list file is already present.
-    if ! add-apt-repository -y ppa:ondrej/php; then
-      if ondrej_php_ppa_present; then
-        warn "add-apt-repository returned non-zero but ppa:ondrej/php is present — continuing"
-      else
-        fail "Could not add ppa:ondrej/php (required for PHP 8.3 on Ubuntu 22.04)"
-        exit 1
-      fi
-    fi
-  fi
+  install_ondrej_php_keyring
+  write_ondrej_php_list "$codename"
 
   if ! apt-get -qq update; then
     fail "apt-get update failed after adding ppa:ondrej/php"
