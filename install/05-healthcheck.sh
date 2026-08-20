@@ -171,9 +171,15 @@ if [ -n "$SEND_IP" ]; then
   info "the result must return to the same sender IP."
 
   A_REC=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "$MAIL_HOST" 2>/dev/null | head -1)
-  [ "$A_REC" = "$SEND_IP" ] \
-    && p "A ${MAIL_HOST} = ${A_REC} = sending address" \
-    || f "A ${MAIL_HOST} = ${A_REC:-empty}, but sending from ${SEND_IP}"
+  if [ "$A_REC" = "$SEND_IP" ]; then
+    p "A ${MAIL_HOST} = ${A_REC} = sending address"
+  elif [ -z "$A_REC" ]; then
+    # Same external dependency as the "A record not published yet" check
+    # above - do not fail the server for a record it does not control yet.
+    b "A ${MAIL_HOST} not published yet - need public IP from the network team"
+  else
+    f "A ${MAIL_HOST} = ${A_REC}, but sending from ${SEND_IP}"
+  fi
 
   PTR=$(dig +short +time=5 -x "$SEND_IP" 2>/dev/null | head -1)
   if [ -z "$PTR" ]; then
