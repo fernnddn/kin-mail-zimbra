@@ -153,6 +153,91 @@ else
   bad "tonight replay should pass on all-Stopped"
 fi
 
+# Live failure after 450160f: ldap already Stopped, zmcontrol fell back to
+# cache, antispam stayed Running on every poll, every other service Stopped.
+# zmantispamctl does not check processes when zmprov cannot list antispam.
+TONIGHT_ANTISPAM_CACHE='Connect: Unable to determine enabled services from ldap.
+Enabled services read from cache. Service list may be inaccurate.
+Host mail.nisaroti.my.id
+	amavis                  Stopped
+	antispam                Running
+	antivirus               Stopped
+	ldap                    Stopped
+	logger                  Stopped
+	mailbox                 Stopped
+	memcached               Stopped
+	mta                     Stopped
+	opendkim                Stopped
+	proxy                   Stopped
+	service webapp          Stopped
+	snmp                    Stopped
+	spell                   Stopped
+	stats                   Stopped
+	zimbra webapp           Stopped
+	zimbraAdmin webapp      Stopped
+	zimlet webapp           Stopped
+	zmconfigd               Stopped
+'
+
+as_run=$(printf '%s\n' "$TONIGHT_ANTISPAM_CACHE" | zimbra_status_names Running)
+as_svc=$(printf '%s\n' "$TONIGHT_ANTISPAM_CACHE" | zimbra_status_service_count)
+if [ "$(printf '%s\n' "$as_run" | count_nonempty_lines)" -eq 1 ] \
+  && printf '%s\n' "$as_run" | grep -qx 'antispam' \
+  && [ "$as_svc" -eq 18 ]; then
+  pass "parser: tonight ldap-cache dump is antispam Running, 18 services"
+else
+  bad "parser tonight cache dump: running=[$as_run] svc=$as_svc"
+fi
+
+export KIN_ANTISPAM_BACKING=down
+filtered=$(zimbra_filter_cached_antispam "$TONIGHT_ANTISPAM_CACHE" "$as_run" 2>/dev/null)
+if [ "$(printf '%s\n' "$filtered" | count_nonempty_lines)" -eq 0 ] \
+  && ! printf '%s\n' "$filtered" | grep -q 'zmantispamctl'; then
+  pass "filter: ldap Stopped + backing down drops cached antispam Running"
+else
+  bad "filter should drop antispam: [$filtered]"
+fi
+
+export KIN_ANTISPAM_BACKING=up
+filtered_up=$(zimbra_filter_cached_antispam "$TONIGHT_ANTISPAM_CACHE" "$as_run" 2>/dev/null)
+if printf '%s\n' "$filtered_up" | grep -qx 'antispam'; then
+  pass "filter: backing up keeps antispam Running even when ldap is Stopped"
+else
+  bad "filter must not drop a live antispam process: [$filtered_up]"
+fi
+
+LDAP_UP_ANTISPAM='Host mail.nisaroti.my.id
+	amavis                  Stopped
+	antispam                Running
+	ldap                    Running
+	mailbox                 Stopped
+'
+export KIN_ANTISPAM_BACKING=down
+filtered_ldap_up=$(zimbra_filter_cached_antispam "$LDAP_UP_ANTISPAM" $'antispam' 2>/dev/null)
+if printf '%s\n' "$filtered_ldap_up" | grep -qx 'antispam'; then
+  pass "filter: ldap Running keeps antispam (zmantispamctl zmprov still works)"
+else
+  bad "filter must not override antispam while ldap is Running: [$filtered_ldap_up]"
+fi
+
+export KIN_ANTISPAM_BACKING=down
+export KIN_ZMCONTROL_STATUS_TEXT="$TONIGHT_ANTISPAM_CACHE"
+if wait_none_running; then
+  pass "wait_none_running: tonight antispam cache false Running succeeds when backing is down"
+else
+  bad "wait_none_running should pass tonight's dump once antispam backing is gone"
+fi
+
+export KIN_ANTISPAM_BACKING=up
+export KIN_ZMCONTROL_STATUS_TEXT="$TONIGHT_ANTISPAM_CACHE"
+if wait_none_running; then
+  bad "wait_none_running must still fail when antispam backing is up"
+else
+  pass "wait_none_running: tonight dump still fails if antispam backing is up"
+fi
+
+unset KIN_ANTISPAM_BACKING
+
 if [ "$fails" -ne 0 ]; then
   printf '%s\n' "FAILED $fails test(s)"
   exit 1

@@ -108,6 +108,7 @@ zimbra_status_names() {
     /^[[:space:]]*$/ { next }
     $1 == "Host" { next }
     /Connect:/ { next }
+    /Enabled services read from cache/ { next }
     NF >= 2 && $NF == want {
       n = $1
       for (i = 2; i < NF; i++) n = n " " $i
@@ -121,6 +122,7 @@ zimbra_status_service_count() {
     /^[[:space:]]*$/ { next }
     $1 == "Host" { next }
     /Connect:/ { next }
+    /Enabled services read from cache/ { next }
     NF >= 2 && ($NF == "Running" || $NF == "Stopped") { n++ }
     END { print n + 0 }
   '
@@ -135,16 +137,57 @@ names_on_one_line() {
 }
 
 # Daemons that must be gone before rsync. Ignores shells and the status check.
+# Antispam is not a dedicated spamd: zmantispamctl runs antispam-mysql.server
+# (mysqld_safe) and zmamavisdctl (amavisd master / amavis-mc).
 zimbra_lingering_daemons() {
   [ "${KIN_MIGRATE_SKIP_PS_CHECK:-0}" = "1" ] && return 0
   ps -u zimbra -ww -o comm=,args= 2>/dev/null | awk '
     $1 ~ /^(bash|sh|dash|su|ps|awk|sed|grep|cat|head|tr|wc)$/ { next }
     $0 ~ /zmcontrol/ { next }
-    $1 ~ /^(java|mysqld|mysqld_safe|slapd|nginx|master|amavisd|clamd|clamdscan|memcached|opendkim|httpd|node|beam\.smp|epmd|god)$/ { print; next }
+    $1 ~ /^(java|mysqld|mysqld_safe|slapd|nginx|master|amavisd|amavis-mc|clamd|clamdscan|memcached|opendkim|httpd|node|beam\.smp|epmd|god)$/ { print; next }
     $0 ~ /zmconfigd/ { print; next }
     $0 ~ /onlyoffice/ { print; next }
     $0 ~ /soffice/ { print; next }
+    $0 ~ /amavisd/ { print; next }
+    $0 ~ /antispam-mysql/ { print; next }
   ' || true
+}
+
+# zmamavisdctl status walks the process table for amavisd (master). It does not
+# need LDAP. KIN_ANTISPAM_BACKING=up|down mocks this for tests.
+zimbra_antispam_backing_up() {
+  case "${KIN_ANTISPAM_BACKING:-}" in
+    up) return 0 ;;
+    down) return 1 ;;
+  esac
+  su - zimbra -c "zmamavisdctl status" >/dev/null 2>&1
+}
+
+# zmcontrol maps *ctl status exit 0 to Running. zmantispamctl does:
+#   zmprov -l gs $host zimbraServiceEnabled | grep -qw antispam
+#   if that grep fails, ENABLED=0 and status exits 0 without checking processes.
+# After ldap is Stopped, zmprov fails, so antispam stays "Running" forever even
+# when amavisd and antispam-mysql are gone. Drop that cached line only then.
+zimbra_filter_cached_antispam() {
+  local text="$1"
+  local running="$2"
+  local ldap_stopped
+  ldap_stopped=$(printf '%s\n' "$text" | zimbra_status_names Stopped | grep -cx 'ldap' || true)
+  if [ "${ldap_stopped:-0}" -eq 0 ]; then
+    printf '%s\n' "$running"
+    return 0
+  fi
+  if ! printf '%s\n' "$running" | grep -qx 'antispam'; then
+    printf '%s\n' "$running"
+    return 0
+  fi
+  if zimbra_antispam_backing_up; then
+    printf '%s\n' "$running"
+    return 0
+  fi
+  # info writes stdout; this function's stdout is the remaining Running names.
+  info "ldap is Stopped; zmcontrol antispam Running is zmantispamctl skipping process checks after zmprov failed. Backing processes are gone; treating antispam as Stopped." >&2
+  printf '%s\n' "$running" | grep -vx 'antispam' || true
 }
 
 dump_zimbra_status() {
@@ -171,6 +214,7 @@ wait_none_running() {
   while [ "$slept" -le "$budget" ]; do
     text=$(zimbra_status_text)
     running=$(printf '%s\n' "$text" | zimbra_status_names Running)
+    running=$(zimbra_filter_cached_antispam "$text" "$running")
     linger=$(zimbra_lingering_daemons || true)
     svc=$(printf '%s\n' "$text" | zimbra_status_service_count)
     nrunning=$(printf '%s\n' "$running" | count_nonempty_lines)
