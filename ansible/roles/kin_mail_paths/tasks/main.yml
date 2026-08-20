@@ -1,0 +1,27 @@
+---
+# copy src is read on the controller. Fail here with the resolved path rather
+# than Ansible's generic "Could not find or access" after a role_path walk.
+- name: Require kin-fail2ban-jails.sh on the Ansible controller
+  ansible.builtin.stat:
+    path: "{{ kin_mail_fail2ban_jails_src }}"
+  register: kin_mail_fail2ban_jails_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+
+- name: Fail if the jail helper is missing on the controller
+  ansible.builtin.assert:
+    that:
+      - kin_mail_fail2ban_jails_stat.stat.exists | default(false)
+      - kin_mail_fail2ban_jails_stat.stat.isreg | default(false)
+    fail_msg: >-
+      kin-fail2ban-jails.sh is not on this Ansible controller at
+      {{ kin_mail_fail2ban_jails_src }}.
+      Set KIN_MAIL_DEPLOY_DIR (or -e kin_mail_deploy_dir=...) to the tree
+      that contains install/lib/ (git repo root, or /opt/kin-mail-deploy).
+      Walking up from role_path is wrong on a deployed console because
+      ansible/ is under /opt/kin-mail-console, not next to install/.
+  run_once: true

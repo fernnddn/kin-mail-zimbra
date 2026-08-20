@@ -30,9 +30,12 @@
   when: not ansible_check_mode or pacemaker_agents_ocf_dir_stat.stat.exists
   tags: [pacemaker, agents, ocf]
 
+# Same file os_hardening installs. ocf:kin:zimbra calls
+# /usr/local/sbin/kin-fail2ban-jails on mount/unmount so zimbra-auth /
+# zpush-auth track the mailbox logs. Not leftover fail2ban.yml paste.
 - name: Deploy the fail2ban jail helper used by ocf:kin:zimbra
   ansible.builtin.copy:
-    src: "{{ role_path }}/../../../install/lib/kin-fail2ban-jails.sh"
+    src: "{{ kin_mail_fail2ban_jails_src }}"
     dest: "{{ pacemaker_agents_fail2ban_jails_path }}"
     owner: root
     group: root

@@ -36,6 +36,16 @@ WORK_DIR = Path(
         "/var/lib/kin-mail-privhelper/orchestration",
     )
 )
+
+
+def kin_mail_deploy_dir() -> str:
+    """Controller path of the install/ tree (contains install/lib).
+
+    Same env as commands.DEPLOY_DIR. On a deployed host ansible/ lives under
+    /opt/kin-mail-console and is not a sibling of install/.
+    """
+    raw = (os.environ.get("KIN_MAIL_DEPLOY_DIR") or "/opt/kin-mail-deploy").strip()
+    return raw or "/opt/kin-mail-deploy"
 IPV4_RE = re.compile(
     r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
 )
@@ -105,6 +115,9 @@ def render_inventory(
         # Proven HA layout — not the old loop-meta default. Preflight checks these.
         "    drbd_resource_disk: /dev/sdb1",
         "    drbd_resource_meta_disk: /dev/sdb2",
+        # Console ansible/ is not next to install/. Roles copy helper scripts
+        # from here (KIN_MAIL_DEPLOY_DIR), not via role_path/../../../install.
+        '    kin_mail_deploy_dir: "' + kin_mail_deploy_dir() + '"',
     ]
     if vip_ip:
         lines.append(f"    pacemaker_mail_stack_vip_ip: {vip_ip}")
@@ -1000,6 +1013,7 @@ async def cmd_run_ha_orchestration(
         "KIN_ANSIBLE_PASSWORD": ssh_pass,
         "KIN_ANSIBLE_BECOME_PASSWORD": ssh_pass,
         "KIN_HACLUSTER_PASSWORD": hacluster_pass,
+        "KIN_MAIL_DEPLOY_DIR": kin_mail_deploy_dir(),
         "ANSIBLE_CONFIG": str(WORK_DIR / "ansible.cfg"),
         "ANSIBLE_HOST_KEY_CHECKING": "False",
         "ANSIBLE_RETRY_FILES_ENABLED": "False",

@@ -6,4 +6,5 @@ galaxy_info:
     systemd drbd.service (task 2.7 preconditions + Stage C OCF).
   license: proprietary
   min_ansible_version: "2.14"
-dependencies: []
+dependencies:
+  - role: kin_mail_paths

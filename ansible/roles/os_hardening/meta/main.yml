@@ -10,4 +10,5 @@ galaxy_info:
   platforms:
     - name: Ubuntu
       versions: ["22.04", "24.04"]
-dependencies: []
+dependencies:
+  - role: kin_mail_paths

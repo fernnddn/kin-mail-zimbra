@@ -1,0 +1,16 @@
+---
+# Controller-side root of the install/ tree (the directory that contains
+# install/lib/...). On a deployed console that is KIN_MAIL_DEPLOY_DIR
+# (/opt/kin-mail-deploy by default). ansible/ lives under
+# /opt/kin-mail-console, so walking up from role_path does not reach it.
+#
+# Resolution, first match whose install/lib/kin-fail2ban-jails.sh exists:
+#   1. kin_mail_deploy_dir extra/inventory var (console inventory sets this)
+#   2. KIN_MAIL_DEPLOY_DIR on the controller
+#   3. git checkout where ansible/ and install/ are siblings
+#   4. /opt/kin-mail-deploy
+# If none of those files exist, keep the env or appliance path so the
+# following assert can name it.
+kin_mail_deploy_dir: "{% set env_dir = lookup('env', 'KIN_MAIL_DEPLOY_DIR') | trim %}{% set git_root = playbook_dir ~ '/../..' %}{% set env_lib = env_dir ~ '/install/lib/kin-fail2ban-jails.sh' %}{% set git_lib = git_root ~ '/install/lib/kin-fail2ban-jails.sh' %}{% set app_lib = '/opt/kin-mail-deploy/install/lib/kin-fail2ban-jails.sh' %}{% if env_dir | length > 0 and env_lib is file %}{{ env_dir | realpath }}{% elif git_lib is file %}{{ git_root | realpath }}{% elif app_lib is file %}/opt/kin-mail-deploy{% elif env_dir | length > 0 %}{{ env_dir }}{% else %}/opt/kin-mail-deploy{% endif %}"
+
+kin_mail_fail2ban_jails_src: "{{ kin_mail_deploy_dir }}/install/lib/kin-fail2ban-jails.sh"

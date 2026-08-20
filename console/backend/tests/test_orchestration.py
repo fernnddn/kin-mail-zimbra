@@ -7,6 +7,7 @@ import unittest
 from kin_privhelper.orchestration import (
     STEPS,
     OrchHost,
+    kin_mail_deploy_dir,
     redact_text,
     render_inventory,
     resolve_topology,
@@ -151,6 +152,37 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertIn("roles_path = /opt/kin-mail-console/ansible/roles", cfg)
         self.assertIn("local_tmp = /var/lib/example/.ansible/tmp", cfg)
+
+    def test_inventory_sets_kin_mail_deploy_dir(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"KIN_MAIL_DEPLOY_DIR": "/opt/kin-mail-deploy"}):
+            inv = render_inventory(
+                [OrchHost("mail.example.test", "192.0.2.15", "mail")],
+                OrchHost("mon.example.test", "192.0.2.12", "mon"),
+            )
+        self.assertIn('kin_mail_deploy_dir: "/opt/kin-mail-deploy"', inv)
+
+    def test_kin_mail_deploy_dir_follows_env(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"KIN_MAIL_DEPLOY_DIR": "/opt/custom-deploy"}, clear=False):
+            self.assertEqual(kin_mail_deploy_dir(), "/opt/custom-deploy")
+        with patch.dict(os.environ, {"KIN_MAIL_DEPLOY_DIR": "  "}, clear=False):
+            self.assertEqual(kin_mail_deploy_dir(), "/opt/kin-mail-deploy")
+
+    def test_ansible_roles_do_not_walk_role_path_into_install(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3] / "ansible"
+        hits: list[str] = []
+        for path in root.rglob("*.yml"):
+            text = path.read_text(encoding="utf-8")
+            if "/../../../install/" in text:
+                hits.append(str(path.relative_to(root)))
+        self.assertEqual(hits, [])
 
 
 class OrchRbacTests(unittest.TestCase):

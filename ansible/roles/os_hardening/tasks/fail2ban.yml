@@ -84,7 +84,7 @@
 
 - name: Install the shared fail2ban jail helper
   ansible.builtin.copy:
-    src: "{{ role_path }}/../../../install/lib/kin-fail2ban-jails.sh"
+    src: "{{ kin_mail_fail2ban_jails_src }}"
     dest: "{{ os_hardening_fail2ban_jails_path }}"
     owner: root
     group: root
