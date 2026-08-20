@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Parser and wait-gate tests for migrate-zimbra-to-drbd-disk.sh (no live zmcontrol).
+# Parser, wait-gate, and rsync-verify tests for migrate-zimbra-to-drbd-disk.sh
+# (no live zmcontrol; rsync fixtures use local temp dirs).
 set -u
 cd "$(dirname "$0")" || exit 1
 fails=0
@@ -238,9 +239,68 @@ fi
 
 unset KIN_ANTISPAM_BACKING
 
+# Same grep the live verify gate uses: copy/delete lines count, GNU timestamp-only
+# (leading '.') does not. Fixture text, no rsync required.
+pending_keep=$(printf '%s\n' '.f..t...... keep.txt' 'cd+++++++++ empty-dir/' | rsync_itemize_pending)
+if [ "$(printf '%s\n' "$pending_keep" | count_nonempty_lines)" -eq 0 ]; then
+  pass "itemize: timestamp-only and dir-create lines are not pending"
+else
+  bad "itemize should ignore timestamp-only: [$pending_keep]"
+fi
+
+pending_one=$(printf '%s\n' \
+  '.f..t...... keep.txt' \
+  '>f.st...... log/zimbra.log' \
+  '*deleting stale.pid' | rsync_itemize_pending)
+if [ "$(printf '%s\n' "$pending_one" | count_nonempty_lines)" -eq 2 ] \
+  && printf '%s\n' "$pending_one" | grep -q 'log/zimbra.log' \
+  && printf '%s\n' "$pending_one" | grep -q 'stale.pid'; then
+  pass "itemize: keeps copy and delete lines with their paths"
+else
+  bad "itemize pending paths: [$pending_one]"
+fi
+
+dump_out=$(dump_rsync_verify_pending $'>f.st...... log/zimbra.log')
+if printf '%s\n' "$dump_out" | grep -q 'rsync verify pending (1):' \
+  && printf '%s\n' "$dump_out" | grep -q 'log/zimbra.log'; then
+  pass "dump: failure output includes the real itemize path"
+else
+  bad "dump should show path: [$dump_out]"
+fi
+
+if command -v rsync >/dev/null 2>&1; then
+  rsync_fix=$(mktemp -d)
+  mkdir -p "$rsync_fix/src" "$rsync_fix/dst"
+  printf '%s\n' 'same' > "$rsync_fix/src/a.txt"
+  printf '%s\n' 'same' > "$rsync_fix/dst/a.txt"
+  ident=$(rsync_verify_pending_lines "$rsync_fix/src"/ "$rsync_fix/dst"/ -a)
+  if [ "$(printf '%s\n' "$ident" | count_nonempty_lines)" -eq 0 ]; then
+    pass "rsync fixture: identical trees have zero pending copy/delete lines"
+  else
+    bad "rsync fixture identical pending: [$ident]"
+  fi
+  printf '%s\n' 'only on source' > "$rsync_fix/src/only-src.txt"
+  one=$(rsync_verify_pending_lines "$rsync_fix/src"/ "$rsync_fix/dst"/ -a)
+  n_one=$(printf '%s\n' "$one" | count_nonempty_lines)
+  if [ "$n_one" -eq 1 ] && printf '%s\n' "$one" | grep -q 'only-src.txt'; then
+    pass "rsync fixture: single new file is the one pending path"
+  else
+    bad "rsync fixture one-file pending (n=$n_one): [$one]"
+  fi
+  dump_live=$(dump_rsync_verify_pending "$one")
+  if printf '%s\n' "$dump_live" | grep -q 'only-src.txt'; then
+    pass "dump: manufactured single-file diff prints the real path"
+  else
+    bad "dump of live itemize missing path: [$dump_live]"
+  fi
+  rm -rf "$rsync_fix"
+else
+  bad "rsync not installed; cannot run tree fixture tests"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf '%s\n' "FAILED $fails test(s)"
   exit 1
 fi
-printf '%s\n' "All migrate-zimbra status tests passed"
+printf '%s\n' "All migrate-zimbra tests passed"
 exit 0

@@ -331,6 +331,28 @@ tree_entry_count() {
   find "$1" -mindepth 1 ! -path '*/lost+found' ! -path '*/lost+found/*' | wc -l | tr -d ' '
 }
 
+# Itemize lines that mean verify would still copy or delete. Timestamp-only
+# GNU rsync lines (leading '.') are ignored, matching the live cutover gate.
+rsync_itemize_pending() {
+  grep -E '^[<>]|^\*deleting' || true
+}
+
+rsync_verify_pending_lines() {
+  local src="$1"
+  local dest="$2"
+  shift 2
+  rsync "$@" --dry-run --itemize-changes "$src" "$dest" | rsync_itemize_pending
+}
+
+dump_rsync_verify_pending() {
+  local lines="$1"
+  local n
+  n=$(printf '%s\n' "$lines" | count_nonempty_lines)
+  [ "$n" -ge 1 ] || return 0
+  info "rsync verify pending (${n}):"
+  printf '%s\n' "$lines" | sed 's/^/    /'
+}
+
 umount_retry() {
   local target="$1" i=0
   while [ "$i" -lt 10 ]; do
@@ -556,10 +578,11 @@ if [ "${KIN_MIGRATE_CHECKSUM:-0}" = "1" ]; then
   VERIFY_FLAGS+=(--checksum)
   info "KIN_MIGRATE_CHECKSUM=1 — verify pass uses --checksum (slow on large stores)"
 fi
-pending=$(rsync "${VERIFY_FLAGS[@]}" --dry-run --itemize-changes \
-  "$ZIMBRA_DIR"/ "$TMP_MNT"/ | grep -E '^[<>]|^\*deleting' | wc -l | tr -d ' ')
+pending_lines=$(rsync_verify_pending_lines "$ZIMBRA_DIR"/ "$TMP_MNT"/ "${VERIFY_FLAGS[@]}")
+pending=$(printf '%s\n' "$pending_lines" | count_nonempty_lines)
 if [ "${pending:-0}" -ne 0 ]; then
-  die "rsync verify still lists ${pending} change(s) — refusing cutover"
+  dump_rsync_verify_pending "$pending_lines"
+  die "rsync verify still lists ${pending} change(s); refusing cutover"
 fi
 src_n=$(tree_entry_count "$ZIMBRA_DIR")
 dst_n=$(tree_entry_count "$TMP_MNT")
