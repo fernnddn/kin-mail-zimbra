@@ -210,7 +210,8 @@ function HaDiskStatus({ haDisk, haDiskLoading }: { haDisk: HaDisk | null; haDisk
           <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem" }}>
             {haDisk.will_auto_partition.map((p) => (
               <li key={`${p.label || ""}-${p.disk || p.message || ""}`}>
-                {p.message || `${p.label || "server"}: ${p.disk} (${p.size_human || ""})`}
+                {p.label ? <strong>{p.label}: </strong> : null}
+                {p.message || `${p.disk} (${p.size_human || ""})`}
               </li>
             ))}
           </ul>
