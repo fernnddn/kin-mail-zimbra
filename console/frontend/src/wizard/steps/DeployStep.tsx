@@ -329,7 +329,7 @@ export default function DeployStep() {
   }, [draft.topology, canOps, activeRun, complete, failed]);
   const haDiskBlocked =
     draft.topology === "2vm" && haDisk != null && !haDisk.ok && haDisk.build_allowed !== true;
-  const showHaPair = canOps && shouldOfferHaPair({
+  const showHaPair = canOps && !activeRun && shouldOfferHaPair({
     topology: draft.topology,
     fullInstallComplete,
   });
