@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import sys
+import importlib.util
 import unittest
 from pathlib import Path
 
-_FILTER_DIR = (
-    Path(__file__).resolve().parents[3]
-    / "ansible"
-    / "roles"
-    / "cluster_setup"
-    / "filter_plugins"
+from kin_privhelper.corosync_stub import (
+    is_debian_corosync_stub,
+    is_harmless_package_stub_cluster,
+    parse_pcs_cluster_name,
+    parse_resource_instance_count,
 )
-sys.path.insert(0, str(_FILTER_DIR))
-
-from corosync_stub import is_debian_corosync_stub  # noqa: E402
+from kin_privhelper.orchestration import live_cluster_blocks_apply
+from kin_privhelper.maintenance import parse_online_nodes
 
 
 # Live mail.nisaroti.my.id tonight: package default, name: commented out,
@@ -146,6 +144,42 @@ Corosync Nodes:
  Offline:
 """
 
+# Operator-captured pcs status on mail.nisaroti.my.id after the Ansible stub
+# fix was deployed but before this Python pre-flight knew about the stub.
+LIVE_PCS_STATUS = """\
+Cluster name: debian
+1 node configured
+0 resource instances configured
+
+Node List: Online: [ mail.nisaroti.my.id ]
+
+Daemon Status:
+  corosync: active/enabled
+  pacemaker: active/enabled
+  pcsd: active/enabled
+"""
+
+LIVE_CRM_MON = """\
+Cluster Summary:
+  * Stack: corosync
+  * Current DC: mail.nisaroti.my.id
+  * 1 node configured
+  * 0 resource instances configured
+
+Node List:
+  * Online: [ mail.nisaroti.my.id ]
+
+No active resources
+"""
+
+PCS_KIN_MAIL_WITH_RESOURCES = """\
+Cluster name: kin-mail
+2 nodes configured
+6 resource instances configured
+
+Node List: Online: [ mail.nisaroti.my.id ]
+"""
+
 
 class DebianCorosyncStubTests(unittest.TestCase):
     def test_live_stub_name_commented_is_stub(self) -> None:
@@ -197,6 +231,150 @@ class DebianCorosyncStubTests(unittest.TestCase):
         for name in expected:
             self.assertNotIn(name, PCS_STUB_NODES)
             self.assertIn(name, PCS_REAL_NODES)
+
+    def test_ansible_filter_is_the_same_function(self) -> None:
+        path = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "cluster_setup"
+            / "filter_plugins"
+            / "corosync_stub.py"
+        )
+        spec = importlib.util.spec_from_file_location("ansible_corosync_stub_filter", path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertIs(mod.is_debian_corosync_stub, is_debian_corosync_stub)
+        self.assertTrue(mod.FilterModule().filters()["kin_is_debian_corosync_stub"](LIVE_STUB_NAME_COMMENTED))
+
+    def test_resource_instance_count_from_live_pcs_and_crm(self) -> None:
+        self.assertEqual(parse_resource_instance_count(LIVE_PCS_STATUS), 0)
+        self.assertEqual(parse_resource_instance_count(LIVE_CRM_MON), 0)
+        self.assertEqual(parse_resource_instance_count(PCS_KIN_MAIL_WITH_RESOURCES), 6)
+        self.assertIsNone(parse_resource_instance_count(""))
+        self.assertEqual(parse_pcs_cluster_name(LIVE_PCS_STATUS), "debian")
+        self.assertEqual(parse_pcs_cluster_name(PCS_KIN_MAIL_WITH_RESOURCES), "kin-mail")
+
+    def test_pcs_status_nodes_line_parses_uname_fallback(self) -> None:
+        # Pacemaker reports the uname even when corosync.conf has no name:.
+        self.assertEqual(
+            parse_online_nodes(LIVE_PCS_STATUS),
+            ["mail.nisaroti.my.id"],
+        )
+
+    def test_harmless_stub_matches_tonight_live_host(self) -> None:
+        self.assertTrue(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_PCS_STATUS,
+                live_nodes=["mail.nisaroti.my.id"],
+            )
+        )
+        self.assertTrue(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_CRM_MON,
+                live_nodes=["mail.nisaroti.my.id"],
+            )
+        )
+
+    def test_harmless_stub_rejects_resources_or_extra_nodes(self) -> None:
+        self.assertFalse(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=PCS_KIN_MAIL_WITH_RESOURCES,
+                live_nodes=["mail.nisaroti.my.id"],
+            )
+        )
+        self.assertFalse(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_PCS_STATUS,
+                live_nodes=["mail.nisaroti.my.id", "mail2.nisaroti.my.id"],
+            )
+        )
+        self.assertFalse(
+            is_harmless_package_stub_cluster(
+                REAL_TWO_NODE,
+                status_text=LIVE_CRM_MON,
+                live_nodes=["mail.nisaroti.my.id"],
+            )
+        )
+
+    def test_apply_gate_lets_tonight_stub_through(self) -> None:
+        kwargs = dict(
+            join_mode="apply",
+            live_nodes=["mail.nisaroti.my.id"],
+            peer_name="mail2.nisaroti.my.id",
+            peer_ip="10.10.40.52",
+            corosync_conf=LIVE_STUB_NAME_COMMENTED,
+        )
+        self.assertFalse(
+            live_cluster_blocks_apply(status_text=LIVE_PCS_STATUS, **kwargs)
+        )
+        # orchestration.py passes gather_status()['raw']['crm'], not pcs status.
+        self.assertFalse(
+            live_cluster_blocks_apply(status_text=LIVE_CRM_MON, **kwargs)
+        )
+
+    def test_apply_gate_refuses_real_cluster_wrong_peer(self) -> None:
+        self.assertTrue(
+            live_cluster_blocks_apply(
+                join_mode="apply",
+                live_nodes=["mail.nisaroti.my.id"],
+                peer_name="mail-wrong.example.test",
+                peer_ip="192.0.2.99",
+                corosync_conf=REAL_TWO_NODE,
+                status_text=PCS_KIN_MAIL_WITH_RESOURCES,
+            )
+        )
+
+    def test_apply_gate_refuses_stub_conf_when_resources_exist(self) -> None:
+        self.assertTrue(
+            live_cluster_blocks_apply(
+                join_mode="apply",
+                live_nodes=["mail.nisaroti.my.id"],
+                peer_name="mail2.nisaroti.my.id",
+                peer_ip="10.10.40.52",
+                corosync_conf=LIVE_STUB_NAME_COMMENTED,
+                status_text=PCS_KIN_MAIL_WITH_RESOURCES,
+            )
+        )
+
+    def test_apply_gate_allows_when_peer_already_in_ring(self) -> None:
+        self.assertFalse(
+            live_cluster_blocks_apply(
+                join_mode="apply",
+                live_nodes=["mail.nisaroti.my.id"],
+                peer_name="mail2.nisaroti.my.id",
+                peer_ip="10.10.40.14",
+                corosync_conf=REAL_TWO_NODE,
+                status_text=PCS_KIN_MAIL_WITH_RESOURCES,
+            )
+        )
+
+    def test_apply_gate_skips_when_no_live_nodes_or_check_mode(self) -> None:
+        self.assertFalse(
+            live_cluster_blocks_apply(
+                join_mode="apply",
+                live_nodes=[],
+                peer_name="mail2.nisaroti.my.id",
+                peer_ip="10.10.40.52",
+                corosync_conf=LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_PCS_STATUS,
+            )
+        )
+        self.assertFalse(
+            live_cluster_blocks_apply(
+                join_mode="check",
+                live_nodes=["mail.nisaroti.my.id"],
+                peer_name="mail2.nisaroti.my.id",
+                peer_ip="10.10.40.52",
+                corosync_conf=REAL_TWO_NODE,
+                status_text=PCS_KIN_MAIL_WITH_RESOURCES,
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -46,6 +46,38 @@ def kin_mail_deploy_dir() -> str:
     """
     raw = (os.environ.get("KIN_MAIL_DEPLOY_DIR") or "/opt/kin-mail-deploy").strip()
     return raw or "/opt/kin-mail-deploy"
+
+
+def live_cluster_blocks_apply(
+    *,
+    join_mode: str,
+    live_nodes: list[str],
+    peer_name: str,
+    peer_ip: str,
+    corosync_conf: str,
+    status_text: str = "",
+) -> bool:
+    """True when join_mode=apply must stop rather than mutate a live CIB.
+
+    A real Pacemaker cluster that does not already include the wizard peer
+    must refuse. The Debian/Ubuntu package-default stub (cluster_name debian,
+    loopback-only, no resources) is not a real cluster; detect.yml replaces it.
+    """
+    if join_mode != "apply" or not live_nodes:
+        return False
+    from .maintenance import parse_corosync_ring_addrs
+    from .corosync_stub import is_harmless_package_stub_cluster
+
+    ring = parse_corosync_ring_addrs(corosync_conf) if corosync_conf else {}
+    if peer_name in live_nodes or peer_ip in set(ring.values()):
+        return False
+    if is_harmless_package_stub_cluster(
+        corosync_conf, status_text=status_text, live_nodes=live_nodes
+    ):
+        return False
+    return True
+
+
 IPV4_RE = re.compile(
     r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
 )
@@ -897,6 +929,7 @@ async def cmd_run_ha_orchestration(
     yield emit_line(f"cluster_vip={vip_ip}")
 
     from .maintenance import gather_status, parse_corosync_ring_addrs
+    from .corosync_stub import is_harmless_package_stub_cluster
 
     st = await gather_status()
     live_nodes = list(st.get("nodes") or [])
@@ -918,8 +951,16 @@ async def cmd_run_ha_orchestration(
             corosync_txt = ""
     ring = parse_corosync_ring_addrs(corosync_txt) if corosync_txt else {}
     peer_is_member = peer.name in live_nodes or peer.ip in set(ring.values())
+    status_text = str((st.get("raw") or {}).get("crm") or "")
 
-    if join_mode == "apply" and live_nodes and not peer_is_member:
+    if live_cluster_blocks_apply(
+        join_mode=join_mode,
+        live_nodes=live_nodes,
+        peer_name=peer.name,
+        peer_ip=peer.ip,
+        corosync_conf=corosync_txt,
+        status_text=status_text,
+    ):
         yield emit_line(
             "Refusing join_mode=apply: the wizard peer is not a member of the live "
             f"Pacemaker cluster ({live_nodes}). Applying mail-cluster-setup / "
@@ -930,6 +971,20 @@ async def cmd_run_ha_orchestration(
         )
         yield proto.event_done(2)
         return
+
+    if (
+        join_mode == "apply"
+        and live_nodes
+        and not peer_is_member
+        and is_harmless_package_stub_cluster(
+            corosync_txt, status_text=status_text, live_nodes=live_nodes
+        )
+    ):
+        yield emit_line(
+            "Live Pacemaker nodelist is the Debian/Ubuntu package-default stub "
+            f"({live_nodes}). Not a real cluster; mail-cluster-setup will stop it "
+            "and write kin-mail."
+        )
 
     if not ANSIBLE_DIR.is_dir():
         yield emit_line(
