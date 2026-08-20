@@ -289,7 +289,8 @@ def evaluate_node(
             errors.append(
                 f"{label}: Zimbra is on {where}, not {data_disk}. Build HA pair would replicate "
                 "an empty DRBD disk and leave mail on the OS volume. Move /opt/zimbra onto "
-                f"{data_disk} first (stop Zimbra, rsync, fstab UUID, start — see HA-RUNBOOK)."
+                f"{data_disk} first (stop Zimbra, rsync, fstab UUID, start — see HA-RUNBOOK "
+                "§13 / install/lib/migrate-zimbra-to-drbd-disk.sh)."
             )
 
     ok = not errors and not can_auto
@@ -326,7 +327,8 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
             "Build HA pair will GPT-partition the unique blank spare disk on each "
             "server that still needs it (not the OS disk; no existing table). "
             "It then re-checks before DRBD. If /opt/zimbra is still on the root "
-            "volume after that, it stops — migrate onto the data partition first."
+            "volume after that, it stops — migrate onto the data partition first "
+            "(HA-RUNBOOK §13 / install/lib/migrate-zimbra-to-drbd-disk.sh)."
         )
     else:
         instructions = (
@@ -334,7 +336,8 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
             f"OS disk). Build HA pair will GPT-partition {data_disk_path()} (data) and "
             f"{meta_disk_path()} (~256 MiB meta, no mkfs) when that disk is unambiguous. "
             "Zero or multiple spare disks stay fail-closed. If Zimbra is already on "
-            "the root volume, migrate /opt/zimbra onto the data partition before DRBD."
+            "the root volume, migrate /opt/zimbra onto the data partition before DRBD "
+            "(HA-RUNBOOK §13 / install/lib/migrate-zimbra-to-drbd-disk.sh)."
         )
     return {
         "ok": ok,

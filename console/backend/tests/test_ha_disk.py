@@ -170,6 +170,12 @@ class HaDiskTests(unittest.TestCase):
         )
         self.assertFalse(r["ok"])
         self.assertTrue(any("Zimbra is on" in e for e in r["errors"]))
+        self.assertTrue(
+            any(
+                "HA-RUNBOOK §13" in e and "migrate-zimbra-to-drbd-disk.sh" in e
+                for e in r["errors"]
+            )
+        )
 
     def test_ready_layout_passes(self) -> None:
         r = evaluate_node(

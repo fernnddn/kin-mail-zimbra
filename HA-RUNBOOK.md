@@ -25,6 +25,8 @@ Promoted until that node is down or an operator moves it. Resting state as of
 
 > **Audience:** anyone operating a KIN Mail HA pair.  
 > **Not covered here:** first Zimbra install (`install/kin-mail.sh`) — see `README.md`.  
+> **Single-node → HA:** if `/opt/zimbra` is still on the OS volume, Build HA pair
+> refuses until you migrate onto the data partition — **§13**.  
 > **Console:** `https://10.10.40.15:9443` lives on Host A’s OS, not on the VIP. If A
 > is down, the console is down even when mail is healthy on B.
 
@@ -84,6 +86,10 @@ repeatable downtime**, fencing against split-brain, and a single consistent stor
 
 Backup VM `.13` is **not** in the cluster. It pulls backups over SSH from whichever
 mail node currently has `/opt/zimbra` mounted, and hosts Grafana.
+
+**Before the first HA pair** (single-node Zimbra still on the OS volume): migrate
+`/opt/zimbra` onto the data partition (`/dev/sdb1`) — **§13**. Build HA pair
+refuses to wrap an empty DRBD disk while mail still lives on root.
 
 | Layer | What | Notes (proven) |
 |---|---|---|
@@ -654,6 +660,123 @@ inconsistent after fence, or fencing loop):
 **Stop rule:** any hint of **two Primaries** or unexpected dual mount of
 `/opt/zimbra` → stop automated recovery, preserve logs (`pcs status`,
 `drbdadm status`, `journalctl -u pacemaker -u sbd`), escalate.
+
+---
+
+## 13. Move `/opt/zimbra` onto the DRBD data partition (before Build HA pair)
+
+This is the procedure the console warning refers to when it says Zimbra is still
+on the **root volume**, not `/dev/sdb1` (or `KIN_DRBD_DATA_DISK`). Build HA pair
+would otherwise replicate an **empty** DRBD disk and leave live mail on the OS
+volume.
+
+**Do not run this on a formed cluster** (Pacemaker already mounting `/dev/drbd0`).
+**Do not run it on both mail nodes** — only the host that currently has the live
+`/opt/zimbra` tree (typical: the single-node Primary after a successful wizard
+install). **Do not run it against production without an independent backup** of
+`/opt/zimbra` first (the script keeps a rename on the root filesystem; that is
+not a substitute for a real backup). Run it **on that mail host**, as root, after
+confirming hostname/IP — not from a laptop and not against the wrong VM.
+
+### Order relative to Build HA pair
+
+1. Spare disk attached and GPT-partitioned (`sdb1` data + `sdb2` meta). Disk prep
+   (`plan_auto_partition` / `ansible/roles/drbd_disk_prep`) **does not mkfs**
+   either slice. If `sdb1` does not exist yet, let Build HA pair GPT it (or
+   attach/partition first), then stop — it will re-check and refuse DRBD while
+   Zimbra is still on root.
+2. This migrate script (mkfs data if needed, rsync, fstab UUID, start Zimbra).
+3. Build HA pair again for DRBD + Pacemaker. **Comment/remove the UUID fstab
+   line** when `kin-fs` starts mounting `/dev/drbd0`.
+
+### Why a script, and why mkfs is in it
+
+`ansible/roles/drbd_disk_prep` / `plan_auto_partition()` only GPT-partitions the
+spare disk:
+
+- partition 1 = Zimbra/DRBD **data** (usually `/dev/sdb1`) — **no mkfs**
+- partition 2 ≈ 256 MiB DRBD **meta** (usually `/dev/sdb2`) — **never mkfs**
+
+So after disk prep, `sdb1` is a blank slice. The migrate script will `mkfs.ext4
+-L zimbra-data` **only if** `blkid` shows no filesystem; it refuses any unexpected
+TYPE and refuses a non-empty ext4. It never formats the meta partition.
+
+### Commands (on that mail host, as root)
+
+```bash
+# 1) Independent backup (operator — outside the script)
+#    e.g. tar/rsync /opt/zimbra to another disk or the Backup VM.
+
+# 2) Read-only plan (must print OK on size, disk parent ≠ OS disk, mkfs-or-not)
+sudo /opt/kin-mail-deploy/install/lib/migrate-zimbra-to-drbd-disk.sh --dry-run
+# If the tree lives in the git checkout instead:
+# sudo /path/to/kin-mail/install/lib/migrate-zimbra-to-drbd-disk.sh --dry-run
+
+# 3) Real move — stops Zimbra for the duration of rsync + cutover
+sudo /opt/kin-mail-deploy/install/lib/migrate-zimbra-to-drbd-disk.sh \
+  --i-understand-this-moves-live-mail
+```
+
+Override the target if this host is not `sdb1`:
+
+```bash
+sudo KIN_DRBD_DATA_DISK=/dev/nvme0n1p1 KIN_DRBD_META_DISK=/dev/nvme0n1p2 \
+  /opt/kin-mail-deploy/install/lib/migrate-zimbra-to-drbd-disk.sh --dry-run
+```
+
+### What the script does (fail-closed)
+
+1. Refuses: missing `/opt/zimbra`, data disk on the OS parent, Pacemaker KIN
+   resources, live `kin-zimbra` DRBD, extra mounts under `/opt/zimbra`, data
+   disk already mounted, unexpected filesystem, too-small partition.
+2. `mkfs.ext4` on the data slice **only when it has no TYPE**.
+3. `zmcontrol stop`, waits until **no** service is `Running`.
+4. Mounts the data slice on `/mnt/kin-zimbra-data`, `rsync -aHAX --numeric-ids
+   --sparse` of `/opt/zimbra/` onto it, then a dry-run itemize that must show
+   **no** pending copies/deletes, plus an entry-count check. Original tree is
+   not renamed until that passes. A previous failed rsync (filesystem label
+   `zimbra-data`, source still on root) is resumed with `--delete`. Optional
+   `KIN_MIGRATE_CHECKSUM=1` adds a `--checksum` verify pass (slow).
+5. Appends `UUID=<data> /opt/zimbra ext4 defaults 0 2` to `/etc/fstab` (never
+   `/dev/sdX`). Backs up fstab. Renames `/opt/zimbra` →
+   `/opt/zimbra.root-<timestamp>` on the **same** root filesystem (rename, not
+   a second full copy). `mkdir` + `mount /opt/zimbra` from fstab. Verifies UUID.
+6. `zmcontrol start`, waits until **all services Running** (same gate as
+   `install/03-install-zimbra.sh`).
+7. **Does not delete** `/opt/zimbra.root-*`. Operator removes it later, after
+   mail is healthy **and** preferably after Build HA pair has wrapped the disk
+   in DRBD.
+
+Any failure after stop attempts rollback (restore fstab, restore the renamed
+tree, `zmcontrol start`). Treat a rollback as “check `zmcontrol status` before
+continuing.”
+
+### After success — Build HA pair
+
+Console preflight should now see Zimbra on the data partition (`sdb1`), not the
+root volume. Then:
+
+1. Build HA pair will `drbdadm create-md` with **external** meta on `sdb2`.
+   Unmount `/opt/zimbra` first if DRBD refuses a busy backing disk.
+2. `create-md` may complain that `sdb1` already has an ext4 signature. That is
+   expected (existing mail data). Do **not** `wipefs` the data partition.
+3. When Pacemaker `kin-fs` mounts **`/dev/drbd0`** at `/opt/zimbra`,
+   **comment or remove** the UUID fstab line the migrate script added, or boot
+   and Pacemaker will fight over the mount.
+
+### Rollback without the script
+
+If the script did not finish and `/opt/zimbra.root-*` exists while `/opt/zimbra`
+is empty or wrong:
+
+```bash
+su - zimbra -c 'zmcontrol stop' || true
+umount /opt/zimbra 2>/dev/null || true
+# restore fstab from /etc/fstab.kin-pre-zimbra-migrate-*
+mv /opt/zimbra.root-<timestamp> /opt/zimbra
+su - zimbra -c 'zmcontrol start'
+su - zimbra -c 'zmcontrol status'   # all Running
+```
 
 ---
 
