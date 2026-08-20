@@ -20,6 +20,7 @@ import { useWizard } from "../WizardContext";
 import { useDeploySession } from "../DeploySession";
 import {
   FULL_INSTALL_STAGES,
+  HA_ORCH_STAGES,
   isHaOrchestrationLog,
   shouldOfferHaPair,
 } from "../deployPipeline";
@@ -429,8 +430,8 @@ export default function DeployStep() {
                   ? `Current: ${label}`
                   : "Preparing install…"}
           </StageMeta>
-          <StageList aria-label="Install stages">
-            {FULL_INSTALL_STAGES.map((stage, idx) => {
+          <StageList aria-label={haLog ? "HA orchestration steps" : "Install stages"}>
+            {(haLog ? HA_ORCH_STAGES : FULL_INSTALL_STAGES).map((stage, idx) => {
               const state = stageState(idx, current, failed, complete);
               return (
                 <StageItem key={stage.script} $state={state}>

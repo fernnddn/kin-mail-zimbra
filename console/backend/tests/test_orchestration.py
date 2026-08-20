@@ -134,6 +134,31 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("mail_pacemaker_stack", ids)
         self.assertEqual(ids[-1], "live_join_check")
 
+    def test_frontend_ha_orch_stages_match_steps(self) -> None:
+        import re
+        from pathlib import Path
+
+        ts = (
+            Path(__file__).resolve().parents[3]
+            / "console"
+            / "frontend"
+            / "src"
+            / "wizard"
+            / "deployPipeline.ts"
+        )
+        text = ts.read_text(encoding="utf-8")
+        block = re.search(
+            r"export const HA_ORCH_STAGES: readonly InstallStage\[\] = \[([\s\S]*?)\] as const;",
+            text,
+        )
+        self.assertIsNotNone(block, "HA_ORCH_STAGES missing from deployPipeline.ts")
+        pairs = re.findall(
+            r'script:\s*"([^"]+)",\s*label:\s*"([^"]+)"',
+            block.group(1),
+        )
+        expected = [(s.step_id, s.label) for s in STEPS]
+        self.assertEqual(pairs, expected)
+
     def test_event_exit_code_zero_is_success(self) -> None:
         from kin_privhelper.orchestration import _event_exit_code
 

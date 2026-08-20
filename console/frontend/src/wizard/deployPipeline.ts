@@ -23,6 +23,37 @@ export const FULL_INSTALL_STAGES: readonly InstallStage[] = [
 
 export const FULL_INSTALL_STAGE_COUNT = FULL_INSTALL_STAGES.length;
 
+/**
+ * HA orchestration steps, same order and labels as
+ * console/backend/kin_privhelper/orchestration.py STEPS.
+ * Backend tests pin this list against that tuple so the Deploy checklist
+ * cannot silently drift.
+ *
+ * Conditional skips (join_mode=check cluster_join steps, and live_join_check
+ * on apply) have no distinct visual state. parseHaOrchProgress tracks START
+ * lines, so a skipped index becomes done once a later START advances current,
+ * matching stageState.
+ */
+export const HA_ORCH_STAGES: readonly InstallStage[] = [
+  { script: "peer_os_prep", label: "OS prep + Zimbra install on the new node" },
+  { script: "os_hardening", label: "mail-os-hardening.yml (fail2ban + unattended-upgrades)" },
+  { script: "mon_qnetd", label: "mon-qnetd.yml (qdevice witness)" },
+  { script: "mail_cluster_setup", label: "mail-cluster-setup.yml (pcsd + pcs cluster setup)" },
+  { script: "mail_qdevice", label: "mail-qdevice.yml (qdevice client packages + TLS)" },
+  { script: "mon_iscsi", label: "mon-iscsi-target.yml (SBD LUN)" },
+  { script: "mail_fencing", label: "mail-fencing.yml (initiator packages, softdog, SBD agent)" },
+  { script: "mail_drbd_install", label: "mail-drbd.yml tags=install (DRBD packages)" },
+  { script: "mail_drbd_activate", label: "mail-drbd.yml resource activation" },
+  { script: "mail_pacemaker_agents", label: "mail-pacemaker.yml tags=agents (OCF scripts)" },
+  { script: "mail_pacemaker_stack", label: "mail-pacemaker.yml stack (constraints, VIP, hostname remap)" },
+  {
+    script: "live_join_check",
+    label: "dry-run mail-drbd + mail-pacemaker against the live Pacemaker pair",
+  },
+] as const;
+
+export const HA_ORCH_STAGE_COUNT = HA_ORCH_STAGES.length;
+
 export type InstallProgress = {
   /** 0 = not started; 1..total = current stage number */
   current: number;
@@ -169,10 +200,11 @@ export function parseHaOrchProgress(log: string): InstallProgress {
   }
   const failed = /\bORCH_FAILED\b/.test(log) || /\] FAIL /.test(log);
   const complete = /\bORCH_DONE\b/.test(log);
+  const resolvedTotal = total || HA_ORCH_STAGE_COUNT;
   if (complete) {
     return {
-      current: total || current,
-      total: total || current,
+      current: resolvedTotal,
+      total: resolvedTotal,
       label: "HA sequence complete",
       script,
       complete: true,
@@ -182,7 +214,7 @@ export function parseHaOrchProgress(log: string): InstallProgress {
   if (failed) {
     return {
       current: current || 1,
-      total: total || current || 1,
+      total: resolvedTotal,
       label: current ? `${label} (failed)` : "HA sequence failed",
       script,
       complete: false,
@@ -191,7 +223,7 @@ export function parseHaOrchProgress(log: string): InstallProgress {
   }
   return {
     current,
-    total: total || 0,
+    total: resolvedTotal,
     label: current ? label : "Waiting…",
     script,
     complete: false,
