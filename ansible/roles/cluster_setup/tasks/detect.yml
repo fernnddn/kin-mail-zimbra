@@ -1,5 +1,11 @@
 ---
-# Read-only. Never check_mode: false on mutating pcs.
+# Membership detection. Mutating pcs is never check_mode: false and this
+# role never runs pcs cluster destroy / --overwrite.
+#
+# Exception: Debian/Ubuntu corosync.deb auto-starts a throwaway loopback
+# cluster from the package example config (cluster_name debian). That is
+# not real membership. detect.yml stops those units and removes the stub
+# file so pcs cluster setup can proceed. Anything else still fails closed.
 - name: Require exactly two mail_nodes for cluster setup
   ansible.builtin.assert:
     that:
@@ -46,10 +52,91 @@
   check_mode: false
   tags: [cluster, setup, detect]
 
+- name: Slurp corosync.conf when present
+  ansible.builtin.slurp:
+    src: /etc/corosync/corosync.conf
+  register: cluster_setup_corosync_conf_body
+  check_mode: false
+  when: cluster_setup_corosync_conf.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Classify a Debian package-default Corosync stub
+  ansible.builtin.set_fact:
+    cluster_setup_debian_stub: "{{ (cluster_setup_corosync_conf_body.content | b64decode) | kin_is_debian_corosync_stub }}"
+  when: cluster_setup_corosync_conf.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Note a throwaway Debian package-default Corosync stub
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} has the Debian/Ubuntu package-default
+      Corosync stub (cluster_name debian, loopback-only). That is not a
+      real cluster. This role will stop the throwaway service and remove
+      the stub corosync.conf so pcs cluster setup can write a real one.
+  when: cluster_setup_debian_stub | bool
+  tags: [cluster, setup, detect]
+
+- name: Stop and disable the throwaway Debian Corosync stub
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - pacemaker
+    - corosync
+  when:
+    - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
+- name: Keep a copy of the Debian stub corosync.conf
+  ansible.builtin.copy:
+    src: /etc/corosync/corosync.conf
+    dest: /etc/corosync/corosync.conf.kin-package-stub
+    remote_src: true
+    force: true
+    mode: "0644"
+  when:
+    - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+    - cluster_setup_corosync_conf.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Remove the Debian stub corosync.conf so pcs cluster setup can write
+  ansible.builtin.file:
+    path: /etc/corosync/corosync.conf
+    state: absent
+  when:
+    - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
+- name: Re-probe Pacemaker after clearing the Debian stub
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_setup_pcs_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
+- name: Re-check corosync.conf after clearing the Debian stub
+  ansible.builtin.stat:
+    path: /etc/corosync/corosync.conf
+  register: cluster_setup_corosync_conf
+  check_mode: false
+  when:
+    - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
 - name: Flag whether this host is already in a running cluster
   ansible.builtin.set_fact:
-    cluster_setup_running: "{{ cluster_setup_pcs_status.rc == 0 }}"
-    cluster_setup_configured: "{{ cluster_setup_corosync_conf.stat.exists | default(false) }}"
+    cluster_setup_running: "{{ false if (cluster_setup_debian_stub | bool and ansible_check_mode) else (cluster_setup_pcs_status.rc == 0) }}"
+    cluster_setup_configured: "{{ false if (cluster_setup_debian_stub | bool and ansible_check_mode) else (cluster_setup_corosync_conf.stat.exists | default(false)) }}"
     cluster_setup_expected_names: "{{ groups['mail_nodes'] }}"
     cluster_setup_formed_this_run: false
   tags: [cluster, setup, detect]

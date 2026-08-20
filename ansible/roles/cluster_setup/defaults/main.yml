@@ -4,6 +4,8 @@
 cluster_setup_name: kin-mail
 cluster_setup_hacluster_user: "{{ cluster_node_base_hacluster_user | default('hacluster') }}"
 cluster_setup_hacluster_password: "{{ cluster_node_base_hacluster_password | default('') }}"
-# Fresh cluster only — fencing playbook later sets stonith-enabled=true.
+# Fresh cluster only. Fencing playbook later sets stonith-enabled=true.
 cluster_setup_stonith_enabled_until_fencing: false
 cluster_setup_no_quorum_policy: stop
+# Set in detect.yml. True only for the Debian/Ubuntu package-default stub.
+cluster_setup_debian_stub: false
