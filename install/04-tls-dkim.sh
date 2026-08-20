@@ -13,6 +13,77 @@
 # inbound HTTP path for HTTP-01.
 # =============================================================================
 set -u
+
+# Certbot's --manual-auth-hook is run with stdout/stderr captured
+# (subprocess.PIPE) and only reported after the hook exits. Poll-mode waits
+# inside that hook for DNS, so tee'd challenge lines never reach the console
+# log live. CERTBOT_VALIDATION is also only known when certbot invokes the
+# hook, so it cannot be printed before certbot certonly.
+#
+# Same idea as kin_privhelper.commands._watch_log_file: follow the file the
+# writer already tees to, from this script, whose stdout the console streams.
+# dd writes via the kernel, so a piped SSH session is not block-buffered the
+# way GNU tail -F would be.
+follow_file_while() {
+  local file="$1"
+  shift
+  local stop follower_pid rc=0
+  [ -n "$file" ] || return 2
+  : > "$file" || return 1
+  stop=$(mktemp "${TMPDIR:-/tmp}/kin-mail-acme-follow.XXXXXX") || return 1
+  rm -f "$stop"
+
+  (
+    offset=0
+    last_head=""
+    drain() {
+      local size head do_reset=0
+      [ -f "$file" ] || return 0
+      size=$(wc -c < "$file" | tr -d '[:space:]')
+      case "$size" in
+        ''|*[!0-9]*) return 0 ;;
+      esac
+      head=$(dd if="$file" bs=1 count=64 2>/dev/null || true)
+      # Truncate+rewrite can land in one poll with size still >= offset.
+      # Reset when the new head is not an extension of the bytes we already
+      # saw (same rule as _watch_log_file).
+      if [ "$size" -lt "$offset" ]; then
+        do_reset=1
+      elif [ -n "$last_head" ] && [ -n "$head" ]; then
+        if [ "${head#"$last_head"}" = "$head" ] && [ "${last_head#"$head"}" = "$last_head" ]; then
+          do_reset=1
+        fi
+      fi
+      if [ "$do_reset" -eq 1 ]; then
+        offset=0
+      fi
+      last_head="$head"
+      if [ "$size" -gt "$offset" ]; then
+        dd if="$file" bs=1 skip="$offset" count="$((size - offset))" 2>/dev/null || true
+        offset=$size
+      fi
+    }
+    while [ ! -f "$stop" ]; do
+      drain
+      sleep "${KIN_FOLLOW_POLL_S:-0.2}"
+    done
+    drain
+  ) &
+  follower_pid=$!
+  # shellcheck disable=SC2064
+  trap "kill ${follower_pid} 2>/dev/null || true; rm -f '${stop}'" INT TERM
+  "$@" || rc=$?
+  trap - INT TERM
+  : > "$stop"
+  wait "$follower_pid" 2>/dev/null || true
+  rm -f "$stop"
+  return "$rc"
+}
+
+if [ "${KIN_TLS_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
@@ -243,8 +314,9 @@ tls_manual() {
         --agree-tos --no-eff-email -m "$LE_EMAIL" \
         --manual-public-ip-logging-ok
     else
-      info "Poll mode: challenge written to /tmp/kin-mail-acme-challenge.txt"
-      info "Create TXT in the DNS panel for zone ${MAIL_DOMAIN}, then wait for propagation."
+      info "Poll mode: the DNS-01 TXT name and value will print in this log when certbot issues them."
+      info "Create that TXT in the DNS panel for zone ${MAIL_DOMAIN}, then wait for propagation."
+      info "The same text is also written to /tmp/kin-mail-acme-challenge.txt"
       AUTH_HOOK=$(mktemp /tmp/kin-mail-acme-auth.XXXXXX)
       CLEAN_HOOK=$(mktemp /tmp/kin-mail-acme-clean.XXXXXX)
       chmod 700 "$AUTH_HOOK" "$CLEAN_HOOK"
@@ -292,16 +364,17 @@ HOOK
 #!/bin/bash
 exit 0
 HOOK
-      certbot certonly \
-        --manual \
-        --preferred-challenges dns \
-        --manual-auth-hook "$AUTH_HOOK" \
-        --manual-cleanup-hook "$CLEAN_HOOK" \
-        -d "$MAIL_HOST" \
-        --preferred-chain "ISRG Root X1" \
-        --agree-tos --no-eff-email -m "$LE_EMAIL" \
-        --manual-public-ip-logging-ok \
-        --non-interactive
+      follow_file_while /tmp/kin-mail-acme-challenge.txt \
+        certbot certonly \
+          --manual \
+          --preferred-challenges dns \
+          --manual-auth-hook "$AUTH_HOOK" \
+          --manual-cleanup-hook "$CLEAN_HOOK" \
+          -d "$MAIL_HOST" \
+          --preferred-chain "ISRG Root X1" \
+          --agree-tos --no-eff-email -m "$LE_EMAIL" \
+          --manual-public-ip-logging-ok \
+          --non-interactive
       rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
     fi
     [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"; exit 1; }

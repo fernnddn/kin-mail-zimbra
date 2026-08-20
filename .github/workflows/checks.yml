@@ -43,6 +43,9 @@ jobs:
       - name: 00-config TTY fail-closed tests
         run: bash install/lib/test-00-config-tty.sh
 
+      - name: ACME poll-mode challenge log follow tests
+        run: bash install/lib/test-04-tls-acme-follow.sh
+
       - name: Install shellcheck
         run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
 
