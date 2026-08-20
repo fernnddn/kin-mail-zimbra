@@ -611,6 +611,7 @@ if [ "$STOPPED" -eq 0 ]; then
   ok "All services running"
 else
   fail "$STOPPED service(s) not running"
+  exit 1
 fi
 
 su - zimbra -c "zmcontrol -v" 2>/dev/null | sed 's/^/    /'

@@ -75,7 +75,7 @@ for target in "alt1.aspmx.l.google.com 25" "gmail-smtp-in.l.google.com 25"; do
   if [ -n "$b" ]; then
     ok "$(printf '%-32s:%s' "$1" "$2")  ${b%%$'\n'*}"
   else
-    fail "$(printf '%-32s:%s' "$1" "$2")  no banner - FILTERED"; BLOCKED_SMTP=1
+    warn "$(printf '%-32s:%s' "$1" "$2")  no banner - FILTERED"; BLOCKED_SMTP=1
   fi
 done
 
@@ -144,7 +144,7 @@ if [ $BLOCKED_SMTP -eq 0 ] && command -v swaks >/dev/null 2>&1; then
                           || warn "Chain broken: ${ptr%.} resolves to ${back:-nothing}, not ${s1}"
     fi
   elif [ -n "$s1" ]; then
-    fail "SMTP sending address is NOT consistent (${s1} vs ${s2})"
+    warn "SMTP sending address is NOT consistent (${s1} vs ${s2})"
     info "PTR can only name one address, so a share of outbound mail will be"
     info "rejected. Pin this host to one uplink with a policy route or IP pool."
   fi

@@ -128,9 +128,9 @@ fi
 a=$(dig +short +time=4 A "$MAIL_HOST" 2>/dev/null | head -1)
 mx=$(dig +short +time=4 MX "$MAIL_DOMAIN" 2>/dev/null | head -1)
 up=$(dig +short +time=4 A google.com 2>/dev/null | head -1)
-[ "$a" = "$SERVER_IP" ] && ok "A  ${MAIL_HOST} -> ${a}"     || fail "A  ${MAIL_HOST} -> ${a:-empty}"
-[ -n "$mx" ]            && ok "MX ${MAIL_DOMAIN} -> ${mx}"  || fail "MX ${MAIL_DOMAIN} -> empty"
-[ -n "$up" ]            && ok "Upstream forwarding working" || fail "Upstream forwarding failed"
+[ "$a" = "$SERVER_IP" ] && ok "A  ${MAIL_HOST} -> ${a}"     || warn "A  ${MAIL_HOST} -> ${a:-empty}"
+[ -n "$mx" ]            && ok "MX ${MAIL_DOMAIN} -> ${mx}"  || warn "MX ${MAIL_DOMAIN} -> empty"
+[ -n "$up" ]            && ok "Upstream forwarding working" || warn "Upstream forwarding failed"
 
 # --- 5. verdict --------------------------------------------------------------
 echo

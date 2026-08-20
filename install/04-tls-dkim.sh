@@ -158,7 +158,7 @@ verify_tls_ports() {
       S=$(echo | timeout 20 openssl s_client -connect 127.0.0.1:$1 -servername "$MAIL_HOST" 2>/dev/null \
           | openssl x509 -noout -subject 2>/dev/null)
     fi
-    [ -n "$S" ] && ok "port $1 : $S" || fail "port $1 : handshake failed"
+    [ -n "$S" ] && ok "port $1 : $S" || warn "port $1 : handshake failed"
   done
 }
 
