@@ -8,3 +8,5 @@
 drbd_disk_prep_data: "{{ drbd_resource_disk | default('/dev/sdb1') }}"
 drbd_disk_prep_meta: "{{ '/dev/sdb2' if (drbd_resource_meta_disk | default('') is search('loop')) else (drbd_resource_meta_disk | default('/dev/sdb2')) }}"
 drbd_disk_prep_meta_mib: 256
+# Staged only for the selector task, then removed. Not a persistent install path.
+drbd_disk_prep_selector_remote: /var/tmp/kin-select-drbd-disk.py

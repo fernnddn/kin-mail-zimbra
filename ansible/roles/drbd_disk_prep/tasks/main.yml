@@ -36,17 +36,59 @@
     fail_msg: Could not read lsblk JSON — refusing to partition anything.
   tags: [drbd, disk_prep]
 
-- name: Select a safe DRBD backing disk
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ role_path }}/files/select_drbd_disk.py"
-    stdin: "{{ {'lsblk': drbd_disk_prep_lsblk.stdout | from_json, 'root_source': drbd_disk_prep_root.stdout | trim, 'data_disk': drbd_disk_prep_data, 'meta_disk': drbd_disk_prep_meta} | to_json }}"
-  register: drbd_disk_prep_select
-  changed_when: false
-  failed_when: false
-  check_mode: false
+# ansible.builtin.command runs on the target. role_path is the controller
+# path after templating, so `python3 {{ role_path }}/files/select_drbd_disk.py`
+# only works on a host that already has the console ansible tree (the box
+# that ran bootstrap.sh). A peer does not. ansible.builtin.script cannot be
+# used: it has no stdin, and the selector reads lsblk JSON on stdin.
+# Copy from role files/ onto the target, then command with stdin.
+- name: Run the DRBD disk selector on this host
   tags: [drbd, disk_prep]
+  block:
+    - name: Stage the DRBD disk selector on the target
+      ansible.builtin.copy:
+        src: select_drbd_disk.py
+        dest: "{{ drbd_disk_prep_selector_remote }}"
+        mode: "0755"
+      changed_when: false
+      check_mode: false
+      tags: [drbd, disk_prep]
+
+    - name: Select a safe DRBD backing disk
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ drbd_disk_prep_selector_remote }}"
+        stdin: >-
+          {{ {'lsblk': drbd_disk_prep_lsblk.stdout | from_json,
+              'root_source': drbd_disk_prep_root.stdout | trim,
+              'data_disk': drbd_disk_prep_data,
+              'meta_disk': drbd_disk_prep_meta} | to_json }}
+      register: drbd_disk_prep_select
+      changed_when: false
+      # rc=2 with JSON is a planned fail-closed decision (no unique disk).
+      # Swallow rc so Parse can read the plan. Empty stdout is inspected next.
+      failed_when: false
+      check_mode: false
+      tags: [drbd, disk_prep]
+
+    - name: Require JSON from the DRBD disk selector
+      ansible.builtin.assert:
+        that:
+          - drbd_disk_prep_select.stdout | default('') | trim | length > 0
+        fail_msg: >-
+          DRBD disk selector produced no JSON
+          (rc={{ drbd_disk_prep_select.rc | default('unset') }},
+          stderr={{ drbd_disk_prep_select.stderr | default('') | trim | default('(empty)') }}).
+          python3 must run the selector copied from the controller.
+      tags: [drbd, disk_prep]
+  always:
+    - name: Remove the staged DRBD disk selector
+      ansible.builtin.file:
+        path: "{{ drbd_disk_prep_selector_remote }}"
+        state: absent
+      changed_when: false
+      tags: [drbd, disk_prep]
 
 - name: Parse the DRBD disk plan
   ansible.builtin.set_fact:

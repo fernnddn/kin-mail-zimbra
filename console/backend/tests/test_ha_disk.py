@@ -74,6 +74,36 @@ def _lsblk(
                 ],
             }
         )
+    elif sdb == "gpt_fresh":
+        # GPT written by disk_prep; no mkfs yet (live mail.nisaroti after a
+        # play that partitioned this host then failed on the peer).
+        devices.append(
+            {
+                "name": "sdb",
+                "path": "/dev/sdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": "gpt",
+                "children": [
+                    {
+                        "name": "sdb1",
+                        "path": "/dev/sdb1",
+                        "type": "part",
+                        "size": 106954752000,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                    {
+                        "name": "sdb2",
+                        "path": "/dev/sdb2",
+                        "type": "part",
+                        "size": 267386880,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                ],
+            }
+        )
     elif sdb == "tiny":
         devices.append(
             {
@@ -336,6 +366,61 @@ class HaDiskTests(unittest.TestCase):
         )
         self.assertEqual(plan["action"], "skip")
         self.assertIn("already present", plan["message"])
+        self.assertNotIn("parted_argv", plan)
+
+    def test_fresh_gpt_without_filesystem_skips_repartition(self) -> None:
+        """disk_prep GPT with no mkfs must skip, not rewrite, on the next run."""
+        plan = plan_auto_partition(
+            _lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            data_disk="/dev/sdb1",
+            meta_disk="/dev/sdb2",
+        )
+        self.assertEqual(plan["action"], "skip")
+        self.assertEqual(plan["disk"], "/dev/sdb")
+        self.assertIn("already present", plan["message"])
+        self.assertNotIn("parted_argv", plan)
+
+    def test_asymmetric_pair_skip_plus_partition(self) -> None:
+        """Next real run: already-GPT host skips; blank peer still partitions."""
+        already = plan_auto_partition(
+            _lsblk(sdb="gpt_fresh"),
+            root_source="/dev/sda2",
+            data_disk="/dev/sdb1",
+            meta_disk="/dev/sdb2",
+        )
+        peer = plan_auto_partition(
+            _lsblk(sdb="unpartitioned"),
+            root_source="/dev/sda2",
+            data_disk="/dev/sdb1",
+            meta_disk="/dev/sdb2",
+        )
+        self.assertEqual(already["action"], "skip")
+        self.assertEqual(peer["action"], "partition")
+        self.assertEqual(peer["disk"], "/dev/sdb")
+
+    def test_selector_emits_json_even_on_bad_stdin(self) -> None:
+        """Empty stdout means the process never ran, not a selector logic miss."""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = (
+            Path(__file__).resolve().parents[3]
+            / "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
+        )
+        self.assertTrue(script.is_file(), msg=str(script))
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            input="not-json",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertTrue(proc.stdout.strip(), msg=proc.stderr)
+        body = json.loads(proc.stdout)
+        self.assertEqual(body["action"], "fail")
+        self.assertTrue(any("invalid JSON" in e for e in body["errors"]))
 
     def test_mounted_spare_is_not_a_candidate(self) -> None:
         lsblk = _lsblk(sdb="unpartitioned")
