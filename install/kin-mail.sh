@@ -240,7 +240,7 @@ run_firewall_stage_interactive() {
   info "Do NOT apply Host A and Host B in parallel."
   echo
 
-  local default_ans=y
+  local default_ans=y admin_ips
   if ufw_is_active; then
     warn "ufw is already active on this host."
     info "Re-apply resets rules and re-arms the dead-man switch."
@@ -254,6 +254,16 @@ run_firewall_stage_interactive() {
   fi
 
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
+    # Wizard marks Admin IPs optional. Empty = skip stage 10 (same as CLI "no"),
+    # then continue to 11 and 05. Do not fail the whole pipeline.
+    admin_ips=$(printf '%s' "${KIN_ADMIN_IPS:-}" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
+    if [ -z "$admin_ips" ]; then
+      warn "Host firewall (ufw) not applied — no admin IPs configured via wizard."
+      warn "Perimeter firewall (FortiGate) remains your only protection at host level until you set Admin access IPs and re-run this stage."
+      info "Console: run_script 10-host-firewall.sh apply"
+      info "CLI:     sudo ./10-host-firewall.sh apply"
+      return 0
+    fi
     # Console UI button is the operator confirm — never invent a silent default-yes
     # for bare non-TTY runs without this flag.
     say "KIN_CONSOLE_CONFIRMED=1 — applying firewall (console operator confirmed)"
