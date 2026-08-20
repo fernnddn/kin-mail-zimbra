@@ -265,8 +265,15 @@ if [ $QUICK -eq 0 ]; then
         --tls --header "Subject: $SUBJ" --body "healthcheck" 2>&1)
   if printf '%s' "$OUT" | grep -q "queued as"; then
     p "Submission accepted (587, TLS, AUTH)"
-    sleep 12
-    MSG=$(find /opt/zimbra/store -name '*.msg' -newermt '-2 minutes' 2>/dev/null | head -1)
+    # amavis/antispam scanning can still be warming up right after a restart
+    # (04-tls-dkim.sh and the DNS-cache flush above both restart it), so a
+    # single fixed sleep can catch it mid-scan. Poll instead of one shot.
+    MSG=""
+    for _t1_try in 1 2 3 4 5 6; do
+      sleep 6
+      MSG=$(find /opt/zimbra/store -name '*.msg' -newermt '-2 minutes' 2>/dev/null | head -1)
+      [ -n "$MSG" ] && break
+    done
     if [ -n "$MSG" ]; then
       grep -qi '^DKIM-Signature' "$MSG" && p "Message signed with DKIM" || f "No DKIM-Signature header"
       AR=$(grep -i '^Authentication-Results' -A1 "$MSG" | tr '\n' ' ')
