@@ -302,6 +302,26 @@ class DebianCorosyncStubTests(unittest.TestCase):
             )
         )
 
+    def test_harmless_stub_accepts_empty_cib_and_rejects_real_cib(self) -> None:
+        from test_pacemaker_cib import EMPTY_SKELETON_CIB, REAL_CIB_WITH_RESOURCES
+
+        self.assertTrue(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_PCS_STATUS,
+                live_nodes=["mail.nisaroti.my.id"],
+                cib_text=EMPTY_SKELETON_CIB,
+            )
+        )
+        self.assertFalse(
+            is_harmless_package_stub_cluster(
+                LIVE_STUB_NAME_COMMENTED,
+                status_text=LIVE_PCS_STATUS,
+                live_nodes=["mail.nisaroti.my.id"],
+                cib_text=REAL_CIB_WITH_RESOURCES,
+            )
+        )
+
     def test_apply_gate_lets_tonight_stub_through(self) -> None:
         kwargs = dict(
             join_mode="apply",

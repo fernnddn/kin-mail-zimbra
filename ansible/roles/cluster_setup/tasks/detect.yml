@@ -5,7 +5,10 @@
 # Exception: Debian/Ubuntu corosync.deb auto-starts a throwaway loopback
 # cluster from the package example config (cluster_name debian). That is
 # not real membership. detect.yml stops those units and removes the stub
-# file so pcs cluster setup can proceed. Anything else still fails closed.
+# corosync.conf. When that stub classifier matches, it also removes a
+# confirmed-empty Pacemaker cib.xml skeleton (same package first-start)
+# so pcs cluster setup is not blocked by leftover CIB files. A CIB with
+# nodes, resources, or status history is left alone (fail closed).
 - name: Require exactly two mail_nodes for cluster setup
   ansible.builtin.assert:
     that:
@@ -21,7 +24,7 @@
     that:
       - hostvars[item].ansible_host | default('') | length > 0
     fail_msg: >-
-      {{ item }} has no ansible_host — pcs cluster setup needs a real LAN IP,
+      {{ item }} has no ansible_host - pcs cluster setup needs a real LAN IP,
       not a hostname that might resolve to loopback after the HA remap.
   loop: "{{ groups['mail_nodes'] }}"
   run_once: true
@@ -71,8 +74,9 @@
     msg: >-
       {{ inventory_hostname }} has the Debian/Ubuntu package-default
       Corosync stub (cluster_name debian, loopback-only). That is not a
-      real cluster. This role will stop the throwaway service and remove
-      the stub corosync.conf so pcs cluster setup can write a real one.
+      real cluster. This role will stop the throwaway service, remove the
+      stub corosync.conf, and remove an empty Pacemaker cib.xml skeleton
+      when present so pcs cluster setup can write a real config.
   when: cluster_setup_debian_stub | bool
   tags: [cluster, setup, detect]
 
@@ -108,6 +112,69 @@
     state: absent
   when:
     - cluster_setup_debian_stub | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
+- name: Check for a Pacemaker cib.xml left by the package stub
+  ansible.builtin.stat:
+    path: /var/lib/pacemaker/cib/cib.xml
+  register: cluster_setup_cib_xml
+  check_mode: false
+  when: cluster_setup_debian_stub | bool
+  tags: [cluster, setup, detect]
+
+- name: Slurp cib.xml when the Debian stub is present
+  ansible.builtin.slurp:
+    src: /var/lib/pacemaker/cib/cib.xml
+  register: cluster_setup_cib_xml_body
+  check_mode: false
+  when:
+    - cluster_setup_debian_stub | bool
+    - cluster_setup_cib_xml.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Classify an empty Pacemaker cib.xml skeleton
+  ansible.builtin.set_fact:
+    cluster_setup_empty_cib: "{{ (cluster_setup_cib_xml_body.content | b64decode) | kin_is_empty_skeleton_cib }}"
+  when:
+    - cluster_setup_debian_stub | bool
+    - cluster_setup_cib_xml.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Note a non-empty cib.xml beside the Debian Corosync stub
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} has the Debian Corosync stub but
+      /var/lib/pacemaker/cib/cib.xml is not an empty skeleton. Leaving
+      that CIB untouched (fail closed). pcs cluster setup will refuse
+      until an operator inspects or runs pcs cluster destroy by hand.
+  when:
+    - cluster_setup_debian_stub | bool
+    - cluster_setup_cib_xml.stat.exists | default(false)
+    - not (cluster_setup_empty_cib | bool)
+  tags: [cluster, setup, detect]
+
+- name: Keep a copy of the empty Pacemaker cib.xml skeleton
+  ansible.builtin.copy:
+    src: /var/lib/pacemaker/cib/cib.xml
+    dest: /var/lib/pacemaker/cib/cib.xml.kin-package-stub
+    remote_src: true
+    force: true
+    mode: "0600"
+  when:
+    - cluster_setup_debian_stub | bool
+    - cluster_setup_empty_cib | bool
+    - not ansible_check_mode
+    - cluster_setup_cib_xml.stat.exists | default(false)
+  tags: [cluster, setup, detect]
+
+- name: Remove the empty Pacemaker cib.xml so pcs cluster setup can write
+  ansible.builtin.file:
+    path: /var/lib/pacemaker/cib/cib.xml
+    state: absent
+  when:
+    - cluster_setup_debian_stub | bool
+    - cluster_setup_empty_cib | bool
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
