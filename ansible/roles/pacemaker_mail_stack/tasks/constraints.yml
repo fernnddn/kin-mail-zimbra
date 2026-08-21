@@ -24,8 +24,7 @@
   run_once: true
   when:
     - not ansible_check_mode
-    - pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout
-      or 'with Promoted' not in pacemaker_mail_stack_constraints.stdout
+    - not (pacemaker_mail_stack_constraints.stdout | kin_pcs_has_promoted_colocation(pacemaker_mail_stack_group, pacemaker_mail_stack_drbd_clone))
   tags: [pacemaker, stack, constraints]
 
 - name: Add the order to promote DRBD then start the service group
@@ -37,9 +36,7 @@
   run_once: true
   when:
     - not ansible_check_mode
-    - >-
-      ('promote resource' not in pacemaker_mail_stack_constraints.stdout)
-      or (pacemaker_mail_stack_group not in pacemaker_mail_stack_constraints.stdout)
+    - not (pacemaker_mail_stack_constraints.stdout | kin_pcs_has_promote_then_start(pacemaker_mail_stack_drbd_clone, pacemaker_mail_stack_group))
   tags: [pacemaker, stack, constraints]
 
 # Group members are created --disabled so they do not start on a Secondary

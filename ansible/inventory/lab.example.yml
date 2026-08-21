@@ -28,6 +28,9 @@ all:
     drbd_resource_node_a_address: 10.10.40.15
     drbd_resource_node_b_name: mail2.gits-it.site
     drbd_resource_node_b_address: 10.10.40.14
+    # Proven rebuild layout. Role defaults still say /dev/loop21.
+    drbd_resource_disk: /dev/sdb1
+    drbd_resource_meta_disk: /dev/sdb2
     # Partition meta: leave meta-loop empty (no kin-drbd-meta-loop.service).
     # pacemaker_agents_keep_meta_loop_unit: ""
   children:
