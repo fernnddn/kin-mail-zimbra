@@ -33,6 +33,11 @@ export KIN_MIGRATE_SOURCE_ONLY
 # shellcheck source=migrate-zimbra-to-drbd-disk.sh
 . "$MIGRATE"
 
+# LUKS mapper is the DRBD/mkfs backing when encryption is on.
+# shellcheck source=zimbra-data-disk-luks.sh
+KIN_LUKS_SOURCE_ONLY=1
+. "${HERE}/zimbra-data-disk-luks.sh"
+
 DATA_DISK="${KIN_DRBD_DATA_DISK:-/dev/sdb1}"
 ZIMBRA_DIR="${KIN_ZIMBRA_DIR:-/opt/zimbra}"
 FSTAB="${KIN_RELEASE_FSTAB:-/etc/fstab}"
@@ -58,10 +63,17 @@ same_as_data_disk() {
   local src="$1"
   local data_uuid mnt_uuid
   [ -n "$src" ] || return 1
-  [ "$src" = "$DATA_DISK" ] && return 0
+  if same_as_data_backing "$src" "$DATA_DISK"; then
+    return 0
+  fi
   data_uuid=$(blkid -s UUID -o value "$DATA_DISK" 2>/dev/null || true)
   mnt_uuid=$(findmnt -n -o UUID "$ZIMBRA_DIR" 2>/dev/null || true)
-  [ -n "$data_uuid" ] && [ -n "$mnt_uuid" ] && [ "$data_uuid" = "$mnt_uuid" ]
+  [ -n "$data_uuid" ] && [ -n "$mnt_uuid" ] && [ "$data_uuid" = "$mnt_uuid" ] && return 0
+  if [ -b "$(luks_mapper_path)" ]; then
+    data_uuid=$(blkid -s UUID -o value "$(luks_mapper_path)" 2>/dev/null || true)
+    [ -n "$data_uuid" ] && [ -n "$mnt_uuid" ] && [ "$data_uuid" = "$mnt_uuid" ] && return 0
+  fi
+  return 1
 }
 
 remove_precluster_fstab() {
@@ -120,9 +132,14 @@ fi
 ok "Unmounted ${ZIMBRA_DIR}"
 
 if command -v fuser >/dev/null 2>&1; then
-  if fuser -m "$DATA_DISK" >/dev/null 2>&1; then
-    fuser -vm "$DATA_DISK" 2>&1 | sed 's/^/    /' || true
-    die_release "${DATA_DISK} still has open holders after umount"
+  fuser_dev="$DATA_DISK"
+  if [ "$SRC" = "$(luks_mapper_path)" ]; then
+    # cryptsetup holds the raw LUKS partition; only the mapper is the FS.
+    fuser_dev=$(luks_mapper_path)
+  fi
+  if fuser -m "$fuser_dev" >/dev/null 2>&1; then
+    fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    die_release "${fuser_dev} still has open holders after umount"
   fi
 fi
 

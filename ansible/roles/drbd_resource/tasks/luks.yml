@@ -1,0 +1,103 @@
+---
+# LUKS under the raw data partition before DRBD attach.
+# Same helper as install/lib/prepare-zimbra-data-disk.sh.
+# Never check_mode: false on cryptsetup luksFormat.
+# =============================================================================
+
+- name: Install cryptsetup for the Zimbra data disk
+  ansible.builtin.apt:
+    name: cryptsetup
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Stat the shared LUKS helper on the controller
+  ansible.builtin.stat:
+    path: "{{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh"
+  register: drbd_resource_luks_src_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, luks]
+
+- name: Require the shared LUKS helper on the controller
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_luks_src_stat.stat.exists | default(false)
+      - drbd_resource_luks_src_stat.stat.isreg | default(false)
+    fail_msg: >-
+      Missing {{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh.
+      Set kin_mail_deploy_dir / KIN_MAIL_DEPLOY_DIR to the tree that contains
+      install/lib.
+  tags: [drbd, resource, luks]
+
+- name: Install the LUKS ensure helper on this host
+  ansible.builtin.copy:
+    src: "{{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh"
+    dest: "{{ drbd_resource_luks_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Ensure LUKS on the DRBD data partition (idempotent, no reformat)
+  ansible.builtin.command:
+    argv:
+      - "{{ drbd_resource_luks_script }}"
+  environment:
+    KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
+    KIN_ENCRYPT_ZIMBRA_DATA_DISK: "{{ '1' if drbd_resource_luks | bool else '0' }}"
+    KIN_LUKS_MAPPER_NAME: "{{ drbd_resource_luks_mapper_name }}"
+    KIN_LUKS_KEYFILE: "{{ drbd_resource_luks_keyfile }}"
+  register: drbd_resource_luks_ensure
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Record the DRBD backing device (mapper or raw)
+  ansible.builtin.set_fact:
+    drbd_resource_backing_disk: >-
+      {{
+        (
+          drbd_resource_luks_ensure.stdout_lines
+          | select('match', '^KIN_LUKS_BACKING=')
+          | list
+          | first
+          | default('KIN_LUKS_BACKING=' ~ drbd_resource_disk)
+        ).split('=')[1]
+      }}
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Require the DRBD backing device to exist
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_backing_disk }}"
+  register: drbd_resource_backing_stat
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Fail closed if the DRBD backing device is missing
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_backing_stat.stat.exists | default(false)
+      - drbd_resource_backing_stat.stat.isblk | default(false)
+    fail_msg: >-
+      DRBD backing {{ drbd_resource_backing_disk }} is not a block device
+      after LUKS ensure. Raw partition is {{ drbd_resource_disk }}.
+  when: not ansible_check_mode
+  tags: [drbd, resource, luks]
+
+- name: Note check-mode would ensure LUKS without writing
+  ansible.builtin.debug:
+    msg: >-
+      --check: would run {{ drbd_resource_luks_script }} on
+      {{ drbd_resource_disk }} (encrypt={{ drbd_resource_luks | bool }}).
+      Not calling cryptsetup.
+  when: ansible_check_mode | bool
+  tags: [drbd, resource, luks]

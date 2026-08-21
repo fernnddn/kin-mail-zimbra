@@ -1,2 +1,4 @@
 ---
-# no handlers for this role
+- name: Reload systemd after Pacemaker drop-in changes
+  ansible.builtin.systemd:
+    daemon_reload: true

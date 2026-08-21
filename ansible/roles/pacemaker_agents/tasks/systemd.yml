@@ -41,10 +41,31 @@
   ansible.builtin.debug:
     msg: >-
       {{ pacemaker_agents_keep_meta_loop_unit | default('(unset)') }} is not
-      present — OK when DRBD meta-disk is a real partition (rebuild), unlike
+      present - OK when DRBD meta-disk is a real partition (rebuild), unlike
       the Phase 2 loop-backed meta path.
   when: >-
     pacemaker_agents_keep_meta_loop_unit | length == 0
     or (pacemaker_agents_meta_loop_cat is defined
         and pacemaker_agents_meta_loop_cat.rc != 0)
+  tags: [pacemaker, agents, systemd]
+
+- name: Prepare the pacemaker.service LUKS ordering drop-in directory
+  ansible.builtin.file:
+    path: "{{ pacemaker_agents_luks_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [pacemaker, agents, systemd]
+
+- name: Deploy the pacemaker After=cryptsetup.target drop-in
+  ansible.builtin.template:
+    src: kin-luks-cryptsetup.conf.j2
+    dest: "{{ pacemaker_agents_luks_dropin_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd after Pacemaker drop-in changes
+  when: not ansible_check_mode
   tags: [pacemaker, agents, systemd]

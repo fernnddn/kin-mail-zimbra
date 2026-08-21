@@ -18,7 +18,9 @@ from typing import Any
 # Proven HA layout (ha-build-03 / HA-RUNBOOK): data + small external meta.
 DEFAULT_DATA_DISK = "/dev/sdb1"
 DEFAULT_META_DISK = "/dev/sdb2"
-MIN_DATA_BYTES = 20 * 1024**3  # 20 GiB floor — not a sizing recommendation
+LUKS_MAPPER_NAME = "kin-zimbra-crypt"
+LUKS_MAPPER_PATH = "/dev/mapper/kin-zimbra-crypt"
+MIN_DATA_BYTES = 20 * 1024**3  # 20 GiB floor - not a sizing recommendation
 MIN_META_BYTES = 128 * 1024**2
 MAX_META_BYTES = 2 * 1024**3
 
@@ -92,6 +94,43 @@ def data_disk_path() -> str:
 
 def meta_disk_path() -> str:
     return str(os.environ.get("KIN_DRBD_META_DISK") or DEFAULT_META_DISK).strip() or DEFAULT_META_DISK
+
+
+def luks_mapper_path() -> str:
+    name = str(os.environ.get("KIN_LUKS_MAPPER_NAME") or LUKS_MAPPER_NAME).strip() or LUKS_MAPPER_NAME
+    if name.startswith("/dev/"):
+        return name
+    return f"/dev/mapper/{name}"
+
+
+def encrypt_zimbra_data_disk_enabled(value: str | None = None) -> bool:
+    raw = (value if value is not None else os.environ.get("KIN_ENCRYPT_ZIMBRA_DATA_DISK", "1")).strip()
+    return raw not in ("0", "false", "FALSE", "no", "NO", "off", "OFF")
+
+
+def luks_prepare_action(*, encrypt: bool, fstype: str) -> str:
+    """Mirror install/lib/zimbra-data-disk-luks.sh luks_prepare_action.
+
+    format_luks is only for an empty disk. crypto_LUKS never reformats.
+    Existing ext4 stays plain (no live-pair retrofit).
+    """
+    kind = (fstype or "").strip()
+    if kind == "crypto_LUKS":
+        return "open_luks"
+    if kind == "ext4":
+        return "skip_plain_existing"
+    if kind == "":
+        return "format_luks" if encrypt else "mkfs_plain"
+    return "die_unknown"
+
+
+def drbd_backing_device(*, data_disk: str, fstype: str, encrypt: bool | None = None) -> str:
+    """Device DRBD should attach (mapper after LUKS, otherwise the raw partition)."""
+    enabled = encrypt_zimbra_data_disk_enabled() if encrypt is None else encrypt
+    action = luks_prepare_action(encrypt=enabled, fstype=fstype)
+    if action in ("format_luks", "open_luks"):
+        return luks_mapper_path()
+    return data_disk or DEFAULT_DATA_DISK
 
 
 def _norm_dev(value: str) -> str:
@@ -323,7 +362,12 @@ def evaluate_node(
     zimbra_src = _norm_dev(zimbra_source)
     zimbra_mid_handoff = False
     if require_zimbra_on_data and zimbra_exists:
-        allowed = {data_disk, "/dev/drbd0", "/dev/drbd/by-res/kin-zimbra"}
+        allowed = {
+            data_disk,
+            luks_mapper_path(),
+            "/dev/drbd0",
+            "/dev/drbd/by-res/kin-zimbra",
+        }
         if zimbra_src.startswith("/dev/drbd"):
             pass
         elif zimbra_src in allowed:

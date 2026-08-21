@@ -46,6 +46,9 @@ jobs:
       - name: zimbra-data-disk-probe helper tests
         run: bash install/lib/test-zimbra-data-disk-probe.sh
 
+      - name: zimbra-data-disk-luks helper tests
+        run: bash install/lib/test-zimbra-data-disk-luks.sh
+
       - name: release-zimbra-plain-mount-for-drbd helper tests
         run: bash install/lib/test-release-zimbra-plain-mount-for-drbd.sh
 

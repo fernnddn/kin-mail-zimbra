@@ -145,6 +145,19 @@ else
   echo "--- fstab ---"; cat "$FSTAB" || true
 fi
 
+write_fstab
+printf '%s\n' "/dev/mapper/kin-zimbra-crypt" >"$ROOT/mnt_state"
+: >"$ROOT/su.log"
+: >"$ROOT/umount.log"
+if "$SCRIPT" >/dev/null \
+  && grep -q 'zmcontrol stop' "$ROOT/su.log" \
+  && grep -q umount "$ROOT/umount.log" \
+  && ! grep -Fq "$MARK" "$FSTAB"; then
+  pass "LUKS mapper mount: stop, umount, remove fstab mark"
+else
+  bad "LUKS mapper mount handoff failed"
+fi
+
 printf 'UUID=aaaa-bbbb /boot ext4 defaults 0 2\n' >"$FSTAB"
 printf '%s\n' "/dev/sda1" >"$ROOT/mnt_state"
 if "$SCRIPT" >/dev/null 2>&1; then
@@ -179,6 +192,8 @@ if "when: not ansible_check_mode" not in chunk:
     raise SystemExit("expected when: not ansible_check_mode")
 if "precluster-zimbra-fstab.sh" not in text:
     raise SystemExit("precluster helper not staged")
+if "zimbra-data-disk-luks.sh" not in text:
+    raise SystemExit("LUKS helper not staged")
 PY
 then
   pass "ansible release_plain_mount runs fstab cleanup on every mail node"

@@ -18,6 +18,9 @@
 #
 #   KIN_PREPARE_ZIMBRA_DATA_DISK=0  force OS-volume install (no disk work)
 #   KIN_DRBD_DATA_DISK / KIN_DRBD_META_DISK  same defaults as disk_prep
+#   KIN_ENCRYPT_ZIMBRA_DATA_DISK=1  LUKS under the data partition (default on
+#                                   for new empty disks). Already-ext4 disks
+#                                   stay plain (no live-pair retrofit).
 # =============================================================================
 set -u
 
@@ -56,6 +59,10 @@ first_leftover() {
 # Shared mount_has_zmcontrol / zimbra_data_disk_has_real_install.
 # shellcheck source=zimbra-data-disk-probe.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zimbra-data-disk-probe.sh"
+# LUKS under the data partition (fresh empty disks).
+# shellcheck source=zimbra-data-disk-luks.sh
+KIN_LUKS_SOURCE_ONLY=1
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zimbra-data-disk-luks.sh"
 # Shared pre-cluster fstab cleanup (same helper as release-zimbra-plain-mount).
 # shellcheck source=precluster-zimbra-fstab.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/precluster-zimbra-fstab.sh"
@@ -187,8 +194,8 @@ case "$(prepare_data_disk_drbd_action "$HELD_BY_DRBD" "$ON_DRBD")" in
 esac
 
 if [ -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
-  if [ -n "$Z_MNTSRC" ] && [ "$Z_MNTSRC" = "$DATA_DISK" ]; then
-    ok "${ZIMBRA_DIR} is already on ${DATA_DISK}"
+  if [ -n "$Z_MNTSRC" ] && { [ "$Z_MNTSRC" = "$DATA_DISK" ] || [ "$Z_MNTSRC" = "$(luks_mapper_path)" ]; }; then
+    ok "${ZIMBRA_DIR} is already on ${Z_MNTSRC}"
     exit 0
   fi
   fallback_os "Zimbra is already installed under ${ZIMBRA_DIR}; not mounting a data disk over it (use install/lib/migrate-zimbra-to-drbd-disk.sh)"
@@ -304,21 +311,74 @@ if [ -n "$DATA_MP" ] && [ "$DATA_MP" != "$ZIMBRA_DIR" ]; then
 fi
 
 FSTYPE=$(blkid -s TYPE -o value "$DATA_DISK" 2>/dev/null || true)
+ENCRYPT=0
+encrypt_zimbra_data_disk_enabled && ENCRYPT=1
+LUKS_ACTION=$(luks_prepare_action "$ENCRYPT" "$FSTYPE")
+FS_DEV="$DATA_DISK"
+FSTAB_OPTS="defaults"
+
+case "$LUKS_ACTION" in
+  die_unknown)
+    die "${DATA_DISK} has TYPE=${FSTYPE}; refusing to reuse or reformat it"
+    ;;
+  format_luks)
+    command -v cryptsetup >/dev/null 2>&1 || die "cryptsetup is not installed"
+    say "LUKS-format ${DATA_DISK} (keyfile, auto-unlock at boot)"
+    ensure_luks_keyfile || die "Could not create LUKS keyfile"
+    luks_format_and_open "$DATA_DISK" || die "cryptsetup luksFormat/open failed"
+    ensure_luks_crypttab "$DATA_DISK" || die "Could not write crypttab"
+    FS_DEV=$(luks_mapper_path)
+    FSTAB_OPTS="defaults,x-systemd.requires=cryptsetup.target"
+    FSTYPE=""
+    ok "LUKS mapper ${FS_DEV}"
+    ;;
+  open_luks)
+    command -v cryptsetup >/dev/null 2>&1 || die "cryptsetup is not installed"
+    say "Opening existing LUKS on ${DATA_DISK} (no reformat)"
+    ensure_luks_keyfile || die "LUKS keyfile missing and could not be created"
+    open_luks_mapper "$DATA_DISK" || die "cryptsetup open failed"
+    ensure_luks_crypttab "$DATA_DISK" || die "Could not write crypttab"
+    FS_DEV=$(luks_mapper_path)
+    FSTAB_OPTS="defaults,x-systemd.requires=cryptsetup.target"
+    FSTYPE=$(blkid -s TYPE -o value "$FS_DEV" 2>/dev/null || true)
+    ok "LUKS mapper ${FS_DEV} (existing volume)"
+    ;;
+  skip_plain_existing)
+    if [ "$ENCRYPT" = "1" ]; then
+      info "KIN_ENCRYPT_ZIMBRA_DATA_DISK=1 but ${DATA_DISK} is already ext4; leaving plain (no retrofit)"
+    fi
+    FS_DEV="$DATA_DISK"
+    FSTYPE="ext4"
+    ;;
+  mkfs_plain)
+    FS_DEV="$DATA_DISK"
+    FSTYPE=""
+    ;;
+esac
+
+[ -b "$FS_DEV" ] || die "data backing ${FS_DEV} is not a block device"
+
+FS_MP=$(lsblk -no MOUNTPOINT "$FS_DEV" 2>/dev/null | head -1 | tr -d ' ')
+if [ -n "$FS_MP" ] && [ "$FS_MP" != "$ZIMBRA_DIR" ]; then
+  die "${FS_DEV} is already mounted on ${FS_MP}"
+fi
+[ -n "$FS_MP" ] && DATA_MP="$FS_MP"
+
 case "$FSTYPE" in
   "")
     command -v mkfs.ext4 >/dev/null 2>&1 || die "mkfs.ext4 not found (install e2fsprogs)"
-    say "Creating ext4 on ${DATA_DISK}"
-    mkfs.ext4 -F -L zimbra-data "$DATA_DISK" || die "mkfs.ext4 failed"
+    say "Creating ext4 on ${FS_DEV}"
+    mkfs.ext4 -F -L zimbra-data "$FS_DEV" || die "mkfs.ext4 failed"
     udevadm settle || true
-    FSTYPE=$(blkid -s TYPE -o value "$DATA_DISK" 2>/dev/null || true)
+    FSTYPE=$(blkid -s TYPE -o value "$FS_DEV" 2>/dev/null || true)
     [ "$FSTYPE" = "ext4" ] || die "mkfs reported success but TYPE is '${FSTYPE}'"
-    ok "ext4 ready on ${DATA_DISK}"
+    ok "ext4 ready on ${FS_DEV}"
     ;;
   ext4)
     leftover=""
     has_zmcontrol=0
     tmp=$(mktemp -d)
-    if mount -o ro "$DATA_DISK" "$tmp" 2>/dev/null; then
+    if mount -o ro "$FS_DEV" "$tmp" 2>/dev/null; then
       leftover=$(first_leftover "$tmp" || true)
       if mount_has_zmcontrol "$tmp"; then
         has_zmcontrol=1
@@ -329,34 +389,34 @@ case "$FSTYPE" in
     case "$(ext4_unmounted_action "$leftover" "$has_zmcontrol" "$DATA_MP")" in
       accept_zimbra)
         # Mid-handoff (or any prior install on the data partition): real Zimbra
-        # tree is on ${DATA_DISK}, /opt/zimbra is just empty. Do not mkfs, do not
-        # remount here - release-zimbra-plain-mount-for-drbd.sh and Pacemaker
-        # kin-fs own that lifecycle during Build HA pair.
-        ok "${DATA_DISK} already holds a Zimbra install (bin/zmcontrol); leaving unmounted for DRBD/Pacemaker"
+        # tree is on the backing device, /opt/zimbra is just empty. Do not mkfs,
+        # do not remount here. release-zimbra-plain-mount-for-drbd.sh and
+        # Pacemaker kin-fs own that lifecycle during Build HA pair.
+        ok "${FS_DEV} already holds a Zimbra install (bin/zmcontrol); leaving unmounted for DRBD/Pacemaker"
         exit 0
         ;;
       die_leftover)
-        die "${DATA_DISK} already has files (e.g. ${leftover}) and is not mounted at ${ZIMBRA_DIR}"
+        die "${FS_DEV} already has files (e.g. ${leftover}) and is not mounted at ${ZIMBRA_DIR}"
         ;;
     esac
-    ok "${DATA_DISK} is already ext4"
+    ok "${FS_DEV} is already ext4"
     ;;
   *)
-    die "${DATA_DISK} has TYPE=${FSTYPE}; refusing to reuse or reformat it"
+    die "${FS_DEV} has TYPE=${FSTYPE}; refusing to reuse or reformat it"
     ;;
 esac
 
-UUID=$(blkid -s UUID -o value "$DATA_DISK" 2>/dev/null || true)
-[ -n "$UUID" ] || die "No UUID for ${DATA_DISK}"
+UUID=$(blkid -s UUID -o value "$FS_DEV" 2>/dev/null || true)
+[ -n "$UUID" ] || die "No UUID for ${FS_DEV}"
 
 if fstab_has_kin_mark && ! fstab_has_uuid "$UUID"; then
   die "${FSTAB} already has a KIN Mail zimbra data entry for a different UUID"
 fi
 if ! fstab_has_uuid "$UUID"; then
-  printf '\n%s\n# Remove this UUID line when Pacemaker kin-fs mounts /dev/drbd0 (Build HA pair).\nUUID=%s %s ext4 defaults 0 2\n' \
-    "$FSTAB_MARK" "$UUID" "$ZIMBRA_DIR" >>"$FSTAB" \
+  printf '\n%s\n# Remove this UUID line when Pacemaker kin-fs mounts /dev/drbd0 (Build HA pair).\nUUID=%s %s ext4 %s 0 2\n' \
+    "$FSTAB_MARK" "$UUID" "$ZIMBRA_DIR" "$FSTAB_OPTS" >>"$FSTAB" \
     || die "Could not append ${FSTAB}"
-  grep -Fq "UUID=${UUID} ${ZIMBRA_DIR} ext4 defaults 0 2" "$FSTAB" \
+  grep -Fq "UUID=${UUID} ${ZIMBRA_DIR} ext4 ${FSTAB_OPTS} 0 2" "$FSTAB" \
     || die "fstab write did not stick"
   ok "fstab UUID=${UUID} -> ${ZIMBRA_DIR}"
 else
@@ -366,11 +426,11 @@ fi
 if mountpoint -q "$ZIMBRA_DIR" 2>/dev/null; then
   now=$(norm_src "$(findmnt -n -o SOURCE "$ZIMBRA_DIR")")
   uuid_now=$(findmnt -n -o UUID "$ZIMBRA_DIR" 2>/dev/null || true)
-  if [ "$uuid_now" = "$UUID" ] || [ "$now" = "$DATA_DISK" ]; then
-    ok "${ZIMBRA_DIR} already mounted from ${DATA_DISK}"
+  if [ "$uuid_now" = "$UUID" ] || same_as_data_backing "$now" "$DATA_DISK"; then
+    ok "${ZIMBRA_DIR} already mounted from ${now}"
     exit 0
   fi
-  die "${ZIMBRA_DIR} is mounted from ${now}, not ${DATA_DISK}"
+  die "${ZIMBRA_DIR} is mounted from ${now}, not ${FS_DEV}"
 fi
 
 mkdir -p "$ZIMBRA_DIR" || die "mkdir ${ZIMBRA_DIR} failed"
@@ -379,11 +439,11 @@ if ! mount "$ZIMBRA_DIR"; then
 fi
 now=$(norm_src "$(findmnt -n -o SOURCE "$ZIMBRA_DIR")")
 uuid_now=$(findmnt -n -o UUID "$ZIMBRA_DIR" 2>/dev/null || true)
-if [ "$uuid_now" != "$UUID" ] && [ "$now" != "$DATA_DISK" ]; then
+if [ "$uuid_now" != "$UUID" ] && ! same_as_data_backing "$now" "$DATA_DISK"; then
   umount "$ZIMBRA_DIR" 2>/dev/null || true
   die "${ZIMBRA_DIR} mounted from ${now} (uuid=${uuid_now}), expected UUID=${UUID}"
 fi
-ok "Mounted ${ZIMBRA_DIR} from UUID=${UUID} (${DATA_DISK})"
+ok "Mounted ${ZIMBRA_DIR} from UUID=${UUID} (${FS_DEV})"
 info "Meta ${META_DISK} stays unformatted for a later Build HA pair."
 info "When Pacemaker mounts /dev/drbd0, remove the UUID=${UUID} line from ${FSTAB}."
 exit 0

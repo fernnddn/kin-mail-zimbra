@@ -132,7 +132,7 @@ fi
 rm -f "$fstab_drbd"
 
 # Already-on-data success path still lives at the top of the script.
-if grep -q 'is already on \${DATA_DISK}' ./prepare-zimbra-data-disk.sh \
+if grep -q 'is already on \${Z_MNTSRC}' ./prepare-zimbra-data-disk.sh \
   && grep -q 'accept_zimbra' ./prepare-zimbra-data-disk.sh \
   && grep -q 'leaving unmounted for DRBD/Pacemaker' ./prepare-zimbra-data-disk.sh \
   && grep -q 'skip_drbd_attached' ./prepare-zimbra-data-disk.sh \
@@ -179,8 +179,8 @@ else
 fi
 
 if grep -q 'prepare-zimbra-data-disk.sh' ../02-prepare-os.sh \
-  && grep -q 'python3 parted e2fsprogs' ../02-prepare-os.sh; then
-  pass "02-prepare-os.sh calls the helper and installs python3/parted"
+  && grep -q 'python3 parted e2fsprogs cryptsetup' ../02-prepare-os.sh; then
+  pass "02-prepare-os.sh calls the helper and installs python3/parted/cryptsetup"
 else
   bad "02-prepare-os.sh is missing the helper hook or packages"
 fi

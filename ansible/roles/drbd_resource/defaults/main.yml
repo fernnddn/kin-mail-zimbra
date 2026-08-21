@@ -3,7 +3,16 @@
 # on a populated /dev/sdb1 (internal would overwrite end of existing filesystem).
 drbd_resource_name: kin-zimbra
 drbd_resource_device: /dev/drbd0
+# Raw GPT data partition. DRBD's `disk` directive uses
+# drbd_resource_backing_disk (LUKS mapper when encryption is on).
 drbd_resource_disk: /dev/sdb1
+drbd_resource_luks: true
+drbd_resource_luks_mapper_name: kin-zimbra-crypt
+drbd_resource_luks_mapper: /dev/mapper/kin-zimbra-crypt
+drbd_resource_luks_keyfile: /etc/kin-mail/luks-keyfile
+drbd_resource_luks_script: /usr/local/sbin/kin-ensure-zimbra-data-luks.sh
+# Overwritten by tasks/luks.yml after ensure (mapper or raw).
+drbd_resource_backing_disk: "{{ drbd_resource_disk }}"
 drbd_resource_meta_disk: /dev/loop21
 drbd_resource_meta_img: /var/lib/kin-mail/drbd-zimbra-meta.img
 drbd_resource_meta_img_size: 256M

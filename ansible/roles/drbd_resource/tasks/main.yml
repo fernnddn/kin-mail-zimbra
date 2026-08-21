@@ -3,6 +3,10 @@
   ansible.builtin.import_tasks: detect.yml
   tags: [drbd, resource, detect]
 
+- name: Include LUKS under the DRBD data partition (fresh installs)
+  ansible.builtin.import_tasks: luks.yml
+  tags: [drbd, resource, luks]
+
 - name: Include the DRBD external meta file steps
   ansible.builtin.import_tasks: meta_loop.yml
   when: drbd_resource_meta_disk is search('loop')

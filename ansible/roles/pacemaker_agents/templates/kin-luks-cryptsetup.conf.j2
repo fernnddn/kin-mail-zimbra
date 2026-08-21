@@ -1,0 +1,4 @@
+# Pacemaker starts OCF DRBD. Wait for systemd-cryptsetup so
+# /dev/mapper/kin-zimbra-crypt exists before attach.
+[Unit]
+After=cryptsetup.target

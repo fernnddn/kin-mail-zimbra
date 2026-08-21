@@ -5,6 +5,9 @@ Stdlib only — runs on mail VMs via the drbd_disk_prep role (no kin_privhelper)
 Never recommends a disk that is the OS disk, has a partition table, has a
 filesystem signature, is mounted, or is below the 20 GiB data floor.
 
+LUKS is applied later (prepare-zimbra-data-disk / drbd_resource). This
+selector only plans GPT partitions.
+
 CLI: JSON on stdin → JSON plan on stdout.
 """
 

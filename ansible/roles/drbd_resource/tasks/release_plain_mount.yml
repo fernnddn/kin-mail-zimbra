@@ -64,7 +64,19 @@
   check_mode: false
   tags: [drbd, resource, release]
 
-- name: Require the migrate helper, release script, and fstab helper on the controller
+- name: Stat the shared LUKS helper on the controller
+  ansible.builtin.stat:
+    path: "{{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh"
+  register: drbd_resource_luks_helper_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Require the migrate helper, release script, fstab helper, and LUKS helper
   ansible.builtin.assert:
     that:
       - drbd_resource_release_migrate_stat.stat.exists | default(false)
@@ -73,10 +85,13 @@
       - drbd_resource_release_script_stat.stat.isreg | default(false)
       - drbd_resource_precluster_fstab_stat.stat.exists | default(false)
       - drbd_resource_precluster_fstab_stat.stat.isreg | default(false)
+      - drbd_resource_luks_helper_stat.stat.exists | default(false)
+      - drbd_resource_luks_helper_stat.stat.isreg | default(false)
     fail_msg: >-
       Missing {{ drbd_resource_release_migrate_src }},
-      {{ drbd_resource_release_script_src }}, or
-      {{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh.
+      {{ drbd_resource_release_script_src }},
+      {{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh, or
+      {{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh.
       Set kin_mail_deploy_dir / KIN_MAIL_DEPLOY_DIR to the tree that contains
       install/lib/.
   run_once: true
@@ -156,6 +171,8 @@
       dest: release-zimbra-plain-mount-for-drbd.sh
     - src: "{{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh"
       dest: precluster-zimbra-fstab.sh
+    - src: "{{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh"
+      dest: zimbra-data-disk-luks.sh
   when: not ansible_check_mode
   tags: [drbd, resource, release]
 

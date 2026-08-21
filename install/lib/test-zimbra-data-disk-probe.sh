@@ -62,6 +62,18 @@ fi
 unset KIN_SYSFS_ROOT
 rm -rf "$sysfs_empty"
 
+sysfs_luks=$(mktemp -d)
+mkdir -p "$sysfs_luks/class/block/sdb1/holders/dm-2"
+mkdir -p "$sysfs_luks/class/block/dm-2/holders/drbd0"
+export KIN_SYSFS_ROOT="$sysfs_luks"
+if data_disk_held_by_drbd "/dev/sdb1"; then
+  pass "data_disk_held_by_drbd: true when LUKS dm holder has drbd0"
+else
+  bad "data_disk_held_by_drbd missed dm-crypt -> drbd0"
+fi
+unset KIN_SYSFS_ROOT
+rm -rf "$sysfs_luks"
+
 act=$(zimbra_install_skip_action "1" "0")
 if [ "$act" = "skip_healthy" ]; then
   pass "skip_action: already healthy"

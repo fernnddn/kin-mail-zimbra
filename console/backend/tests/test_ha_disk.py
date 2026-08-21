@@ -7,9 +7,13 @@ import unittest
 
 from kin_privhelper.ha_disk import (
     DEFAULT_DATA_DISK,
+    LUKS_MAPPER_PATH,
     combine_results,
+    drbd_backing_device,
+    encrypt_zimbra_data_disk_enabled,
     evaluate_node,
     install_prepare_plan,
+    luks_prepare_action,
     parse_remote_probe,
     plan_auto_partition,
 )
@@ -169,6 +173,71 @@ def _lsblk(
                 "pttype": None,
             }
         )
+    elif sdb == "ready_luks":
+        devices.append(
+            {
+                "name": "sdb",
+                "path": "/dev/sdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": "gpt",
+                "children": [
+                    {
+                        "name": "sdb1",
+                        "path": "/dev/sdb1",
+                        "type": "part",
+                        "size": 106954752000,
+                        "fstype": "crypto_LUKS",
+                        "mountpoint": "",
+                        "children": [
+                            {
+                                "name": "kin-zimbra-crypt",
+                                "path": "/dev/mapper/kin-zimbra-crypt",
+                                "type": "crypt",
+                                "fstype": "ext4",
+                                "mountpoint": "/opt/zimbra",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "sdb2",
+                        "path": "/dev/sdb2",
+                        "type": "part",
+                        "size": 267386880,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                ],
+            }
+        )
+    elif sdb == "ready_luks_unmounted":
+        devices.append(
+            {
+                "name": "sdb",
+                "path": "/dev/sdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": "gpt",
+                "children": [
+                    {
+                        "name": "sdb1",
+                        "path": "/dev/sdb1",
+                        "type": "part",
+                        "size": 106954752000,
+                        "fstype": "crypto_LUKS",
+                        "mountpoint": "",
+                    },
+                    {
+                        "name": "sdb2",
+                        "path": "/dev/sdb2",
+                        "type": "part",
+                        "size": 267386880,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                ],
+            }
+        )
     return {"blockdevices": devices + list(extra or [])}
 
 
@@ -254,6 +323,54 @@ class HaDiskTests(unittest.TestCase):
         self.assertTrue(r["build_allowed"])
         self.assertEqual(r["data_disk"], DEFAULT_DATA_DISK)
 
+    def test_ready_luks_mapper_mount_passes(self) -> None:
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source=LUKS_MAPPER_PATH,
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["build_allowed"])
+
+    def test_ready_luks_unmounted_mid_handoff(self) -> None:
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=False,
+            label="mail.example.test",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["zimbra_mid_handoff"])
+
+    def test_luks_prepare_action_never_reformats_existing(self) -> None:
+        self.assertEqual(luks_prepare_action(encrypt=True, fstype=""), "format_luks")
+        self.assertEqual(luks_prepare_action(encrypt=True, fstype="crypto_LUKS"), "open_luks")
+        self.assertEqual(luks_prepare_action(encrypt=False, fstype="crypto_LUKS"), "open_luks")
+        self.assertEqual(luks_prepare_action(encrypt=True, fstype="ext4"), "skip_plain_existing")
+        self.assertEqual(luks_prepare_action(encrypt=False, fstype=""), "mkfs_plain")
+        self.assertEqual(luks_prepare_action(encrypt=True, fstype="xfs"), "die_unknown")
+        self.assertTrue(encrypt_zimbra_data_disk_enabled("1"))
+        self.assertFalse(encrypt_zimbra_data_disk_enabled("0"))
+        self.assertEqual(
+            drbd_backing_device(data_disk="/dev/sdb1", fstype="crypto_LUKS", encrypt=True),
+            LUKS_MAPPER_PATH,
+        )
+        self.assertEqual(
+            drbd_backing_device(data_disk="/dev/sdb1", fstype="ext4", encrypt=True),
+            "/dev/sdb1",
+        )
+        self.assertEqual(
+            drbd_backing_device(data_disk="/dev/sdb1", fstype="", encrypt=True),
+            LUKS_MAPPER_PATH,
+        )
 
     def test_mid_handoff_unmounted_data_disk_allows_build(self) -> None:
         """findmnt empty + no visible zmcontrol + unmounted ext4 data = handoff."""

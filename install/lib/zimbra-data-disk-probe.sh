@@ -19,13 +19,14 @@ mount_has_zmcontrol() {
   [ -x "${1}/bin/zmcontrol" ]
 }
 
-# True when the kernel already handed the disk to a drbd* holder
-# (Secondary or Primary after drbdadm up). Mid-handoff has no holders yet.
+# Probe-only: walks holders and also dm-crypt (LUKS under DRBD).
 # Optional 2nd arg: sysfs root (tests inject a stub tree).
 data_disk_held_by_drbd() {
   local disk="$1"
   local sys_root="${2:-${KIN_SYSFS_ROOT:-/sys}}"
-  local base sysdev holder
+  local depth="${3:-0}"
+  local base sysdev holder hbase
+  [ "$depth" -lt 6 ] || return 1
   base=$(basename "$disk")
   [ -n "$base" ] || return 1
   sysdev=$(readlink -f "${sys_root}/class/block/${base}" 2>/dev/null || true)
@@ -34,8 +35,15 @@ data_disk_held_by_drbd() {
   fi
   for holder in "${sysdev}/holders"/*; do
     [ -e "$holder" ] || continue
-    case "$(basename "$holder")" in
+    hbase=$(basename "$holder")
+    case "$hbase" in
       drbd*) return 0 ;;
+      dm-*)
+        # LUKS sits under DRBD: sdb1 -> dm-crypt -> drbd0.
+        if data_disk_held_by_drbd "/dev/${hbase}" "$sys_root" $((depth + 1)); then
+          return 0
+        fi
+        ;;
     esac
   done
   return 1

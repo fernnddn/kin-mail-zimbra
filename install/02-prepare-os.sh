@@ -55,7 +55,7 @@ esac
 apt-get -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
-  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs >/dev/null 2>&1
+  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup >/dev/null 2>&1
 ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
 
 # --- 4. local resolver -------------------------------------------------------
