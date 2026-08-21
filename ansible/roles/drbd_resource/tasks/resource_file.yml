@@ -44,7 +44,9 @@
 
 - name: Ensure the definition does not use internal meta on the data disk
   ansible.builtin.command:
-    cmd: grep -E 'meta-disk\s+internal' {{ drbd_resource_res_path }}
+    # Anchored to an actual directive line (leading whitespace, trailing ;),
+    # not the file's own header comment warning against meta-disk internal.
+    cmd: grep -E '^\s*meta-disk\s+internal\s*;' {{ drbd_resource_res_path }}
   register: drbd_resource_internal_meta
   changed_when: false
   failed_when: drbd_resource_internal_meta.rc == 0
