@@ -53,12 +53,9 @@ first_leftover() {
   return 1
 }
 
-# Positive signal that a mounted tree is a real Zimbra install (same idea as
-# ha_disk.py zimbra_tree_present). Used when the data partition is unmounted
-# mid-handoff and findmnt on /opt/zimbra is empty.
-mount_has_zmcontrol() {
-  [ -x "$1/bin/zmcontrol" ]
-}
+# Shared mount_has_zmcontrol / zimbra_data_disk_has_real_install.
+# shellcheck source=zimbra-data-disk-probe.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zimbra-data-disk-probe.sh"
 
 # Decide what to do for an already-ext4 data disk.
 # Args: leftover_name (may be empty), has_zmcontrol 0|1, current_mountpoint

@@ -14,6 +14,9 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# Shared mid-handoff probe (data partition holds bin/zmcontrol).
+# shellcheck source=lib/zimbra-data-disk-probe.sh
+. ./lib/zimbra-data-disk-probe.sh
 need_root
 
 MANUAL=0; [ "${1:-}" = "--manual" ] && MANUAL=1
@@ -261,23 +264,41 @@ fi
 # a second pass against an already-installed system hits upgrade/reconfigure
 # prompts the state machine does not recognise (hang or wrong answers).
 SKIP_INSTALLER=0
+DATA_DISK="${KIN_DRBD_DATA_DISK:-/dev/sdb1}"
 if [ -d /opt/zimbra ]; then
   STATUS_PRE=$(su - zimbra -c "zmcontrol status" 2>&1) || STATUS_PRE=""
   STOPPED_PRE=$(printf '%s' "$STATUS_PRE" | grep -v Running | grep -vE "^Host|^$" | wc -l | tr -d ' ')
+  HEALTHY_PRE=0
   if [ -n "$STATUS_PRE" ] && [ "${STOPPED_PRE:-1}" -eq 0 ]; then
-    say "2. Installer skipped — Zimbra already installed and healthy"
-    ok "/opt/zimbra exists; zmcontrol status: all services Running"
-    info "Re-run does not re-run install.sh (avoids upgrade/reconfigure flow)."
-    SKIP_INSTALLER=1
-  else
-    fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
-    info "This script will not re-run the installer on a partial/broken installation."
-    info "Fix manually first: repair stopped services, or uninstall cleanly then run 03 again."
-    if [ -n "$STATUS_PRE" ]; then
-      printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
-    fi
-    exit 1
+    HEALTHY_PRE=1
   fi
+  ON_DATA_PRE=0
+  if [ "$HEALTHY_PRE" -eq 0 ] && zimbra_data_disk_has_real_install "$DATA_DISK"; then
+    ON_DATA_PRE=1
+  fi
+  case "$(zimbra_install_skip_action "$HEALTHY_PRE" "$ON_DATA_PRE")" in
+    skip_healthy)
+      say "2. Installer skipped - Zimbra already installed and healthy"
+      ok "/opt/zimbra exists; zmcontrol status: all services Running"
+      info "Re-run does not re-run install.sh (avoids upgrade/reconfigure flow)."
+      SKIP_INSTALLER=1
+      ;;
+    skip_mid_handoff)
+      say "2. Installer skipped - Zimbra already on the data partition (mid-handoff)"
+      ok "bin/zmcontrol present on ${DATA_DISK}; /opt/zimbra is currently unmounted"
+      info "Not remounting or starting Zimbra here; DRBD attach and Pacemaker own that."
+      SKIP_INSTALLER=1
+      ;;
+    *)
+      fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
+      info "This script will not re-run the installer on a partial/broken installation."
+      info "Fix manually first: repair stopped services, or uninstall cleanly then run 03 again."
+      if [ -n "$STATUS_PRE" ]; then
+        printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
+      fi
+      exit 1
+      ;;
+  esac
 fi
 
 if [ "$SKIP_INSTALLER" -eq 0 ]; then
