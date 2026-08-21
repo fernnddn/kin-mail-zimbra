@@ -1,17 +1,58 @@
 ---
 # =============================================================================
-# MUTATING — rewrite kin-zimbra.res to drop the retired peer (survivor stays
+# MUTATING: rewrite kin-zimbra.res to drop the retired peer (survivor stays
 # Primary/UpToDate). Does NOT run drbdadm primary/secondary or touch Pacemaker
 # mail resources.
 # =============================================================================
 
-- name: Check whether the retired peer still appears in the DRBD resource file
-  ansible.builtin.command:
-    cmd: grep -F {{ cluster_remove_host_retired_name }} {{ cluster_remove_host_drbd_res_path }}
-  register: cluster_remove_host_res_grep
-  changed_when: false
+- name: Read the live DRBD resource file on the survivor
+  ansible.builtin.slurp:
+    src: "{{ cluster_remove_host_drbd_res_path }}"
+  register: cluster_remove_host_res_slurp
   failed_when: false
   check_mode: false
+  tags: [cluster, remove_host, drbd]
+
+- name: Require the survivor DRBD resource file
+  ansible.builtin.assert:
+    that:
+      - cluster_remove_host_res_slurp.content is defined
+    fail_msg: >-
+      Missing {{ cluster_remove_host_drbd_res_path }} on the survivor.
+      Refusing to template a new resource from role defaults.
+  tags: [cluster, remove_host, drbd]
+
+- name: Decode the live DRBD resource text
+  ansible.builtin.set_fact:
+    cluster_remove_host_res_text: "{{ cluster_remove_host_res_slurp.content | b64decode }}"
+  tags: [cluster, remove_host, drbd]
+
+- name: Read disk paths from the live resource file for the survivor node
+  ansible.builtin.set_fact:
+    cluster_remove_host_live_disk: "{{ cluster_remove_host_res_text | kin_drbd_node_disk(cluster_remove_host_survivor_name) }}"
+    cluster_remove_host_live_meta: "{{ cluster_remove_host_res_text | kin_drbd_node_meta_disk(cluster_remove_host_survivor_name) }}"
+    cluster_remove_host_live_device: "{{ cluster_remove_host_res_text | kin_drbd_node_device(cluster_remove_host_survivor_name) }}"
+  tags: [cluster, remove_host, drbd]
+
+- name: Apply live disk paths, falling back to inventory only when the file has none
+  ansible.builtin.set_fact:
+    drbd_resource_disk: "{{ cluster_remove_host_live_disk | kin_drbd_prefer_live_path(cluster_remove_host_drbd_disk) }}"
+    drbd_resource_meta_disk: "{{ cluster_remove_host_live_meta | kin_drbd_prefer_live_path(cluster_remove_host_drbd_meta_disk) }}"
+    drbd_resource_device: "{{ cluster_remove_host_live_device | kin_drbd_prefer_live_path(cluster_remove_host_drbd_device) }}"
+  tags: [cluster, remove_host, drbd]
+
+- name: Refuse to rewrite DRBD with an empty meta-disk or an unproven loop default
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_disk is search('^/dev/')
+      - drbd_resource_meta_disk is search('^/dev/')
+      - drbd_resource_device is search('^/dev/')
+      - drbd_resource_meta_disk != '/dev/loop21' or cluster_remove_host_live_meta == '/dev/loop21'
+    fail_msg: >-
+      cluster_remove_host would write disk={{ drbd_resource_disk }}
+      meta-disk={{ drbd_resource_meta_disk }}. The live file must already
+      name those paths, or inventory must set cluster_remove_host_drbd_*
+      (rebuild meta is /dev/sdb2, not /dev/loop21).
   tags: [cluster, remove_host, drbd]
 
 - name: Deploy survivor-only DRBD resource (drop retired peer)
@@ -23,8 +64,9 @@
     mode: "0644"
   when:
     - not ansible_check_mode
-    - cluster_remove_host_res_grep.rc == 0
-      or cluster_remove_host_retired_address | length > 0
+    - cluster_remove_host_retired_name in cluster_remove_host_res_text
+      or (cluster_remove_host_retired_address | length > 0
+          and cluster_remove_host_retired_address in cluster_remove_host_res_text)
   register: cluster_remove_host_res_tpl
   tags: [cluster, remove_host, drbd]
 
@@ -50,6 +92,7 @@
   ansible.builtin.debug:
     msg: >-
       --check: would rewrite {{ cluster_remove_host_drbd_res_path }} to survivor-only
-      ({{ cluster_remove_host_survivor_name }}). Retired={{ cluster_remove_host_retired_name }}.
+      ({{ cluster_remove_host_survivor_name }}) only if the retired name or address
+      is still in that file. Retired={{ cluster_remove_host_retired_name }}.
   when: ansible_check_mode
   tags: [cluster, remove_host, drbd]

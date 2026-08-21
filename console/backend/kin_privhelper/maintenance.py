@@ -1,4 +1,4 @@
-"""Maintenance-mode enter/exit — gated pcs node standby/unstandby.
+"""Maintenance-mode enter/exit: gated pcs node standby/unstandby.
 
 Target names are validated against the live Pacemaker nodelist and passed as
 argv (never interpolated into a shell). Dual-primary assertion stays the
@@ -8,13 +8,14 @@ cluster script, not UI state.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import re
 import socket
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, IO
 
 from . import protocol as proto
 
@@ -37,6 +38,9 @@ FAILCOUNT_RESOURCES = (
 COROSYNC_CONF = Path("/etc/corosync/corosync.conf")
 RESYNC_TIMEOUT_SEC = int(os.environ.get("KIN_MAINT_RESYNC_TIMEOUT", "180"))
 RESYNC_POLL_SEC = 5
+MAINT_LOCK_PATH = Path(
+    os.environ.get("KIN_MAINT_LOCK", "/run/kin-mail/maintenance.lock")
+)
 
 
 async def _capture(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
@@ -72,62 +76,86 @@ def validate_node_name(raw: str) -> str:
     return name
 
 
+def _node_tokens(rest: str) -> list[str]:
+    found: list[str] = []
+    for tok in rest.replace("[", " ").replace("]", " ").split():
+        tok = tok.strip(",").strip("'\"")
+        if NODE_RE.match(tok) and tok not in found:
+            found.append(tok)
+    return found
+
+
+def _pcs_nodes_line_rest(line: str, prefixes: tuple[str, ...]) -> str | None:
+    stripped = line.strip().lstrip("*").strip()
+    low = stripped.lower()
+    for prefix in prefixes:
+        if low.startswith(prefix):
+            if ":" not in stripped:
+                return ""
+            return stripped.split(":", 1)[1]
+    return None
+
+
+# pcs 0.10 prints a node that is still draining as
+# "Standby with resource(s) running:" not "Standby:". A parser that only
+# matches "Standby:" treats mid-flight enter as not-in-maintenance.
+_STANDBY_PREFIXES = ("standby with resource", "standby:")
+_MEMBER_PREFIXES = (
+    "online:",
+    "standby with resource",
+    "standby:",
+    "maintenance:",
+)
+
+
 def parse_online_nodes(pcs_nodes: str) -> list[str]:
-    """Parse `pcs status nodes` Online / Standby lines."""
+    """Parse `pcs status nodes` member lines (Online, Standby, draining)."""
     found: list[str] = []
     for line in pcs_nodes.splitlines():
-        stripped = line.strip().lstrip("*").strip()
-        low = stripped.lower()
-        if low.startswith("online:") or low.startswith("standby:"):
-            _, rest = stripped.split(":", 1)
-            for tok in rest.replace("[", " ").replace("]", " ").split():
-                tok = tok.strip(",")
-                if NODE_RE.match(tok):
-                    found.append(tok)
-    # Fallback: crm_node -l style "1 mail.gits-it.site member"
+        rest = _pcs_nodes_line_rest(line, _MEMBER_PREFIXES)
+        if rest is None:
+            continue
+        found.extend(_node_tokens(rest))
     if not found:
         for line in pcs_nodes.splitlines():
             parts = line.split()
             for tok in parts:
+                tok = tok.strip("'\"")
                 if "." in tok and NODE_RE.match(tok):
                     found.append(tok)
-    # Dedupe preserve order
     out: list[str] = []
-    for n in found:
-        if n not in out:
-            out.append(n)
+    for name in found:
+        if name not in out:
+            out.append(name)
     return out
 
 
 def parse_standby_nodes(pcs_nodes: str) -> list[str]:
     standby: list[str] = []
     for line in pcs_nodes.splitlines():
-        stripped = line.strip()
-        if stripped.lower().startswith("standby:"):
-            _, rest = stripped.split(":", 1)
-            for tok in rest.replace("[", " ").replace("]", " ").split():
-                tok = tok.strip(",")
-                if NODE_RE.match(tok) and tok not in standby:
-                    standby.append(tok)
+        rest = _pcs_nodes_line_rest(line, _STANDBY_PREFIXES)
+        if rest is None:
+            continue
+        for tok in _node_tokens(rest):
+            if tok not in standby:
+                standby.append(tok)
     return standby
 
 
 def parse_promoted(crm: str) -> str | None:
     for line in crm.splitlines():
-        if "Promoted:" in line:
-            m = re.search(r"Promoted:\s*\[([^\]]+)\]", line)
-            if m:
-                names = [t.strip() for t in m.group(1).split() if NODE_RE.match(t.strip())]
-                return names[0] if names else None
+        match = re.search(r"(?:Promoted|Masters):\s*\[([^\]]+)\]", line)
+        if match:
+            names = _node_tokens(match.group(1))
+            return names[0] if names else None
     return None
 
 
 def parse_unpromoted(crm: str) -> list[str]:
     for line in crm.splitlines():
-        if "Unpromoted:" in line:
-            m = re.search(r"Unpromoted:\s*\[([^\]]+)\]", line)
-            if m:
-                return [t.strip() for t in m.group(1).split() if NODE_RE.match(t.strip())]
+        match = re.search(r"(?:Unpromoted|Slaves):\s*\[([^\]]+)\]", line)
+        if match:
+            return _node_tokens(match.group(1))
     return []
 
 
@@ -277,6 +305,21 @@ async def _zmcontrol_on(node: str, addr: str, crm: str) -> tuple[bool, str]:
     return False, f"cannot confirm zmcontrol on {node}: kin-zimbra is not Started there"
 
 
+def _failcount_query_absent(text: str) -> bool:
+    low = text.lower()
+    return any(
+        needle in low
+        for needle in (
+            "not found",
+            "no such",
+            "unknown resource",
+            "does not exist",
+            "no failcount",
+            "no fail-count",
+        )
+    )
+
+
 async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:
     lines: list[str] = []
     ok = True
@@ -286,13 +329,56 @@ async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:
                 ["crm_failcount", "--query", "-r", res, "-N", node]
             )
             text = (out + err).strip()
-            if c != 0 and "not found" in text.lower():
+            if c != 0 and _failcount_query_absent(text):
+                continue
+            if c != 0:
+                ok = False
+                lines.append(f"  {res}@{node} fail-count=query-failed:{c}")
                 continue
             val = parse_failcount_value(text)
             lines.append(f"  {res}@{node} fail-count={val}")
             if val != 0:
                 ok = False
     return ok, lines
+
+
+def try_lock_maintenance(path: Path | None = None) -> IO[str] | None:
+    """Non-blocking flock so a second enter/exit cannot overlap the first."""
+    lock_path = path or MAINT_LOCK_PATH
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a+", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    except OSError:
+        fh.close()
+        return None
+    try:
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()))
+        fh.flush()
+    except OSError:
+        pass
+    return fh
+
+
+def release_maintenance_lock(fh: IO[str] | None) -> None:
+    if fh is None:
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        fh.close()
+    except OSError:
+        pass
 
 
 async def gather_status() -> dict[str, Any]:
@@ -419,7 +505,7 @@ async def wait_exit_healthy(target: str) -> tuple[bool, list[str]]:
             logs.append("exit verification complete")
             return True, logs
         if asyncio.get_event_loop().time() >= deadline:
-            logs.append(f"TIMEOUT after {RESYNC_TIMEOUT_SEC}s — {last}")
+            logs.append(f"TIMEOUT after {RESYNC_TIMEOUT_SEC}s: {last}")
             if dual_txt:
                 logs.append(dual_txt)
             return False, logs
@@ -479,54 +565,83 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield proto.event_done(0 if ok else 1)
         return
 
-    if op == "enter":
-        ok, logs, checks = await run_preflight(target)
-        for line in logs:
-            yield await _emit(line)
-        yield await _emit("PREFLIGHT_JSON:" + json.dumps(checks, separators=(",", ":")))
-        if not ok:
-            yield await _emit("Refusing enter — pre-flight failed (no override in this slice).", err=True)
-            yield proto.event_done(1)
+    lock_fh = try_lock_maintenance()
+    if lock_fh is None:
+        yield await _emit(
+            "Refusing: another maintenance enter or exit is already running.",
+            err=True,
+        )
+        yield proto.event_done(1)
+        return
+
+    try:
+        if op == "enter":
+            ok, logs, checks = await run_preflight(target)
+            for line in logs:
+                yield await _emit(line)
+            yield await _emit("PREFLIGHT_JSON:" + json.dumps(checks, separators=(",", ":")))
+            if not ok:
+                yield await _emit(
+                    "Refusing enter: pre-flight failed (no override in this slice).",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            yield await _emit(f"pcs node standby {target}")
+            c, out, err = await _capture(["pcs", "node", "standby", target], timeout=120)
+            if out:
+                yield await _emit(out)
+            if err:
+                yield await _emit(err, err=True)
+            if c != 0:
+                yield await _emit(f"pcs node standby failed (exit {c})", err=True)
+                yield proto.event_done(c)
+                return
+            _c, crm, _e = await _capture(["crm_mon", "-1", "-r"])
+            yield await _emit(crm or "(no crm_mon output)")
+            _c2, nodes, _e2 = await _capture(["pcs", "status", "nodes"])
+            yield await _emit(nodes)
+            st = await gather_status()
+            yield await _emit(f"promoted_now={st['promoted']} standby={st['standby']}")
+            if target not in st["standby"]:
+                yield await _emit(
+                    f"pcs node standby returned success but {target} is not listed as Standby "
+                    "(including Standby with resource(s) running).",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            yield proto.event_done(0)
             return
-        yield await _emit(f"pcs node standby {target}")
-        c, out, err = await _capture(["pcs", "node", "standby", target], timeout=120)
+
+        yield await _emit(f"pcs node unstandby {target}")
+        c, out, err = await _capture(["pcs", "node", "unstandby", target], timeout=120)
         if out:
             yield await _emit(out)
         if err:
             yield await _emit(err, err=True)
         if c != 0:
-            yield await _emit(f"pcs node standby failed (exit {c})", err=True)
+            yield await _emit(f"pcs node unstandby failed (exit {c})", err=True)
             yield proto.event_done(c)
             return
-        # Live status after the move
-        _c, crm, _e = await _capture(["crm_mon", "-1", "-r"])
-        yield await _emit(crm or "(no crm_mon output)")
-        _c2, nodes, _e2 = await _capture(["pcs", "status", "nodes"])
-        yield await _emit(nodes)
+        yield await _emit(
+            "Waiting for Secondary-only + DRBD UpToDate + fail-count 0 + NO_DUAL_PRIMARY_OK"
+        )
+        ok, logs = await wait_exit_healthy(target)
+        for line in logs:
+            yield await _emit(line)
         st = await gather_status()
-        yield await _emit(f"promoted_now={st['promoted']} standby={st['standby']}")
-        yield proto.event_done(0)
-        return
-
-    # exit
-    yield await _emit(f"pcs node unstandby {target}")
-    c, out, err = await _capture(["pcs", "node", "unstandby", target], timeout=120)
-    if out:
-        yield await _emit(out)
-    if err:
-        yield await _emit(err, err=True)
-    if c != 0:
-        yield await _emit(f"pcs node unstandby failed (exit {c})", err=True)
-        yield proto.event_done(c)
-        return
-    yield await _emit("Waiting for Secondary-only + DRBD UpToDate + fail-count 0 + NO_DUAL_PRIMARY_OK")
-    ok, logs = await wait_exit_healthy(target)
-    for line in logs:
-        yield await _emit(line)
-    st = await gather_status()
-    yield await _emit(f"promoted_now={st['promoted']} standby={st['standby']} drbd_uptodate={st['drbd_uptodate']}")
-    if ok:
-        yield await _emit("maintenance exit done")
-    else:
-        yield await _emit("maintenance exit incomplete — node unstandby'd but verification did not pass", err=True)
-    yield proto.event_done(0 if ok else 1)
+        yield await _emit(
+            f"promoted_now={st['promoted']} standby={st['standby']} "
+            f"drbd_uptodate={st['drbd_uptodate']}"
+        )
+        if ok:
+            yield await _emit("maintenance exit done")
+        else:
+            yield await _emit(
+                "maintenance exit incomplete: node unstandby'd but verification did not pass",
+                err=True,
+            )
+        yield proto.event_done(0 if ok else 1)
+    finally:
+        release_maintenance_lock(lock_fh)

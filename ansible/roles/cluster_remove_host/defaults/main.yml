@@ -12,8 +12,11 @@ cluster_remove_host_survivor_address: "{{ cluster_add_host_survivor_address | de
 cluster_remove_host_drbd_resource: "{{ cluster_add_host_drbd_resource | default('kin-zimbra') }}"
 cluster_remove_host_drbd_res_path: "{{ cluster_add_host_drbd_res_path | default('/etc/drbd.d/kin-zimbra.res') }}"
 cluster_remove_host_drbd_device: "{{ cluster_add_host_drbd_device | default('/dev/drbd0') }}"
-cluster_remove_host_drbd_disk: "{{ cluster_add_host_drbd_disk | default('/dev/sdb1') }}"
-cluster_remove_host_drbd_meta_disk: "{{ cluster_add_host_drbd_meta_disk | default('/dev/loop21') }}"
+cluster_remove_host_drbd_disk: "{{ cluster_add_host_drbd_disk | default('') }}"
+# Empty on purpose. The live /etc/drbd.d/kin-zimbra.res on the survivor is the
+# source of truth. Role default /dev/loop21 would rewrite a rebuild pair that
+# uses /dev/sdb2. Inventory may set this only when the live file is unreadable.
+cluster_remove_host_drbd_meta_disk: "{{ cluster_add_host_drbd_meta_disk | default('') }}"
 cluster_remove_host_drbd_port: "{{ cluster_add_host_drbd_port | default(7788) }}"
 cluster_remove_host_drbd_protocol: "{{ cluster_add_host_drbd_protocol | default('C') }}"
 cluster_remove_host_drbd_sync_rate: "{{ cluster_add_host_drbd_sync_rate | default('100M') }}"

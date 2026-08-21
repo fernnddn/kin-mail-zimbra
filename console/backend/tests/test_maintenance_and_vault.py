@@ -15,7 +15,10 @@ from kin_privhelper.maintenance import (
     parse_online_nodes,
     parse_promoted,
     parse_standby_nodes,
+    parse_unpromoted,
     qdevice_voting,
+    release_maintenance_lock,
+    try_lock_maintenance,
     validate_node_name,
 )
 from kin_privhelper.provisioning_secrets import load_secrets, rotate_key, store_secrets
@@ -33,10 +36,39 @@ Pacemaker Nodes:
  Standby: mail.gits-it.site
 """
 
+# Ubuntu 22.04 pcs 0.10 (RHBZ 1619253): a node still draining resources is
+# NOT on the Standby: line. The previous parser only matched Standby:.
+PCS_DRAINING = """
+Pacemaker Nodes:
+ Online: mail2.example.test
+ Standby:
+ Standby with resource(s) running: mail.example.test
+ Maintenance:
+ Offline:
+"""
+
+PCS_QUOTED_STAR = """
+Pacemaker Nodes:
+  * Online: 'mail2.example.test'
+  * Standby: 'mail.example.test'
+"""
+
 CRM = """
   * Clone Set: kin-drbd-clone [kin-drbd] (promotable):
     * Promoted: [ mail2.gits-it.site ]
     * Unpromoted: [ mail.gits-it.site ]
+"""
+
+CRM_MASTERS = """
+ Master/Slave Set: kin-drbd-clone [kin-drbd]
+     Masters: [ mail2.example.test ]
+     Slaves: [ mail.example.test ]
+"""
+
+CRM_QUOTED = """
+  * Clone Set: kin-drbd-clone [kin-drbd] (promotable):
+    * Promoted: [ 'mail2.example.test' ]
+    * Unpromoted: [ 'mail.example.test' ]
 """
 
 DRBD_OK = """
@@ -85,6 +117,19 @@ class MaintenanceParseTests(unittest.TestCase):
         )
         self.assertEqual(parse_standby_nodes(PCS_STANDBY), ["mail.gits-it.site"])
         self.assertEqual(parse_promoted(CRM), "mail2.gits-it.site")
+        self.assertEqual(
+            parse_standby_nodes(PCS_DRAINING),
+            ["mail.example.test"],
+        )
+        self.assertEqual(
+            parse_online_nodes(PCS_DRAINING),
+            ["mail2.example.test", "mail.example.test"],
+        )
+        self.assertEqual(parse_standby_nodes(PCS_QUOTED_STAR), ["mail.example.test"])
+        self.assertEqual(parse_promoted(CRM_MASTERS), "mail2.example.test")
+        self.assertEqual(parse_unpromoted(CRM_MASTERS), ["mail.example.test"])
+        self.assertEqual(parse_promoted(CRM_QUOTED), "mail2.example.test")
+        self.assertEqual(parse_unpromoted(CRM_QUOTED), ["mail.example.test"])
         from kin_privhelper.maintenance import zimbra_started_on
 
         self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.gits-it.site", "mail2.gits-it.site"))
@@ -101,6 +146,20 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertEqual(addrs["mail.example.test"], "192.0.2.15")
         self.assertEqual(parse_failcount_value("scope=status  name=fail-count-kin-zimbra value=0"), 0)
         self.assertEqual(parse_failcount_value("value=3"), 3)
+
+
+class MaintenanceLockTests(unittest.TestCase):
+    def test_second_lock_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "maintenance.lock"
+            first = try_lock_maintenance(path)
+            self.assertIsNotNone(first)
+            second = try_lock_maintenance(path)
+            self.assertIsNone(second)
+            release_maintenance_lock(first)
+            third = try_lock_maintenance(path)
+            self.assertIsNotNone(third)
+            release_maintenance_lock(third)
 
 
 class VaultTests(unittest.TestCase):

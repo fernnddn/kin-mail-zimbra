@@ -478,6 +478,8 @@ def _ansible_bin() -> str:
 
 def _live_drbd_meta_disk() -> str:
     """Read this console host's live kin-zimbra.res meta-disk (rebuild uses a partition)."""
+    from .drbd_res import parse_first_meta_disk
+
     path = Path("/etc/drbd.d/kin-zimbra.res")
     if not path.is_file():
         return ""
@@ -485,14 +487,7 @@ def _live_drbd_meta_disk() -> str:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return ""
-    found = re.findall(r"meta-disk\s+(\S+);", text)
-    disks = [d.rstrip(";") for d in found if d and d != "internal"]
-    if not disks:
-        return ""
-    disk = disks[0]
-    if not re.match(r"^/dev/[A-Za-z0-9/_.+-]+$", disk):
-        return ""
-    return disk
+    return parse_first_meta_disk(text)
 
 
 def live_join_check_playbooks(
