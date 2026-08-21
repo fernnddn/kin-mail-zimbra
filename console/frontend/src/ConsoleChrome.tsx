@@ -3,7 +3,7 @@ import styled from "@emotion/styled";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import { theme } from "./styles/theme";
-import { Avatar, Dropdown, MenuItem } from "./ui";
+import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
 
 const Frame = styled.div`
   min-height: 100vh;
@@ -41,20 +41,16 @@ const LogoButton = styled.button`
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.05rem;
+  justify-content: center;
+  gap: 0.1rem;
   font: inherit;
-
-  strong {
-    letter-spacing: -0.03em;
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: ${theme.surface[800]};
-  }
+  min-width: 0;
 
   span {
     color: ${theme.muted};
     font-size: 0.68rem;
     font-weight: 500;
+    line-height: 1;
   }
 `;
 
@@ -163,7 +159,7 @@ export function ConsoleChrome({
       <Top>
         <BrandBlock>
           <LogoButton type="button" onClick={() => navigate(setupMode ? "/wizard" : "/cluster")}>
-            <strong>KIN Mail</strong>
+            <BrandLockup compact />
             {!setupMode && subtitle ? <span>{subtitle}</span> : null}
           </LogoButton>
           {!setupMode ? (

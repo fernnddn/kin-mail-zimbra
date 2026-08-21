@@ -5,11 +5,13 @@ import {
   type ButtonHTMLAttributes,
   type ComponentProps,
   type CSSProperties,
+  type ImgHTMLAttributes,
   type ReactNode,
 } from "react";
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { theme } from "./styles/theme";
+import kinMailLogo from "./assets/kinmail-lockup-black.png";
 
 const spin = keyframes`
   to { transform: rotate(360deg); }
@@ -72,6 +74,33 @@ export const Brand = styled.p`
   color: ${theme.muted};
   margin: 0 0 0.35rem;
 `;
+
+const LockupImg = styled.img<{ $compact?: boolean }>`
+  display: block;
+  height: ${(p) => (p.$compact ? "2.4rem" : "3.4rem")};
+  width: auto;
+  max-width: ${(p) => (p.$compact ? "11rem" : "14rem")};
+  object-fit: contain;
+  object-position: left top;
+`;
+
+const CompactLockup = styled.span`
+  display: block;
+  height: 1.7rem;
+  overflow: hidden;
+  line-height: 0;
+`;
+
+/** Official KIN Mail lockup. Compact crops the tagline to fit the 56px top bar. */
+export function BrandLockup({
+  compact = false,
+  alt = "KIN Mail",
+  ...rest
+}: { compact?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
+  const img = <LockupImg src={kinMailLogo} alt={alt} $compact={compact} {...rest} />;
+  if (compact) return <CompactLockup>{img}</CompactLockup>;
+  return img;
+}
 
 export const Title = styled.h1`
   margin: 0 0 0.4rem;

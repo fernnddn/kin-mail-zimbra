@@ -5,7 +5,7 @@ import { useAuth } from "../auth";
 import { useEula } from "../eula";
 import { useSetup, wizardHomePath } from "../setup";
 import { theme } from "../styles/theme";
-import { Brand, Button, Card, Err, Input, Label, PasswordInput, Shell, Title } from "../ui";
+import { Brand, BrandLockup, Button, Card, Err, Input, Label, PasswordInput, Shell, Title } from "../ui";
 
 const Sub = styled.p`
   margin: 0 0 1.5rem;
@@ -37,12 +37,10 @@ const Foot = styled.div`
   }
 `;
 
-const Logo = styled.p`
+const Logo = styled.div`
   margin: 0 0 1.5rem;
-  text-align: center;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: ${theme.surface[800]};
+  display: flex;
+  justify-content: center;
 `;
 
 export default function LoginPage() {
@@ -78,7 +76,9 @@ export default function LoginPage() {
   return (
     <Shell>
       <div style={{ width: "min(360px, 100%)" }}>
-        <Logo>KIN Mail</Logo>
+        <Logo>
+          <BrandLockup />
+        </Logo>
         <Card style={{ width: "100%" }}>
           <form onSubmit={onSubmit}>
             <Brand>Console</Brand>

@@ -3,7 +3,7 @@ import { Navigate } from "react-router-dom";
 import { useEula } from "../eula";
 import { useSetup, wizardHomePath } from "../setup";
 import { theme } from "../styles/theme";
-import { Brand, Button, Card, CheckRow, Err, Lede, Shell, Skeleton, Title } from "../ui";
+import { BrandLockup, Button, Card, CheckRow, Err, Lede, Shell, Skeleton, Title } from "../ui";
 
 export default function EulaPage() {
   const { loading, accepted, title, body, accept } = useEula();
@@ -38,7 +38,9 @@ export default function EulaPage() {
     <Shell>
       <Card style={{ width: "min(640px, 100%)" }}>
         <form onSubmit={onSubmit}>
-          <Brand>KIN Mail</Brand>
+          <div style={{ margin: "0 0 1rem" }}>
+            <BrandLockup />
+          </div>
           <Title>{title}</Title>
           <Lede>Read and accept before signing in to the admin console.</Lede>
           {loading ? (
