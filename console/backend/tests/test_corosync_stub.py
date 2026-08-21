@@ -303,7 +303,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
         )
 
     def test_harmless_stub_accepts_empty_cib_and_rejects_real_cib(self) -> None:
-        from test_pacemaker_cib import EMPTY_SKELETON_CIB, REAL_CIB_WITH_RESOURCES
+        from tests.test_pacemaker_cib import EMPTY_SKELETON_CIB, REAL_CIB_WITH_RESOURCES
 
         self.assertTrue(
             is_harmless_package_stub_cluster(
