@@ -495,6 +495,38 @@ def _live_drbd_meta_disk() -> str:
     return disk
 
 
+def live_join_check_playbooks(
+    live_hosts: list[OrchHost],
+    *,
+    meta_disk: str = "",
+) -> list[tuple[str, list[str]]]:
+    """Playbook extras for live_join_check (always ansible-playbook --check).
+
+    cluster_setup detect asserts len(mail_nodes)==2, so skip that playbook
+    unless two live members exist. Skip disk_prep: the selector copy uses
+    check_mode: false, and a --check run that does not also force cleanup
+    would leave /var/tmp/kin-select-drbd-disk.py on the live MX. Skip
+    install/verify/agents so the dry-run does not demand packages or a
+    finished CIB on a pair that is not HA yet.
+    """
+    drbd_skip = ["--skip-tags", "install,verify,disk_prep"]
+    if meta_disk:
+        drbd_skip.extend(["-e", f"drbd_resource_meta_disk={meta_disk}"])
+    runs: list[tuple[str, list[str]]] = []
+    if len(live_hosts) >= 2:
+        runs.append(
+            (
+                "playbooks/mail-cluster-setup.yml",
+                ["--skip-tags", "auth,pcs,properties"],
+            )
+        )
+    runs.append(("playbooks/mail-drbd.yml", drbd_skip))
+    runs.append(
+        ("playbooks/mail-pacemaker.yml", ["--skip-tags", "agents,verify"])
+    )
+    return runs
+
+
 async def _probe_ha_disks(
     *,
     local: OrchHost,
@@ -1367,19 +1399,13 @@ async def cmd_run_ha_orchestration(
                 f"live dry-run inventory mail_nodes={[h.name for h in live_hosts]} "
                 f"(peer {peer.name} is NOT in this inventory — will not join it)"
             )
-            drbd_skip = ["--skip-tags", "install,verify"]
             meta = _live_drbd_meta_disk()
             if meta:
-                drbd_skip.extend(["-e", f"drbd_resource_meta_disk={meta}"])
                 yield emit_line(
                     f"live DRBD meta-disk from this host resource file: {meta} "
                     "(role default loop device is the old lab; verify tags skipped)"
                 )
-            for rel, extra in (
-                ("playbooks/mail-cluster-setup.yml", ["--skip-tags", "auth,pcs,properties"]),
-                ("playbooks/mail-drbd.yml", drbd_skip),
-                ("playbooks/mail-pacemaker.yml", ["--skip-tags", "agents"]),
-            ):
+            for rel, extra in live_join_check_playbooks(live_hosts, meta_disk=meta):
                 play = _playbook_path(rel)
                 argv = [
                     ansible_playbook,

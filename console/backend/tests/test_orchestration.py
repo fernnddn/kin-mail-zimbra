@@ -277,8 +277,104 @@ class CheckModeSafetyTests(unittest.TestCase):
         )
         self.assertTrue(by_id["os_hardening"].peer_only_on_join_check)
         self.assertTrue(by_id["mail_drbd_install"].peer_only_on_join_check)
+        self.assertEqual(by_id["mail_drbd_install"].tags, ("install",))
+        self.assertTrue(by_id["mail_pacemaker_agents"].peer_only_on_join_check)
+        self.assertEqual(by_id["mail_pacemaker_agents"].tags, ("agents",))
         self.assertTrue(by_id["mon_qnetd"].check_on_join_check)
         self.assertTrue(by_id["mon_iscsi"].check_on_join_check)
+
+    def test_live_join_check_skips_cluster_setup_on_a_single_live_member(self) -> None:
+        from kin_privhelper.orchestration import live_join_check_playbooks
+
+        one = [OrchHost("mail.example.test", "192.0.2.15", "mail")]
+        plays = live_join_check_playbooks(one, meta_disk="/dev/sdb2")
+        rels = [rel for rel, _ in plays]
+        self.assertNotIn("playbooks/mail-cluster-setup.yml", rels)
+        self.assertEqual(
+            plays,
+            [
+                (
+                    "playbooks/mail-drbd.yml",
+                    [
+                        "--skip-tags",
+                        "install,verify,disk_prep",
+                        "-e",
+                        "drbd_resource_meta_disk=/dev/sdb2",
+                    ],
+                ),
+                (
+                    "playbooks/mail-pacemaker.yml",
+                    ["--skip-tags", "agents,verify"],
+                ),
+            ],
+        )
+
+    def test_live_join_check_runs_cluster_setup_when_two_live_members(self) -> None:
+        from kin_privhelper.orchestration import live_join_check_playbooks
+
+        pair = [
+            OrchHost("mail.example.test", "192.0.2.15", "mail"),
+            OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+        ]
+        plays = live_join_check_playbooks(pair)
+        self.assertEqual(plays[0][0], "playbooks/mail-cluster-setup.yml")
+        self.assertEqual(plays[0][1], ["--skip-tags", "auth,pcs,properties"])
+        self.assertEqual(plays[1][1][1], "install,verify,disk_prep")
+        self.assertEqual(plays[2][1], ["--skip-tags", "agents,verify"])
+
+    def test_disk_prep_cleanup_runs_under_check_mode(self) -> None:
+        from pathlib import Path
+
+        tasks = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "drbd_disk_prep"
+            / "tasks"
+            / "main.yml"
+        )
+        text = tasks.read_text(encoding="utf-8")
+        idx = text.find("Remove the staged DRBD disk selector")
+        self.assertGreater(idx, 0)
+        cleanup = text[idx : idx + 400]
+        self.assertIn("check_mode: false", cleanup)
+
+    def test_jammy_drbd_modinfo_matches_install_verify_gates(self) -> None:
+        # Ubuntu 22.04 in-tree module (captured from jammy 5.15 kernels).
+        filename = (
+            "/lib/modules/5.15.0-117-generic/kernel/drivers/block/drbd/drbd.ko"
+        )
+        version = "8.4.11"
+        self.assertIn("/kernel/drivers/block/drbd/", filename)
+        self.assertNotIn("dkms", filename.lower())
+        self.assertRegex(version, r"^8\.4\.")
+        dkms = "/lib/modules/5.15.0-117-generic/updates/dkms/drbd.ko"
+        self.assertNotIn("/kernel/drivers/block/drbd/", dkms)
+
+    def test_pacemaker_agents_ocf_meta_contains_resource_agent(self) -> None:
+        from pathlib import Path
+
+        ocf = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "pacemaker_agents"
+            / "files"
+            / "zimbra"
+        )
+        text = ocf.read_text(encoding="utf-8")
+        self.assertIn("<resource-agent", text)
+        paths = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "kin_mail_paths"
+            / "tasks"
+            / "main.yml"
+        )
+        helper = paths.read_text(encoding="utf-8")
+        self.assertIn("delegate_to: localhost", helper)
+        self.assertNotIn("{{ role_path }}", helper)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

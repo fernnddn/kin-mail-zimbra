@@ -90,6 +90,9 @@
         path: "{{ drbd_disk_prep_selector_remote }}"
         state: absent
       changed_when: false
+      # Pair with the copy above (check_mode: false). Under --check the copy
+      # still writes; without this the script stays on the target.
+      check_mode: false
       tags: [drbd, disk_prep]
 
 - name: Parse the DRBD disk plan
