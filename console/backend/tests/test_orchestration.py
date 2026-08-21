@@ -284,6 +284,9 @@ class OrchRbacTests(unittest.TestCase):
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "run_hardening"))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "run_hardening"))
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "run_hardening"))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "remove_host"))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "remove_host"))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_host"))
         # Status is read-only; apply is the sensitive mutation.
         self.assertTrue(
             command_allowed(ROLE_CUSTOMER_ADMIN, "run_script:09-hardening.sh --status")

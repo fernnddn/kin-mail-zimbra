@@ -12,6 +12,7 @@ from kin_privhelper.maintenance import (
     drbd_both_uptodate,
     parse_corosync_ring_addrs,
     parse_failcount_value,
+    parse_offline_nodes,
     parse_online_nodes,
     parse_promoted,
     parse_standby_nodes,
@@ -51,6 +52,13 @@ PCS_QUOTED_STAR = """
 Pacemaker Nodes:
   * Online: 'mail2.example.test'
   * Standby: 'mail.example.test'
+"""
+
+PCS_OFFLINE = """
+Pacemaker Nodes:
+ Online: mail.example.test
+ Standby:
+ Offline: mail2.example.test
 """
 
 CRM = """
@@ -134,6 +142,11 @@ class MaintenanceParseTests(unittest.TestCase):
 
         self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.gits-it.site", "mail2.gits-it.site"))
         self.assertFalse(zimbra_started_on("    * kin-zimbra Started mail2.gits-it.site", "mail.gits-it.site"))
+
+    def test_offline_nodes(self) -> None:
+        self.assertEqual(parse_offline_nodes(PCS_OFFLINE), ["mail2.example.test"])
+        self.assertEqual(parse_online_nodes(PCS_OFFLINE), ["mail.example.test"])
+        self.assertEqual(parse_offline_nodes(PCS_NODES), [])
 
     def test_drbd_and_qdevice(self) -> None:
         self.assertTrue(drbd_both_uptodate(DRBD_OK))
@@ -290,6 +303,8 @@ class RbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "status"}))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "enter"}))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "maintenance", args={"op": "enter"}))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_host", args={"op": "apply"}))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "remove_host", args={"op": "apply"}))
 
 
 if __name__ == "__main__":

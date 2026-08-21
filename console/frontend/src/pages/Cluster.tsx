@@ -7,6 +7,7 @@ import { theme } from "../styles/theme";
 import {
   Button,
   ClusterIcon,
+  ConfirmModal,
   Dropdown,
   Hint,
   LogPane,
@@ -28,6 +29,8 @@ type ClusterSnap = {
   qdevice_ok?: boolean;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
+  offline?: string[];
+  stale_peers?: string[];
 };
 
 type StatusResp = {
@@ -38,6 +41,25 @@ type StatusResp = {
 };
 
 type PreflightCheck = { ok: boolean; detail: string };
+
+type RemoveProbe = {
+  mode: "graceful" | "forced";
+  target: string;
+  survivor: string;
+  reachable: boolean;
+  errors?: string[];
+  notes?: string[];
+};
+
+function uniqueNames(...groups: Array<string[] | undefined>): string[] {
+  const out: string[] = [];
+  for (const group of groups) {
+    for (const name of group || []) {
+      if (name && !out.includes(name)) out.push(name);
+    }
+  }
+  return out;
+}
 
 type HealthLine = { ok: boolean; label: string };
 
@@ -311,7 +333,11 @@ export default function ClusterPage() {
   const [preflightTarget, setPreflightTarget] = useState("");
   const [tab, setTab] = useState<"status" | "activity">("status");
   const [healthOpen, setHealthOpen] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [removeProbe, setRemoveProbe] = useState<RemoveProbe | null>(null);
+  const [probing, setProbing] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const probeRef = useRef<EventSource | null>(null);
 
   const refresh = useCallback(async () => {
     const st = await api<StatusResp>("/api/cluster/status");
@@ -328,6 +354,8 @@ export default function ClusterPage() {
     return () => {
       esRef.current?.close();
       esRef.current = null;
+      probeRef.current?.close();
+      probeRef.current = null;
     };
   }, [refresh]);
 
@@ -400,19 +428,132 @@ export default function ClusterPage() {
     };
   }
 
-  const nodes = cluster.nodes || [];
+  function openRemove(target: string) {
+    probeRef.current?.close();
+    setPendingRemove(target);
+    setRemoveProbe(null);
+    setProbing(true);
+    setMessage("");
+    const qs = new URLSearchParams({
+      action: "remove_host",
+      op: "probe",
+      target,
+    });
+    const es = new EventSource(`/api/wizard/deploy/stream?${qs.toString()}`);
+    probeRef.current = es;
+    let buf = "";
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
+        if (data.type === "stdout" && data.data) buf += data.data;
+        else if (data.type === "stderr" && data.data) buf += data.data;
+        else if (data.type === "error") {
+          buf += `[error] ${data.message || ""}\n`;
+          setMessage(data.message || "Remove-host probe failed");
+        } else if (data.type === "done") {
+          es.close();
+          if (probeRef.current === es) probeRef.current = null;
+          const parsed = parseTaggedJson(buf, "REMOVE_PROBE_JSON:");
+          if (parsed && typeof parsed.target === "string") {
+            setRemoveProbe(parsed as RemoveProbe);
+          }
+          setProbing(false);
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      if (probeRef.current === es) {
+        es.close();
+        probeRef.current = null;
+        setProbing(false);
+        setMessage("Lost connection while probing host reachability.");
+      }
+    };
+  }
+
+  function runRemove(target: string) {
+    esRef.current?.close();
+    setBusy(true);
+    setMessage("");
+    setLog("");
+    setTab("activity");
+    const qs = new URLSearchParams({
+      action: "remove_host",
+      op: "apply",
+      target,
+    });
+    const es = new EventSource(`/api/wizard/deploy/stream?${qs.toString()}`);
+    esRef.current = es;
+    let buf = "";
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
+        if (data.type === "stdout" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "stderr" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "error") {
+          buf += `[error] ${data.message || ""}\n`;
+          setLog(buf);
+        } else if (data.type === "done") {
+          es.close();
+          esRef.current = null;
+          setBusy(false);
+          setPendingRemove(null);
+          setRemoveProbe(null);
+          const code = data.exit_code ?? 1;
+          setMessage(
+            code === 0
+              ? `Remove host finished for ${target}.`
+              : `Remove host failed for ${target}.`,
+          );
+          void refresh();
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      if (esRef.current === es) {
+        es.close();
+        esRef.current = null;
+        setBusy(false);
+        setMessage("Lost connection to the remove-host stream.");
+      }
+    };
+  }
+
+  const nodes = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers);
   const standby = new Set(cluster.standby || []);
+  const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
   const lines = healthLines(cluster);
   const clusterOk = loaded && lines.every((l) => l.ok);
 
   function nodeCard(node: string) {
     const isStandby = standby.has(node);
     const isPromoted = cluster.promoted === node;
+    const isOffline = offline.has(node);
     const pfForThis = preflightTarget === node ? preflight : null;
     const pfFailed = pfForThis ? Object.values(pfForThis).some((c) => !c.ok) : false;
     const pfPassed = !!pfForThis && !pfFailed;
-    const statusTone: "ok" | "idle" | "warn" = isStandby ? "warn" : isPromoted ? "ok" : "idle";
-    const statusLabel = isStandby ? "Maintenance" : isPromoted ? "Promoted" : "Unpromoted";
+    const statusTone: "ok" | "idle" | "warn" = isOffline
+      ? "warn"
+      : isStandby
+        ? "warn"
+        : isPromoted
+          ? "ok"
+          : "idle";
+    const statusLabel = isOffline
+      ? "Unreachable"
+      : isStandby
+        ? "Maintenance"
+        : isPromoted
+          ? "Promoted"
+          : "Unpromoted";
     return (
       <NodeCard key={node}>
         <NodeHead>
@@ -442,32 +583,44 @@ export default function ClusterPage() {
         ) : null}
         {ops ? (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {!isOffline ? (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => runStream("preflight", node)}
+                >
+                  Check
+                </Button>
+                {isStandby ? (
+                  <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
+                    Exit Maintenance
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    disabled={busy || !pfPassed || (!!cluster.maintenance_active && !isStandby)}
+                    onClick={() => runStream("enter", node)}
+                  >
+                    Enter Maintenance
+                  </Button>
+                )}
+              </>
+            ) : null}
             <Button
               type="button"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => runStream("preflight", node)}
+              variant="danger"
+              disabled={busy || probing}
+              onClick={() => openRemove(node)}
             >
-              Check
+              Remove Host
             </Button>
-            {isStandby ? (
-              <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
-                Exit Maintenance
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                disabled={busy || !pfPassed || (!!cluster.maintenance_active && !isStandby)}
-                onClick={() => runStream("enter", node)}
-              >
-                Enter Maintenance
-              </Button>
-            )}
           </div>
         ) : (
           <Hint>Maintenance actions require KIN Super Admin or Support-Ops.</Hint>
         )}
-        {ops && !isStandby && !pfPassed ? (
+        {ops && !isOffline && !isStandby && !pfPassed ? (
           <Hint>
             {pfFailed
               ? "Enter is blocked until every pre-flight check is green."
@@ -562,6 +715,55 @@ export default function ClusterPage() {
           <LogPane aria-label="Maintenance log">{log || "Status and transition output appears here."}</LogPane>
         )}
         {message ? <Hint>{message}</Hint> : null}
+        <ConfirmModal
+          open={!!pendingRemove}
+          title={
+            removeProbe?.mode === "forced"
+              ? "Remove unreachable host"
+              : "Remove host"
+          }
+          message={
+            probing ? (
+              <>Probing SSH reachability for <strong>{pendingRemove}</strong>…</>
+            ) : removeProbe?.mode === "forced" ? (
+              <>
+                <strong>{pendingRemove}</strong> does not answer SSH. This will run the
+                forced path: clear Corosync membership, the DRBD peer, Pacemaker
+                location constraints, and qdevice certs on the survivor (
+                {removeProbe.survivor || "this host"}) only. The departing VM will not
+                be uninstalled.
+              </>
+            ) : (
+              <>
+                Drain <strong>{pendingRemove}</strong> if it is not already in
+                maintenance, remove it from the cluster on the survivor, then run
+                uninstall on the departing node. Mail on the surviving node keeps
+                running.
+              </>
+            )
+          }
+          detail={
+            probing
+              ? undefined
+              : removeProbe?.mode === "forced"
+                ? "A failed forced remove leaves stale references that also block Add Host. Survivor-side cleanup is the part that must succeed."
+                : "This is harder to reverse than maintenance mode. If uninstall on the departing node fails, survivor-side removal still counts as success."
+          }
+          confirmLabel={probing ? "Probing…" : "Remove host"}
+          loading={busy || probing}
+          onCancel={() => {
+            if (busy || probing) return;
+            probeRef.current?.close();
+            probeRef.current = null;
+            setPendingRemove(null);
+            setRemoveProbe(null);
+          }}
+          onConfirm={() => {
+            if (!pendingRemove || !removeProbe || probing || busy) return;
+            if ((removeProbe.errors || []).length > 0) return;
+            runRemove(pendingRemove);
+          }}
+        />
       </Page>
     </ConsoleChrome>
   );

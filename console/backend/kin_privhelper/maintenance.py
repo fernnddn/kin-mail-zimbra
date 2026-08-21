@@ -106,6 +106,7 @@ _MEMBER_PREFIXES = (
     "standby:",
     "maintenance:",
 )
+_OFFLINE_PREFIXES = ("offline:",)
 
 
 def parse_online_nodes(pcs_nodes: str) -> list[str]:
@@ -140,6 +141,19 @@ def parse_standby_nodes(pcs_nodes: str) -> list[str]:
             if tok not in standby:
                 standby.append(tok)
     return standby
+
+
+def parse_offline_nodes(pcs_nodes: str) -> list[str]:
+    """Parse `pcs status nodes` Offline: names (forced remove-host targets)."""
+    found: list[str] = []
+    for line in pcs_nodes.splitlines():
+        rest = _pcs_nodes_line_rest(line, _OFFLINE_PREFIXES)
+        if rest is None:
+            continue
+        for tok in _node_tokens(rest):
+            if tok not in found:
+                found.append(tok)
+    return found
 
 
 def parse_promoted(crm: str) -> str | None:
@@ -385,6 +399,7 @@ async def gather_status() -> dict[str, Any]:
     nodes_text = await _pcs_nodes_text()
     nodes = parse_online_nodes(nodes_text)
     standby = parse_standby_nodes(nodes_text)
+    offline = parse_offline_nodes(nodes_text)
     _c, crm, _e = await _capture(["crm_mon", "-1", "-r"])
     promoted = parse_promoted(crm)
     unpromoted = parse_unpromoted(crm)
@@ -393,11 +408,15 @@ async def gather_status() -> dict[str, Any]:
     addrs = {}
     if COROSYNC_CONF.is_file():
         addrs = parse_corosync_ring_addrs(COROSYNC_CONF.read_text(encoding="utf-8", errors="replace"))
+    live = set(nodes) | set(offline)
+    stale_peers = [n for n in addrs if n not in live]
     fc_ok, fc_lines = await _failcounts(nodes)
     return {
         "local_host": this_hostname(),
         "nodes": nodes,
         "standby": standby,
+        "offline": offline,
+        "stale_peers": stale_peers,
         "promoted": promoted,
         "unpromoted": unpromoted,
         "drbd_uptodate": drbd_both_uptodate(drbd),
@@ -526,6 +545,8 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"local={st['local_host']}")
         yield await _emit(f"nodes={st['nodes']}")
         yield await _emit(f"standby={st['standby']}")
+        yield await _emit(f"offline={st['offline']}")
+        yield await _emit(f"stale_peers={st['stale_peers']}")
         yield await _emit(f"promoted={st['promoted']}")
         yield await _emit(f"unpromoted={st['unpromoted']}")
         yield await _emit(f"drbd_uptodate={st['drbd_uptodate']}")
@@ -537,6 +558,8 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "local_host": st["local_host"],
             "nodes": st["nodes"],
             "standby": st["standby"],
+            "offline": st["offline"],
+            "stale_peers": st["stale_peers"],
             "promoted": st["promoted"],
             "unpromoted": st["unpromoted"],
             "drbd_uptodate": st["drbd_uptodate"],

@@ -31,6 +31,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "store_provisioning_secrets",
         "run_ha_orchestration",
         "ha_disk_preflight",
+        "remove_host",
     }
 )
 

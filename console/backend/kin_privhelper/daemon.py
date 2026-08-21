@@ -262,6 +262,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         elif cmd == proto.CMD_RUN_HA_ORCHESTRATION:
             jmode = str(args.get("join_mode") or "apply")[:16]
             audit_cmd = f"{cmd}:{jmode}"
+        elif cmd == proto.CMD_REMOVE_HOST:
+            rop = str(args.get("op") or "apply")[:16]
+            tgt = str(args.get("target") or "")[:80]
+            audit_cmd = f"{cmd}:{rop}" + (f":{tgt}" if tgt else "")
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
@@ -278,6 +282,9 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         ) or (
             cmd == proto.CMD_MAINTENANCE
             and str(args.get("op") or "").strip().lower() in ("status", "preflight")
+        ) or (
+            cmd == proto.CMD_REMOVE_HOST
+            and str(args.get("op") or "").strip().lower() == "probe"
         ) or cmd == proto.CMD_HA_DISK_PREFLIGHT
 
         if not bypass_busy:

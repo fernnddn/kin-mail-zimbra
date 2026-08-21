@@ -755,6 +755,13 @@ async def cmd_run_ha_orchestration(
         yield ev
 
 
+async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    from .remove_host import cmd_remove_host as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     from .maintenance import cmd_maintenance as _run
 
@@ -958,6 +965,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_CREATE_MAILBOX: _adapt(cmd_create_mailbox),
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
     proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
+    proto.CMD_REMOVE_HOST: _adapt(cmd_remove_host),
     proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
     proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
     proto.CMD_HA_DISK_PREFLIGHT: _adapt(cmd_ha_disk_preflight),
