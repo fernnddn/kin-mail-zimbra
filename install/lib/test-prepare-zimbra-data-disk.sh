@@ -81,13 +81,65 @@ else
   bad "ext4_unmounted_action mounted: [$act]"
 fi
 
+# DRBD-attached (third state): backing device has a drbd* holder.
+sysfs=$(mktemp -d)
+mkdir -p "$sysfs/class/block/sdb1/holders/drbd0"
+if data_disk_held_by_drbd "/dev/sdb1" "$sysfs"; then
+  pass "data_disk_held_by_drbd: true when holders/drbd0 exists"
+else
+  bad "data_disk_held_by_drbd missed stub holder"
+fi
+sysfs_empty=$(mktemp -d)
+mkdir -p "$sysfs_empty/class/block/sdb1/holders"
+if ! data_disk_held_by_drbd "/dev/sdb1" "$sysfs_empty"; then
+  pass "data_disk_held_by_drbd: false without holders (mid-handoff / fresh)"
+else
+  bad "data_disk_held_by_drbd true with empty holders"
+fi
+rm -rf "$sysfs" "$sysfs_empty"
+
+act=$(prepare_data_disk_drbd_action "1" "0")
+if [ "$act" = "skip_drbd_attached" ]; then
+  pass "prepare_data_disk_drbd_action: held by DRBD skips"
+else
+  bad "prepare_data_disk_drbd_action held: [$act]"
+fi
+act=$(prepare_data_disk_drbd_action "0" "1")
+if [ "$act" = "skip_drbd_attached" ]; then
+  pass "prepare_data_disk_drbd_action: mount on /dev/drbd* skips"
+else
+  bad "prepare_data_disk_drbd_action on_drbd: [$act]"
+fi
+act=$(prepare_data_disk_drbd_action "0" "0")
+if [ "$act" = "continue" ]; then
+  pass "prepare_data_disk_drbd_action: mid-handoff/fresh still continues"
+else
+  bad "prepare_data_disk_drbd_action continue: [$act]"
+fi
+
+# Stale pre-cluster fstab cleanup (used on DRBD-attached skip).
+fstab_drbd=$(mktemp)
+export FSTAB="$fstab_drbd"
+printf 'UUID=root / ext4 defaults 0 1\n\n%s. See HA-RUNBOOK §13.\n# Remove this UUID line when Pacemaker kin-fs mounts /dev/drbd0 (Build HA pair).\nUUID=stale-uuid %s ext4 defaults 0 2\n' \
+  "$FSTAB_MARK" "$ZIMBRA_DIR" >"$fstab_drbd"
+if remove_precluster_zimbra_fstab \
+  && ! grep -Fq "$FSTAB_MARK" "$fstab_drbd" \
+  && ! grep -q "$ZIMBRA_DIR" "$fstab_drbd"; then
+  pass "remove_precluster_zimbra_fstab: drops legacy mark + UUID line"
+else
+  bad "remove_precluster_zimbra_fstab left mark or zimbra line"
+fi
+rm -f "$fstab_drbd"
+
 # Already-on-data success path still lives at the top of the script.
 if grep -q 'is already on \${DATA_DISK}' ./prepare-zimbra-data-disk.sh \
   && grep -q 'accept_zimbra' ./prepare-zimbra-data-disk.sh \
-  && grep -q 'leaving unmounted for DRBD/Pacemaker' ./prepare-zimbra-data-disk.sh; then
-  pass "helper keeps already-on-data path and mid-handoff accept_zimbra exit"
+  && grep -q 'leaving unmounted for DRBD/Pacemaker' ./prepare-zimbra-data-disk.sh \
+  && grep -q 'skip_drbd_attached' ./prepare-zimbra-data-disk.sh \
+  && grep -q 'data_disk_held_by_drbd' ./prepare-zimbra-data-disk.sh; then
+  pass "helper keeps already-on-data, mid-handoff accept_zimbra, and DRBD-attached skip"
 else
-  bad "helper missing already-on-data or mid-handoff accept path"
+  bad "helper missing already-on-data, mid-handoff, or DRBD-attached skip path"
 fi
 
 fstab=$(mktemp)

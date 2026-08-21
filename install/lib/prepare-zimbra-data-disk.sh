@@ -75,6 +75,76 @@ ext4_unmounted_action() {
   printf '%s\n' "continue"
 }
 
+# True when the kernel already handed DATA_DISK to a drbd* holder
+# (Secondary or Primary after drbdadm up). Mid-handoff has no holders yet.
+# Optional 2nd arg: sysfs root (tests inject a stub tree).
+data_disk_held_by_drbd() {
+  local disk="$1"
+  local sys_root="${2:-/sys}"
+  local base sysdev holder
+  base=$(basename "$disk")
+  [ -n "$base" ] || return 1
+  sysdev=$(readlink -f "${sys_root}/class/block/${base}" 2>/dev/null || true)
+  if [ -z "$sysdev" ] || [ ! -d "${sysdev}/holders" ]; then
+    return 1
+  fi
+  for holder in "${sysdev}/holders"/*; do
+    [ -e "$holder" ] || continue
+    case "$(basename "$holder")" in
+      drbd*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Args: held_by_drbd 0|1, zimbra_mount_is_drbd 0|1
+# Prints: skip_drbd_attached | continue
+prepare_data_disk_drbd_action() {
+  local held="${1:-0}"
+  local on_drbd="${2:-0}"
+  if [ "$held" = "1" ] || [ "$on_drbd" = "1" ]; then
+    printf '%s\n' "skip_drbd_attached"
+    return 0
+  fi
+  printf '%s\n' "continue"
+}
+
+# Drop stale pre-cluster /opt/zimbra fstab bookkeeping once DRBD owns the disk.
+# Same mark matching as release-zimbra-plain-mount-for-drbd.sh (prefix match).
+remove_precluster_zimbra_fstab() {
+  local ts bak
+  if ! grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
+    info "${FSTAB} has no ${FSTAB_MARK} block (already removed or never written)"
+    return 0
+  fi
+  ts=$(date +%Y%m%dT%H%M%S)
+  bak="${FSTAB}.kin-pre-drbd-prepare-${ts}"
+  cp -a "$FSTAB" "$bak" || {
+    fail "Could not backup ${FSTAB}"
+    return 1
+  }
+  awk -v mark="$FSTAB_MARK" -v zdir="$ZIMBRA_DIR" '
+    index($0, mark) == 1 { skip = 1; next }
+    skip && /^# Remove this UUID line when Pacemaker/ { next }
+    skip && $0 ~ /^UUID=/ && index($0, zdir) { skip = 0; next }
+    skip { skip = 0 }
+    { print }
+  ' "$bak" >"${FSTAB}.kin-new" || {
+    fail "awk rewrite of ${FSTAB} failed"
+    return 1
+  }
+  mv "${FSTAB}.kin-new" "$FSTAB" || {
+    fail "Could not replace ${FSTAB}"
+    return 1
+  }
+  if grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
+    fail "${FSTAB} still contains ${FSTAB_MARK} after rewrite (backup ${bak})"
+    return 1
+  fi
+  ok "Removed stale pre-cluster fstab block (backup ${bak})"
+  return 0
+}
+
 find_selector() {
   if [ -n "${KIN_SELECT_DRBD_DISK:-}" ] && [ -f "${KIN_SELECT_DRBD_DISK}" ]; then
     printf '%s\n' "${KIN_SELECT_DRBD_DISK}"
@@ -148,6 +218,27 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 Z_MNTSRC=$(norm_src "$(findmnt -n -o SOURCE "$ZIMBRA_DIR" 2>/dev/null || true)")
+ON_DRBD=0
+case "$Z_MNTSRC" in
+  /dev/drbd*|*/drbd/*) ON_DRBD=1 ;;
+esac
+HELD_BY_DRBD=0
+if data_disk_held_by_drbd "$DATA_DISK"; then
+  HELD_BY_DRBD=1
+fi
+case "$(prepare_data_disk_drbd_action "$HELD_BY_DRBD" "$ON_DRBD")" in
+  skip_drbd_attached)
+    if [ "$ON_DRBD" -eq 1 ]; then
+      ok "${ZIMBRA_DIR} is already on DRBD (${Z_MNTSRC}); Pacemaker kin-fs owns the mount"
+    else
+      ok "${DATA_DISK} is already attached to DRBD; skipping prepare (do not mount or rewrite fstab)"
+    fi
+    info "kin-fs mounts /dev/drbd0; this script must not touch the raw backing device."
+    remove_precluster_zimbra_fstab || die "Could not clean stale pre-cluster fstab after DRBD attach"
+    exit 0
+    ;;
+esac
+
 if [ -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
   if [ -n "$Z_MNTSRC" ] && [ "$Z_MNTSRC" = "$DATA_DISK" ]; then
     ok "${ZIMBRA_DIR} is already on ${DATA_DISK}"
