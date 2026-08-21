@@ -1,7 +1,7 @@
 ---
 sbd_stonith_packages:
   - sbd
-  - fence-agents-sbd
+  - fence-agents-base
 # Same path iscsi_initiator discovers (or inventory override). Empty until
 # that fact is set; do not ship a lab scsi-by-id as the default.
 sbd_stonith_device: "{{ iscsi_initiator_sbd_by_id | default('') }}"
