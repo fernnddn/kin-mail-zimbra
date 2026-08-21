@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { api } from "../../api";
-import { Button, Spinner } from "../../ui";
+import { Button, Spinner, StatusPill } from "../../ui";
 import { theme } from "../../styles/theme";
 import { formatDeployLog } from "../ansi";
 import { parseInstallProgress } from "../deployPipeline";
@@ -24,8 +24,9 @@ const Bar = styled.header`
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.85rem 1.25rem;
-  border-bottom: 1px solid ${theme.line};
+  height: 3.5rem;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid color-mix(in srgb, ${theme.line} 60%, transparent);
   background: ${theme.bgElev};
   flex-shrink: 0;
 `;
@@ -52,22 +53,6 @@ const Meta = styled.div`
   align-items: center;
   gap: 0.75rem;
   flex-shrink: 0;
-`;
-
-const Badge = styled.span<{ $tone?: "ok" | "warn" | "muted" }>`
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0.25rem 0.55rem;
-  border-radius: 999px;
-  border: 1px solid ${theme.line};
-  color: ${(p) =>
-    p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.muted};
-  background: ${(p) =>
-    p.$tone === "ok"
-      ? "rgba(5, 150, 105, 0.08)"
-      : p.$tone === "warn"
-        ? theme.warnSoft
-        : theme.bgPanel};
 `;
 
 const SoftHint = styled.p`
@@ -192,19 +177,19 @@ export default function DeployLogsPage() {
         </TitleBlock>
         <Meta>
           {live ? (
-            <Badge $tone="warn">
+            <StatusPill tone="warn">
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
                 <Spinner /> Live
               </span>
-            </Badge>
+            </StatusPill>
           ) : complete ? (
-            <Badge $tone="ok">Complete</Badge>
+            <StatusPill tone="completed">Complete</StatusPill>
           ) : failed ? (
-            <Badge $tone="warn">Failed</Badge>
+            <StatusPill tone="critical">Failed</StatusPill>
           ) : (
-            <Badge $tone="muted">Idle</Badge>
+            <StatusPill tone="neutral">Idle</StatusPill>
           )}
-          <Button type="button" variant="ghost" onClick={() => void refresh({ manual: true })}>
+          <Button type="button" variant="secondary" onClick={() => void refresh({ manual: true })}>
             Reload
           </Button>
           <Button type="button" variant="ghost" onClick={() => window.close()}>

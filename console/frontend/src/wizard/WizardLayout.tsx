@@ -2,7 +2,7 @@ import styled from "@emotion/styled";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { useSetup } from "../setup";
-import { Lede, Shell } from "../ui";
+import { Lede, Shell, Skeleton, Spinner } from "../ui";
 import { theme } from "../styles/theme";
 import { useDeploySession } from "./DeploySession";
 import { useWizard } from "./WizardContext";
@@ -45,22 +45,23 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
   gap: 0.65rem;
   padding: 0.55rem 0.65rem;
   margin-bottom: 0.2rem;
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   text-decoration: none;
-  color: ${(p) => (p.$active ? theme.ink : theme.muted)};
+  color: ${(p) => (p.$active ? theme.accent : theme.muted)};
   background: ${(p) => (p.$active ? theme.accentSoft : "transparent")};
-  border: 1px solid ${(p) => (p.$active ? "color-mix(in srgb, " + theme.accent + " 35%, transparent)" : "transparent")};
+  border: 1px solid ${(p) => (p.$active ? "color-mix(in srgb, " + theme.accent + " 20%, transparent)" : "transparent")};
   font-size: 0.9rem;
+  font-weight: ${(p) => (p.$active ? 600 : 500)};
+  box-shadow: ${(p) => (p.$active ? "inset 3px 0 0 0 " + theme.accent : "none")};
   transition:
-    color ${theme.motion} ease-out,
-    background ${theme.motion} ease-out,
-    border-color ${theme.motion} ease-out,
-    box-shadow ${theme.motion} ease-out;
+    color ${theme.motion.fast} ease-out,
+    background ${theme.motion.fast} ease-out,
+    border-color ${theme.motion.fast} ease-out,
+    box-shadow ${theme.motion.fast} ease-out;
 
   &:hover {
-    color: ${theme.ink};
+    color: ${(p) => (p.$active ? theme.accent : theme.ink)};
     background: ${(p) => (p.$active ? theme.accentSoft : "rgba(0, 97, 255, 0.05)")};
-    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
   }
 `;
 
@@ -70,7 +71,7 @@ const StepLock = styled.div<{ $active?: boolean; $done?: boolean }>`
   gap: 0.65rem;
   padding: 0.55rem 0.65rem;
   margin-bottom: 0.2rem;
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   color: ${theme.muted};
   background: transparent;
   border: 1px solid transparent;
@@ -93,9 +94,9 @@ const StepNum = styled.span<{ $active?: boolean; $done?: boolean }>`
   color: ${(p) => (p.$active ? "#fff" : p.$done ? theme.ok : theme.muted)};
   border: 1px solid ${(p) => (p.$active ? theme.accent : theme.line)};
   transition:
-    background ${theme.motion} ease-out,
-    color ${theme.motion} ease-out,
-    border-color ${theme.motion} ease-out;
+    background ${theme.motion.fast} ease-out,
+    color ${theme.motion.fast} ease-out,
+    border-color ${theme.motion.fast} ease-out;
 `;
 
 const Main = styled.main`
@@ -112,7 +113,7 @@ const CrumbBar = styled.div`
   a {
     color: ${theme.muted};
     text-decoration: none;
-    transition: color ${theme.motion} ease-out;
+    transition: color ${theme.motion.fast} ease-out;
   }
 
   a:hover {
@@ -129,7 +130,7 @@ const Content = styled.div`
   padding: 1rem 1.5rem 2rem;
   max-width: 760px;
   width: 100%;
-  animation: kin-fade-in ${theme.motion} ease-out;
+  animation: kin-page-in ${theme.motion.page} cubic-bezier(0.16, 1, 0.3, 1);
 `;
 
 function currentStepId(pathname: string): StepId {
@@ -149,7 +150,10 @@ function furthestReachedIndex(currentStep: string): number {
 function LoadingPage({ text }: { text: string }) {
   return (
     <Shell>
-      <Lede>{text}</Lede>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
+        <Spinner $size={20} />
+        <Lede style={{ margin: 0 }}>{text}</Lede>
+      </div>
     </Shell>
   );
 }
@@ -253,7 +257,16 @@ export default function WizardLayout() {
             <strong>{activeDef.crumb}</strong>
           </CrumbBar>
           <Content key={active}>
-            {draftLoading ? <p style={{ color: theme.muted }}>Loading draft…</p> : <Outlet />}
+            {draftLoading ? (
+              <div style={{ display: "grid", gap: "0.65rem", paddingTop: "0.5rem" }}>
+                <Skeleton $h="1.4rem" $w="42%" />
+                <Skeleton $h="0.75rem" $w="88%" />
+                <Skeleton $h="0.75rem" $w="70%" />
+                <Skeleton $h="7rem" $w="100%" />
+              </div>
+            ) : (
+              <Outlet />
+            )}
           </Content>
         </Main>
       </Body>

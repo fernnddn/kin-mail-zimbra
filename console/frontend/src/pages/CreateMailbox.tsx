@@ -3,7 +3,18 @@ import styled from "@emotion/styled";
 import { api } from "../api";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { theme } from "../styles/theme";
-import { Button, Hint, Input, Label, Lede, LogPane, Title, WarnBox } from "../ui";
+import {
+  Button,
+  Hint,
+  Input,
+  Label,
+  LogPane,
+  MailIcon,
+  Page,
+  PageHeader,
+  PasswordInput,
+  WarnBox,
+} from "../ui";
 
 type StatusResp = {
   ok: boolean;
@@ -19,12 +30,6 @@ type CreateResp = {
   log: string;
   local_part: string;
 };
-
-const Page = styled.div`
-  padding: 1.25rem 1.5rem 2rem;
-  max-width: 720px;
-  width: 100%;
-`;
 
 const FormGrid = styled.form`
   display: grid;
@@ -142,12 +147,17 @@ export default function CreateMailboxPage() {
   return (
     <ConsoleChrome subtitle="Self-service mailbox create">
       <Page>
-        <Title>Create mailbox</Title>
-        <Lede>
-          Creates one mailbox on the configured mail domain only. Seat limits use the same quota
-          gate as the CLI (<code>kin_quota_gate_allow_new_mailbox</code>); Customer Admin can create
-          within the contracted seats, but cannot raise the seat limit.
-        </Lede>
+        <PageHeader
+          icon={<MailIcon />}
+          title="Create mailbox"
+          subtitle={
+            <>
+              Creates one mailbox on the configured mail domain only. Seat limits use the same quota
+              gate as the CLI (<code>kin_quota_gate_allow_new_mailbox</code>); Customer Admin can
+              create within the contracted seats, but cannot raise the seat limit.
+            </>
+          }
+        />
 
         {maintHint ? <WarnBox>{maintHint}</WarnBox> : null}
 
@@ -180,9 +190,8 @@ export default function CreateMailboxPage() {
             <DomainSuffix>@{domain || "…"}</DomainSuffix>
           </LocalRow>
           <Label htmlFor="pw">Password (min 8 characters)</Label>
-          <Input
+          <PasswordInput
             id="pw"
-            type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             minLength={8}
@@ -196,7 +205,7 @@ export default function CreateMailboxPage() {
             onChange={(e) => setDisplayName(e.target.value)}
             autoComplete="off"
           />
-          <Button type="submit" variant="primary" disabled={busy || !!maintHint}>
+          <Button type="submit" variant="primary" loading={busy} disabled={!!maintHint}>
             {busy ? "Creating…" : "Create mailbox"}
           </Button>
         </FormGrid>

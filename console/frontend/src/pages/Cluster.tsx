@@ -4,7 +4,18 @@ import { ConsoleChrome } from "../ConsoleChrome";
 import { isOpsRole, useAuth } from "../auth";
 import { api } from "../api";
 import { theme } from "../styles/theme";
-import { Button, Hint, Lede, LogPane, Title, WarnBox } from "../ui";
+import {
+  Button,
+  ClusterIcon,
+  Hint,
+  LogPane,
+  Page,
+  PageHeader,
+  Skeleton,
+  SkeletonCard,
+  StatusPill,
+  WarnBox,
+} from "../ui";
 
 type ClusterSnap = {
   local_host?: string;
@@ -27,12 +38,6 @@ type StatusResp = {
 
 type PreflightCheck = { ok: boolean; detail: string };
 
-const Page = styled.div`
-  padding: 1.25rem 1.5rem 2rem;
-  max-width: 960px;
-  width: 100%;
-`;
-
 const Grid = styled.div`
   display: grid;
   gap: 0.85rem;
@@ -43,8 +48,9 @@ const Grid = styled.div`
 const NodeCard = styled.div`
   border: 1px solid ${theme.line};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   padding: 1rem 1.05rem;
+  box-shadow: ${theme.shadow.sm};
 `;
 
 const NodeName = styled.p`
@@ -60,16 +66,11 @@ const Meta = styled.p`
   line-height: 1.4;
 `;
 
-const Badge = styled.span<{ $ok?: boolean }>`
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  margin-right: 0.35rem;
-  color: ${(p) => (p.$ok ? theme.ok : theme.warn)};
-  background: ${(p) => (p.$ok ? "rgba(5, 150, 105, 0.08)" : theme.warnSoft)};
-  border: 1px solid ${theme.line};
+const PillRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
 `;
 
 const CheckList = styled.ul`
@@ -108,6 +109,7 @@ export default function ClusterPage() {
   const [log, setLog] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [preflight, setPreflight] = useState<Record<string, PreflightCheck> | null>(null);
   const [preflightTarget, setPreflightTarget] = useState("");
   const esRef = useRef<EventSource | null>(null);
@@ -119,9 +121,11 @@ export default function ClusterPage() {
   }, []);
 
   useEffect(() => {
-    void refresh().catch((err: unknown) => {
-      setMessage(err instanceof Error ? err.message : "Failed to load cluster status");
-    });
+    void refresh()
+      .catch((err: unknown) => {
+        setMessage(err instanceof Error ? err.message : "Failed to load cluster status");
+      })
+      .finally(() => setLoaded(true));
     return () => {
       esRef.current?.close();
       esRef.current = null;
@@ -203,93 +207,118 @@ export default function ClusterPage() {
   return (
     <ConsoleChrome subtitle="Cluster">
       <Page>
-        <Title>Cluster</Title>
-        <Lede>
-          Take one mail node out of service for planned work. Pre-flight must pass before Enter
-          is allowed. Closing this browser does not take the node out of maintenance; use Exit.
-        </Lede>
+        <PageHeader
+          icon={<ClusterIcon />}
+          title="Cluster"
+          subtitle="Take one mail node out of service for planned work. Pre-flight must pass before Enter is allowed. Closing this browser does not take the node out of maintenance; use Exit."
+        />
         {cluster.maintenance_active ? (
           <WarnBox>
             A node is in maintenance ({(cluster.standby || []).join(", ") || "unknown"}). Deploy
             and mailbox create stay blocked until you exit.
           </WarnBox>
         ) : null}
-        <Meta as="div" style={{ marginBottom: "0.5rem" }}>
-          <Badge $ok={!!cluster.drbd_uptodate}>DRBD {cluster.drbd_uptodate ? "UpToDate" : "not UpToDate"}</Badge>
-          <Badge $ok={!!cluster.qdevice_ok}>qdevice {cluster.qdevice_ok ? "voting" : "unhealthy"}</Badge>
-          <Badge $ok={!!cluster.failcount_ok}>fail-count {cluster.failcount_ok ? "0" : "nonzero"}</Badge>
-          <Badge $ok={!cluster.maintenance_active}>
-            {cluster.promoted ? `Promoted: ${cluster.promoted}` : "Promoted: unknown"}
-          </Badge>
-        </Meta>
-        <Grid>
-          {nodes.map((node) => {
-            const isStandby = standby.has(node);
-            const isPromoted = cluster.promoted === node;
-            const pfForThis = preflightTarget === node ? preflight : null;
-            const pfFailed = pfForThis
-              ? Object.values(pfForThis).some((c) => !c.ok)
-              : false;
-            const pfPassed = !!pfForThis && !pfFailed;
-            return (
-              <NodeCard key={node}>
-                <NodeName>{node}</NodeName>
-                <Meta>
-                  {isPromoted ? "Promoted (serving mail)" : "Unpromoted"}
-                  {isStandby ? " · in maintenance" : ""}
-                </Meta>
-                {pfForThis ? (
-                  <CheckList>
-                    {Object.entries(pfForThis).map(([name, check]) => (
-                      <CheckItem key={name} $ok={check.ok}>
-                        {name}: {check.detail}
-                      </CheckItem>
-                    ))}
-                  </CheckList>
-                ) : null}
-                {ops ? (
-                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => runStream("preflight", node)}
-                    >
-                      Check
-                    </Button>
-                    {isStandby ? (
-                      <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
-                        Exit Maintenance
-                      </Button>
+        {!loaded ? (
+          <Grid>
+            <SkeletonCard>
+              <Skeleton $h="1rem" $w="40%" style={{ marginBottom: 12 }} />
+              <Skeleton $h="0.7rem" $w="70%" style={{ marginBottom: 8 }} />
+              <Skeleton $h="2rem" $w="55%" />
+            </SkeletonCard>
+            <SkeletonCard>
+              <Skeleton $h="1rem" $w="40%" style={{ marginBottom: 12 }} />
+              <Skeleton $h="0.7rem" $w="70%" style={{ marginBottom: 8 }} />
+              <Skeleton $h="2rem" $w="55%" />
+            </SkeletonCard>
+          </Grid>
+        ) : (
+          <>
+            <PillRow>
+              <StatusPill tone={cluster.drbd_uptodate ? "completed" : "warn"}>
+                DRBD {cluster.drbd_uptodate ? "UpToDate" : "not UpToDate"}
+              </StatusPill>
+              <StatusPill tone={cluster.qdevice_ok ? "completed" : "warn"}>
+                qdevice {cluster.qdevice_ok ? "voting" : "unhealthy"}
+              </StatusPill>
+              <StatusPill tone={cluster.failcount_ok ? "completed" : "warn"}>
+                fail-count {cluster.failcount_ok ? "0" : "nonzero"}
+              </StatusPill>
+              <StatusPill tone={cluster.maintenance_active ? "high" : "primary"}>
+                {cluster.promoted ? `Promoted: ${cluster.promoted}` : "Promoted: unknown"}
+              </StatusPill>
+            </PillRow>
+            <Grid>
+              {nodes.map((node) => {
+                const isStandby = standby.has(node);
+                const isPromoted = cluster.promoted === node;
+                const pfForThis = preflightTarget === node ? preflight : null;
+                const pfFailed = pfForThis
+                  ? Object.values(pfForThis).some((c) => !c.ok)
+                  : false;
+                const pfPassed = !!pfForThis && !pfFailed;
+                return (
+                  <NodeCard key={node}>
+                    <NodeName>{node}</NodeName>
+                    <Meta>
+                      {isPromoted ? "Promoted (serving mail)" : "Unpromoted"}
+                      {isStandby ? " · in maintenance" : ""}
+                    </Meta>
+                    {pfForThis ? (
+                      <CheckList>
+                        {Object.entries(pfForThis).map(([name, check]) => (
+                          <CheckItem key={name} $ok={check.ok}>
+                            {name}: {check.detail}
+                          </CheckItem>
+                        ))}
+                      </CheckList>
+                    ) : null}
+                    {ops ? (
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() => runStream("preflight", node)}
+                        >
+                          Check
+                        </Button>
+                        {isStandby ? (
+                          <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
+                            Exit Maintenance
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            disabled={
+                              busy ||
+                              !pfPassed ||
+                              (!!cluster.maintenance_active && !isStandby)
+                            }
+                            onClick={() => runStream("enter", node)}
+                          >
+                            Enter Maintenance
+                          </Button>
+                        )}
+                      </div>
                     ) : (
-                      <Button
-                        type="button"
-                        disabled={
-                          busy ||
-                          !pfPassed ||
-                          (!!cluster.maintenance_active && !isStandby)
-                        }
-                        onClick={() => runStream("enter", node)}
-                      >
-                        Enter Maintenance
-                      </Button>
+                      <Hint>Maintenance actions require KIN Super Admin or Support-Ops.</Hint>
                     )}
-                  </div>
-                ) : (
-                  <Hint>Maintenance actions require KIN Super Admin or Support-Ops.</Hint>
-                )}
-                {ops && !isStandby && !pfPassed ? (
-                  <Hint>
-                    {pfFailed
-                      ? "Enter is blocked until every pre-flight check is green."
-                      : "Run Check first. Enter stays disabled until pre-flight passes."}
-                  </Hint>
-                ) : null}
-              </NodeCard>
-            );
-          })}
-        </Grid>
-        {nodes.length === 0 ? <Hint>No Pacemaker nodes reported. Is this host in the HA pair?</Hint> : null}
+                    {ops && !isStandby && !pfPassed ? (
+                      <Hint>
+                        {pfFailed
+                          ? "Enter is blocked until every pre-flight check is green."
+                          : "Run Check first. Enter stays disabled until pre-flight passes."}
+                      </Hint>
+                    ) : null}
+                  </NodeCard>
+                );
+              })}
+            </Grid>
+            {nodes.length === 0 ? (
+              <Hint>No Pacemaker nodes reported. Is this host in the HA pair?</Hint>
+            ) : null}
+          </>
+        )}
         {message ? <Hint>{message}</Hint> : null}
         <LogPane aria-label="Maintenance log">{log || "Status and transition output appears here."}</LogPane>
       </Page>

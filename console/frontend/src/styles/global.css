@@ -1,4 +1,3 @@
-/* Minimal resets — component styles live in Emotion. */
 *,
 *::before,
 *::after {
@@ -12,17 +11,25 @@ body,
   min-height: 100%;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
 body {
   margin: 0;
-  background: #f5f7fb;
-  color: #0f172a;
-  font-family: "DM Sans", InterVariable, Inter, -apple-system, "system-ui", "Segoe UI", Helvetica,
-    Arial, sans-serif;
+  background: #f8fafc;
+  color: #1e293b;
+  color-scheme: light;
+  font-family: "Inter", "Inter var", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, Monaco, Consolas,
-    monospace;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo,
+    Monaco, Consolas, monospace;
   font-size: 0.9em;
 }
 
@@ -46,11 +53,52 @@ code {
 @keyframes kin-scale-in {
   from {
     opacity: 0;
-    transform: scale(0.97);
+    transform: scale(0.95);
   }
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes kin-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes kin-page-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes kin-focus-flash {
+  0%,
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+  20%,
+  60% {
+    background-color: rgb(254 243 199);
+    box-shadow: inset 3px 0 0 0 rgb(245 158 11);
+  }
+  40%,
+  80% {
+    background-color: rgb(253 230 138);
+    box-shadow: inset 3px 0 0 0 rgb(217 119 6);
   }
 }
 
@@ -59,5 +107,13 @@ code {
 }
 
 .kin-scale-in {
-  animation: kin-scale-in 300ms ease-out;
+  animation: kin-scale-in 150ms ease-out;
+}
+
+.kin-page-in {
+  animation: kin-page-in 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.kin-focus-flash {
+  animation: kin-focus-flash 1.6s ease-in-out 2;
 }

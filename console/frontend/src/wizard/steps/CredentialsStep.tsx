@@ -143,7 +143,7 @@ export default function CredentialsStep() {
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/topology")}>
           Back
         </Button>
-        <Button type="button" disabled={saving} onClick={() => void next()}>
+        <Button type="button" loading={saving} onClick={() => void next()}>
           Continue
         </Button>
       </NavRow>

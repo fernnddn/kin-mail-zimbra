@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Button,
-  CheckRow,
   Err,
   FieldLabel,
   FieldRow,
@@ -11,6 +10,7 @@ import {
   Lede,
   NavRow,
   PasswordInput,
+  Switch,
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
@@ -73,17 +73,14 @@ export default function HybridStep() {
         You can let users sign in with their company Active Directory accounts. Skip this if AD is
         not ready; local mail passwords will be used instead.
       </Lede>
-      <CheckRow>
-        <input
-          type="checkbox"
-          checked={draft.ad_auth_enabled}
-          onChange={(e) => {
-            setFieldErr("");
-            setLocal({ ad_auth_enabled: e.target.checked });
-          }}
-        />
-        <span>Configure Active Directory bind now</span>
-      </CheckRow>
+      <Switch
+        checked={draft.ad_auth_enabled}
+        onChange={(next) => {
+          setFieldErr("");
+          setLocal({ ad_auth_enabled: next });
+        }}
+        label="Configure Active Directory bind now"
+      />
       {draft.ad_auth_enabled && (
         <>
           <FieldRow>
@@ -191,15 +188,15 @@ export default function HybridStep() {
         </Button>
         <div style={{ display: "flex", gap: "0.6rem" }}>
           {!draft.ad_auth_enabled ? (
-            <Button type="button" disabled={saving} onClick={() => void skip()}>
+            <Button type="button" loading={saving} onClick={() => void skip()}>
               Skip
             </Button>
           ) : (
             <>
-              <Button type="button" variant="ghost" disabled={saving} onClick={() => void skip()}>
+              <Button type="button" variant="ghost" loading={saving} onClick={() => void skip()}>
                 Skip instead
               </Button>
-              <Button type="button" disabled={saving} onClick={() => void continueWithAd()}>
+              <Button type="button" loading={saving} onClick={() => void continueWithAd()}>
                 Continue
               </Button>
             </>

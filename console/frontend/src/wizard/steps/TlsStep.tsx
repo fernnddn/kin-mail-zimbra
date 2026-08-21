@@ -65,7 +65,7 @@ export default function TlsStep() {
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/domain")}>
           Back
         </Button>
-        <Button type="button" disabled={saving} onClick={() => void next()}>
+        <Button type="button" loading={saving} onClick={() => void next()}>
           Continue
         </Button>
       </NavRow>

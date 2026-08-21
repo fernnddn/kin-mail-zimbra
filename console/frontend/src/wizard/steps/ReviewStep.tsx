@@ -85,7 +85,7 @@ export default function ReviewStep() {
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/firewall")}>
           Back
         </Button>
-        <Button type="button" disabled={saving} onClick={() => void next()}>
+        <Button type="button" loading={saving} onClick={() => void next()}>
           Continue to deploy
         </Button>
       </NavRow>

@@ -23,12 +23,15 @@ import TlsStep from "./wizard/steps/TlsStep";
 import TopologyStep from "./wizard/steps/TopologyStep";
 import ZpushStep from "./wizard/steps/ZpushStep";
 import { DeploySessionProvider } from "./wizard/DeploySession";
-import { Lede, Shell } from "./ui";
+import { Lede, Shell, Spinner } from "./ui";
 
 function LoadingShell({ text }: { text: string }) {
   return (
     <Shell>
-      <Lede>{text}</Lede>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
+        <Spinner $size={20} />
+        <Lede style={{ margin: 0 }}>{text}</Lede>
+      </div>
     </Shell>
   );
 }

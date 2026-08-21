@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
-import styled from "@emotion/styled";
 import { useAuth } from "../auth";
 import { ConsoleChrome } from "../ConsoleChrome";
-import { Button, Hint, Lede, LogPane, Title } from "../ui";
+import { AuditIcon, Button, Hint, LogPane, Page, PageHeader } from "../ui";
 
 type StreamEvent = {
   type: string;
@@ -12,12 +11,6 @@ type StreamEvent = {
   message?: string;
   exit_code?: number;
 };
-
-const Page = styled.div`
-  padding: 1.25rem 1.5rem 2rem;
-  max-width: 960px;
-  width: 100%;
-`;
 
 export default function AuditLogPage() {
   const { user } = useAuth();
@@ -93,16 +86,21 @@ export default function AuditLogPage() {
   return (
     <ConsoleChrome subtitle="Audit log · KIN Super Admin">
       <Page>
-        <Title>Privhelper audit log</Title>
-        <Lede>
-          Read-only tail of <code>/var/log/kin-mail/privhelper.log</code>. Restricted to KIN Super
-          Admin (enforced in API and privhelperd).
-        </Lede>
-        <div style={{ marginBottom: "0.75rem" }}>
-          <Button type="button" variant="primary" disabled={busy} onClick={() => load()}>
-            {busy ? "Loading…" : "Refresh"}
-          </Button>
-        </div>
+        <PageHeader
+          icon={<AuditIcon />}
+          title="Privhelper audit log"
+          subtitle={
+            <>
+              Read-only tail of <code>/var/log/kin-mail/privhelper.log</code>. Restricted to KIN
+              Super Admin (enforced in API and privhelperd).
+            </>
+          }
+          action={
+            <Button type="button" variant="primary" loading={busy} onClick={() => load()}>
+              {busy ? "Loading…" : "Refresh"}
+            </Button>
+          }
+        />
         {message && <Hint>{message}</Hint>}
         <LogPane aria-label="Audit log">{log}</LogPane>
       </Page>

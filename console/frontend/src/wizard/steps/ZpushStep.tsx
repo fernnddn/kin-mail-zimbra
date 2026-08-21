@@ -44,7 +44,7 @@ export default function ZpushStep() {
         </Button>
         <Button
           type="button"
-          disabled={saving}
+          loading={saving}
           onClick={() => void next(draft.zpush_enabled)}
         >
           Continue

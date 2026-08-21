@@ -216,7 +216,7 @@ export default function TopologyStep() {
       <Err>{fieldErr || error}</Err>
       <NavRow>
         <span />
-        <Button type="button" disabled={saving} onClick={() => void next()}>
+        <Button type="button" loading={saving} onClick={() => void next()}>
           Continue
         </Button>
       </NavRow>

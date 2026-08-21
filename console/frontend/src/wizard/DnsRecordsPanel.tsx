@@ -11,7 +11,7 @@ import {
 const Panel = styled.section`
   border: 1px solid ${theme.line};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   padding: 1rem 1.05rem;
   margin: 0 0 1rem;
 `;
@@ -36,7 +36,7 @@ const Rows = styled.div`
 
 const Row = styled.div`
   border: 1px solid ${theme.line};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   background: ${theme.bgPanel};
   padding: 0.7rem 0.8rem;
 `;
@@ -101,19 +101,13 @@ const ContinueBox = styled.div`
   padding: 0.9rem 1rem;
   border: 1px solid color-mix(in srgb, ${theme.accent} 40%, ${theme.line});
   background: ${theme.accentSoft};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
 `;
 
 const ContinueHeading = styled.p`
   margin: 0 0 0.35rem;
   font-weight: 650;
   font-size: 0.92rem;
-`;
-
-const CopyBtn = styled(Button)`
-  padding: 0.35rem 0.65rem;
-  font-size: 0.78rem;
-  font-weight: 600;
 `;
 
 async function copyText(text: string): Promise<boolean> {
@@ -136,10 +130,11 @@ function CopyValue({
 }) {
   const [copied, setCopied] = useState(false);
   return (
-    <CopyBtn
+    <Button
       type="button"
-      variant="ghost"
+      variant="secondary"
       disabled={disabled || !text}
+      style={{ padding: "0.35rem 0.65rem", fontSize: "0.78rem", fontWeight: 600 }}
       onClick={() => {
         void copyText(text).then((ok) => {
           if (!ok) return;
@@ -149,7 +144,7 @@ function CopyValue({
       }}
     >
       {copied ? "Copied" : label}
-    </CopyBtn>
+    </Button>
   );
 }
 

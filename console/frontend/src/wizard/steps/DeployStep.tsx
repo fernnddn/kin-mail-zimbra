@@ -11,6 +11,7 @@ import {
   Hint,
   Lede,
   NavRow,
+  Skeleton,
   Spinner,
   Title,
   WarnBox,
@@ -28,12 +29,12 @@ import {
 const StepCard = styled.div`
   border: 1px solid ${theme.line};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   padding: 1rem 1.05rem;
   margin-bottom: 0.85rem;
   transition:
-    box-shadow ${theme.motion} ease-out,
-    border-color ${theme.motion} ease-out;
+    box-shadow ${theme.motion.fast} ease-out,
+    border-color ${theme.motion.fast} ease-out;
 
   &:hover {
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
@@ -56,7 +57,7 @@ const StepBody = styled.p`
 const ProgressCard = styled.div`
   border: 1px solid ${theme.line};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   padding: 1.1rem 1.15rem;
   margin-bottom: 1rem;
 `;
@@ -97,8 +98,8 @@ const Fill = styled.div<{ $pct: number; $failed?: boolean; $complete?: boolean }
   border-radius: 999px;
   background: ${(p) => (p.$failed ? theme.danger : p.$complete ? theme.ok : theme.accent)};
   transition:
-    width ${theme.motion} ease-out,
-    background ${theme.motion} ease-out;
+    width ${theme.motion.slow} ease-out,
+    background ${theme.motion.fast} ease-out;
 `;
 
 const StageMeta = styled.p`
@@ -147,8 +148,8 @@ const Dot = styled.span<{ $state: "pending" | "active" | "done" | "failed" }>`
           : theme.line};
   box-shadow: ${(p) => (p.$state === "active" ? `0 0 0 3px ${theme.accentSoft}` : "none")};
   transition:
-    background ${theme.motion} ease-out,
-    box-shadow ${theme.motion} ease-out;
+    background ${theme.motion.fast} ease-out,
+    box-shadow ${theme.motion.fast} ease-out;
 `;
 
 const ActionsRow = styled.div`
@@ -163,7 +164,7 @@ const DnsReference = styled.details`
   margin: 0 0 1rem;
   border: 1px solid ${theme.line};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius};
+  border-radius: ${theme.radius.md};
   padding: 0.65rem 0.9rem;
 `;
 
@@ -186,7 +187,13 @@ function HaDiskStatus({ haDisk, haDiskLoading }: { haDisk: HaDisk | null; haDisk
   return (
     <>
       {haDiskLoading && (
-        <Hint style={{ marginTop: 0 }}>Checking second-disk partitions on both mail servers…</Hint>
+        <div style={{ marginBottom: "0.75rem" }}>
+          <Skeleton $h="0.7rem" $w="78%" style={{ marginBottom: 8 }} />
+          <Skeleton $h="0.7rem" $w="54%" />
+          <Hint style={{ margin: "0.55rem 0 0" }}>
+            Checking second-disk partitions on both mail servers…
+          </Hint>
+        </div>
       )}
       {haDisk && !haDisk.ok && haDisk.build_allowed !== true && (
         <WarnBox>
@@ -567,16 +574,10 @@ export default function DeployStep() {
           <Button
             type="button"
             variant="danger"
-            disabled={cancelBusy}
+            loading={cancelBusy}
             onClick={() => void runCancelDeadman()}
           >
-            {cancelBusy ? (
-              <>
-                <Spinner /> Confirming…
-              </>
-            ) : (
-              "Confirm access is OK"
-            )}
+            {cancelBusy ? "Confirming…" : "Confirm access is OK"}
           </Button>
         </StepCard>
       )}
