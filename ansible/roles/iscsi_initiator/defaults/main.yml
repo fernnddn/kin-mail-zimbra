@@ -8,4 +8,9 @@ iscsi_initiator_target_iqn: "iqn.2026-08.site.gits-it:kin-mail-sbd"
 # Override per host in inventory (mail vs mail2).
 iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
 iscsi_initiator_name_file: /etc/iscsi/initiatorname.iscsi
-iscsi_initiator_sbd_by_id: /dev/disk/by-id/scsi-36001405837abac113064e6da60264d82
+# Empty on purpose. The previous default was an old lab scsi-by-id that is
+# not the current HA-RUNBOOK device and will not exist on a new pair.
+# After login the role discovers /dev/disk/by-id/scsi-* for this IQN.
+# Inventory may still override after a login if discovery is ambiguous.
+iscsi_initiator_sbd_by_id: ""
+iscsi_initiator_selector_remote: /var/tmp/kin-select-sbd-device.py

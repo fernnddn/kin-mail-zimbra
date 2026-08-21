@@ -1,4 +1,14 @@
 ---
+- name: Require the iSCSI portal address
+  ansible.builtin.assert:
+    that:
+      - iscsi_initiator_portal | length > 0
+    fail_msg: >-
+      iscsi_initiator_portal is empty. Set it in inventory (wizard sets
+      the monitoring VM IP:3260). The previous hardcoded default targeted
+      a mail node.
+  tags: [iscsi, initiator, login]
+
 - name: Check for an already active SBD iSCSI session
   ansible.builtin.command:
     cmd: iscsiadm -m session
@@ -44,3 +54,74 @@
     - not ansible_check_mode
   changed_when: false
   tags: [iscsi, initiator, login]
+
+- name: Wait for udev to publish the SBD LUN by-id
+  ansible.builtin.command:
+    argv: [udevadm, settle]
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [iscsi, initiator, login]
+
+# ansible.builtin.command runs on the target. Copy the selector from role
+# files/, then parse JSON. Same pattern as drbd_disk_prep: a peer does not
+# have the console ansible tree on disk.
+- name: Discover the SBD LUN by-id after iSCSI login
+  tags: [iscsi, initiator, login]
+  when:
+    - not ansible_check_mode
+    - (iscsi_initiator_sbd_by_id | default('') | length) == 0
+  block:
+    - name: Stage the SBD device selector on the target
+      ansible.builtin.copy:
+        src: select_sbd_device.py
+        dest: "{{ iscsi_initiator_selector_remote }}"
+        mode: "0755"
+      changed_when: false
+      tags: [iscsi, initiator, login]
+
+    - name: Select the SBD by-id path from udev links
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ iscsi_initiator_selector_remote }}"
+          - --iqn
+          - "{{ iscsi_initiator_target_iqn }}"
+          - --disk-root
+          - /dev/disk
+      register: iscsi_initiator_sbd_select
+      changed_when: false
+      failed_when: false
+      tags: [iscsi, initiator, login]
+
+    - name: Require JSON from the SBD device selector
+      ansible.builtin.assert:
+        that:
+          - iscsi_initiator_sbd_select.stdout | default('') | trim | length > 0
+        fail_msg: >-
+          SBD device selector produced no JSON
+          (rc={{ iscsi_initiator_sbd_select.rc | default('unset') }},
+          stderr={{ iscsi_initiator_sbd_select.stderr | default('') | trim | default('(empty)') }}).
+      tags: [iscsi, initiator, login]
+
+    - name: Parse the SBD device plan
+      ansible.builtin.set_fact:
+        iscsi_initiator_sbd_plan: "{{ iscsi_initiator_sbd_select.stdout | from_json }}"
+      tags: [iscsi, initiator, login]
+
+    - name: Fail closed when the SBD LUN by-id is not unique
+      ansible.builtin.fail:
+        msg: "{{ (iscsi_initiator_sbd_plan.errors | default(['SBD LUN not found'])) | join(' ') }}"
+      when: (iscsi_initiator_sbd_plan.action | default('fail')) != 'ok'
+      tags: [iscsi, initiator, login]
+
+    - name: Use the discovered SBD by-id path
+      ansible.builtin.set_fact:
+        iscsi_initiator_sbd_by_id: "{{ iscsi_initiator_sbd_plan.device }}"
+      tags: [iscsi, initiator, login]
+  always:
+    - name: Remove the staged SBD device selector
+      ansible.builtin.file:
+        path: "{{ iscsi_initiator_selector_remote }}"
+        state: absent
+      changed_when: false
+      tags: [iscsi, initiator, login]

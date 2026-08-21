@@ -151,6 +151,14 @@ def render_inventory(
         # from here (KIN_MAIL_DEPLOY_DIR), not via role_path/../../../install.
         '    kin_mail_deploy_dir: "' + kin_mail_deploy_dir() + '"',
     ]
+    if mail_hosts:
+        primary = mail_hosts[0]
+        short = primary.name.split(".")[0].lower() or primary.name
+        # Role defaults still say mail.gits-it.site. The hostname remap and
+        # optional prefer pin must follow this pair, not the lab FQDN.
+        lines.append(f"    pacemaker_mail_stack_zimbra_service_hostname: {primary.name}")
+        lines.append(f"    pacemaker_mail_stack_zimbra_service_shortname: {short}")
+        lines.append(f"    pacemaker_mail_stack_prefer_node: {primary.name}")
     if vip_ip:
         lines.append(f"    pacemaker_mail_stack_vip_ip: {vip_ip}")
     if len(mail_hosts) >= 2:

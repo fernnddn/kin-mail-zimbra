@@ -1,4 +1,17 @@
 ---
+- name: Require a real SBD device path
+  ansible.builtin.assert:
+    that:
+      - sbd_stonith_device | length > 0
+      - sbd_stonith_device is match('^/dev/')
+    fail_msg: >-
+      sbd_stonith_device is empty. The iscsi_initiator role must discover
+      the LUN by-id after login, or inventory must set
+      iscsi_initiator_sbd_by_id. The previous role default was an old lab
+      scsi-by-id that will not exist on a new pair.
+  when: not ansible_check_mode
+  tags: [sbd, stonith, config]
+
 - name: Deploy the /etc/default/sbd configuration
   ansible.builtin.template:
     src: sbd.default.j2

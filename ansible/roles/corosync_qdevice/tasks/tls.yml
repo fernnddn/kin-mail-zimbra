@@ -7,6 +7,17 @@
 # PKCS#12 may exist only on the node that ran -M; peers often have NSS only.
 # Mutating steps require not ansible_check_mode (no apply on live lab).
 
+- name: Require the qnetd address
+  ansible.builtin.assert:
+    that:
+      - corosync_qdevice_qnetd_ip | length > 0
+      - corosync_qdevice_qnetd_inventory_host | length > 0
+    fail_msg: >-
+      corosync_qdevice_qnetd_ip is empty. Set it in inventory (wizard sets
+      the monitoring VM IP). The previous hardcoded default targeted a mail
+      node.
+  tags: [qdevice, tls]
+
 - name: Check the qdevice certificate database on the mail hosts
   ansible.builtin.stat:
     path: "{{ corosync_qdevice_nssdb_cert9 }}"

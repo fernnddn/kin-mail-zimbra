@@ -2,7 +2,9 @@
 sbd_stonith_packages:
   - sbd
   - fence-agents-sbd
-sbd_stonith_device: /dev/disk/by-id/scsi-36001405837abac113064e6da60264d82
+# Same path iscsi_initiator discovers (or inventory override). Empty until
+# that fact is set; do not ship a lab scsi-by-id as the default.
+sbd_stonith_device: "{{ iscsi_initiator_sbd_by_id | default('') }}"
 sbd_stonith_watchdog_timeout: 35
 sbd_stonith_msgwait: 70
 sbd_stonith_delay_start: "yes"

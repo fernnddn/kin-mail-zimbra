@@ -10,6 +10,17 @@
   check_mode: false
   tags: [iscsi, initiator, verify]
 
+- name: Require the SBD by-id path after login
+  ansible.builtin.assert:
+    that:
+      - iscsi_initiator_sbd_by_id | default('') | length > 0
+    fail_msg: >-
+      iscsi_initiator_sbd_by_id is empty after login. Discovery looks for
+      a unique scsi-* by-id whose by-path name contains this IQN
+      ({{ iscsi_initiator_target_iqn }}). Override the var in inventory
+      if udev names are ambiguous.
+  tags: [iscsi, initiator, verify]
+
 - name: Verify the by-id SBD device is available
   ansible.builtin.stat:
     path: "{{ iscsi_initiator_sbd_by_id }}"

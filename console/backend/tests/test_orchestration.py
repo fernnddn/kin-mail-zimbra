@@ -45,6 +45,13 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("pacemaker_mail_stack_vip_ip: 192.0.2.16", inv)
         self.assertIn("drbd_resource_disk: /dev/sdb1", inv)
         self.assertIn("drbd_resource_meta_disk: /dev/sdb2", inv)
+        self.assertIn(
+            "pacemaker_mail_stack_zimbra_service_hostname: mail.example.test", inv
+        )
+        self.assertIn("pacemaker_mail_stack_zimbra_service_shortname: mail", inv)
+        self.assertIn("pacemaker_mail_stack_prefer_node: mail.example.test", inv)
+        self.assertNotIn("mail.gits-it.site", inv)
+        self.assertNotIn("scsi-36001405", inv)
         self.assertNotIn("10.10.40.", inv)
 
     def test_empty_vip_is_omitted_from_inventory(self) -> None:
@@ -203,11 +210,30 @@ class InventoryTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[3] / "ansible"
         hits: list[str] = []
-        for path in root.rglob("*.yml"):
+        for path in root.rglob("*"):
+            if path.suffix not in {".yml", ".yaml", ".j2", ".py"}:
+                continue
+            if not path.is_file():
+                continue
             text = path.read_text(encoding="utf-8")
             if "/../../../install/" in text:
                 hits.append(str(path.relative_to(root)))
         self.assertEqual(hits, [])
+
+    def test_sbd_role_defaults_do_not_ship_a_lab_by_id(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3] / "ansible" / "roles"
+        initiator = (root / "iscsi_initiator" / "defaults" / "main.yml").read_text(
+            encoding="utf-8"
+        )
+        sbd = (root / "sbd_stonith" / "defaults" / "main.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("scsi-36001405", initiator)
+        self.assertNotIn("scsi-36001405", sbd)
+        self.assertIn('iscsi_initiator_sbd_by_id: ""', initiator)
+        self.assertIn("iscsi_initiator_sbd_by_id", sbd)
 
 
 class OrchRbacTests(unittest.TestCase):
