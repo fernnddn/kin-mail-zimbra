@@ -12,6 +12,11 @@ sbd_stonith_timeout_start_sec: 180
 sbd_stonith_pcmk_delay_max: 5s
 sbd_stonith_pcmk_reboot_timeout: 120
 sbd_stonith_pcmk_off_timeout: 120
+# fence_sbd compares --power-timeout to the device msgwait header. Default
+# fence_sbd power_timeout is 30s; with msgwait=70 that warns on every monitor
+# and can time out a real fence before the poison pill is considered delivered.
+sbd_stonith_power_timeout: 150
+# Keep Pacemaker's stonith-timeout at least power_timeout (and >= 2*msgwait).
 sbd_stonith_cluster_timeout: 150s
 sbd_stonith_resource_name: sbd
 sbd_stonith_default_path: /etc/default/sbd

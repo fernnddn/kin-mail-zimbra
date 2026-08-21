@@ -7,8 +7,10 @@
     cache_valid_time: 3600
   tags: [sbd, stonith, install]
 
-# Ubuntu sbd.service uses [Install] RequiredBy=corosync/pacemaker — enable
+# Ubuntu sbd.service uses [Install] RequiredBy=corosync/pacemaker - enable
 # creates those Requires symlinks. Without this, SBD stays inactive forever.
+# Enabling alone does not start SBD when corosync/pacemaker are already
+# running; activate.yml recycles the local node when that is safe.
 - name: Enable sbd so corosync/pacemaker pull it in at start
   ansible.builtin.systemd:
     name: sbd
@@ -16,4 +18,3 @@
     daemon_reload: true
   when: not ansible_check_mode
   tags: [sbd, stonith, install]
-

@@ -1,0 +1,114 @@
+---
+# Recycle the local node only when it is not hosting the mail stack so
+# RequiredBy=corosync/pacemaker can pull in RefuseManualStart sbd.service.
+
+- name: Check whether sbd.service is already active
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: sbd_stonith_is_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [sbd, stonith, activate]
+
+- name: Resolve this node's Pacemaker/corosync name
+  ansible.builtin.command:
+    cmd: crm_node -n
+  register: sbd_stonith_crm_node
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [sbd, stonith, activate]
+
+- name: Capture pcs status for local mail-stack busy check
+  ansible.builtin.command:
+    cmd: pcs status
+  register: sbd_stonith_pcs_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [sbd, stonith, activate]
+
+- name: Compute whether this node hosts the live mail stack
+  ansible.builtin.set_fact:
+    sbd_stonith_local_busy: >-
+      {{
+        sbd_stonith_pcs_status.stdout | default('')
+        | kin_pcs_status_local_mail_busy([
+            sbd_stonith_crm_node.stdout | default('') | trim,
+            inventory_hostname,
+            inventory_hostname_short,
+            ansible_hostname | default(''),
+          ])
+      }}
+  tags: [sbd, stonith, activate]
+
+- name: Decide whether a local cluster recycle is safe to activate SBD
+  ansible.builtin.set_fact:
+    sbd_stonith_activation: >-
+      {{
+        (sbd_stonith_is_active.stdout | trim == 'active')
+        | kin_sbd_activation_plan(sbd_stonith_local_busy | bool)
+      }}
+  tags: [sbd, stonith, activate]
+
+- name: Refuse to bounce a node that is hosting the live mail stack
+  ansible.builtin.fail:
+    msg: >-
+      sbd.service is inactive on {{ inventory_hostname }}, but pcs status shows
+      kin-fs / kin-zimbra / kin-vip / Promoted kin-drbd on this node. Refusing
+      to pcs cluster stop/start here (would take mail down, and failover is only
+      trustworthy once SBD is active on both nodes with power_timeout > msgwait).
+      Activate SBD on the idle peer first, or move the mail stack off this node,
+      then re-run mail-fencing.yml.
+  when:
+    - sbd_stonith_activation == 'refuse_busy'
+    - not ansible_check_mode
+  tags: [sbd, stonith, activate]
+
+- name: Recycle local corosync/pacemaker so RequiredBy pulls sbd.service in
+  ansible.builtin.shell: |
+    set -euo pipefail
+    node="{{ sbd_stonith_crm_node.stdout | trim }}"
+    if [ -z "$node" ]; then
+      node="{{ inventory_hostname_short }}"
+    fi
+    pcs cluster stop "$node"
+    pcs cluster start "$node"
+  args:
+    executable: /bin/bash
+  register: sbd_stonith_recycle
+  when:
+    - sbd_stonith_activation == 'recycle_local'
+    - not ansible_check_mode
+  tags: [sbd, stonith, activate]
+
+- name: Wait for sbd.service to become active after recycle
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: sbd_stonith_active_after
+  until: sbd_stonith_active_after.stdout | trim == 'active'
+  retries: "{{ ((sbd_stonith_timeout_start_sec | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when:
+    - sbd_stonith_activation == 'recycle_local'
+    - not ansible_check_mode
+  tags: [sbd, stonith, activate]
+
+- name: Note when sbd.service was already active
+  ansible.builtin.debug:
+    msg: >-
+      sbd.service already active on {{ inventory_hostname }}; no cluster recycle.
+  when: sbd_stonith_activation == 'already_active'
+  tags: [sbd, stonith, activate]
+
+- name: Verify sbd.service is active before creating/using fence_sbd
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: sbd_stonith_active_gate
+  changed_when: false
+  failed_when: sbd_stonith_active_gate.stdout | trim != 'active'
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [sbd, stonith, activate]

@@ -15,6 +15,14 @@
   ansible.builtin.import_tasks: dropins.yml
   tags: [sbd, stonith, dropins]
 
+- name: Apply pending systemd reload before activating SBD
+  ansible.builtin.meta: flush_handlers
+  tags: [sbd, stonith, activate]
+
+- name: Include the SBD service activation steps
+  ansible.builtin.import_tasks: activate.yml
+  tags: [sbd, stonith, activate]
+
 - name: Include the Pacemaker STONITH resource steps
   ansible.builtin.import_tasks: stonith.yml
   tags: [sbd, stonith, pcs]

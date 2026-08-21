@@ -283,8 +283,9 @@ STEPS: tuple[Step, ...] = (
         peer_only_on_join_check=True,
         # check: packages/softdog/SBD agent only. Never iSCSI-login to the
         # production SBD target, never write /etc/default/sbd (needs the LUN
-        # by-id from login), never pcs stonith create, never verify a session.
-        skip_tags=("login", "config", "pcs", "verify"),
+        # by-id from login), never activate/recycle cluster, never pcs stonith
+        # create, never verify a session.
+        skip_tags=("login", "config", "activate", "pcs", "verify"),
     ),
     Step(
         "mail_drbd_install",

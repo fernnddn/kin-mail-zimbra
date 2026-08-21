@@ -10,11 +10,18 @@
       - (sbd_stonith_msgwait | int) >= (2 * (sbd_stonith_watchdog_timeout | int))
       - (sbd_stonith_cluster_timeout | regex_replace('[^0-9]', '') | int)
         > (sbd_stonith_msgwait | int)
+      - (sbd_stonith_power_timeout | int) > (sbd_stonith_msgwait | int)
+      - (sbd_stonith_cluster_timeout | regex_replace('[^0-9]', '') | int)
+        >= (sbd_stonith_power_timeout | int)
+      - (sbd_stonith_power_timeout | int)
+        | kin_fence_sbd_power_timeout_ok(sbd_stonith_msgwait | int)
     fail_msg: >-
       SBD timeouts are inconsistent: watchdog={{ sbd_stonith_watchdog_timeout }}s
-      msgwait={{ sbd_stonith_msgwait }}s cluster/stonith-timeout={{ sbd_stonith_cluster_timeout }}.
-      msgwait must be >= 2 * watchdog (sbd create -4), and stonith-timeout must
-      exceed msgwait so Pacemaker waits long enough for fence_sbd.
+      msgwait={{ sbd_stonith_msgwait }}s power_timeout={{ sbd_stonith_power_timeout }}s
+      cluster/stonith-timeout={{ sbd_stonith_cluster_timeout }}.
+      msgwait must be >= 2 * watchdog (sbd create -4), power_timeout must be
+      greater than msgwait (fence_sbd), and stonith-timeout must be at least
+      power_timeout so Pacemaker waits long enough for fence_sbd.
   run_once: true
   tags: [sbd, stonith, initialize]
 

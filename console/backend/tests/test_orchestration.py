@@ -269,7 +269,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         by_id = {s.step_id: s for s in STEPS}
         self.assertEqual(
             set(by_id["mail_fencing"].skip_tags),
-            {"login", "config", "pcs", "verify"},
+            {"login", "config", "activate", "pcs", "verify"},
         )
         self.assertEqual(
             set(by_id["mail_qdevice"].skip_tags),

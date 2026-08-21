@@ -15,6 +15,15 @@
   check_mode: false
   tags: [sbd, stonith, verify]
 
+- name: Verify sbd.service is active (not merely enabled)
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: sbd_stonith_verify_active
+  changed_when: false
+  failed_when: sbd_stonith_verify_active.stdout | trim != 'active'
+  check_mode: false
+  tags: [sbd, stonith, verify]
+
 - name: Verify the fence_sbd resource exists in the cluster
   ansible.builtin.command:
     cmd: pcs stonith config {{ sbd_stonith_resource_name }}
@@ -23,7 +32,9 @@
   failed_when: >-
     sbd_stonith_pcs_verify.rc != 0 or
     ('fence_sbd' not in sbd_stonith_pcs_verify.stdout) or
-    (sbd_stonith_device not in sbd_stonith_pcs_verify.stdout)
+    (sbd_stonith_device not in sbd_stonith_pcs_verify.stdout) or
+    (not (sbd_stonith_pcs_verify.stdout | kin_stonith_config_has_attr(
+      'power_timeout', sbd_stonith_power_timeout | string)))
   check_mode: false
   run_once: true
   tags: [sbd, stonith, verify]
@@ -45,6 +56,8 @@
     msg: >-
       The dry-run only confirms the file/config/STONITH resource exists.
       The effectiveness of SBD_DELAY_START (rejoin race protection) and
-      fence/partition behaviour requires a real reboot/fence like task 2.3/2.9 —
-      not run against the live lab through this playbook.
+      fence/partition behaviour requires a real reboot/fence like task 2.3/2.9 -
+      not run against the live lab through this playbook. After this role,
+      schedule a deliberate graceful pcs cluster stop failover test and confirm
+      the survivor promotes DRBD and starts kin-mail-svc without manual start.
   tags: [sbd, stonith, verify]
