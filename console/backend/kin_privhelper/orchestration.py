@@ -147,6 +147,8 @@ def render_inventory(
         # Proven HA layout — not the old loop-meta default. Preflight checks these.
         "    drbd_resource_disk: /dev/sdb1",
         "    drbd_resource_meta_disk: /dev/sdb2",
+        # Proven rebuild uses /dev/sdb2. Do not keep the old-lab loop unit.
+        '    pacemaker_agents_keep_meta_loop_unit: ""',
         # Console ansible/ is not next to install/. Roles copy helper scripts
         # from here (KIN_MAIL_DEPLOY_DIR), not via role_path/../../../install.
         '    kin_mail_deploy_dir: "' + kin_mail_deploy_dir() + '"',
@@ -280,8 +282,9 @@ STEPS: tuple[Step, ...] = (
         "ansible",
         peer_only_on_join_check=True,
         # check: packages/softdog/SBD agent only. Never iSCSI-login to the
-        # production SBD target, never pcs stonith create, never verify a session.
-        skip_tags=("login", "pcs", "verify"),
+        # production SBD target, never write /etc/default/sbd (needs the LUN
+        # by-id from login), never pcs stonith create, never verify a session.
+        skip_tags=("login", "config", "pcs", "verify"),
     ),
     Step(
         "mail_drbd_install",

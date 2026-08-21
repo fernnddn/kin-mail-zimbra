@@ -112,10 +112,18 @@
     - not ansible_check_mode
     - pacemaker_mail_stack_clone_meta.rc == 0
     - >-
-      ('resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
-      not in pacemaker_mail_stack_clone_meta.stdout
-      or ('promoted-resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
-      not in pacemaker_mail_stack_clone_meta.stdout
+      (
+        ('resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_clone_meta.stdout
+        and ('resource-stickiness: ' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_clone_meta.stdout
+      )
+      or (
+        ('promoted-resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_clone_meta.stdout
+        and ('promoted-resource-stickiness: ' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_clone_meta.stdout
+      )
   tags: [pacemaker, stack, drbd]
 
 - name: Note that DRBD clone creation is skipped during a dry-run or already exists

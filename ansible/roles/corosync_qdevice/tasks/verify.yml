@@ -26,8 +26,7 @@
   changed_when: false
   failed_when: >-
     (corosync_qdevice_tool_status.rc != 0) or
-    ('Connected' not in corosync_qdevice_tool_status.stdout) or
-    (corosync_qdevice_qnetd_ip not in corosync_qdevice_tool_status.stdout)
+    not (corosync_qdevice_tool_status.stdout | kin_qdevice_is_connected(corosync_qdevice_qnetd_ip))
   check_mode: false
   tags: [qdevice, verify]
 

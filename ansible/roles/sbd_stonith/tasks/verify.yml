@@ -34,9 +34,8 @@
   register: sbd_stonith_props
   changed_when: false
   failed_when: >-
-    ('stonith-enabled=true' not in sbd_stonith_props.stdout) or
-    ('stonith-timeout=150s' not in sbd_stonith_props.stdout and
-     'stonith-timeout=150' not in sbd_stonith_props.stdout)
+    not (sbd_stonith_props.stdout | kin_pcs_has_property('stonith-enabled', 'true'))
+    or not (sbd_stonith_props.stdout | kin_pcs_has_property('stonith-timeout', '150s', '150'))
   check_mode: false
   run_once: true
   tags: [sbd, stonith, verify]

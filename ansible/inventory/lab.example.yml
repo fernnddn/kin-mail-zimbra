@@ -31,8 +31,8 @@ all:
     # Proven rebuild layout. Role defaults still say /dev/loop21.
     drbd_resource_disk: /dev/sdb1
     drbd_resource_meta_disk: /dev/sdb2
-    # Partition meta: leave meta-loop empty (no kin-drbd-meta-loop.service).
-    # pacemaker_agents_keep_meta_loop_unit: ""
+    # Partition meta: do not keep the old-lab loop unit enabled.
+    pacemaker_agents_keep_meta_loop_unit: ""
   children:
     monitoring:
       hosts:

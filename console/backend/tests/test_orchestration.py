@@ -45,6 +45,7 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("pacemaker_mail_stack_vip_ip: 192.0.2.16", inv)
         self.assertIn("drbd_resource_disk: /dev/sdb1", inv)
         self.assertIn("drbd_resource_meta_disk: /dev/sdb2", inv)
+        self.assertIn('pacemaker_agents_keep_meta_loop_unit: ""', inv)
         self.assertIn(
             "pacemaker_mail_stack_zimbra_service_hostname: mail.example.test", inv
         )
@@ -268,7 +269,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         by_id = {s.step_id: s for s in STEPS}
         self.assertEqual(
             set(by_id["mail_fencing"].skip_tags),
-            {"login", "pcs", "verify"},
+            {"login", "config", "pcs", "verify"},
         )
         self.assertEqual(
             set(by_id["mail_qdevice"].skip_tags),
