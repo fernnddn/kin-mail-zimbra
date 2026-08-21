@@ -36,6 +36,15 @@ write_fstab() {
     "$MARK" "$ROOT/opt/zimbra" >"$FSTAB"
 }
 
+# migrate-zimbra-to-drbd-disk.sh's own historical mark line has extra
+# trailing text after "(pre-cluster)". A host migrated by that script
+# before this marker text was standardized still has this exact line on
+# disk tonight; the awk match must still find and remove it.
+write_fstab_legacy_mark() {
+  printf 'UUID=aaaa-bbbb /boot ext4 defaults 0 2\n\n%s. See HA-RUNBOOK §13.\n# Remove this UUID line when Pacemaker kin-fs mounts /dev/drbd0 (Build HA pair).\nUUID=cccc-dddd %s ext4 defaults 0 2\n' \
+    "$MARK" "$ROOT/opt/zimbra" >"$FSTAB"
+}
+
 cat >"$STUB/id" <<'EOF'
 #!/usr/bin/env bash
 [ "${1:-}" = "-u" ] && { echo 0; exit 0; }
@@ -108,6 +117,15 @@ if "$SCRIPT" >/dev/null && ! grep -Fq "$MARK" "$FSTAB"; then
   pass "unmounted: removes fstab mark without stop"
 else
   bad "unmounted path should remove mark"
+fi
+
+write_fstab_legacy_mark
+: >"$ROOT/mnt_state"
+if "$SCRIPT" >/dev/null 2>&1 && ! grep -Fq "$MARK" "$FSTAB"; then
+  pass "legacy mark line (extra trailing text) is still matched and removed"
+else
+  bad "legacy mark line should still be matched and removed"
+  cat "$FSTAB" || true
 fi
 
 write_fstab

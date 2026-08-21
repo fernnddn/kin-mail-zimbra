@@ -67,8 +67,12 @@ remove_precluster_fstab() {
   cp -a "$FSTAB" "$bak" || die_release "Could not backup ${FSTAB}"
   # Drop the mark line, the following Pacemaker reminder comment (if present),
   # and any /opt/zimbra UUID line that belongs to this pre-cluster mount.
+  # index()==1 (starts-with), not ==, so an older mark line with extra
+  # trailing text (migrate-zimbra-to-drbd-disk.sh's own historical
+  # "... See HA-RUNBOOK §13." variant, already on disk on hosts migrated
+  # before this marker text was standardized) still matches.
   awk -v mark="$FSTAB_MARK" -v zdir="$ZIMBRA_DIR" '
-    $0 == mark { skip = 1; next }
+    index($0, mark) == 1 { skip = 1; next }
     skip && /^# Remove this UUID line when Pacemaker/ { next }
     skip && $0 ~ /^UUID=/ && index($0, zdir) { skip = 0; next }
     skip { skip = 0 }
