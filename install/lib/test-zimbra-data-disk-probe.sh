@@ -28,6 +28,40 @@ else
   bad "mount_has_zmcontrol true on leftover-only tree"
 fi
 
+# Stub sysfs: DRBD holder on sdb1 (Secondary / attached steady state).
+sysfs=$(mktemp -d)
+mkdir -p "$sysfs/class/block/sdb1/holders/drbd0"
+export KIN_SYSFS_ROOT="$sysfs"
+if data_disk_held_by_drbd "/dev/sdb1"; then
+  pass "data_disk_held_by_drbd: true when holders/drbd0 exists"
+else
+  bad "data_disk_held_by_drbd missed stub holder"
+fi
+if zimbra_data_disk_has_real_install "/dev/sdb1"; then
+  pass "has_real_install: DRBD holder alone proves real install (no mount)"
+else
+  bad "has_real_install false despite DRBD holder"
+fi
+act=$(zimbra_install_skip_action "0" "1" "1")
+if [ "$act" = "skip_drbd_secondary" ]; then
+  pass "skip_action: DRBD-held Secondary is skip_drbd_secondary"
+else
+  bad "skip_action drbd_secondary: [$act]"
+fi
+unset KIN_SYSFS_ROOT
+rm -rf "$sysfs"
+
+sysfs_empty=$(mktemp -d)
+mkdir -p "$sysfs_empty/class/block/sdb1/holders"
+export KIN_SYSFS_ROOT="$sysfs_empty"
+if ! data_disk_held_by_drbd "/dev/sdb1"; then
+  pass "data_disk_held_by_drbd: false without holders (mid-handoff / fresh)"
+else
+  bad "data_disk_held_by_drbd true with empty holders"
+fi
+unset KIN_SYSFS_ROOT
+rm -rf "$sysfs_empty"
+
 act=$(zimbra_install_skip_action "1" "0")
 if [ "$act" = "skip_healthy" ]; then
   pass "skip_action: already healthy"
@@ -35,7 +69,7 @@ else
   bad "skip_action healthy: [$act]"
 fi
 
-act=$(zimbra_install_skip_action "0" "1")
+act=$(zimbra_install_skip_action "0" "1" "0")
 if [ "$act" = "skip_mid_handoff" ]; then
   pass "skip_action: mid-handoff with real data-disk install"
 else
@@ -50,7 +84,7 @@ else
 fi
 
 # Prefer healthy over mid-handoff when both signals are true.
-act=$(zimbra_install_skip_action "1" "1")
+act=$(zimbra_install_skip_action "1" "1" "1")
 if [ "$act" = "skip_healthy" ]; then
   pass "skip_action: healthy wins when both signals set"
 else
@@ -58,10 +92,17 @@ else
 fi
 
 act=$(zimbra_install_verify_action "mid_handoff")
-if [ "$act" = "skip_mid_handoff" ]; then
+if [ "$act" = "skip_offline" ]; then
   pass "verify_action: mid-handoff skips live zmcontrol"
 else
   bad "verify_action mid-handoff: [$act]"
+fi
+
+act=$(zimbra_install_verify_action "drbd_secondary")
+if [ "$act" = "skip_offline" ]; then
+  pass "verify_action: DRBD Secondary skips live zmcontrol"
+else
+  bad "verify_action drbd_secondary: [$act]"
 fi
 
 act=$(zimbra_install_verify_action "healthy")
@@ -130,26 +171,50 @@ else
   bad "zimbra_is_mid_handoff true without data disk"
 fi
 
+# Empty mountpoint + DRBD holder -> treated like mid-handoff for stage skips
+sysfs2=$(mktemp -d)
+mkdir -p "$sysfs2/class/block/sdb1/holders/drbd0"
+export KIN_SYSFS_ROOT="$sysfs2"
+KIN_DRBD_DATA_DISK="/dev/sdb1"
+KIN_ZIMBRA_DIR="$tmp/empty"
+if zimbra_is_mid_handoff; then
+  pass "zimbra_is_mid_handoff: true for DRBD Secondary (empty /opt/zimbra)"
+else
+  bad "zimbra_is_mid_handoff false for DRBD Secondary"
+fi
+unset KIN_SYSFS_ROOT
+rm -rf "$sysfs2"
+
 if grep -q 'zimbra_install_skip_action' ../03-install-zimbra.sh \
   && grep -q 'zimbra-data-disk-probe.sh' ../03-install-zimbra.sh \
-  && grep -q 'skip_mid_handoff' ../03-install-zimbra.sh \
-  && grep -q 'zimbra_install_verify_action' ../03-install-zimbra.sh \
+  && grep -q 'skip_drbd_secondary' ../03-install-zimbra.sh \
+  && grep -q 'skip_offline' ../03-install-zimbra.sh \
   && grep -q 'SKIP_REASON' ../03-install-zimbra.sh; then
-  pass "03-install-zimbra.sh uses shared probe, mid-handoff skip, and verify action"
+  pass "03-install-zimbra.sh uses shared probe, Secondary skip, and offline verify"
 else
-  bad "03-install-zimbra.sh missing shared probe / verify wiring"
+  bad "03-install-zimbra.sh missing shared probe / Secondary / verify wiring"
 fi
 
-if grep -q 'zimbra-data-disk-probe.sh' ./prepare-zimbra-data-disk.sh; then
-  pass "prepare-zimbra-data-disk.sh sources the shared probe"
+if grep -q 'zimbra-data-disk-probe.sh' ./prepare-zimbra-data-disk.sh \
+  && ! grep -q '^data_disk_held_by_drbd()' ./prepare-zimbra-data-disk.sh; then
+  pass "prepare-zimbra-data-disk.sh uses shared data_disk_held_by_drbd (no local copy)"
 else
-  bad "prepare-zimbra-data-disk.sh does not source the shared probe"
+  bad "prepare-zimbra-data-disk.sh still defines a local data_disk_held_by_drbd"
+fi
+
+if grep -q 'data_disk_held_by_drbd' ./migrate-zimbra-to-drbd-disk.sh \
+  && grep -q 'zimbra-data-disk-probe.sh' ./migrate-zimbra-to-drbd-disk.sh \
+  && grep -q 'already held by a drbd' ./migrate-zimbra-to-drbd-disk.sh; then
+  pass "migrate-zimbra-to-drbd-disk.sh fail-closes on DRBD-held disk"
+else
+  bad "migrate-zimbra-to-drbd-disk.sh missing DRBD-held fail-closed guard"
 fi
 
 if grep -q 'full_install_zimbra_stage_action' ../kin-mail.sh \
   && grep -q 'zimbra_is_mid_handoff' ../kin-mail.sh \
+  && grep -q 'data_disk_held_by_drbd' ../kin-mail.sh \
   && grep -q 'full_install_hardening_mode' ../kin-mail.sh; then
-  pass "kin-mail.sh driver uses mid-handoff stage/hardening decisions"
+  pass "kin-mail.sh driver uses mid-handoff/DRBD stage/hardening decisions"
 else
   bad "kin-mail.sh missing mid-handoff driver wiring"
 fi

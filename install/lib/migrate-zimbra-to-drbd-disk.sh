@@ -404,8 +404,20 @@ if [ ! -b "$DATA_DISK" ]; then
   fail "Data partition ${DATA_DISK} is not a block device. Attach/partition the spare disk first (Build HA pair GPT: data + ~256 MiB meta)."
   exit 1
 fi
+
+# Shared probe: refuse if the kernel already handed DATA_DISK to DRBD.
+# (drbdadm status below also catches a configured resource; holders catch the
+# busy device even if the resource name differs.)
+# shellcheck source=zimbra-data-disk-probe.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zimbra-data-disk-probe.sh"
+if data_disk_held_by_drbd "$DATA_DISK"; then
+  fail "${DATA_DISK} is already held by a drbd* device - refuse migrate (would mkfs/rsync a live DRBD backing disk)"
+  info "This script is only for OS-root -> plain data partition before Build HA pair."
+  exit 1
+fi
+
 if [ -b "$META_DISK" ] && [ "$DATA_DISK" = "$META_DISK" ]; then
-  fail "Data and meta disks are the same path — refusing"
+  fail "Data and meta disks are the same path - refusing"
   exit 1
 fi
 

@@ -264,7 +264,7 @@ fi
 # a second pass against an already-installed system hits upgrade/reconfigure
 # prompts the state machine does not recognise (hang or wrong answers).
 SKIP_INSTALLER=0
-# none | healthy | mid_handoff - drives section 3 verification (not just installer skip)
+# none | healthy | mid_handoff | drbd_secondary - drives section 3 verification
 SKIP_REASON=none
 DATA_DISK="${KIN_DRBD_DATA_DISK:-/dev/sdb1}"
 if [ -d /opt/zimbra ]; then
@@ -274,17 +274,28 @@ if [ -d /opt/zimbra ]; then
   if [ -n "$STATUS_PRE" ] && [ "${STOPPED_PRE:-1}" -eq 0 ]; then
     HEALTHY_PRE=1
   fi
+  DRBD_HELD_PRE=0
+  if data_disk_held_by_drbd "$DATA_DISK"; then
+    DRBD_HELD_PRE=1
+  fi
   ON_DATA_PRE=0
   if [ "$HEALTHY_PRE" -eq 0 ] && zimbra_data_disk_has_real_install "$DATA_DISK"; then
     ON_DATA_PRE=1
   fi
-  case "$(zimbra_install_skip_action "$HEALTHY_PRE" "$ON_DATA_PRE")" in
+  case "$(zimbra_install_skip_action "$HEALTHY_PRE" "$ON_DATA_PRE" "$DRBD_HELD_PRE")" in
     skip_healthy)
       say "2. Installer skipped - Zimbra already installed and healthy"
       ok "/opt/zimbra exists; zmcontrol status: all services Running"
       info "Re-run does not re-run install.sh (avoids upgrade/reconfigure flow)."
       SKIP_INSTALLER=1
       SKIP_REASON=healthy
+      ;;
+    skip_drbd_secondary)
+      say "2. Installer skipped - data disk is DRBD-attached (cluster Secondary or Promoted peer)"
+      ok "${DATA_DISK} is held by a drbd* device; local Zimbra is not expected to run here"
+      info "Pacemaker runs kin-zimbra only on the Promoted node; do not remount the raw disk."
+      SKIP_INSTALLER=1
+      SKIP_REASON=drbd_secondary
       ;;
     skip_mid_handoff)
       say "2. Installer skipped - Zimbra already on the data partition (mid-handoff)"
@@ -628,10 +639,15 @@ fi
 scrub_install_log "$LOG"
 
 case "$(zimbra_install_verify_action "$SKIP_REASON")" in
-  skip_mid_handoff)
-    ok "Live zmcontrol verify skipped (mid-handoff)"
-    info "Real install is on ${DATA_DISK}; /opt/zimbra is an empty mountpoint by design."
-    info "DRBD attach and Pacemaker (mail-pacemaker.yml) bring Zimbra back; not this stage."
+  skip_offline)
+    if [ "$SKIP_REASON" = "drbd_secondary" ]; then
+      ok "Live zmcontrol verify skipped (DRBD-attached; Zimbra not local)"
+      info "${DATA_DISK} is cluster-managed; only the Promoted node runs kin-zimbra."
+    else
+      ok "Live zmcontrol verify skipped (mid-handoff)"
+      info "Real install is on ${DATA_DISK}; /opt/zimbra is an empty mountpoint by design."
+      info "DRBD attach and Pacemaker (mail-pacemaker.yml) bring Zimbra back; not this stage."
+    fi
     if [ -f "$LOG" ]; then
       scrub_install_log "$LOG"
       if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
@@ -643,8 +659,13 @@ case "$(zimbra_install_verify_action "$SKIP_REASON")" in
       info "No new installer log (driver skipped)"
     fi
     echo
-    say "DONE (mid-handoff)"
-    info "Full-install will skip Zimbra-touching stages 04/05/06/07/11 until the tree is live again."
+    if [ "$SKIP_REASON" = "drbd_secondary" ]; then
+      say "DONE (DRBD Secondary / attached)"
+      info "Full-install skips Zimbra-touching stages; Pacemaker owns the live tree on the Promoted node."
+    else
+      say "DONE (mid-handoff)"
+      info "Full-install will skip Zimbra-touching stages 04/05/06/07/11 until the tree is live again."
+    fi
     tmux kill-session -t "$SESS" 2>/dev/null
     if declare -F cleanup_redactor >/dev/null 2>&1; then
       cleanup_redactor

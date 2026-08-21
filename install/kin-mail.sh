@@ -347,9 +347,14 @@ run_full_install() {
 
   if zimbra_is_mid_handoff; then
     mid_handoff=1
-    warn "Mid-handoff detected: real Zimbra is on the data disk; /opt/zimbra is unmounted."
-    info "Skipping Zimbra-touching stages 04/05/06/07/11. Pacemaker/DRBD own bringing the tree live."
-    info "Still running 09 --os-only (fail2ban/unattended) and 10 host firewall."
+    if data_disk_held_by_drbd "${KIN_DRBD_DATA_DISK:-/dev/sdb1}"; then
+      warn "DRBD already holds the data disk (Secondary or attached); skipping Zimbra-touching stages."
+      info "Pacemaker owns kin-zimbra on the Promoted node. Still running 09 --os-only and 10 host firewall."
+    else
+      warn "Mid-handoff detected: real Zimbra is on the data disk; /opt/zimbra is unmounted."
+      info "Skipping Zimbra-touching stages 04/05/06/07/11. Pacemaker/DRBD own bringing the tree live."
+      info "Still running 09 --os-only (fail2ban/unattended) and 10 host firewall."
+    fi
   fi
 
   # 04 + 06 need a live Zimbra tree (zmcertmgr / zmprov / auth probes).

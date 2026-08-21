@@ -75,30 +75,9 @@ ext4_unmounted_action() {
   printf '%s\n' "continue"
 }
 
-# True when the kernel already handed DATA_DISK to a drbd* holder
-# (Secondary or Primary after drbdadm up). Mid-handoff has no holders yet.
-# Optional 2nd arg: sysfs root (tests inject a stub tree).
-data_disk_held_by_drbd() {
-  local disk="$1"
-  local sys_root="${2:-/sys}"
-  local base sysdev holder
-  base=$(basename "$disk")
-  [ -n "$base" ] || return 1
-  sysdev=$(readlink -f "${sys_root}/class/block/${base}" 2>/dev/null || true)
-  if [ -z "$sysdev" ] || [ ! -d "${sysdev}/holders" ]; then
-    return 1
-  fi
-  for holder in "${sysdev}/holders"/*; do
-    [ -e "$holder" ] || continue
-    case "$(basename "$holder")" in
-      drbd*) return 0 ;;
-    esac
-  done
-  return 1
-}
-
 # Args: held_by_drbd 0|1, zimbra_mount_is_drbd 0|1
 # Prints: skip_drbd_attached | continue
+# (data_disk_held_by_drbd lives in zimbra-data-disk-probe.sh)
 prepare_data_disk_drbd_action() {
   local held="${1:-0}"
   local on_drbd="${2:-0}"
