@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import grp
 import json
 import logging
 import os
 import stat
+from collections.abc import AsyncIterator, Callable
 from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from typing import Any
@@ -95,6 +97,64 @@ def _prepare_socket_dir() -> None:
 async def _send(writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
     writer.write(proto.encode_line(obj))
     await writer.drain()
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    """True when the console side of the Unix socket has gone away."""
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionError)):
+        return True
+    if isinstance(exc, OSError) and exc.errno in (
+        errno.EPIPE,
+        errno.ECONNRESET,
+        errno.ENOTCONN,
+        errno.EBADF,
+    ):
+        return True
+    return False
+
+
+async def _drive_handler(
+    handler: Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]],
+    args: dict[str, Any],
+    writer: asyncio.StreamWriter,
+    *,
+    log: logging.Logger,
+    audit_cmd: str,
+    username: str,
+) -> tuple[int, bool]:
+    """Run a privileged handler to completion even if the client disconnects.
+
+    The Unix-socket writer is only a live progress feed. A browser tab blip,
+    reverse-proxy idle cut, or SSE cancel must not abort an in-flight HA
+    orchestration / install. When send fails with a disconnect, keep
+    consuming the handler (so subprocess pumps stay alive) and stop writing.
+
+    Returns (exit_code, client_gone).
+    """
+    exit_code = 1
+    saw_done = False
+    client_gone = False
+    async for ev in handler(args):
+        if not client_gone:
+            try:
+                await _send(writer, ev)
+            except Exception as send_exc:  # noqa: BLE001 - classify below
+                if not _is_client_disconnect(send_exc):
+                    raise
+                client_gone = True
+                log.warning(
+                    "client connection lost during cmd=%s user=%s (%s); "
+                    "continuing privileged job without streaming",
+                    audit_cmd,
+                    username,
+                    type(send_exc).__name__,
+                )
+        if ev.get("type") == "done":
+            exit_code = int(ev.get("exit_code", 1))
+            saw_done = True
+    if not saw_done and not client_gone:
+        await _send(writer, proto.event_done(exit_code))
+    return exit_code, client_gone
 
 
 def _role_for_username(username: str) -> str | None:
@@ -233,22 +293,36 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
         try:
             await _send(writer, proto.event_accepted(cmd))
-            exit_code = 1
-            saw_done = False
             try:
-                async for ev in handler(args):
-                    await _send(writer, ev)
-                    if ev.get("type") == "done":
-                        exit_code = int(ev.get("exit_code", 1))
-                        saw_done = True
-                if not saw_done:
-                    await _send(writer, proto.event_done(exit_code))
-                _audit_line(username, audit_cmd, "ok", exit_code)
+                exit_code, client_gone = await _drive_handler(
+                    handler,
+                    args,
+                    writer,
+                    log=log,
+                    audit_cmd=audit_cmd,
+                    username=username,
+                )
+                _audit_line(
+                    username,
+                    audit_cmd,
+                    "ok_detached" if client_gone else "ok",
+                    exit_code,
+                )
             except Exception as exc:  # noqa: BLE001 — keep daemon alive
+                # Disconnect during send is handled inside _drive_handler.
+                # Reaching here means the privileged job itself failed.
                 log.exception("privileged command failed cmd=%s user=%s", audit_cmd, username)
                 msg = _safe_exec_error(exc)
-                await _send(writer, proto.event_error("exec_failed", msg))
-                await _send(writer, proto.event_done(1))
+                try:
+                    await _send(writer, proto.event_error("exec_failed", msg))
+                    await _send(writer, proto.event_done(1))
+                except Exception as send_exc:  # noqa: BLE001
+                    if not _is_client_disconnect(send_exc):
+                        log.warning(
+                            "failed to report exec_failed to client cmd=%s: %s",
+                            audit_cmd,
+                            send_exc,
+                        )
                 _audit_line(username, audit_cmd, "exec_failed", 1)
         finally:
             if not bypass_busy:

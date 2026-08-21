@@ -491,6 +491,10 @@ async def wizard_deploy_stream(
             socket_path=settings.privhelper_socket,
             args=stream_args,
         ):
+            # Drop the SSE feed when the browser is gone. privhelperd keeps the
+            # privileged job running and last-log remains the catch-up path.
+            if await request.is_disconnected():
+                break
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
