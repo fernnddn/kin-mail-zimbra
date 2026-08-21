@@ -75,6 +75,36 @@ def _lsblk(
                 ],
             }
         )
+    elif sdb == "ready_unmounted":
+        # Mid-handoff after release-zimbra-plain-mount-for-drbd.sh: ext4 data
+        # partition present, /opt/zimbra not mounted.
+        devices.append(
+            {
+                "name": "sdb",
+                "path": "/dev/sdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": "gpt",
+                "children": [
+                    {
+                        "name": "sdb1",
+                        "path": "/dev/sdb1",
+                        "type": "part",
+                        "size": 106954752000,
+                        "fstype": "ext4",
+                        "mountpoint": "",
+                    },
+                    {
+                        "name": "sdb2",
+                        "path": "/dev/sdb2",
+                        "type": "part",
+                        "size": 267386880,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                ],
+            }
+        )
     elif sdb == "gpt_fresh":
         # GPT written by disk_prep; no mkfs yet (live mail.nisaroti after a
         # play that partitioned this host then failed on the peer).
@@ -223,6 +253,80 @@ class HaDiskTests(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertTrue(r["build_allowed"])
         self.assertEqual(r["data_disk"], DEFAULT_DATA_DISK)
+
+
+    def test_mid_handoff_unmounted_data_disk_allows_build(self) -> None:
+        """findmnt empty + no visible zmcontrol + unmounted ext4 data = handoff."""
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=False,
+            label="mail.nisaroti.my.id",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["build_allowed"])
+        self.assertTrue(r["zimbra_mid_handoff"])
+
+    def test_empty_findmnt_with_visible_zmcontrol_still_blocks(self) -> None:
+        """Never-migrated: /opt/zimbra on OS volume still has bin/zmcontrol."""
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=True,
+            label="this server",
+        )
+        self.assertFalse(r["ok"])
+        self.assertFalse(r["build_allowed"])
+        self.assertFalse(r["zimbra_mid_handoff"])
+        self.assertTrue(any("Zimbra is on" in e for e in r["errors"]))
+
+    def test_empty_findmnt_without_tree_fact_stays_fail_closed(self) -> None:
+        """Legacy callers with zimbra_tree_present=None must not open the gate."""
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=None,
+            label="this server",
+        )
+        self.assertFalse(r["ok"])
+        self.assertFalse(r["build_allowed"])
+        self.assertTrue(any("Zimbra is on" in e for e in r["errors"]))
+
+    def test_both_mid_handoff_allows_combine(self) -> None:
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="ready_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=False,
+            label="a",
+        )
+        peer = evaluate_node(
+            lsblk=_lsblk(sdb="ready_unmounted"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            zimbra_tree_present=False,
+            label="b",
+        )
+        comb = combine_results(local, peer)
+        self.assertTrue(local["ok"])
+        self.assertTrue(peer["ok"])
+        self.assertTrue(comb["ok"])
+        self.assertTrue(comb["build_allowed"])
+
 
     def test_peer_without_zimbra_passes_when_partitioned(self) -> None:
         r = evaluate_node(
@@ -415,13 +519,27 @@ class HaDiskTests(unittest.TestCase):
         blob = (
             "---LSBLK---\n"
             + json.dumps(_lsblk(sdb="ready"))
-            + "\n---ROOT---\n/dev/sda2\n---ZIMBRA---\n/dev/sdb1\n---ZIMBRA_DIR---\nyes\n"
+            + "\n---ROOT---\n/dev/sda2\n---ZIMBRA---\n/dev/sdb1\n"
+            + "---ZIMBRA_DIR---\nyes\n---ZIMBRA_TREE---\nyes\n"
         )
         facts = parse_remote_probe(blob)
         self.assertTrue(facts["lsblk_ok"])
         self.assertEqual(facts["root_source"], "/dev/sda2")
         self.assertEqual(facts["zimbra_source"], "/dev/sdb1")
         self.assertTrue(facts["zimbra_exists"])
+        self.assertTrue(facts["zimbra_tree_present"])
+
+    def test_parse_remote_probe_mid_handoff_tree_absent(self) -> None:
+        blob = (
+            "---LSBLK---\n"
+            + json.dumps(_lsblk(sdb="ready_unmounted"))
+            + "\n---ROOT---\n/dev/sda2\n---ZIMBRA---\n\n"
+            + "---ZIMBRA_DIR---\nyes\n---ZIMBRA_TREE---\nno\n"
+        )
+        facts = parse_remote_probe(blob)
+        self.assertEqual(facts["zimbra_source"], "")
+        self.assertTrue(facts["zimbra_exists"])
+        self.assertIs(facts["zimbra_tree_present"], False)
 
     def test_zero_candidates_fail_closed(self) -> None:
         plan = plan_auto_partition(

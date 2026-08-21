@@ -182,6 +182,24 @@ def summarize_disks(lsblk: dict[str, Any], *, root_source: str) -> list[str]:
     return lines
 
 
+def _data_disk_unmounted_with_fs(
+    nodes: dict[str, dict[str, Any]], data_disk: str
+) -> bool:
+    """True when the data partition has a filesystem but is not mounted.
+
+    Used to recognise the mid-handoff state after release-zimbra-plain-mount-for-drbd.sh:
+    Zimbra data still lives on the partition, /opt/zimbra is only an empty mountpoint.
+    """
+    node = nodes.get(data_disk)
+    if node is None:
+        return False
+    fstype = str(node.get("fstype") or "").strip()
+    if not fstype:
+        return False
+    mountpoint = str(node.get("mountpoint") or "").strip()
+    return mountpoint == ""
+
+
 def evaluate_node(
     *,
     lsblk: dict[str, Any],
@@ -192,8 +210,14 @@ def evaluate_node(
     data_disk: str = DEFAULT_DATA_DISK,
     meta_disk: str = DEFAULT_META_DISK,
     label: str = "this server",
+    zimbra_tree_present: bool | None = None,
 ) -> dict[str, Any]:
-    """Return a JSON-serialisable result. ok=False is fail-closed."""
+    """Return a JSON-serialisable result. ok=False is fail-closed.
+
+    zimbra_tree_present: whether bin/zmcontrol is visible under /opt/zimbra on the
+    currently mounted directory tree. None means "unknown" (legacy callers) and
+    keeps the fail-closed behaviour when findmnt returns empty.
+    """
     data_disk = _norm_dev(data_disk) or DEFAULT_DATA_DISK
     meta_disk = _norm_dev(meta_disk) or DEFAULT_META_DISK
     if not _DEV_RE.match(data_disk) or not _DEV_RE.match(meta_disk):
@@ -297,16 +321,29 @@ def evaluate_node(
             )
 
     zimbra_src = _norm_dev(zimbra_source)
+    zimbra_mid_handoff = False
     if require_zimbra_on_data and zimbra_exists:
         allowed = {data_disk, "/dev/drbd0", "/dev/drbd/by-res/kin-zimbra"}
         if zimbra_src.startswith("/dev/drbd"):
             pass
-        elif zimbra_src not in allowed:
+        elif zimbra_src in allowed:
+            pass
+        elif (
+            not zimbra_src
+            and zimbra_tree_present is False
+            and _data_disk_unmounted_with_fs(nodes, data_disk)
+        ):
+            # Mid-handoff after release-zimbra-plain-mount-for-drbd.sh: findmnt is
+            # empty and /opt/zimbra has no visible zmcontrol because the real tree
+            # sits on the unmounted data partition (which still has a filesystem).
+            # Never-migrated hosts still have bin/zmcontrol on the OS volume.
+            zimbra_mid_handoff = True
+        else:
             where = zimbra_src or "the root volume"
             errors.append(
                 f"{label}: Zimbra is on {where}, not {data_disk}. Build HA pair would replicate "
                 "an empty DRBD disk and leave mail on the OS volume. Move /opt/zimbra onto "
-                f"{data_disk} first (stop Zimbra, rsync, fstab UUID, start — see HA-RUNBOOK "
+                f"{data_disk} first (stop Zimbra, rsync, fstab UUID, start - see HA-RUNBOOK "
                 "§13 / install/lib/migrate-zimbra-to-drbd-disk.sh)."
             )
 
@@ -319,6 +356,8 @@ def evaluate_node(
         "root_source": _norm_dev(root_source),
         "zimbra_source": zimbra_src,
         "zimbra_exists": zimbra_exists,
+        "zimbra_tree_present": zimbra_tree_present,
+        "zimbra_mid_handoff": zimbra_mid_handoff,
         "seen": seen,
         "errors": errors,
         "can_auto_partition": can_auto,
@@ -397,13 +436,21 @@ REMOTE_PROBE = (
     "echo '---ZIMBRA---'; "
     "findmnt -n -o SOURCE /opt/zimbra 2>/dev/null || true; "
     "echo '---ZIMBRA_DIR---'; "
-    "if [ -d /opt/zimbra ]; then echo yes; else echo no; fi"
+    "if [ -d /opt/zimbra ]; then echo yes; else echo no; fi; "
+    "echo '---ZIMBRA_TREE---'; "
+    "if [ -x /opt/zimbra/bin/zmcontrol ]; then echo yes; else echo no; fi"
 )
 
 
 def parse_remote_probe(text: str) -> dict[str, Any]:
     """Parse REMOTE_PROBE stdout into collect_local_facts-shaped dict."""
-    chunks = {"LSBLK": "", "ROOT": "", "ZIMBRA": "", "ZIMBRA_DIR": ""}
+    chunks = {
+        "LSBLK": "",
+        "ROOT": "",
+        "ZIMBRA": "",
+        "ZIMBRA_DIR": "",
+        "ZIMBRA_TREE": "",
+    }
     current = ""
     for line in (text or "").splitlines():
         if line.startswith("---") and line.endswith("---"):
@@ -421,12 +468,22 @@ def parse_remote_probe(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             lsblk = {}
     zimbra_dir = chunks["ZIMBRA_DIR"].strip().lower() == "yes"
+    tree_chunk = chunks["ZIMBRA_TREE"].strip().lower()
+    # Older peers without the ZIMBRA_TREE section leave this empty -> None.
+    zimbra_tree_present: bool | None
+    if tree_chunk == "yes":
+        zimbra_tree_present = True
+    elif tree_chunk == "no":
+        zimbra_tree_present = False
+    else:
+        zimbra_tree_present = None
     return {
         "lsblk": lsblk,
         "lsblk_ok": bool(lsblk),
         "root_source": _norm_dev(chunks["ROOT"]),
         "zimbra_source": _norm_dev(chunks["ZIMBRA"]),
         "zimbra_exists": zimbra_dir,
+        "zimbra_tree_present": zimbra_tree_present,
     }
 
 
@@ -463,16 +520,22 @@ def collect_local_facts() -> dict[str, Any]:
         except json.JSONDecodeError:
             lsblk = {}
     _, root_src = _run(["findmnt", "-n", "-o", "SOURCE", "/"])
-    zimbra_exists = os.path.isdir(os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra"))
+    zimbra_root = os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra")
+    zimbra_exists = os.path.isdir(zimbra_root)
     zimbra_src = ""
+    zimbra_tree_present = False
     if zimbra_exists:
         _, zimbra_src = _run(["findmnt", "-n", "-o", "SOURCE", "/opt/zimbra"])
+        zimbra_tree_present = os.path.isfile(
+            os.path.join(zimbra_root, "bin", "zmcontrol")
+        )
     return {
         "lsblk": lsblk,
         "lsblk_ok": code == 0 and bool(lsblk),
         "root_source": _norm_dev(root_src),
         "zimbra_source": _norm_dev(zimbra_src),
         "zimbra_exists": zimbra_exists,
+        "zimbra_tree_present": zimbra_tree_present,
     }
 
 
@@ -493,6 +556,12 @@ def evaluate_facts(
             "plan_action": "fail",
             "build_allowed": False,
         }
+    tree_raw = facts.get("zimbra_tree_present")
+    tree_present: bool | None
+    if tree_raw is None:
+        tree_present = None
+    else:
+        tree_present = bool(tree_raw)
     return evaluate_node(
         lsblk=facts.get("lsblk") or {},
         root_source=str(facts.get("root_source") or ""),
@@ -502,4 +571,5 @@ def evaluate_facts(
         data_disk=data_disk_path(),
         meta_disk=meta_disk_path(),
         label=label,
+        zimbra_tree_present=tree_present,
     )
