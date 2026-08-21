@@ -53,6 +53,31 @@ first_leftover() {
   return 1
 }
 
+# Positive signal that a mounted tree is a real Zimbra install (same idea as
+# ha_disk.py zimbra_tree_present). Used when the data partition is unmounted
+# mid-handoff and findmnt on /opt/zimbra is empty.
+mount_has_zmcontrol() {
+  [ -x "$1/bin/zmcontrol" ]
+}
+
+# Decide what to do for an already-ext4 data disk.
+# Args: leftover_name (may be empty), has_zmcontrol 0|1, current_mountpoint
+# Prints: accept_zimbra | die_leftover | continue
+ext4_unmounted_action() {
+  local leftover="$1"
+  local has_zm="$2"
+  local data_mp="$3"
+  if [ "$has_zm" = "1" ]; then
+    printf '%s\n' "accept_zimbra"
+    return 0
+  fi
+  if [ -n "$leftover" ] && [ "$data_mp" != "$ZIMBRA_DIR" ]; then
+    printf '%s\n' "die_leftover"
+    return 0
+  fi
+  printf '%s\n' "continue"
+}
+
 find_selector() {
   if [ -n "${KIN_SELECT_DRBD_DISK:-}" ] && [ -f "${KIN_SELECT_DRBD_DISK}" ]; then
     printf '%s\n' "${KIN_SELECT_DRBD_DISK}"
@@ -256,15 +281,29 @@ case "$FSTYPE" in
     ;;
   ext4)
     leftover=""
+    has_zmcontrol=0
     tmp=$(mktemp -d)
     if mount -o ro "$DATA_DISK" "$tmp" 2>/dev/null; then
       leftover=$(first_leftover "$tmp" || true)
+      if mount_has_zmcontrol "$tmp"; then
+        has_zmcontrol=1
+      fi
       umount "$tmp" 2>/dev/null || true
     fi
     rmdir "$tmp" 2>/dev/null || true
-    if [ -n "$leftover" ] && [ "$DATA_MP" != "$ZIMBRA_DIR" ]; then
-      die "${DATA_DISK} already has files (e.g. ${leftover}) and is not mounted at ${ZIMBRA_DIR}"
-    fi
+    case "$(ext4_unmounted_action "$leftover" "$has_zmcontrol" "$DATA_MP")" in
+      accept_zimbra)
+        # Mid-handoff (or any prior install on the data partition): real Zimbra
+        # tree is on ${DATA_DISK}, /opt/zimbra is just empty. Do not mkfs, do not
+        # remount here - release-zimbra-plain-mount-for-drbd.sh and Pacemaker
+        # kin-fs own that lifecycle during Build HA pair.
+        ok "${DATA_DISK} already holds a Zimbra install (bin/zmcontrol); leaving unmounted for DRBD/Pacemaker"
+        exit 0
+        ;;
+      die_leftover)
+        die "${DATA_DISK} already has files (e.g. ${leftover}) and is not mounted at ${ZIMBRA_DIR}"
+        ;;
+    esac
     ok "${DATA_DISK} is already ext4"
     ;;
   *)

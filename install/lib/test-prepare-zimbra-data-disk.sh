@@ -38,6 +38,58 @@ else
   bad "first_leftover leftover: [$got]"
 fi
 
+# Mid-handoff: unmounted ext4 with a real Zimbra tree must not die_leftover.
+mkdir -p "$tmp/zimbra/bin" "$tmp/zimbra/backup"
+: >"$tmp/zimbra/bin/zmcontrol"
+chmod +x "$tmp/zimbra/bin/zmcontrol"
+if mount_has_zmcontrol "$tmp/zimbra"; then
+  pass "mount_has_zmcontrol: real tree"
+else
+  bad "mount_has_zmcontrol missed bin/zmcontrol"
+fi
+if ! mount_has_zmcontrol "$tmp/with"; then
+  pass "mount_has_zmcontrol: leftover-only tree is false"
+else
+  bad "mount_has_zmcontrol true on leftover-only tree"
+fi
+
+act=$(ext4_unmounted_action "backup" "1" "")
+if [ "$act" = "accept_zimbra" ]; then
+  pass "ext4_unmounted_action: zmcontrol present accepts mid-handoff"
+else
+  bad "ext4_unmounted_action mid-handoff: [$act]"
+fi
+
+act=$(ext4_unmounted_action "backup" "0" "")
+if [ "$act" = "die_leftover" ]; then
+  pass "ext4_unmounted_action: leftover without zmcontrol still dies"
+else
+  bad "ext4_unmounted_action leftover: [$act]"
+fi
+
+act=$(ext4_unmounted_action "" "0" "")
+if [ "$act" = "continue" ]; then
+  pass "ext4_unmounted_action: empty ext4 continues to fstab/mount"
+else
+  bad "ext4_unmounted_action empty: [$act]"
+fi
+
+act=$(ext4_unmounted_action "backup" "0" "$ZIMBRA_DIR")
+if [ "$act" = "continue" ]; then
+  pass "ext4_unmounted_action: leftover while already mounted at ZIMBRA_DIR continues"
+else
+  bad "ext4_unmounted_action mounted: [$act]"
+fi
+
+# Already-on-data success path still lives at the top of the script.
+if grep -q 'is already on \${DATA_DISK}' ./prepare-zimbra-data-disk.sh \
+  && grep -q 'accept_zimbra' ./prepare-zimbra-data-disk.sh \
+  && grep -q 'leaving unmounted for DRBD/Pacemaker' ./prepare-zimbra-data-disk.sh; then
+  pass "helper keeps already-on-data path and mid-handoff accept_zimbra exit"
+else
+  bad "helper missing already-on-data or mid-handoff accept path"
+fi
+
 fstab=$(mktemp)
 export FSTAB="$fstab"
 printf 'UUID=root / ext4 defaults 0 1\n' >"$fstab"
