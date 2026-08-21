@@ -257,6 +257,13 @@ jobs:
           set -euo pipefail
           yamllint -d '{extends: relaxed, rules: {line-length: disable, comments: disable, comments-indentation: disable, document-start: disable, truthy: disable}}' .
 
+      # A gated (when:) task and an ungated task sharing a register: name
+      # broke cluster_setup on a greenfield host (2026-08-21): the skipped
+      # task's result clobbered the real probe with a dict that has no
+      # .rc/.stat. This guard fails the build if that pattern reappears.
+      - name: cluster_setup register shadowing guard
+        run: python3 ansible/roles/cluster_setup/scripts/check_register_shadowing.py
+
   console:
     name: Console build
     runs-on: ubuntu-22.04
