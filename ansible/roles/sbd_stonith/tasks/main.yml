@@ -7,6 +7,10 @@
   ansible.builtin.import_tasks: config.yml
   tags: [sbd, stonith, config]
 
+- name: Include the SBD device header initialization steps
+  ansible.builtin.import_tasks: initialize.yml
+  tags: [sbd, stonith, initialize]
+
 - name: Include the SBD systemd drop-in steps
   ansible.builtin.import_tasks: dropins.yml
   tags: [sbd, stonith, dropins]

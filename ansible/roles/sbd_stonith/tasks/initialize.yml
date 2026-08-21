@@ -1,0 +1,82 @@
+---
+# Write the SBD metadata header once onto the shared fencing LUN.
+# Both mail nodes see the same iSCSI device; only one host must create it.
+# Do not use --force: a device that already has a readable header (real
+# fencing history) must not be silently re-initialized.
+
+- name: Require msgwait to be at least twice the watchdog timeout
+  ansible.builtin.assert:
+    that:
+      - (sbd_stonith_msgwait | int) >= (2 * (sbd_stonith_watchdog_timeout | int))
+      - (sbd_stonith_cluster_timeout | regex_replace('[^0-9]', '') | int)
+        > (sbd_stonith_msgwait | int)
+    fail_msg: >-
+      SBD timeouts are inconsistent: watchdog={{ sbd_stonith_watchdog_timeout }}s
+      msgwait={{ sbd_stonith_msgwait }}s cluster/stonith-timeout={{ sbd_stonith_cluster_timeout }}.
+      msgwait must be >= 2 * watchdog (sbd create -4), and stonith-timeout must
+      exceed msgwait so Pacemaker waits long enough for fence_sbd.
+  run_once: true
+  tags: [sbd, stonith, initialize]
+
+- name: Probe whether the SBD device already has a readable header
+  ansible.builtin.command:
+    cmd: sbd -d {{ sbd_stonith_device }} dump
+  register: sbd_stonith_header_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [sbd, stonith, initialize]
+
+- name: Initialize the SBD device header when dump finds none
+  ansible.builtin.command:
+    cmd: >-
+      sbd -d {{ sbd_stonith_device }}
+      -1 {{ sbd_stonith_watchdog_timeout }}
+      -4 {{ sbd_stonith_msgwait }}
+      create
+  register: sbd_stonith_create
+  changed_when: sbd_stonith_create.rc == 0
+  failed_when: sbd_stonith_create.rc != 0
+  run_once: true
+  when:
+    - sbd_stonith_header_probe.rc != 0
+    - not ansible_check_mode
+  tags: [sbd, stonith, initialize]
+
+- name: Confirm the SBD device header is readable after initialize
+  ansible.builtin.command:
+    cmd: sbd -d {{ sbd_stonith_device }} dump
+  register: sbd_stonith_header_confirm
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  when:
+    - sbd_stonith_header_probe.rc != 0
+    - not ansible_check_mode
+  tags: [sbd, stonith, initialize]
+
+- name: Fail closed if the SBD header is still unreadable after create
+  ansible.builtin.assert:
+    that:
+      - sbd_stonith_header_confirm.rc == 0
+    fail_msg: >-
+      sbd create finished but `sbd -d {{ sbd_stonith_device }} dump` still
+      fails (rc={{ sbd_stonith_header_confirm.rc }}). Refusing to continue
+      into dropins/stonith against an uninitialized fencing device.
+      stderr: {{ sbd_stonith_header_confirm.stderr | default('') }}
+  run_once: true
+  when:
+    - sbd_stonith_header_probe.rc != 0
+    - not ansible_check_mode
+  tags: [sbd, stonith, initialize]
+
+- name: Note when the SBD device was already initialized
+  ansible.builtin.debug:
+    msg: >-
+      SBD header already present on {{ sbd_stonith_device }}
+      (sbd dump rc=0). Skipping create so fencing history is preserved.
+  run_once: true
+  when: sbd_stonith_header_probe.rc == 0
+  tags: [sbd, stonith, initialize]
