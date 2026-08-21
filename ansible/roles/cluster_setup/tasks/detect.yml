@@ -178,10 +178,15 @@
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
+# Re-probe/re-check MUST use distinct register names. A skipped task with
+# register: still overwrites the variable with a skip stub that has no .rc
+# or .stat; sharing cluster_setup_pcs_status / cluster_setup_corosync_conf
+# with the unconditional probes above broke greenfield hosts (no stub, no
+# corosync.conf) after pcs cluster destroy.
 - name: Re-probe Pacemaker after clearing the Debian stub
   ansible.builtin.command:
     cmd: pcs status
-  register: cluster_setup_pcs_status
+  register: cluster_setup_pcs_status_after_stub
   changed_when: false
   failed_when: false
   check_mode: false
@@ -193,17 +198,38 @@
 - name: Re-check corosync.conf after clearing the Debian stub
   ansible.builtin.stat:
     path: /etc/corosync/corosync.conf
-  register: cluster_setup_corosync_conf
+  register: cluster_setup_corosync_conf_after_stub
   check_mode: false
   when:
     - cluster_setup_debian_stub | bool
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
+# Pick the live probe when stub cleanup actually ran; otherwise the initial
+# unconditional probe. check_mode + stub: treat as not running/configured so
+# dry-run does not claim the throwaway package cluster is real membership.
 - name: Flag whether this host is already in a running cluster
   ansible.builtin.set_fact:
-    cluster_setup_running: "{{ false if (cluster_setup_debian_stub | bool and ansible_check_mode) else (cluster_setup_pcs_status.rc == 0) }}"
-    cluster_setup_configured: "{{ false if (cluster_setup_debian_stub | bool and ansible_check_mode) else (cluster_setup_corosync_conf.stat.exists | default(false)) }}"
+    cluster_setup_running: >-
+      {{ false
+         if (cluster_setup_debian_stub | bool and ansible_check_mode)
+         else (
+           (
+             cluster_setup_pcs_status_after_stub.rc
+             if (cluster_setup_debian_stub | bool and not ansible_check_mode)
+             else cluster_setup_pcs_status.rc
+           ) == 0
+         ) }}
+    cluster_setup_configured: >-
+      {{ false
+         if (cluster_setup_debian_stub | bool and ansible_check_mode)
+         else (
+           (
+             cluster_setup_corosync_conf_after_stub.stat.exists | default(false)
+           )
+           if (cluster_setup_debian_stub | bool and not ansible_check_mode)
+           else (cluster_setup_corosync_conf.stat.exists | default(false))
+         ) }}
     cluster_setup_expected_names: "{{ groups['mail_nodes'] }}"
     cluster_setup_formed_this_run: false
   tags: [cluster, setup, detect]
