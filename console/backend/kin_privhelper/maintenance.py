@@ -395,6 +395,42 @@ def release_maintenance_lock(fh: IO[str] | None) -> None:
         pass
 
 
+def _config_observability_ip() -> str:
+    from .apply_config import parse_config
+
+    path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    if not path.is_file():
+        return ""
+    try:
+        values = parse_config(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ""
+    return str(values.get("OBSERVABILITY_VM_IP") or "").strip()
+
+
+async def _observability_snapshot(corosync_txt: str) -> dict[str, Any]:
+    from .observability_status import (
+        configured_observability_identity,
+        probe_observability_reachable,
+        snapshot_from_texts,
+    )
+    from .qdevice_status import parse_qnetd_host
+
+    identity_cfg = _config_observability_ip()
+    identity = configured_observability_identity(
+        config_ip=identity_cfg,
+        qnetd_host=parse_qnetd_host(corosync_txt),
+    )
+    reachable = False
+    if identity:
+        reachable = await probe_observability_reachable(identity)
+    return snapshot_from_texts(
+        config_ip=identity_cfg,
+        corosync_conf=corosync_txt,
+        reachable=reachable,
+    )
+
+
 async def gather_status() -> dict[str, Any]:
     nodes_text = await _pcs_nodes_text()
     nodes = parse_online_nodes(nodes_text)
@@ -405,12 +441,17 @@ async def gather_status() -> dict[str, Any]:
     unpromoted = parse_unpromoted(crm)
     _c2, drbd, _e2 = await _capture(["drbdadm", "status", DRBD_RESOURCE])
     _c3, quorum, _e3 = await _capture(["pcs", "quorum", "status"])
-    addrs = {}
+    corosync_txt = ""
     if COROSYNC_CONF.is_file():
-        addrs = parse_corosync_ring_addrs(COROSYNC_CONF.read_text(encoding="utf-8", errors="replace"))
+        try:
+            corosync_txt = COROSYNC_CONF.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            corosync_txt = ""
+    addrs = parse_corosync_ring_addrs(corosync_txt) if corosync_txt else {}
     live = set(nodes) | set(offline)
     stale_peers = [n for n in addrs if n not in live]
     fc_ok, fc_lines = await _failcounts(nodes)
+    observability = await _observability_snapshot(corosync_txt)
     return {
         "local_host": this_hostname(),
         "nodes": nodes,
@@ -421,6 +462,7 @@ async def gather_status() -> dict[str, Any]:
         "unpromoted": unpromoted,
         "drbd_uptodate": drbd_both_uptodate(drbd),
         "qdevice_ok": qdevice_voting(quorum),
+        "observability": observability,
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
         "addrs": addrs,
@@ -551,6 +593,12 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"unpromoted={st['unpromoted']}")
         yield await _emit(f"drbd_uptodate={st['drbd_uptodate']}")
         yield await _emit(f"qdevice_ok={st['qdevice_ok']}")
+        obs = st.get("observability") or {}
+        yield await _emit(
+            "observability="
+            f"status={obs.get('status')} ip={obs.get('ip') or '-'} "
+            f"reachable={obs.get('reachable')}"
+        )
         yield await _emit(f"failcount_ok={st['failcount_ok']}")
         for line in st["failcount_lines"]:
             yield await _emit(line)
@@ -564,6 +612,7 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "unpromoted": st["unpromoted"],
             "drbd_uptodate": st["drbd_uptodate"],
             "qdevice_ok": st["qdevice_ok"],
+            "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),
         }

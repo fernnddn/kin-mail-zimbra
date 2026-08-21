@@ -9,15 +9,20 @@ import {
   ClusterIcon,
   ConfirmModal,
   Dropdown,
+  FieldLabel,
   Hint,
+  Input,
   LogPane,
   MenuItem,
+  Modal,
   Page,
   PageHeader,
+  PasswordInput,
   Skeleton,
   SkeletonCard,
   WarnBox,
 } from "../ui";
+import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
 
 type ClusterSnap = {
   local_host?: string;
@@ -31,6 +36,7 @@ type ClusterSnap = {
   maintenance_active?: boolean;
   offline?: string[];
   stale_peers?: string[];
+  observability?: ObservabilitySnap;
 };
 
 type StatusResp = {
@@ -311,6 +317,20 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
       label: cluster.qdevice_ok ? "qdevice voting" : "qdevice unhealthy",
     },
     {
+      ok:
+        !cluster.observability
+          ? Boolean(cluster.qdevice_ok)
+          : cluster.observability.status === "healthy",
+      label:
+        cluster.observability?.status === "absent"
+          ? "Observability absent"
+          : cluster.observability?.status === "healthy"
+            ? "Observability reachable"
+            : cluster.observability
+              ? "Observability unreachable"
+              : "Observability unknown",
+    },
+    {
       ok: Boolean(cluster.failcount_ok),
       label: cluster.failcount_ok ? "fail-count 0" : "fail-count nonzero",
     },
@@ -336,6 +356,19 @@ export default function ClusterPage() {
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [removeProbe, setRemoveProbe] = useState<RemoveProbe | null>(null);
   const [probing, setProbing] = useState(false);
+  const [pendingObsRemove, setPendingObsRemove] = useState(false);
+  const [obsRemoveProbe, setObsRemoveProbe] = useState<{
+    errors?: string[];
+    notes?: string[];
+    configured_ip?: string;
+  } | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addIp, setAddIp] = useState("");
+  const [addHost, setAddHost] = useState("");
+  const [addRoot, setAddRoot] = useState("");
+  const [addKin, setAddKin] = useState("");
+  const [addErr, setAddErr] = useState("");
+  const [pendingObsAdd, setPendingObsAdd] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
 
@@ -527,7 +560,182 @@ export default function ClusterPage() {
     };
   }
 
+  function openObsRemove() {
+    probeRef.current?.close();
+    setPendingObsRemove(true);
+    setObsRemoveProbe(null);
+    setProbing(true);
+    setMessage("");
+    const qs = new URLSearchParams({
+      action: "remove_observability",
+      op: "probe",
+    });
+    const es = new EventSource(`/api/wizard/deploy/stream?${qs.toString()}`);
+    probeRef.current = es;
+    let buf = "";
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; data?: string; message?: string };
+        if (data.type === "stdout" && data.data) buf += data.data;
+        else if (data.type === "stderr" && data.data) buf += data.data;
+        else if (data.type === "error") {
+          buf += `[error] ${data.message || ""}\n`;
+          setMessage(data.message || "Remove Observability probe failed");
+        } else if (data.type === "done") {
+          es.close();
+          if (probeRef.current === es) probeRef.current = null;
+          const parsed = parseTaggedJson(buf, "REMOVE_OBS_PROBE_JSON:");
+          if (parsed) setObsRemoveProbe(parsed as { errors?: string[]; notes?: string[]; configured_ip?: string });
+          setProbing(false);
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      if (probeRef.current === es) {
+        es.close();
+        probeRef.current = null;
+        setProbing(false);
+        setMessage("Lost connection while probing Observability.");
+      }
+    };
+  }
+
+  function runObsRemove() {
+    esRef.current?.close();
+    setBusy(true);
+    setMessage("");
+    setLog("");
+    setTab("activity");
+    const qs = new URLSearchParams({
+      action: "remove_observability",
+      op: "apply",
+    });
+    const es = new EventSource(`/api/wizard/deploy/stream?${qs.toString()}`);
+    esRef.current = es;
+    let buf = "";
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
+        if (data.type === "stdout" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "stderr" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "error") {
+          buf += `[error] ${data.message || ""}\n`;
+          setLog(buf);
+        } else if (data.type === "done") {
+          es.close();
+          esRef.current = null;
+          setBusy(false);
+          setPendingObsRemove(false);
+          setObsRemoveProbe(null);
+          const code = data.exit_code ?? 1;
+          setMessage(
+            code === 0
+              ? "Remove Observability finished. Add Observability is available if status shows absent."
+              : "Remove Observability failed.",
+          );
+          void refresh();
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      if (esRef.current === es) {
+        es.close();
+        esRef.current = null;
+        setBusy(false);
+        setMessage("Lost connection to the Remove Observability stream.");
+      }
+    };
+  }
+
+  function runObsAdd() {
+    esRef.current?.close();
+    setBusy(true);
+    setMessage("");
+    setLog("");
+    setTab("activity");
+    setPendingObsAdd(false);
+    setAddOpen(false);
+    const qs = new URLSearchParams({
+      action: "add_observability",
+      op: "apply",
+    });
+    const es = new EventSource(`/api/wizard/deploy/stream?${qs.toString()}`);
+    esRef.current = es;
+    let buf = "";
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
+        if (data.type === "stdout" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "stderr" && data.data) {
+          buf += data.data;
+          setLog(buf);
+        } else if (data.type === "error") {
+          buf += `[error] ${data.message || ""}\n`;
+          setLog(buf);
+        } else if (data.type === "done") {
+          es.close();
+          esRef.current = null;
+          setBusy(false);
+          const code = data.exit_code ?? 1;
+          setMessage(code === 0 ? "Add Observability finished." : "Add Observability failed.");
+          void refresh();
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      if (esRef.current === es) {
+        es.close();
+        esRef.current = null;
+        setBusy(false);
+        setMessage("Lost connection to the Add Observability stream.");
+      }
+    };
+  }
+
+  async function submitAddForm() {
+    setAddErr("");
+    if (!addIp.trim()) {
+      setAddErr("Enter the new Observability VM IPv4 address.");
+      return;
+    }
+    if (addRoot.length < 8 || addKin.length < 8) {
+      setAddErr("Root and kin passwords must be at least 8 characters.");
+      return;
+    }
+    try {
+      await api("/api/cluster/observability/secrets", {
+        method: "POST",
+        body: JSON.stringify({
+          ip: addIp.trim(),
+          hostname: addHost.trim(),
+          host_root_pass: addRoot,
+          kin_user_pass: addKin,
+        }),
+      });
+      setPendingObsAdd(true);
+    } catch (err: unknown) {
+      setAddErr(err instanceof Error ? err.message : "Could not store credentials");
+    }
+  }
+
   const nodes = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers);
+  const mailTopo = nodes.map((name) => ({
+    name,
+    healthy:
+      !(cluster.offline || []).includes(name) && !(cluster.stale_peers || []).includes(name),
+  }));
   const standby = new Set(cluster.standby || []);
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
   const lines = healthLines(cluster);
@@ -695,6 +903,17 @@ export default function ClusterPage() {
                   ))}
                 </Dropdown>
               </HealthWrap>
+              <ClusterTopology
+                mailNodes={mailTopo}
+                observability={cluster.observability || { status: "absent" }}
+                ops={ops}
+                busy={busy || probing}
+                onAdd={() => {
+                  setAddErr("");
+                  setAddOpen(true);
+                }}
+                onRemove={openObsRemove}
+              />
               {nodes.length === 2 ? (
                 <Pair>
                   {nodeCard(nodes[0])}
@@ -762,6 +981,123 @@ export default function ClusterPage() {
             if (!pendingRemove || !removeProbe || probing || busy) return;
             if ((removeProbe.errors || []).length > 0) return;
             runRemove(pendingRemove);
+          }}
+        />
+        <ConfirmModal
+          open={pendingObsRemove}
+          title="Remove Observability"
+          message={
+            probing ? (
+              <>Probing whether Observability still answers…</>
+            ) : (obsRemoveProbe?.errors || []).length > 0 ? (
+              <>{(obsRemoveProbe?.errors || []).join(" ")}</>
+            ) : (
+              <>
+                Observability is unreachable. This will disarm SBD on both mail
+                nodes, clear qdevice and iSCSI pointers to
+                {" "}
+                <strong>{obsRemoveProbe?.configured_ip || "the dead witness"}</strong>,
+                and leave mail running without a fencing device until you Add a
+                replacement.
+              </>
+            )
+          }
+          detail="This is a forced path only. A healthy Observability node cannot be removed. Dual-self-fence risk stays until Add Observability completes."
+          confirmLabel={probing ? "Probing…" : "Remove Observability"}
+          loading={busy || probing}
+          onCancel={() => {
+            if (busy || probing) return;
+            probeRef.current?.close();
+            probeRef.current = null;
+            setPendingObsRemove(false);
+            setObsRemoveProbe(null);
+          }}
+          onConfirm={() => {
+            if (probing || busy) return;
+            if ((obsRemoveProbe?.errors || []).length > 0) return;
+            runObsRemove();
+          }}
+        />
+        <Modal
+          open={addOpen}
+          onClose={() => {
+            if (busy) return;
+            setAddOpen(false);
+          }}
+          title="Add Observability"
+          footer={
+            <>
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => setAddOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" disabled={busy} onClick={() => void submitAddForm()}>
+                Continue
+              </Button>
+            </>
+          }
+        >
+          <Hint>
+            Enter the replacement VM address and credentials. Do not assume the
+            previous IP is still available.
+          </Hint>
+          <FieldLabel htmlFor="obs_ip" required>
+            Observability IPv4
+          </FieldLabel>
+          <Input
+            id="obs_ip"
+            value={addIp}
+            onChange={(e) => setAddIp(e.target.value)}
+            placeholder="192.0.2.53"
+            autoComplete="off"
+          />
+          <FieldLabel htmlFor="obs_host">Hostname (optional)</FieldLabel>
+          <Input
+            id="obs_host"
+            value={addHost}
+            onChange={(e) => setAddHost(e.target.value)}
+            placeholder="obs.example.test"
+            autoComplete="off"
+          />
+          <FieldLabel htmlFor="obs_root" required>
+            Root password
+          </FieldLabel>
+          <PasswordInput
+            id="obs_root"
+            value={addRoot}
+            onChange={(e) => setAddRoot(e.target.value)}
+            autoComplete="new-password"
+          />
+          <FieldLabel htmlFor="obs_kin" required>
+            Kin user password
+          </FieldLabel>
+          <PasswordInput
+            id="obs_kin"
+            value={addKin}
+            onChange={(e) => setAddKin(e.target.value)}
+            autoComplete="new-password"
+          />
+          {addErr ? <Hint>{addErr}</Hint> : null}
+        </Modal>
+        <ConfirmModal
+          open={pendingObsAdd}
+          title="Add Observability"
+          message={
+            <>
+              Provision qnetd and the iSCSI SBD target on <strong>{addIp.trim() || "the new VM"}</strong>,
+              reconnect both live mail nodes, initialize a fresh SBD device, and
+              re-arm fencing. Mail service must stay undisturbed.
+            </>
+          }
+          detail="A mistake here can leave both mail nodes without working fencing. Confirm the new VM is the replacement Observability host."
+          confirmLabel="Add Observability"
+          loading={busy}
+          onCancel={() => {
+            if (busy) return;
+            setPendingObsAdd(false);
+          }}
+          onConfirm={() => {
+            if (busy) return;
+            runObsAdd();
           }}
         />
       </Page>
