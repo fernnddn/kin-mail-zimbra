@@ -43,6 +43,9 @@ jobs:
       - name: prepare-zimbra-data-disk helper tests
         run: bash install/lib/test-prepare-zimbra-data-disk.sh
 
+      - name: release-zimbra-plain-mount-for-drbd helper tests
+        run: bash install/lib/test-release-zimbra-plain-mount-for-drbd.sh
+
       - name: 00-config TTY fail-closed tests
         run: bash install/lib/test-00-config-tty.sh
 
