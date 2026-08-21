@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from kin_privhelper.apply_config import (
+    ensure_topology_2vm,
     format_config,
     iface_for_ipv4,
     parse_config,
@@ -77,6 +78,7 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertEqual(out["CLUSTER_VIP_IP"], "192.0.2.16")
         self.assertEqual(out["PEER_HOST_IP"], "192.0.2.15")
         self.assertEqual(out["PEER_HOST_NAME"], "mail.example.test")
+        self.assertEqual(out["TOPOLOGY"], "2vm")
 
     def test_rejects_cloned_hostname_or_ip(self) -> None:
         with self.assertRaises(ValueError):
@@ -108,6 +110,25 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertNotEqual(parsed["MAIL_HOST"], _PRIMARY["MAIL_HOST"])
 
 
+class TopologyUpsertTests(unittest.TestCase):
+    def test_empty_config_gains_2vm(self) -> None:
+        out, changed = ensure_topology_2vm({})
+        self.assertTrue(changed)
+        self.assertEqual(out["TOPOLOGY"], "2vm")
+        body = format_config(out)
+        self.assertIn('TOPOLOGY="2vm"', body)
+
+    def test_already_2vm_is_noop(self) -> None:
+        values = {"TOPOLOGY": "2vm", "MAIL_HOST": "mail2.example.test"}
+        out, changed = ensure_topology_2vm(values)
+        self.assertFalse(changed)
+        self.assertEqual(out["MAIL_HOST"], "mail2.example.test")
+
+    def test_numeric_2_is_already_2vm(self) -> None:
+        out, changed = ensure_topology_2vm({"TOPOLOGY": "2"})
+        self.assertFalse(changed)
+
+
 class PeerPayloadTests(unittest.TestCase):
     def test_payload_uses_peer_iface_and_omits_secrets_from_logs(self) -> None:
         token = "dns_cloudflare_api_token = TESTTOKEN_not_a_real_key"
@@ -131,6 +152,7 @@ class PeerPayloadTests(unittest.TestCase):
         self.assertEqual(parsed["SERVER_IP"], "192.0.2.14")
         self.assertEqual(parsed["NET_IFACE"], "ens34")
         self.assertEqual(parsed["ADMIN_PASS"], "PrimaryAdminPass9")
+        self.assertEqual(parsed["TOPOLOGY"], "2vm")
         self.assertEqual(payload["cf_body"].strip(), token)
 
     def test_cloudflare_missing_creds_refuses(self) -> None:

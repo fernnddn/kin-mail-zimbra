@@ -154,6 +154,50 @@ class MailDeployedGateTests(unittest.TestCase):
         body = self.ha_marker.read_text(encoding="utf-8")
         self.assertTrue(body.startswith("complete "))
 
+    def test_apply_success_does_not_rewrite_existing_ha_marker(self) -> None:
+        self.ha_marker.write_text("complete 2026-01-01T00:00:00Z\n", encoding="utf-8")
+        self.assertTrue(ds.record_ha_orchestration_success(join_mode="apply"))
+        self.assertEqual(
+            self.ha_marker.read_text(encoding="utf-8"),
+            "complete 2026-01-01T00:00:00Z\n",
+        )
+
+    def test_peer_plan_writes_topology_and_markers_on_empty_peer(self) -> None:
+        plan = ds.plan_peer_ha_console_state(
+            config_text="",
+            ha_marker_present=False,
+            setup_marker_present=False,
+        )
+        self.assertTrue(plan["write_config"])
+        self.assertIn('TOPOLOGY="2vm"', plan["config_body"])
+        self.assertTrue(plan["write_ha_marker"])
+        self.assertTrue(plan["write_setup_marker"])
+        self.assertTrue(plan["ha_marker_body"].startswith("complete "))
+        self.assertFalse(plan["noop"])
+
+    def test_peer_plan_is_noop_when_already_marked(self) -> None:
+        plan = ds.plan_peer_ha_console_state(
+            config_text='TOPOLOGY="2vm"\nMAIL_HOST="mail2.example.test"\n',
+            ha_marker_present=True,
+            ha_marker_text="complete 2026-08-21T00:00:00Z\n",
+            setup_marker_present=True,
+        )
+        self.assertTrue(plan["noop"])
+        self.assertFalse(plan["write_config"])
+        self.assertFalse(plan["write_ha_marker"])
+        self.assertFalse(plan["write_setup_marker"])
+
+    def test_peer_plan_adds_ha_marker_only_when_topology_already_2vm(self) -> None:
+        plan = ds.plan_peer_ha_console_state(
+            config_text='TOPOLOGY="2vm"\n',
+            ha_marker_present=False,
+            setup_marker_present=True,
+        )
+        self.assertFalse(plan["write_config"])
+        self.assertTrue(plan["write_ha_marker"])
+        self.assertFalse(plan["write_setup_marker"])
+        self.assertFalse(plan["noop"])
+
     def test_check_mode_does_not_write_ha_marker(self) -> None:
         self.assertFalse(ds.record_ha_orchestration_success(join_mode="check"))
         self.assertFalse(self.ha_marker.exists())

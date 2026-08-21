@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from . import protocol as proto
-from .deploy_state import DEPLOY_LAST_LOG, record_ha_orchestration_success
+from .deploy_state import DEPLOY_LAST_LOG, plan_peer_ha_console_state, record_ha_orchestration_success
 from .provisioning_secrets import load_secrets
 
 ANSIBLE_DIR = Path(
@@ -649,7 +649,7 @@ _PEER_READY_LABELS = {
 
 _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
-    r"^/(etc/kin-mail/config|etc/letsencrypt/[A-Za-z0-9._-]+)$"
+    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete)|etc/letsencrypt/[A-Za-z0-9._-]+)$"
 )
 
 
@@ -722,14 +722,17 @@ async def _install_staged_peer_file(
     *,
     remote_tmp: str,
     dest: str,
+    mode: str = "600",
 ) -> tuple[int, str]:
     """sudo-install a staged /tmp file to dest, then remove the temp copy."""
+    if mode not in ("600", "644"):
+        return 2, "refusing unsafe install mode"
     if not _SCP_TMP_RE.match(remote_tmp) or not _INSTALL_DEST_RE.match(dest):
         return 2, "refusing unsafe install path"
     dest_dir = str(Path(dest).parent)
     cmd = (
         f"sudo -n mkdir -p {dest_dir} && "
-        f"sudo -n install -m 600 -o root -g root {remote_tmp} {dest} && "
+        f"sudo -n install -m {mode} -o root -g root {remote_tmp} {dest} && "
         f"rm -f {remote_tmp}"
     )
     return await _ssh_run(host, user, password, secrets, cmd, timeout=20)
@@ -750,6 +753,185 @@ def _write_secure_temp(body: str) -> Path:
     finally:
         handle.close()
     return Path(handle.name)
+
+
+async def _push_peer_text_file(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+    *,
+    body: str,
+    remote_tmp: str,
+    dest: str,
+    mode: str,
+) -> tuple[int, str]:
+    """scp + sudo-install a small text file onto the peer."""
+    local = _write_secure_temp(body)
+    try:
+        code, text = await _scp_put(host, user, password, secrets, local, remote_tmp)
+        if code != 0:
+            return code, text or f"scp of {dest} failed"
+        return await _install_staged_peer_file(
+            host,
+            user,
+            password,
+            secrets,
+            remote_tmp=remote_tmp,
+            dest=dest,
+            mode=mode,
+        )
+    finally:
+        try:
+            local.unlink()
+        except OSError:
+            pass
+
+
+PEER_CONSOLE_PROBE_CMD = (
+    "echo KIN_PEER_STATE_BEGIN; "
+    "if [ -f /etc/kin-mail/ha-setup-complete ]; then echo HA=1; else echo HA=0; fi; "
+    "if [ -f /etc/kin-mail/setup-complete ]; then echo SETUP=1; else echo SETUP=0; fi; "
+    "if [ -f /etc/kin-mail/config ]; then echo CFG=1; else echo CFG=0; fi; "
+    "echo KIN_PEER_STATE_END; "
+    "echo KIN_PEER_HA_BEGIN; "
+    "if [ -f /etc/kin-mail/ha-setup-complete ]; then cat /etc/kin-mail/ha-setup-complete; fi; "
+    "echo KIN_PEER_HA_END; "
+    "echo KIN_PEER_CFG_BEGIN; "
+    "if [ -f /etc/kin-mail/config ]; then sudo -n cat /etc/kin-mail/config; fi; "
+    "echo KIN_PEER_CFG_END"
+)
+
+
+def _block_between(text: str, begin: str, end: str) -> str:
+    start = text.find(begin)
+    stop = text.find(end)
+    if start < 0 or stop < 0 or stop < start:
+        return ""
+    return text[start + len(begin) : stop]
+
+
+def parse_peer_console_probe(text: str) -> dict[str, Any]:
+    """Parse PEER_CONSOLE_PROBE_CMD stdout. Config body is never logged by callers."""
+    blob = text or ""
+    state = _block_between(blob, "KIN_PEER_STATE_BEGIN", "KIN_PEER_STATE_END")
+    flags: dict[str, str] = {}
+    for line in state.splitlines():
+        line = line.strip()
+        if "=" in line:
+            key, val = line.split("=", 1)
+            flags[key.strip()] = val.strip()
+    return {
+        "ha_present": flags.get("HA") == "1",
+        "setup_present": flags.get("SETUP") == "1",
+        "cfg_present": flags.get("CFG") == "1",
+        "ha_text": _block_between(blob, "KIN_PEER_HA_BEGIN", "KIN_PEER_HA_END"),
+        "config_text": _block_between(blob, "KIN_PEER_CFG_BEGIN", "KIN_PEER_CFG_END"),
+        "ok": "KIN_PEER_STATE_BEGIN" in blob and "KIN_PEER_STATE_END" in blob,
+    }
+
+
+async def sync_peer_ha_console_state(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> tuple[bool, list[str]]:
+    """Write TOPOLOGY=2vm + HA (and missing setup) markers on the peer.
+
+    Uses the same sshpass SSH/scp path as peer_os_prep. Does not log config
+    contents. Returns (ok, operator-facing lines).
+    """
+    notes: list[str] = []
+    code, blob = await _ssh_run(
+        host, user, password, secrets, PEER_CONSOLE_PROBE_CMD, timeout=20
+    )
+    if code != 0:
+        notes.append(
+            f"Could not read console state on the peer (ssh exit {code}). "
+            "That node will still show the from-scratch wizard until this is retried."
+        )
+        return False, notes
+    probe = parse_peer_console_probe(blob)
+    if not probe["ok"]:
+        notes.append(
+            "Peer console probe returned no KIN_PEER_STATE markers. "
+            "That node will still show the from-scratch wizard until this is retried."
+        )
+        return False, notes
+    plan = plan_peer_ha_console_state(
+        config_text=str(probe.get("config_text") or ""),
+        ha_marker_present=bool(probe.get("ha_present")),
+        ha_marker_text=str(probe.get("ha_text") or ""),
+        setup_marker_present=bool(probe.get("setup_present")),
+    )
+    if plan["noop"]:
+        notes.append(
+            "Peer console already has TOPOLOGY=2vm and completion markers; nothing to write."
+        )
+        return True, notes
+
+    if plan["write_config"]:
+        code, text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=str(plan["config_body"]),
+            remote_tmp="/tmp/kin-mail-peer-config",
+            dest="/etc/kin-mail/config",
+            mode="600",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write TOPOLOGY=2vm on the peer config (exit {code}). "
+                "That node will still show the from-scratch wizard until this is retried. "
+                "No auto-retry, no auto-rollback."
+            )
+            return False, notes
+        notes.append("Wrote TOPOLOGY=2vm into the peer /etc/kin-mail/config")
+
+    if plan["write_ha_marker"]:
+        code, text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=str(plan["ha_marker_body"]),
+            remote_tmp="/tmp/kin-mail-peer-ha-setup",
+            dest="/etc/kin-mail/ha-setup-complete",
+            mode="644",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write /etc/kin-mail/ha-setup-complete on the peer (exit {code}). "
+                "That node will still show the from-scratch wizard until this is retried. "
+                "No auto-retry, no auto-rollback."
+            )
+            return False, notes
+        notes.append("Wrote ha-setup-complete on the peer")
+
+    if plan["write_setup_marker"]:
+        code, text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=str(plan["setup_marker_body"]),
+            remote_tmp="/tmp/kin-mail-peer-setup-complete",
+            dest="/etc/kin-mail/setup-complete",
+            mode="644",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write /etc/kin-mail/setup-complete on the peer (exit {code}). "
+                "That node will still show the from-scratch wizard until this is retried. "
+                "No auto-retry, no auto-rollback."
+            )
+            return False, notes
+        notes.append("Wrote setup-complete on the peer (was missing)")
+
+    return True, notes
 
 
 async def _push_peer_install_files(
@@ -1489,7 +1671,21 @@ async def cmd_run_ha_orchestration(
         )
         yield proto.event_done(exit_code or 1)
         return
+    if join_mode == "apply":
+        if record_ha_orchestration_success(join_mode=join_mode):
+            yield emit_line("ha-setup-complete marker written on this node")
+        yield emit_line("Syncing console deployed state to the peer")
+        peer_ok, peer_notes = await sync_peer_ha_console_state(
+            peer, ssh_user, ssh_pass, secrets
+        )
+        for note in peer_notes:
+            yield emit_line(note, err=not peer_ok)
+        if not peer_ok:
+            yield emit_line(
+                f"ORCH_FAILED step=peer_console_state join_mode={join_mode}",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
     yield emit_line(f"ORCH_DONE join_mode={join_mode}")
-    if record_ha_orchestration_success(join_mode=join_mode):
-        yield emit_line("ha-setup-complete marker written")
     yield proto.event_done(0)

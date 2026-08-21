@@ -8,6 +8,7 @@ from kin_privhelper.orchestration import (
     STEPS,
     OrchHost,
     kin_mail_deploy_dir,
+    parse_peer_console_probe,
     redact_text,
     render_inventory,
     resolve_topology,
@@ -173,6 +174,37 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(_event_exit_code({"type": "done", "exit_code": 0}), 0)
         self.assertEqual(_event_exit_code({"type": "done", "exit_code": 2}), 2)
         self.assertEqual(_event_exit_code({"type": "done"}), 1)
+
+    def test_peer_console_probe_parses_markers_without_exposing_layout_bugs(self) -> None:
+        blob = (
+            "KIN_PEER_STATE_BEGIN\nHA=0\nSETUP=1\nCFG=1\nKIN_PEER_STATE_END\n"
+            "KIN_PEER_HA_BEGIN\nKIN_PEER_HA_END\n"
+            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="1vm"\nMAIL_HOST="mail2.example.test"\n'
+            "KIN_PEER_CFG_END\n"
+        )
+        parsed = parse_peer_console_probe(blob)
+        self.assertTrue(parsed["ok"])
+        self.assertFalse(parsed["ha_present"])
+        self.assertTrue(parsed["setup_present"])
+        self.assertTrue(parsed["cfg_present"])
+        self.assertIn('TOPOLOGY="1vm"', parsed["config_text"])
+
+    def test_orch_done_is_after_peer_console_sync(self) -> None:
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "orchestration.py"
+        ).read_text(encoding="utf-8")
+        sync_idx = text.find("sync_peer_ha_console_state(")
+        done_idx = text.find('yield emit_line(f"ORCH_DONE join_mode={join_mode}")')
+        fail_idx = text.find("step=peer_console_state")
+        self.assertGreater(sync_idx, 0)
+        self.assertGreater(done_idx, 0)
+        self.assertLess(sync_idx, done_idx)
+        self.assertGreater(fail_idx, 0)
+        self.assertLess(fail_idx, done_idx)
 
     def test_ansible_cfg_uses_absolute_roles_path(self) -> None:
         from pathlib import Path

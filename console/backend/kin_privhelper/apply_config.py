@@ -163,6 +163,19 @@ def format_config(values: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def ensure_topology_2vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
+    """Set TOPOLOGY=2vm unless the file already records a 2-server topology.
+
+    Does not invent other keys. Caller writes with format_config().
+    """
+    current = str(values.get("TOPOLOGY") or "").strip().lower()
+    if current in ("2vm", "2"):
+        return dict(values), False
+    out = dict(values)
+    out["TOPOLOGY"] = "2vm"
+    return out, True
+
+
 def parse_ip_dash_o_v4(text: str) -> list[tuple[str, str]]:
     """Parse `ip -4 -o addr show scope global` into (ipv4, iface) pairs."""
     rows: list[tuple[str, str]] = []
@@ -239,6 +252,7 @@ def peer_install_config(
     out["MAIL_HOST"] = peer_host
     out["SERVER_IP"] = peer_ip
     out["NET_IFACE"] = peer_iface
+    out["TOPOLOGY"] = "2vm"
     if primary_ip:
         out["PEER_HOST_IP"] = primary_ip
     if primary_host:

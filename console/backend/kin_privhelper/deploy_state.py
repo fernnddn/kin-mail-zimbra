@@ -16,6 +16,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # Override only for tests / unusual layouts — production uses /opt/zimbra.
 ZIMBRA_ROOT = Path(os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra"))
@@ -191,14 +192,37 @@ def saved_wizard_topology() -> str:
     return ""
 
 
-def mark_ha_setup_complete() -> None:
-    """Durable completion stamp — caller must have reached genuine ORCH_DONE apply."""
-    HA_SETUP_COMPLETE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+def _complete_stamp() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"complete {stamp}\n"
+
+
+def marker_already_complete(text: str | None) -> bool:
+    """True when a marker file already holds the durable complete stamp."""
+    if text is None:
+        return False
+    return text.lstrip().startswith("complete ")
+
+
+def mark_ha_setup_complete() -> bool:
+    """Durable completion stamp. Caller must have reached genuine ORCH_DONE apply.
+
+    Returns True when the marker exists afterwards. Skips rewrite when the file
+    already starts with 'complete '.
+    """
+    if HA_SETUP_COMPLETE_MARKER.is_file():
+        try:
+            existing = HA_SETUP_COMPLETE_MARKER.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        if marker_already_complete(existing):
+            return True
+    HA_SETUP_COMPLETE_MARKER.parent.mkdir(parents=True, exist_ok=True)
     tmp = HA_SETUP_COMPLETE_MARKER.with_name(HA_SETUP_COMPLETE_MARKER.name + ".tmp")
-    tmp.write_text(f"complete {stamp}\n", encoding="utf-8")
+    tmp.write_text(_complete_stamp(), encoding="utf-8")
     os.chmod(tmp, 0o644)
     tmp.replace(HA_SETUP_COMPLETE_MARKER)
+    return True
 
 
 def record_ha_orchestration_success(*, join_mode: str) -> bool:
@@ -210,6 +234,37 @@ def record_ha_orchestration_success(*, join_mode: str) -> bool:
         return False
     mark_ha_setup_complete()
     return True
+
+
+def plan_peer_ha_console_state(
+    *,
+    config_text: str,
+    ha_marker_present: bool,
+    ha_marker_text: str = "",
+    setup_marker_present: bool,
+) -> dict[str, Any]:
+    """Decide which peer console files to write after a successful HA apply.
+
+    Idempotent: already-2vm config and existing complete markers are left alone.
+    setup-complete is required by is_mail_deployed() for topology 2vm; write it
+    only when the file is missing (peer_os_prep normally already created it).
+    """
+    from .apply_config import ensure_topology_2vm, format_config, parse_config
+
+    values = parse_config(config_text or "")
+    new_values, config_changed = ensure_topology_2vm(values)
+    write_ha = not (ha_marker_present and marker_already_complete(ha_marker_text))
+    write_setup = not setup_marker_present
+    stamp = _complete_stamp()
+    return {
+        "write_config": config_changed,
+        "config_body": format_config(new_values) if config_changed else "",
+        "write_ha_marker": write_ha,
+        "write_setup_marker": write_setup,
+        "ha_marker_body": stamp if write_ha else "",
+        "setup_marker_body": stamp if write_setup else "",
+        "noop": (not config_changed and not write_ha and not write_setup),
+    }
 
 
 def is_full_install_complete() -> bool:
