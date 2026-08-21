@@ -56,6 +56,10 @@ first_leftover() {
 # Shared mount_has_zmcontrol / zimbra_data_disk_has_real_install.
 # shellcheck source=zimbra-data-disk-probe.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/zimbra-data-disk-probe.sh"
+# Shared pre-cluster fstab cleanup (same helper as release-zimbra-plain-mount).
+# shellcheck source=precluster-zimbra-fstab.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/precluster-zimbra-fstab.sh"
+KIN_PRECLUSTER_FSTAB_BAK_PREFIX="${KIN_PRECLUSTER_FSTAB_BAK_PREFIX:-kin-pre-drbd-prepare}"
 
 # Decide what to do for an already-ext4 data disk.
 # Args: leftover_name (may be empty), has_zmcontrol 0|1, current_mountpoint
@@ -86,42 +90,6 @@ prepare_data_disk_drbd_action() {
     return 0
   fi
   printf '%s\n' "continue"
-}
-
-# Drop stale pre-cluster /opt/zimbra fstab bookkeeping once DRBD owns the disk.
-# Same mark matching as release-zimbra-plain-mount-for-drbd.sh (prefix match).
-remove_precluster_zimbra_fstab() {
-  local ts bak
-  if ! grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
-    info "${FSTAB} has no ${FSTAB_MARK} block (already removed or never written)"
-    return 0
-  fi
-  ts=$(date +%Y%m%dT%H%M%S)
-  bak="${FSTAB}.kin-pre-drbd-prepare-${ts}"
-  cp -a "$FSTAB" "$bak" || {
-    fail "Could not backup ${FSTAB}"
-    return 1
-  }
-  awk -v mark="$FSTAB_MARK" -v zdir="$ZIMBRA_DIR" '
-    index($0, mark) == 1 { skip = 1; next }
-    skip && /^# Remove this UUID line when Pacemaker/ { next }
-    skip && $0 ~ /^UUID=/ && index($0, zdir) { skip = 0; next }
-    skip { skip = 0 }
-    { print }
-  ' "$bak" >"${FSTAB}.kin-new" || {
-    fail "awk rewrite of ${FSTAB} failed"
-    return 1
-  }
-  mv "${FSTAB}.kin-new" "$FSTAB" || {
-    fail "Could not replace ${FSTAB}"
-    return 1
-  }
-  if grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
-    fail "${FSTAB} still contains ${FSTAB_MARK} after rewrite (backup ${bak})"
-    return 1
-  fi
-  ok "Removed stale pre-cluster fstab block (backup ${bak})"
-  return 0
 }
 
 find_selector() {

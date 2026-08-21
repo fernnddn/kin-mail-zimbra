@@ -11,7 +11,9 @@
 # Mail is down from the stop until Pacemaker starts kin-zimbra again. That is
 # intentional for Build HA pair.
 #
-# Idempotent: no-op when /opt/zimbra is unmounted or already on /dev/drbd*.
+# Idempotent: when /opt/zimbra is unmounted or already on /dev/drbd*, skips
+# stop/umount but still removes any stale pre-cluster fstab block (safe while
+# mail is live on DRBD; fstab-only, no mount change).
 # Reuses wait_none_running / umount_retry from migrate-zimbra-to-drbd-disk.sh.
 # =============================================================================
 set -u
@@ -36,6 +38,12 @@ ZIMBRA_DIR="${KIN_ZIMBRA_DIR:-/opt/zimbra}"
 FSTAB="${KIN_RELEASE_FSTAB:-/etc/fstab}"
 # Must match install/lib/prepare-zimbra-data-disk.sh
 FSTAB_MARK="# KIN Mail zimbra data partition (pre-cluster)"
+KIN_PRECLUSTER_FSTAB_BAK_PREFIX="${KIN_PRECLUSTER_FSTAB_BAK_PREFIX:-kin-pre-drbd-handoff}"
+# Used by precluster-zimbra-fstab.sh (sourced below).
+export FSTAB FSTAB_MARK ZIMBRA_DIR KIN_PRECLUSTER_FSTAB_BAK_PREFIX
+
+# shellcheck source=precluster-zimbra-fstab.sh
+. "${HERE}/precluster-zimbra-fstab.sh"
 
 die_release() {
   fail "$*"
@@ -57,32 +65,7 @@ same_as_data_disk() {
 }
 
 remove_precluster_fstab() {
-  local ts bak
-  if ! grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
-    info "${FSTAB} has no ${FSTAB_MARK} block (already removed or never written)"
-    return 0
-  fi
-  ts=$(date +%Y%m%dT%H%M%S)
-  bak="${FSTAB}.kin-pre-drbd-handoff-${ts}"
-  cp -a "$FSTAB" "$bak" || die_release "Could not backup ${FSTAB}"
-  # Drop the mark line, the following Pacemaker reminder comment (if present),
-  # and any /opt/zimbra UUID line that belongs to this pre-cluster mount.
-  # index()==1 (starts-with), not ==, so an older mark line with extra
-  # trailing text (migrate-zimbra-to-drbd-disk.sh's own historical
-  # "... See HA-RUNBOOK §13." variant, already on disk on hosts migrated
-  # before this marker text was standardized) still matches.
-  awk -v mark="$FSTAB_MARK" -v zdir="$ZIMBRA_DIR" '
-    index($0, mark) == 1 { skip = 1; next }
-    skip && /^# Remove this UUID line when Pacemaker/ { next }
-    skip && $0 ~ /^UUID=/ && index($0, zdir) { skip = 0; next }
-    skip { skip = 0 }
-    { print }
-  ' "$bak" >"${FSTAB}.kin-new" || die_release "awk rewrite of ${FSTAB} failed"
-  mv "${FSTAB}.kin-new" "$FSTAB" || die_release "Could not replace ${FSTAB}"
-  if grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null; then
-    die_release "${FSTAB} still contains ${FSTAB_MARK} after rewrite (backup ${bak})"
-  fi
-  ok "Removed pre-cluster fstab block (backup ${bak})"
+  remove_precluster_zimbra_fstab || die_release "pre-cluster fstab cleanup failed"
 }
 
 if [ "${KIN_RELEASE_SOURCE_ONLY:-0}" = "1" ]; then

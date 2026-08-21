@@ -10,6 +10,13 @@
 # Brief mail outage on every node that still has the plain mount. Expected for
 # Build HA pair (wizard confirmation already required).
 #
+# Also always runs the release script for stale pre-cluster fstab cleanup on
+# BOTH mail_nodes. peer_os_prep only re-runs prepare on the SSH peer; the
+# local/orchestrating node's fstab can stay dirty forever otherwise, and a
+# later crash/reboot then fails DRBD attach with "Can not open backing device".
+# When /opt/zimbra is already on /dev/drbd* (or unmounted), the script only
+# edits fstab - it does not stop Zimbra or touch the live mount.
+#
 # Same check_mode discipline as activate.yml: never check_mode: false on the
 # mutating script; gate with `when: not ansible_check_mode`.
 # =============================================================================
@@ -45,17 +52,33 @@
   check_mode: false
   tags: [drbd, resource, release]
 
-- name: Require the migrate helper and release script on the controller
+- name: Stat the shared pre-cluster fstab helper on the controller
+  ansible.builtin.stat:
+    path: "{{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh"
+  register: drbd_resource_precluster_fstab_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Require the migrate helper, release script, and fstab helper on the controller
   ansible.builtin.assert:
     that:
       - drbd_resource_release_migrate_stat.stat.exists | default(false)
       - drbd_resource_release_migrate_stat.stat.isreg | default(false)
       - drbd_resource_release_script_stat.stat.exists | default(false)
       - drbd_resource_release_script_stat.stat.isreg | default(false)
+      - drbd_resource_precluster_fstab_stat.stat.exists | default(false)
+      - drbd_resource_precluster_fstab_stat.stat.isreg | default(false)
     fail_msg: >-
-      Missing {{ drbd_resource_release_migrate_src }} or
-      {{ drbd_resource_release_script_src }}. Set kin_mail_deploy_dir /
-      KIN_MAIL_DEPLOY_DIR to the tree that contains install/lib/.
+      Missing {{ drbd_resource_release_migrate_src }},
+      {{ drbd_resource_release_script_src }}, or
+      {{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh.
+      Set kin_mail_deploy_dir / KIN_MAIL_DEPLOY_DIR to the tree that contains
+      install/lib/.
   run_once: true
   tags: [drbd, resource, release]
 
@@ -68,7 +91,7 @@
   check_mode: false
   tags: [drbd, resource, release]
 
-- name: Decide whether this host still needs the plain-mount handoff
+- name: Decide whether this host still needs the plain-mount handoff (stop/umount)
   ansible.builtin.set_fact:
     drbd_resource_needs_plain_mount_release: >-
       {{
@@ -90,12 +113,14 @@
   when: drbd_resource_needs_plain_mount_release | bool
   tags: [drbd, resource, release]
 
-- name: Note when the plain-mount handoff is not required
+- name: Note when only stale-fstab cleanup is expected (no stop/umount)
   ansible.builtin.debug:
     msg: >-
-      Skipping plain-mount release on {{ inventory_hostname }}:
-      findmnt rc={{ drbd_resource_zimbra_mount_src.rc }}
-      source={{ drbd_resource_zimbra_mount_src.stdout | trim | default('(unmounted)') }}.
+      No plain /opt/zimbra mount on {{ inventory_hostname }}
+      (findmnt rc={{ drbd_resource_zimbra_mount_src.rc }}
+      source={{ drbd_resource_zimbra_mount_src.stdout | trim | default('(unmounted)') }}).
+      Still running release-zimbra-plain-mount-for-drbd.sh for idempotent
+      pre-cluster fstab cleanup before drbdadm up.
   when: not (drbd_resource_needs_plain_mount_release | bool)
   tags: [drbd, resource, release]
 
@@ -106,9 +131,7 @@
     owner: root
     group: root
     mode: "0755"
-  when:
-    - drbd_resource_needs_plain_mount_release | bool
-    - not ansible_check_mode
+  when: not ansible_check_mode
   tags: [drbd, resource, release]
 
 - name: Stage migrate-zimbra-to-drbd-disk.sh for reused stop/umount helpers
@@ -118,24 +141,25 @@
     owner: root
     group: root
     mode: "0755"
-  when:
-    - drbd_resource_needs_plain_mount_release | bool
-    - not ansible_check_mode
+  when: not ansible_check_mode
   tags: [drbd, resource, release]
 
-- name: Stage release-zimbra-plain-mount-for-drbd.sh
+- name: Stage release-zimbra-plain-mount-for-drbd.sh (and shared fstab helper)
   ansible.builtin.copy:
-    src: "{{ drbd_resource_release_script_src }}"
-    dest: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
+    src: "{{ item.src }}"
+    dest: "{{ drbd_resource_release_dir }}/{{ item.dest }}"
     owner: root
     group: root
     mode: "0755"
-  when:
-    - drbd_resource_needs_plain_mount_release | bool
-    - not ansible_check_mode
+  loop:
+    - src: "{{ drbd_resource_release_script_src }}"
+      dest: release-zimbra-plain-mount-for-drbd.sh
+    - src: "{{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh"
+      dest: precluster-zimbra-fstab.sh
+  when: not ansible_check_mode
   tags: [drbd, resource, release]
 
-- name: Stop Zimbra, unmount /opt/zimbra, and drop the pre-cluster fstab block
+- name: Release plain mount if needed, and always drop stale pre-cluster fstab
   ansible.builtin.command:
     cmd: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
   environment:
@@ -143,9 +167,8 @@
     KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
   register: drbd_resource_release_result
   # SAFETY: never check_mode: false - must not stop live mail during --check.
-  when:
-    - drbd_resource_needs_plain_mount_release | bool
-    - not ansible_check_mode
+  # When already on /dev/drbd*, the script only cleans fstab (no zmcontrol stop).
+  when: not ansible_check_mode
   tags: [drbd, resource, release]
 
 - name: Confirm /opt/zimbra is no longer on the plain data partition

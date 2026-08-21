@@ -153,6 +153,39 @@ else
   pass "unexpected mount source fails closed"
 fi
 
+# Shared helper (used by prepare + release + ansible staging).
+if grep -q 'precluster-zimbra-fstab.sh' ./release-zimbra-plain-mount-for-drbd.sh \
+  && grep -q 'precluster-zimbra-fstab.sh' ./prepare-zimbra-data-disk.sh \
+  && [ -f ./precluster-zimbra-fstab.sh ]; then
+  pass "release and prepare share precluster-zimbra-fstab.sh"
+else
+  bad "shared precluster-zimbra-fstab.sh wiring missing"
+fi
+
+release_yml="../../ansible/roles/drbd_resource/tasks/release_plain_mount.yml"
+if [ -f "$release_yml" ] && python3 - "$release_yml" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+marker = "Release plain mount if needed, and always drop stale pre-cluster fstab"
+idx = text.find(marker)
+if idx < 0:
+    raise SystemExit("release command task missing")
+# Stop before the next Confirm task so we only inspect this task's when:.
+chunk = text[idx : text.find("Confirm /opt/zimbra", idx)]
+if "needs_plain_mount_release" in chunk:
+    raise SystemExit("release script still gated on needs_plain_mount_release")
+if "when: not ansible_check_mode" not in chunk:
+    raise SystemExit("expected when: not ansible_check_mode")
+if "precluster-zimbra-fstab.sh" not in text:
+    raise SystemExit("precluster helper not staged")
+PY
+then
+  pass "ansible release_plain_mount runs fstab cleanup on every mail node"
+else
+  bad "ansible release_plain_mount still gates the release script on plain-mount-only"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'ALL OK\n'
   exit 0
