@@ -85,6 +85,13 @@ case "${1:-}" in
     ;;
 esac
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if [ "$OS_ONLY" -eq 0 ] && [ "$STATUS_ONLY" -eq 0 ] && zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; switching to --os-only (fail2ban + unattended)."
+  OS_ONLY=1
+fi
+
 cluster_ok() {
   local code
   code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/ 2>/dev/null || true)

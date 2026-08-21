@@ -15,6 +15,13 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; skipping hybrid auth (zmprov not reachable)."
+  exit 0
+fi
+
 if [ ! -d /opt/zimbra ]; then
   fail "Zimbra is not installed yet - run 03-install-zimbra.sh first"
   exit 1

@@ -56,11 +56,9 @@ REQUIRED_SCRIPTS=(
   kin-mail.sh
 )
 
-# Core stages always in full install (07 / 10 are conditional; see run_full_install).
-FULL_PIPELINE_CORE=(
-  01-preflight.sh
-  02-prepare-os.sh
-  03-install-zimbra.sh
+# Stages that need a live Zimbra tree after 03. Mid-handoff skips these in
+# run_full_install (see full_install_zimbra_stage_action); 01-03 always run.
+FULL_PIPELINE_ZIMBRA_STAGES=(
   04-tls-dkim.sh
   06-hybrid-auth.sh
 )
@@ -158,6 +156,8 @@ ensure_scripts() {
 load_install_config() {
   # shellcheck disable=SC1091
   . ./00-config.sh
+  # shellcheck disable=SC1091
+  . ./lib/zimbra-data-disk-probe.sh
 }
 
 run_stage() {
@@ -323,7 +323,7 @@ run_firewall_stage_interactive() {
 }
 
 run_full_install() {
-  local s rc
+  local s rc mid_handoff=0 zimbra_dir_exists=0 hardening_mode stage_action
   load_install_config
 
   say "Full install"
@@ -334,7 +334,8 @@ run_full_install() {
   fi
   echo
 
-  for s in "${FULL_PIPELINE_CORE[@]}"; do
+  # 01-03 always run. Mid-handoff is only meaningful after 03 (data disk probe).
+  for s in 01-preflight.sh 02-prepare-os.sh 03-install-zimbra.sh; do
     run_stage "$s" || {
       rc=$?
       echo
@@ -344,11 +345,36 @@ run_full_install() {
     }
   done
 
-  # 07 — optional (wizard ZPUSH_ENABLED); needs /opt/zimbra
+  if zimbra_is_mid_handoff; then
+    mid_handoff=1
+    warn "Mid-handoff detected: real Zimbra is on the data disk; /opt/zimbra is unmounted."
+    info "Skipping Zimbra-touching stages 04/05/06/07/11. Pacemaker/DRBD own bringing the tree live."
+    info "Still running 09 --os-only (fail2ban/unattended) and 10 host firewall."
+  fi
+
+  # 04 + 06 need a live Zimbra tree (zmcertmgr / zmprov / auth probes).
+  for s in "${FULL_PIPELINE_ZIMBRA_STAGES[@]}"; do
+    stage_action="$(full_install_zimbra_stage_action "$mid_handoff")"
+    if [ "$stage_action" = "skip_mid_handoff" ]; then
+      warn "Skipping ${s} (mid-handoff; empty /opt/zimbra mountpoint)"
+      continue
+    fi
+    run_stage "$s" || {
+      rc=$?
+      echo
+      fail "Pipeline stopped at ${s}"
+      info "Fix the issue above, then re-run the menu or that stage only."
+      return "$rc"
+    }
+  done
+
+  # 07 - optional (wizard ZPUSH_ENABLED); needs live /opt/zimbra
   if [ "${ZPUSH_ENABLED:-yes}" != "yes" ]; then
-    warn "ZPUSH_ENABLED=${ZPUSH_ENABLED:-} — skipping 07-zpush.sh"
+    warn "ZPUSH_ENABLED=${ZPUSH_ENABLED:-} - skipping 07-zpush.sh"
+  elif [ "$(full_install_zimbra_stage_action "$mid_handoff")" = "skip_mid_handoff" ]; then
+    warn "Skipping 07-zpush.sh (mid-handoff; empty /opt/zimbra mountpoint)"
   elif [ ! -d /opt/zimbra ]; then
-    warn "/opt/zimbra missing — skipping 07-zpush.sh (expected on Secondary without mount)"
+    warn "/opt/zimbra missing - skipping 07-zpush.sh (expected on Secondary without mount)"
   else
     run_stage 07-zpush.sh || {
       rc=$?
@@ -357,15 +383,21 @@ run_full_install() {
     }
   fi
 
-  # 09 — default on; Secondary without Zimbra tree uses --os-only
-  if [ -d /opt/zimbra ]; then
+  # 09 - full when live tree present; --os-only for Secondary or mid-handoff
+  [ -d /opt/zimbra ] && zimbra_dir_exists=1
+  hardening_mode="$(full_install_hardening_mode "$mid_handoff" "$zimbra_dir_exists")"
+  if [ "$hardening_mode" = "full" ]; then
     run_stage 09-hardening.sh || {
       rc=$?
       fail "Pipeline stopped at 09-hardening.sh"
       return "$rc"
     }
   else
-    warn "/opt/zimbra missing — running 09-hardening.sh --os-only"
+    if [ "$mid_handoff" -eq 1 ]; then
+      warn "Mid-handoff - running 09-hardening.sh --os-only (Zimbra attrs wait for Pacemaker)"
+    else
+      warn "/opt/zimbra missing - running 09-hardening.sh --os-only"
+    fi
     run_stage 09-hardening.sh --os-only || {
       rc=$?
       fail "Pipeline stopped at 09-hardening.sh --os-only"
@@ -373,33 +405,44 @@ run_full_install() {
     }
   fi
 
-  # 10 — always interactive + dead-man (never silent auto-apply)
+  # 10 - always interactive + dead-man (never silent auto-apply); safe mid-handoff
   run_firewall_stage_interactive || {
     rc=$?
     fail "Pipeline stopped at 10-host-firewall.sh"
     return "$rc"
   }
 
-  # 11 — admin path lockdown on public 443 (Primary / mounted Zimbra only)
-  if [ -d /opt/zimbra ]; then
+  # 11 - admin path lockdown on public 443 (Primary / mounted Zimbra only)
+  if [ "$(full_install_zimbra_stage_action "$mid_handoff")" = "skip_mid_handoff" ]; then
+    warn "Skipping 11-admin-path-lockdown.sh (mid-handoff; empty /opt/zimbra mountpoint)"
+  elif [ -d /opt/zimbra ]; then
     run_stage 11-admin-path-lockdown.sh || {
       rc=$?
       fail "Pipeline stopped at 11-admin-path-lockdown.sh"
       return "$rc"
     }
   else
-    warn "/opt/zimbra missing — skipping 11-admin-path-lockdown.sh"
+    warn "/opt/zimbra missing - skipping 11-admin-path-lockdown.sh"
   fi
 
-  run_stage 05-healthcheck.sh || {
-    rc=$?
-    fail "Pipeline stopped at 05-healthcheck.sh"
-    return "$rc"
-  }
+  if [ "$(full_install_zimbra_stage_action "$mid_handoff")" = "skip_mid_handoff" ]; then
+    warn "Skipping 05-healthcheck.sh (mid-handoff; zmcontrol not reachable on mountpoint)"
+  else
+    run_stage 05-healthcheck.sh || {
+      rc=$?
+      fail "Pipeline stopped at 05-healthcheck.sh"
+      return "$rc"
+    }
+  fi
 
   echo
-  say "Full install complete"
-  ok "All selected pipeline stages exited 0"
+  if [ "$mid_handoff" -eq 1 ]; then
+    say "Full install complete (mid-handoff path)"
+    ok "OS stages finished; Zimbra-touching stages deferred to DRBD attach + Pacemaker"
+  else
+    say "Full install complete"
+    ok "All selected pipeline stages exited 0"
+  fi
   mkdir -p /etc/kin-mail
   printf 'complete %s\n' "$(date -Is 2>/dev/null || date)" > /etc/kin-mail/setup-complete
   chmod 644 /etc/kin-mail/setup-complete

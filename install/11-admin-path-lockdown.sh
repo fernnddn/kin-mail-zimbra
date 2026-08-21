@@ -22,6 +22,13 @@ zimbra_cmd() {
   su - zimbra -c "$*"
 }
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; skipping admin path lockdown."
+  exit 0
+fi
+
 if [ ! -f "$NGX_TPL" ]; then
   fail "Missing nginx HTTPS template: ${NGX_TPL}"
   exit 1

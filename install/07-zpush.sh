@@ -31,6 +31,13 @@ PHP_FPM_LISTEN="${PHP_FPM_LISTEN:-127.0.0.1:9000}"
 NGX_TPL="${NGX_TPL:-/opt/zimbra/conf/nginx/templates/nginx.conf.web.https.default.template}"
 WORKDIR="${KIN_ZPUSH_WORKDIR:-/var/tmp/kin-zpush}"
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; skipping Z-Push (needs live nginx templates)."
+  exit 0
+fi
+
 if [ ! -d /opt/zimbra ]; then
   fail "Zimbra is not installed yet - run 03-install-zimbra.sh first"
   exit 1

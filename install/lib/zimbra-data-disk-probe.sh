@@ -7,7 +7,7 @@
 # not leave this mount up or start Zimbra; DRBD/Pacemaker own that lifecycle.
 #
 #   KIN_DRBD_DATA_DISK   default /dev/sdb1
-#   KIN_ZIMBRA_DIR       default /opt/zimbra (only for docs/consistency)
+#   KIN_ZIMBRA_DIR       default /opt/zimbra
 # =============================================================================
 
 # Positive signal that a mounted tree is a real Zimbra install (same idea as
@@ -33,6 +33,17 @@ zimbra_data_disk_has_real_install() {
   return "$rc"
 }
 
+# True when /opt/zimbra has no runnable zmcontrol but the data disk does.
+# That is the Build HA pair mid-handoff state after release-plain-mount.
+zimbra_is_mid_handoff() {
+  local disk="${1:-${KIN_DRBD_DATA_DISK:-/dev/sdb1}}"
+  local zimbra_dir="${KIN_ZIMBRA_DIR:-/opt/zimbra}"
+  if [ -x "${zimbra_dir}/bin/zmcontrol" ]; then
+    return 1
+  fi
+  zimbra_data_disk_has_real_install "$disk"
+}
+
 # Decide whether 03-install-zimbra.sh should skip the interactive installer
 # when /opt/zimbra exists as a directory.
 # Args: all_services_running 0|1, data_disk_has_real_install 0|1
@@ -49,4 +60,42 @@ zimbra_install_skip_action() {
     return 0
   fi
   printf '%s\n' "fail_broken"
+}
+
+# Decide whether a post-03 stage that needs a live Zimbra tree should run.
+# Args: mid_handoff 0|1
+# Prints: skip_mid_handoff | run
+full_install_zimbra_stage_action() {
+  if [ "${1:-0}" = "1" ]; then
+    printf '%s\n' "skip_mid_handoff"
+    return 0
+  fi
+  printf '%s\n' "run"
+}
+
+# Decide 09-hardening mode for full-install.
+# Args: mid_handoff 0|1, zimbra_dir_exists 0|1 (legacy [ -d /opt/zimbra ])
+# Prints: full | os_only
+full_install_hardening_mode() {
+  local mid="${1:-0}"
+  local dir_exists="${2:-0}"
+  if [ "$mid" = "1" ]; then
+    printf '%s\n' "os_only"
+    return 0
+  fi
+  if [ "$dir_exists" = "0" ]; then
+    printf '%s\n' "os_only"
+    return 0
+  fi
+  printf '%s\n' "full"
+}
+
+# Decide 03 verification behaviour after the installer-skip decision.
+# Args: skip_reason none|healthy|mid_handoff
+# Prints: skip_mid_handoff | verify_live
+zimbra_install_verify_action() {
+  case "${1:-none}" in
+    mid_handoff) printf '%s\n' "skip_mid_handoff" ;;
+    *) printf '%s\n' "verify_live" ;;
+  esac
 }

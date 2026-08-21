@@ -91,6 +91,13 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 LE_DIR="/etc/letsencrypt/live/${MAIL_HOST}"
 ZS="/opt/zimbra/ssl/letsencrypt"
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; skipping TLS/DKIM (Pacemaker owns live tree)."
+  exit 0
+fi
+
 [ -d /opt/zimbra ] || { fail "Zimbra is not installed yet. Run 03 first."; exit 1; }
 
 : "${TLS_METHOD:=cloudflare}"

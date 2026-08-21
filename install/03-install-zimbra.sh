@@ -264,6 +264,8 @@ fi
 # a second pass against an already-installed system hits upgrade/reconfigure
 # prompts the state machine does not recognise (hang or wrong answers).
 SKIP_INSTALLER=0
+# none | healthy | mid_handoff - drives section 3 verification (not just installer skip)
+SKIP_REASON=none
 DATA_DISK="${KIN_DRBD_DATA_DISK:-/dev/sdb1}"
 if [ -d /opt/zimbra ]; then
   STATUS_PRE=$(su - zimbra -c "zmcontrol status" 2>&1) || STATUS_PRE=""
@@ -282,12 +284,14 @@ if [ -d /opt/zimbra ]; then
       ok "/opt/zimbra exists; zmcontrol status: all services Running"
       info "Re-run does not re-run install.sh (avoids upgrade/reconfigure flow)."
       SKIP_INSTALLER=1
+      SKIP_REASON=healthy
       ;;
     skip_mid_handoff)
       say "2. Installer skipped - Zimbra already on the data partition (mid-handoff)"
       ok "bin/zmcontrol present on ${DATA_DISK}; /opt/zimbra is currently unmounted"
       info "Not remounting or starting Zimbra here; DRBD attach and Pacemaker own that."
       SKIP_INSTALLER=1
+      SKIP_REASON=mid_handoff
       ;;
     *)
       fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
@@ -622,6 +626,34 @@ if [ "$SKIP_INSTALLER" -eq 0 ]; then
 fi
 # Scrub even on failure paths so a broken install cannot leave a dirty log behind.
 scrub_install_log "$LOG"
+
+case "$(zimbra_install_verify_action "$SKIP_REASON")" in
+  skip_mid_handoff)
+    ok "Live zmcontrol verify skipped (mid-handoff)"
+    info "Real install is on ${DATA_DISK}; /opt/zimbra is an empty mountpoint by design."
+    info "DRBD attach and Pacemaker (mail-pacemaker.yml) bring Zimbra back; not this stage."
+    if [ -f "$LOG" ]; then
+      scrub_install_log "$LOG"
+      if grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
+        fail "Admin password still detected in $LOG after redact - check filter"
+        exit 1
+      fi
+      ok "Install log clean of admin password (${LOG}, mode $(stat -c %a "$LOG" 2>/dev/null || stat -f %Lp "$LOG"))"
+    elif [ "$SKIP_INSTALLER" -eq 1 ]; then
+      info "No new installer log (driver skipped)"
+    fi
+    echo
+    say "DONE (mid-handoff)"
+    info "Full-install will skip Zimbra-touching stages 04/05/06/07/11 until the tree is live again."
+    tmux kill-session -t "$SESS" 2>/dev/null
+    if declare -F cleanup_redactor >/dev/null 2>&1; then
+      cleanup_redactor
+      trap - EXIT
+    fi
+    exit 0
+    ;;
+esac
+
 if [ ! -d /opt/zimbra ]; then fail "/opt/zimbra missing - installation failed. See $LOG"; exit 1; fi
 
 STATUS=$(su - zimbra -c "zmcontrol status" 2>&1)

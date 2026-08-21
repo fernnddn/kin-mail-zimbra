@@ -12,6 +12,13 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
+# shellcheck disable=SC1091
+. ./lib/zimbra-data-disk-probe.sh
+if zimbra_is_mid_handoff; then
+  warn "Mid-handoff: /opt/zimbra is unmounted; skipping healthcheck (zmcontrol not reachable)."
+  exit 0
+fi
+
 QUICK=0; [ "${1:-}" = "--quick" ] && QUICK=1
 PASS=0; FAILED=0; BLOCKED=0
 p() { ok   "$*"; PASS=$((PASS+1)); }
