@@ -5,4 +5,5 @@ galaxy_info:
     kin-zimbra DRBD resource with EXTERNAL meta-disk + meta loop unit (task 2.5).
   license: proprietary
   min_ansible_version: "2.14"
-dependencies: []
+dependencies:
+  - role: kin_mail_paths

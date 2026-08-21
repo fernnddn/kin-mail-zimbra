@@ -12,7 +12,11 @@
   ansible.builtin.import_tasks: resource_file.yml
   tags: [drbd, resource, config]
 
-- name: Include the DRBD activation steps (mutating — handle with care)
+- name: Include the plain /opt/zimbra mount release steps (before drbdadm up)
+  ansible.builtin.import_tasks: release_plain_mount.yml
+  tags: [drbd, resource, release]
+
+- name: Include the DRBD activation steps (mutating - handle with care)
   ansible.builtin.import_tasks: activate.yml
   tags: [drbd, resource, activate]
 

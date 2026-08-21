@@ -1,0 +1,165 @@
+---
+# =============================================================================
+# RELEASE PLAIN /opt/zimbra MOUNT SO DRBD CAN ATTACH THE DATA DISK
+# =============================================================================
+# After prepare-zimbra-data-disk.sh, /opt/zimbra sits on {{ drbd_resource_disk }}
+# via fstab. drbdadm up cannot open that backing device while it is mounted.
+# Pacemaker kin-fs / kin-zimbra (mail-pacemaker.yml) remount /dev/drbd0 and
+# start Zimbra later. This handoff only frees the disk; it does not start mail.
+#
+# Brief mail outage on every node that still has the plain mount. Expected for
+# Build HA pair (wizard confirmation already required).
+#
+# Same check_mode discipline as activate.yml: never check_mode: false on the
+# mutating script; gate with `when: not ansible_check_mode`.
+# =============================================================================
+
+- name: Resolve paths for the plain-mount DRBD handoff scripts
+  ansible.builtin.set_fact:
+    drbd_resource_release_migrate_src: "{{ kin_mail_deploy_dir }}/install/lib/migrate-zimbra-to-drbd-disk.sh"
+    drbd_resource_release_script_src: "{{ kin_mail_deploy_dir }}/install/lib/release-zimbra-plain-mount-for-drbd.sh"
+    drbd_resource_release_dir: /var/lib/kin-mail/drbd-plain-mount-handoff
+  tags: [drbd, resource, release]
+
+- name: Stat the migrate helper on the controller
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_release_migrate_src }}"
+  register: drbd_resource_release_migrate_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Stat the release script on the controller
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_release_script_src }}"
+  register: drbd_resource_release_script_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Require the migrate helper and release script on the controller
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_release_migrate_stat.stat.exists | default(false)
+      - drbd_resource_release_migrate_stat.stat.isreg | default(false)
+      - drbd_resource_release_script_stat.stat.exists | default(false)
+      - drbd_resource_release_script_stat.stat.isreg | default(false)
+    fail_msg: >-
+      Missing {{ drbd_resource_release_migrate_src }} or
+      {{ drbd_resource_release_script_src }}. Set kin_mail_deploy_dir /
+      KIN_MAIL_DEPLOY_DIR to the tree that contains install/lib/.
+  run_once: true
+  tags: [drbd, resource, release]
+
+- name: Read the current /opt/zimbra mount source
+  ansible.builtin.command:
+    cmd: findmnt -n -o SOURCE /opt/zimbra
+  register: drbd_resource_zimbra_mount_src
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Decide whether this host still needs the plain-mount handoff
+  ansible.builtin.set_fact:
+    drbd_resource_needs_plain_mount_release: >-
+      {{
+        (drbd_resource_zimbra_mount_src.rc == 0)
+        and (drbd_resource_zimbra_mount_src.stdout | trim | length > 0)
+        and not ((drbd_resource_zimbra_mount_src.stdout | trim) is match('^/dev/drbd'))
+        and not ('/drbd/' in (drbd_resource_zimbra_mount_src.stdout | trim))
+      }}
+  tags: [drbd, resource, release]
+
+- name: Announce a brief mail outage for the DRBD attach handoff
+  ansible.builtin.debug:
+    msg: >-
+      /opt/zimbra is mounted from
+      {{ drbd_resource_zimbra_mount_src.stdout | trim }} (plain data partition).
+      Stopping Zimbra and unmounting so drbdadm up can attach
+      {{ drbd_resource_disk }}. Mail stays down on this node until Pacemaker
+      kin-fs mounts /dev/drbd0 and starts kin-zimbra (mail-pacemaker.yml).
+  when: drbd_resource_needs_plain_mount_release | bool
+  tags: [drbd, resource, release]
+
+- name: Note when the plain-mount handoff is not required
+  ansible.builtin.debug:
+    msg: >-
+      Skipping plain-mount release on {{ inventory_hostname }}:
+      findmnt rc={{ drbd_resource_zimbra_mount_src.rc }}
+      source={{ drbd_resource_zimbra_mount_src.stdout | trim | default('(unmounted)') }}.
+  when: not (drbd_resource_needs_plain_mount_release | bool)
+  tags: [drbd, resource, release]
+
+- name: Stage the handoff directory on the node
+  ansible.builtin.file:
+    path: "{{ drbd_resource_release_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - drbd_resource_needs_plain_mount_release | bool
+    - not ansible_check_mode
+  tags: [drbd, resource, release]
+
+- name: Stage migrate-zimbra-to-drbd-disk.sh for reused stop/umount helpers
+  ansible.builtin.copy:
+    src: "{{ drbd_resource_release_migrate_src }}"
+    dest: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - drbd_resource_needs_plain_mount_release | bool
+    - not ansible_check_mode
+  tags: [drbd, resource, release]
+
+- name: Stage release-zimbra-plain-mount-for-drbd.sh
+  ansible.builtin.copy:
+    src: "{{ drbd_resource_release_script_src }}"
+    dest: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - drbd_resource_needs_plain_mount_release | bool
+    - not ansible_check_mode
+  tags: [drbd, resource, release]
+
+- name: Stop Zimbra, unmount /opt/zimbra, and drop the pre-cluster fstab block
+  ansible.builtin.command:
+    cmd: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
+  environment:
+    KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
+    KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
+  register: drbd_resource_release_result
+  # SAFETY: never check_mode: false - must not stop live mail during --check.
+  when:
+    - drbd_resource_needs_plain_mount_release | bool
+    - not ansible_check_mode
+  tags: [drbd, resource, release]
+
+- name: Confirm /opt/zimbra is no longer on the plain data partition
+  ansible.builtin.command:
+    cmd: findmnt -n -o SOURCE /opt/zimbra
+  register: drbd_resource_zimbra_mount_after
+  changed_when: false
+  failed_when: >-
+    drbd_resource_zimbra_mount_after.rc == 0
+    and (drbd_resource_zimbra_mount_after.stdout | trim | length > 0)
+    and not ((drbd_resource_zimbra_mount_after.stdout | trim) is match('^/dev/drbd'))
+    and not ('/drbd/' in (drbd_resource_zimbra_mount_after.stdout | trim))
+  check_mode: false
+  when:
+    - drbd_resource_needs_plain_mount_release | bool
+    - not ansible_check_mode
+  tags: [drbd, resource, release]

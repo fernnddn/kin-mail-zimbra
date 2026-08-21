@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING DRBD COMMANDS — PRODUCTION DATA ON /dev/sdb1 VIA kin-zimbra
+# MUTATING DRBD COMMANDS - PRODUCTION DATA ON /dev/sdb1 VIA kin-zimbra
 # =============================================================================
 # kin-zimbra is the LIVE production replication resource. Under ansible-playbook
 # --check these tasks must remain PURE dry-run:
@@ -24,19 +24,33 @@
   check_mode: false
   tags: [drbd, resource, activate]
 
+- name: Probe whether DRBD metadata already exists on the meta-disk
+  ansible.builtin.command:
+    cmd: drbdadm dump-md {{ drbd_resource_name }}
+  register: drbd_resource_dump_md
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: drbd_resource_status_pre.rc != 0
+  tags: [drbd, resource, activate]
+
 - name: Create the DRBD metadata on the external meta-disk
   ansible.builtin.command:
     cmd: drbdadm create-md {{ drbd_resource_name }}
-  # SAFETY: never check_mode: false — create-md must not run during --check.
+  # SAFETY: never check_mode: false - create-md must not run during --check.
+  # Skip when dump-md already succeeds: tonight's live pair already ran
+  # create-md once; a blind re-run on retry would be wrong.
   when:
     - drbd_resource_status_pre.rc != 0
+    - drbd_resource_dump_md.rc is defined
+    - drbd_resource_dump_md.rc != 0
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
 - name: Bring up the DRBD resource (drbdadm up)
   ansible.builtin.command:
     cmd: drbdadm up {{ drbd_resource_name }}
-  # SAFETY: never check_mode: false — up must not run during --check.
+  # SAFETY: never check_mode: false - up must not run during --check.
   when:
     - drbd_resource_status_pre.rc != 0
     - not ansible_check_mode
@@ -45,7 +59,7 @@
 - name: Force-promote to Primary only during an empty bootstrap
   ansible.builtin.command:
     cmd: drbdadm primary --force {{ drbd_resource_name }}
-  # SAFETY: never check_mode: false — primary --force must not run during --check.
+  # SAFETY: never check_mode: false - primary --force must not run during --check.
   # On production migration this was Host A only after create-md; Pacemaker now
   # owns promotion. This task is for greenfield/bootstrap labs only.
   when:
