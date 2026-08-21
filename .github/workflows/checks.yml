@@ -168,12 +168,16 @@ jobs:
           #   register_hosts.py      — Zabbix lab host table (Observability /
           #                            Mail A/B / Backup); same lab IPs as
           #                            *.example.yml, not a leaked secret
+          #   test_corosync_stub.py  - Corosync stub fixtures (lab 10.10.40.x
+          #                            ring addresses and peer_ip kwargs);
+          #                            same lab IPs as register_hosts.py
           scan_private_ip() {
             if grep -RInE "$1" "${includes[@]}" \
                  --exclude='HA-RUNBOOK.md' \
                  --exclude='*.example.yml' \
                  --exclude='checks.yml' \
                  --exclude='register_hosts.py' \
+                 --exclude='test_corosync_stub.py' \
                  --exclude-dir=defaults \
                  . ; then
               echo ">>> $2"; fail=1
