@@ -1,0 +1,190 @@
+---
+# Phase 0 after an unplanned Observability loss. Mail stays up. Do not touch
+# Zimbra, DRBD, or Pacemaker mail resources. HA-RUNBOOK.md section 7.
+
+- name: Pause Pacemaker fencing while the shared SBD device is gone
+  ansible.builtin.command:
+    cmd: pcs property set stonith-enabled=false
+  run_once: true
+  when: not ansible_check_mode
+  tags: [observability, disarm, stonith]
+
+- name: Unmanage the sbd primitive so monitors do not flap
+  ansible.builtin.command:
+    cmd: pcs resource unmanage sbd
+  run_once: true
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, disarm, stonith]
+
+- name: Prepare the runtime SBD allow-manual drop-in directory
+  ansible.builtin.file:
+    path: "{{ observability_disarm_dropin_dir }}"
+    state: directory
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Allow manual stop of sbd.service this boot
+  ansible.builtin.copy:
+    dest: "{{ observability_disarm_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      RefuseManualStart=no
+      RefuseManualStop=no
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Reload systemd after the runtime SBD drop-in
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Disable sbd so RequiredBy symlinks are removed
+  ansible.builtin.command:
+    cmd: systemctl disable sbd
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Build the SBD stop order (Unpromoted first)
+  ansible.builtin.set_fact:
+    observability_stop_hosts: >-
+      {{
+        (observability_sbd_stop_order | string).split(',')
+        | map('trim')
+        | select('ne', '')
+        | list
+      }}
+  run_once: true
+  tags: [observability, disarm, sbd]
+
+- name: Fall back to the play hosts when no stop order was supplied
+  ansible.builtin.set_fact:
+    observability_stop_hosts: "{{ ansible_play_hosts }}"
+  run_once: true
+  when: observability_stop_hosts | length == 0
+  tags: [observability, disarm, sbd]
+
+- name: Stop sbd in HA-RUNBOOK order and wait past the watchdog
+  ansible.builtin.include_tasks: stop_one.yml
+  loop: "{{ observability_stop_hosts }}"
+  loop_control:
+    loop_var: obs_stop_host
+  run_once: true
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Runtime-mask sbd so nothing restarts it this boot
+  ansible.builtin.command:
+    cmd: systemctl mask --runtime sbd
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, disarm, sbd]
+
+- name: Log out of the retired Observability iSCSI portal
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ observability_iscsi_iqn }}
+      -p {{ observability_retired_ip }}:3260 --logout
+  register: observability_iscsi_logout
+  failed_when: false
+  changed_when: observability_iscsi_logout.rc == 0
+  when:
+    - observability_retired_ip | length > 0
+    - not ansible_check_mode
+  tags: [observability, disarm, iscsi]
+
+- name: Delete the retired Observability iSCSI node record
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ observability_iscsi_iqn }}
+      -p {{ observability_retired_ip }}:3260 --op delete
+  register: observability_iscsi_delete
+  failed_when: false
+  changed_when: observability_iscsi_delete.rc == 0
+  when:
+    - observability_retired_ip | length > 0
+    - not ansible_check_mode
+  tags: [observability, disarm, iscsi]
+
+- name: Install the quorum.device strip helper
+  ansible.builtin.copy:
+    src: strip_quorum_device.py
+    dest: "{{ observability_strip_helper }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [observability, disarm, qdevice]
+
+- name: Strip quorum.device from corosync.conf
+  ansible.builtin.command:
+    cmd: "{{ observability_strip_helper }}"
+  environment:
+    COROSYNC_CONF: "{{ observability_corosync_conf }}"
+  register: observability_strip
+  changed_when: "'UPDATED' in observability_strip.stdout"
+  when: not ansible_check_mode
+  tags: [observability, disarm, qdevice]
+
+- name: Reload Corosync after stripping the quorum device
+  ansible.builtin.command:
+    cmd: pcs cluster reload corosync
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - observability_strip is defined
+    - "'UPDATED' in (observability_strip.stdout | default(''))"
+  tags: [observability, disarm, qdevice]
+
+- name: Stop corosync-qdevice (witness is gone)
+  ansible.builtin.command:
+    cmd: systemctl stop corosync-qdevice
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, disarm, qdevice]
+
+- name: Clear OBSERVABILITY_VM_IP on this mail node
+  ansible.builtin.replace:
+    path: "{{ observability_kin_mail_config }}"
+    regexp: '^OBSERVABILITY_VM_IP=.*'
+    replace: 'OBSERVABILITY_VM_IP=""'
+  failed_when: false
+  when:
+    - not ansible_check_mode
+  tags: [observability, disarm, config]
+
+- name: Confirm sbd is inactive after disarm
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: observability_sbd_active
+  changed_when: false
+  failed_when: observability_sbd_active.stdout | trim == "active"
+  check_mode: false
+  tags: [observability, disarm, verify]
+
+- name: Confirm stonith is disabled
+  ansible.builtin.command:
+    cmd: pcs property config stonith-enabled
+  register: observability_stonith_prop
+  changed_when: false
+  failed_when: >-
+    'stonith-enabled: true' in
+    (observability_stonith_prop.stdout | default('')) | lower
+  check_mode: false
+  run_once: true
+  tags: [observability, disarm, verify]
+
+- name: Confirm quorum.device host is gone
+  ansible.builtin.command:
+    cmd: grep -E 'model:\s*net' {{ observability_corosync_conf }}
+  register: observability_qnet_grep
+  changed_when: false
+  failed_when: observability_qnet_grep.rc != 1
+  check_mode: false
+  tags: [observability, disarm, verify]

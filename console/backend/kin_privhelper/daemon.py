@@ -266,6 +266,14 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             rop = str(args.get("op") or "apply")[:16]
             tgt = str(args.get("target") or "")[:80]
             audit_cmd = f"{cmd}:{rop}" + (f":{tgt}" if tgt else "")
+        elif cmd == proto.CMD_REMOVE_OBSERVABILITY:
+            rop = str(args.get("op") or "apply")[:16]
+            audit_cmd = f"{cmd}:{rop}"
+        elif cmd == proto.CMD_ADD_OBSERVABILITY:
+            aop = str(args.get("op") or "apply")[:16]
+            audit_cmd = f"{cmd}:{aop}"
+        elif cmd == proto.CMD_STORE_OBSERVABILITY_SECRETS:
+            audit_cmd = f"{cmd}:redacted"
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).
@@ -284,6 +292,12 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             and str(args.get("op") or "").strip().lower() in ("status", "preflight")
         ) or (
             cmd == proto.CMD_REMOVE_HOST
+            and str(args.get("op") or "").strip().lower() == "probe"
+        ) or (
+            cmd == proto.CMD_REMOVE_OBSERVABILITY
+            and str(args.get("op") or "").strip().lower() == "probe"
+        ) or (
+            cmd == proto.CMD_ADD_OBSERVABILITY
             and str(args.get("op") or "").strip().lower() == "probe"
         ) or cmd == proto.CMD_HA_DISK_PREFLIGHT
 

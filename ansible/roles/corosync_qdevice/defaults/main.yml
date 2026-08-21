@@ -24,3 +24,6 @@ corosync_qdevice_crq_path: /etc/corosync/qdevice/net/nssdb/qdevice-net-node.crq
 corosync_qdevice_p12_path: /etc/corosync/qdevice/net/nssdb/qdevice-net-node.p12
 corosync_qdevice_signed_cert_name: "cluster-{{ corosync_qdevice_cluster_name }}.crt"
 corosync_qdevice_controller_workdir: /tmp/kin-mail-ansible-qdevice
+# Rebuild of Observability generates a new qnetd CA. Default false so
+# greenfield HA build stays idempotent when NSS already exists.
+corosync_qdevice_force_tls_reinit: false

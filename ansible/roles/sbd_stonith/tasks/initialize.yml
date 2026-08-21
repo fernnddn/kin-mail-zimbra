@@ -35,6 +35,20 @@
   run_once: true
   tags: [sbd, stonith, initialize]
 
+- name: Refuse an already-initialized SBD LUN during Observability rebuild
+  ansible.builtin.assert:
+    that:
+      - (sbd_stonith_header_probe.rc | int) != 0
+    fail_msg: >-
+      sbd dump succeeded on {{ sbd_stonith_device }}. A rebuild expects a
+      brand-new empty LUN. Refusing sbd create against a device that already
+      has fencing history.
+  run_once: true
+  when:
+    - observability_expect_fresh_sbd | bool
+    - (sbd_stonith_header_probe.rc | int) == 0
+  tags: [sbd, stonith, initialize]
+
 - name: Initialize the SBD device header when dump finds none
   ansible.builtin.command:
     cmd: >-

@@ -21,3 +21,5 @@ sbd_stonith_cluster_timeout: 150s
 sbd_stonith_resource_name: sbd
 sbd_stonith_default_path: /etc/default/sbd
 sbd_stonith_dropin_dir: /etc/systemd/system/sbd.service.d
+# Observability rebuild only. Greenfield HA build must stay skip-on-existing.
+observability_expect_fresh_sbd: false

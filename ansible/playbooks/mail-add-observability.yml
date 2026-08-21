@@ -1,0 +1,26 @@
+---
+# Rebuild a replacement Observability VM and reconnect both live mail nodes.
+# Does not mutate Zimbra / DRBD / Pacemaker mail resources.
+# TLS reinit is required: a fresh qnetd has a new NSS identity.
+
+- name: Install qnetd and the iSCSI SBD target on the new Observability VM
+  hosts: monitoring
+  gather_facts: true
+  become: true
+  roles:
+    - role: corosync_qnetd
+      tags: [observability, add, qnetd]
+    - role: iscsi_target
+      tags: [observability, add, iscsi]
+
+- name: Reconnect qdevice clients on both mail nodes
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: iscsi_initiator
+      tags: [observability, add, iscsi]
+    - role: corosync_qdevice
+      tags: [observability, add, qdevice]
+    - role: observability_rearm
+      tags: [observability, add, rearm]

@@ -1,0 +1,197 @@
+---
+# HA-RUNBOOK.md section 7 re-arm, adapted for a fresh Observability identity.
+# Do not pcs cluster stop/start a node that is hosting mail (activate.yml
+# refuse_busy). systemctl start sbd with the allow-manual drop-in instead.
+
+- name: Rewrite /etc/default/sbd for the new LUN
+  ansible.builtin.include_role:
+    name: sbd_stonith
+    tasks_from: config.yml
+  vars:
+    sbd_stonith_device: >-
+      {{ iscsi_initiator_sbd_by_id | default(sbd_stonith_device) }}
+  tags: [observability, rearm, sbd]
+
+- name: Initialize the SBD header on a genuinely new LUN
+  ansible.builtin.include_role:
+    name: sbd_stonith
+    tasks_from: initialize.yml
+  vars:
+    sbd_stonith_device: >-
+      {{ iscsi_initiator_sbd_by_id | default(sbd_stonith_device) }}
+    observability_expect_fresh_sbd: true
+  tags: [observability, rearm, sbd]
+
+- name: Capture the current fence_sbd resource
+  ansible.builtin.command:
+    cmd: pcs stonith config {{ sbd_stonith_resource_name | default('sbd') }}
+  register: observability_stonith_cfg
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  run_once: true
+  tags: [observability, rearm, stonith]
+
+- name: Point fence_sbd at the new SBD device path
+  ansible.builtin.command:
+    cmd: >-
+      pcs stonith update {{ sbd_stonith_resource_name | default('sbd') }}
+      devices={{ sbd_stonith_device }}
+      power_timeout={{ sbd_stonith_power_timeout | default(150) }}
+  run_once: true
+  when:
+    - observability_stonith_cfg.rc == 0
+    - sbd_stonith_device | default('') | length > 0
+    - not ansible_check_mode
+  tags: [observability, rearm, stonith]
+
+- name: Create fence_sbd when the resource is missing
+  ansible.builtin.include_role:
+    name: sbd_stonith
+    tasks_from: stonith.yml
+  when: observability_stonith_cfg.rc != 0
+  tags: [observability, rearm, stonith]
+
+- name: Unmask runtime sbd
+  ansible.builtin.command:
+    cmd: systemctl unmask --runtime sbd
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Enable sbd so RequiredBy symlinks return
+  ansible.builtin.command:
+    cmd: systemctl enable sbd
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Confirm pacemaker Requires sbd.service
+  ansible.builtin.command:
+    cmd: systemctl show pacemaker -p Requires
+  register: observability_pcmk_requires
+  changed_when: false
+  failed_when: >-
+    'sbd.service' not in
+    (observability_pcmk_requires.stdout | default(''))
+  check_mode: false
+  tags: [observability, rearm, sbd]
+
+- name: Allow manual start of sbd.service this boot
+  ansible.builtin.copy:
+    dest: "{{ observability_allow_manual_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      RefuseManualStart=no
+      RefuseManualStop=no
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Reload systemd before starting sbd
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Build the SBD start order (Unpromoted first)
+  ansible.builtin.set_fact:
+    observability_start_hosts: >-
+      {{
+        (observability_sbd_stop_order | string).split(',')
+        | map('trim')
+        | select('ne', '')
+        | list
+      }}
+  run_once: true
+  tags: [observability, rearm, sbd]
+
+- name: Fall back to the play hosts when no start order was supplied
+  ansible.builtin.set_fact:
+    observability_start_hosts: "{{ ansible_play_hosts }}"
+  run_once: true
+  when: observability_start_hosts | length == 0
+  tags: [observability, rearm, sbd]
+
+- name: Start sbd in HA-RUNBOOK order (SBD_DELAY_START may take ~70s)
+  ansible.builtin.include_tasks: start_one.yml
+  loop: "{{ observability_start_hosts }}"
+  loop_control:
+    loop_var: obs_start_host
+  run_once: true
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Remove the allow-manual drop-in
+  ansible.builtin.file:
+    path: "{{ observability_allow_manual_dropin }}"
+    state: absent
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Remove the disarm drop-in if it is still present
+  ansible.builtin.file:
+    path: "{{ observability_disarm_dropin }}"
+    state: absent
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Reload systemd after dropping allow-manual
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  when: not ansible_check_mode
+  tags: [observability, rearm, sbd]
+
+- name: Cleanup and manage the sbd primitive
+  ansible.builtin.command:
+    cmd: pcs resource cleanup sbd
+  run_once: true
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, rearm, stonith]
+
+- name: Manage the sbd primitive
+  ansible.builtin.command:
+    cmd: pcs resource manage sbd
+  run_once: true
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [observability, rearm, stonith]
+
+- name: Re-enable Pacemaker fencing
+  ansible.builtin.command:
+    cmd: pcs property set stonith-enabled=true
+  run_once: true
+  when: not ansible_check_mode
+  tags: [observability, rearm, stonith]
+
+- name: Record the new Observability IP on this mail node
+  ansible.builtin.replace:
+    path: "{{ observability_kin_mail_config }}"
+    regexp: '^OBSERVABILITY_VM_IP=.*'
+    replace: 'OBSERVABILITY_VM_IP="{{ observability_new_ip }}"'
+  failed_when: false
+  when:
+    - observability_new_ip | length > 0
+    - not ansible_check_mode
+  tags: [observability, rearm, config]
+
+- name: Confirm sbd is active
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  register: observability_sbd_is_active
+  changed_when: false
+  failed_when: observability_sbd_is_active.stdout | trim != "active"
+  check_mode: false
+  tags: [observability, rearm, verify]
+
+- name: Confirm SBD slots are readable
+  ansible.builtin.command:
+    cmd: sbd -d {{ sbd_stonith_device }} list
+  register: observability_sbd_list
+  changed_when: false
+  failed_when: observability_sbd_list.rc != 0
+  check_mode: false
+  when: sbd_stonith_device | default('') | length > 0
+  tags: [observability, rearm, verify]

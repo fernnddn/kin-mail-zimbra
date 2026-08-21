@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: observability_disarm
+  description: >
+    Stabilize both mail nodes after Observability loss: disarm SBD, clear
+    qdevice and iSCSI pointers. Not mail-node cluster_remove_host.
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["22.04", "24.04"]
+dependencies: []

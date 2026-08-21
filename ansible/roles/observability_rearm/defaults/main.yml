@@ -1,0 +1,10 @@
+---
+observability_rearm_wait_sec: 5
+observability_sbd_stop_order: ""
+observability_promoted: ""
+observability_disarm_dropin: >-
+  /run/systemd/system/sbd.service.d/kin-observability-disarm.conf
+observability_allow_manual_dropin: >-
+  /run/systemd/system/sbd.service.d/kin-observability-allow-manual.conf
+observability_kin_mail_config: /etc/kin-mail/config
+observability_new_ip: "{{ corosync_qdevice_qnetd_ip | default('') }}"

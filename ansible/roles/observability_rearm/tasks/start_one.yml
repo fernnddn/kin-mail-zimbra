@@ -1,0 +1,7 @@
+---
+- name: Start sbd on this mail node
+  ansible.builtin.command:
+    cmd: systemctl start sbd
+  delegate_to: "{{ obs_start_host }}"
+  register: observability_sbd_start
+  failed_when: observability_sbd_start.rc != 0

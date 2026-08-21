@@ -1,0 +1,11 @@
+---
+# Forced cleanup after Observability is already unreachable.
+# Hosts: mail_nodes only. Do not run the mail-node remove or replace roles.
+
+- name: Disarm SBD and clear Observability references on both mail nodes
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: observability_disarm
+      tags: [observability, remove]

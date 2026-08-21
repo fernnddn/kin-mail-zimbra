@@ -1,0 +1,190 @@
+"""Add/Remove Observability planners (no live cluster)."""
+
+from __future__ import annotations
+
+import importlib.util
+import unittest
+from pathlib import Path
+
+from kin_privhelper.observability_lifecycle import (
+    observability_inventory_name,
+    plan_add_observability,
+    plan_remove_observability,
+    render_observability_inventory,
+    sbd_stop_order,
+)
+from kin_privhelper.qdevice_status import parse_quorum_votes, quorum_votes_match_rebuild, strip_quorum_device
+from kin_privhelper.observability_status import snapshot_from_texts
+
+REPO = Path(__file__).resolve().parents[3]
+QUORUM_OK = """\
+Quorum information
+------------------
+Expected votes:   3
+Highest expected: 3
+Total votes:      3
+Quorum:           2
+Flags:            Quorate Qdevice
+"""
+
+
+class ObservabilityLifecycleTests(unittest.TestCase):
+    def test_remove_refuses_healthy_or_ssh(self) -> None:
+        plan = plan_remove_observability(
+            identity="192.0.2.53",
+            reachable=True,
+            ssh_ok=False,
+        )
+        self.assertTrue(plan.errors)
+        alive = plan_remove_observability(
+            identity="192.0.2.53",
+            reachable=False,
+            ssh_ok=True,
+        )
+        self.assertTrue(alive.errors)
+
+    def test_remove_forced_when_unreachable(self) -> None:
+        plan = plan_remove_observability(
+            identity="192.0.2.53",
+            reachable=False,
+            ssh_ok=False,
+        )
+        self.assertEqual(plan.errors, ())
+        self.assertEqual(plan.status, "unreachable")
+        self.assertTrue(any("forced" in n for n in plan.notes))
+
+    def test_remove_refuses_absent(self) -> None:
+        plan = plan_remove_observability(identity="", reachable=False, ssh_ok=False)
+        self.assertTrue(plan.errors)
+
+    def test_add_only_when_absent(self) -> None:
+        blocked = plan_add_observability(
+            current_identity="192.0.2.53",
+            current_reachable=False,
+            new_ip="192.0.2.99",
+            has_credentials=True,
+        )
+        self.assertTrue(blocked.errors)
+        ok = plan_add_observability(
+            current_identity="",
+            current_reachable=False,
+            new_ip="192.0.2.99",
+            hostname="obs.example.test",
+            has_credentials=True,
+        )
+        self.assertEqual(ok.errors, ())
+        self.assertEqual(ok.new_ip, "192.0.2.99")
+        self.assertNotEqual(ok.new_ip, "192.0.2.53")
+
+    def test_add_never_defaults_old_ip(self) -> None:
+        plan = plan_add_observability(
+            current_identity="",
+            current_reachable=False,
+            new_ip="",
+            has_credentials=True,
+        )
+        self.assertTrue(any("IPv4" in e for e in plan.errors))
+
+    def test_sbd_stop_order_unpromoted_first(self) -> None:
+        order = sbd_stop_order(
+            promoted="mail.example.test",
+            hosts=["mail.example.test", "mail2.example.test"],
+        )
+        self.assertEqual(order[0], "mail2.example.test")
+        self.assertEqual(order[-1], "mail.example.test")
+
+    def test_inventory_never_embeds_passwords(self) -> None:
+        inv = render_observability_inventory(
+            mail_hosts=[
+                ("mail.example.test", "192.0.2.51", "mail"),
+                ("mail2.example.test", "192.0.2.52", "mail2"),
+            ],
+            obs_name="obs.example.test",
+            obs_ip="192.0.2.99",
+            retired_ip="192.0.2.53",
+            local_mail_name="mail.example.test",
+            force_tls_reinit=True,
+            expect_fresh_sbd=True,
+        )
+        self.assertIn("lookup", inv)
+        self.assertIn("KIN_OBS_ANSIBLE_PASSWORD", inv)
+        self.assertIn("corosync_qdevice_force_tls_reinit: true", inv)
+        self.assertIn("observability_expect_fresh_sbd: true", inv)
+        self.assertIn("ansible_connection: local", inv)
+        self.assertNotIn("cluster_remove_host", inv)
+        self.assertNotIn("cluster_survivor_replace", inv)
+
+    def test_inventory_name(self) -> None:
+        self.assertEqual(
+            observability_inventory_name(ip="192.0.2.99", hostname="obs.example.test"),
+            "obs.example.test",
+        )
+        self.assertEqual(
+            observability_inventory_name(ip="192.0.2.99", hostname=""),
+            "obs-192-0-2-99",
+        )
+
+    def test_quorum_rebuild_match(self) -> None:
+        self.assertEqual(parse_quorum_votes(QUORUM_OK), (3, 3, 2))
+        self.assertTrue(quorum_votes_match_rebuild(QUORUM_OK))
+        self.assertFalse(quorum_votes_match_rebuild("Expected votes: 2\nTotal votes: 2\nQuorum: 2\n"))
+
+    def test_strip_helper_matches_privhelper(self) -> None:
+        path = (
+            REPO
+            / "ansible"
+            / "roles"
+            / "observability_disarm"
+            / "files"
+            / "strip_quorum_device.py"
+        )
+        spec = importlib.util.spec_from_file_location("strip_helper", path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        conf = """quorum {
+    provider: corosync_votequorum
+    device {
+        votes: 1
+        model: net
+        net {
+            host: 192.0.2.53
+            port: 5403
+        }
+    }
+}
+"""
+        a, ac = strip_quorum_device(conf)
+        b, bc = mod.strip_quorum_device(conf)
+        self.assertEqual(a, b)
+        self.assertEqual(ac, bc)
+
+    def test_roles_are_not_mail_node_remove(self) -> None:
+        remove = (
+            REPO / "ansible" / "playbooks" / "mail-remove-observability.yml"
+        ).read_text(encoding="utf-8")
+        add = (REPO / "ansible" / "playbooks" / "mail-add-observability.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("observability_disarm", remove)
+        self.assertNotIn("cluster_remove_host", remove)
+        self.assertNotIn("cluster_survivor_replace", remove)
+        self.assertIn("corosync_qnetd", add)
+        self.assertIn("iscsi_target", add)
+        self.assertIn("observability_rearm", add)
+        self.assertNotIn("cluster_survivor_replace", add)
+
+    def test_tls_role_can_force_reinit(self) -> None:
+        tls = (
+            REPO / "ansible" / "roles" / "corosync_qdevice" / "tasks" / "tls.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("corosync_qdevice_force_tls_reinit", tls)
+
+    def test_gating_falls_out_of_status(self) -> None:
+        gone = snapshot_from_texts(config_ip="", corosync_conf="quorum {\n}\n", reachable=False)
+        self.assertTrue(gone["can_add"])
+        self.assertFalse(gone["can_remove"])
+
+
+if __name__ == "__main__":
+    unittest.main()

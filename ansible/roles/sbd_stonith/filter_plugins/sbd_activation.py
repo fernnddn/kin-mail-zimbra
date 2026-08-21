@@ -26,6 +26,8 @@ from kin_privhelper.sbd_activation import (  # noqa: E402
     fence_sbd_power_timeout_ok,
     pcs_status_shows_local_mail_busy,
     sbd_activation_plan,
+    sbd_device_needs_create,
+    sbd_fresh_lun_plan,
     stonith_config_has_attr,
 )
 
@@ -42,4 +44,11 @@ class FilterModule:
             "kin_pcs_status_local_mail_busy": pcs_status_shows_local_mail_busy,
             "kin_fence_sbd_power_timeout_ok": fence_sbd_power_timeout_ok,
             "kin_stonith_config_has_attr": stonith_config_has_attr,
+            "kin_sbd_device_needs_create": sbd_device_needs_create,
+            "kin_sbd_fresh_lun_plan": (
+                lambda dump_rc, expect_fresh: sbd_fresh_lun_plan(
+                    dump_rc=dump_rc,
+                    expect_fresh=bool(expect_fresh),
+                )
+            ),
         }

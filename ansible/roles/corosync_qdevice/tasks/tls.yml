@@ -7,6 +7,24 @@
 # PKCS#12 may exist only on the node that ran -M; peers often have NSS only.
 # Mutating steps require not ansible_check_mode (no apply on live lab).
 
+- name: Drop stale qdevice NSS when a rebuild forces TLS reinit
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_nssdb_dir }}"
+    state: absent
+  when:
+    - corosync_qdevice_force_tls_reinit | bool
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Drop the copied qnetd CA when forcing TLS reinit
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_cacert_local }}"
+    state: absent
+  when:
+    - corosync_qdevice_force_tls_reinit | bool
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
 - name: Require the qnetd address
   ansible.builtin.assert:
     that:

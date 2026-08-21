@@ -23,7 +23,12 @@ from kin_privhelper.maintenance import (
     validate_node_name,
 )
 from kin_privhelper.provisioning_secrets import load_secrets, rotate_key, store_secrets
-from kin_privhelper.rbac import ROLE_CUSTOMER_ADMIN, ROLE_SUPER_ADMIN, command_allowed
+from kin_privhelper.rbac import (
+    ROLE_CUSTOMER_ADMIN,
+    ROLE_SUPER_ADMIN,
+    ROLE_SUPPORT_OPS,
+    command_allowed,
+)
 
 
 PCS_NODES = """
@@ -305,6 +310,9 @@ class RbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "maintenance", args={"op": "enter"}))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_host", args={"op": "apply"}))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "remove_host", args={"op": "apply"}))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_observability"))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "remove_observability"))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "add_observability"))
 
 
 if __name__ == "__main__":

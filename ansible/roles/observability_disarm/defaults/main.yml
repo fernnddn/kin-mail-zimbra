@@ -1,0 +1,15 @@
+---
+observability_watchdog_wait_sec: 40
+observability_retired_ip: ""
+observability_sbd_stop_order: ""
+observability_promoted: ""
+observability_corosync_conf: /etc/corosync/corosync.conf
+observability_strip_helper: >-
+  /usr/local/libexec/kin-mail-strip-quorum-device.py
+observability_disarm_dropin_dir: /run/systemd/system/sbd.service.d
+observability_disarm_dropin: >-
+  /run/systemd/system/sbd.service.d/kin-observability-disarm.conf
+observability_kin_mail_config: /etc/kin-mail/config
+observability_iscsi_iqn: >-
+  {{ iscsi_initiator_target_iqn
+     | default('iqn.2026-08.site.gits-it:kin-mail-sbd') }}

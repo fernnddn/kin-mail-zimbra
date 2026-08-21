@@ -10,6 +10,8 @@ from kin_privhelper.sbd_activation import (
     fence_sbd_power_timeout_ok,
     pcs_status_shows_local_mail_busy,
     sbd_activation_plan,
+    sbd_device_needs_create,
+    sbd_fresh_lun_plan,
     stonith_config_has_attr,
 )
 
@@ -171,6 +173,21 @@ class RoleWiringTests(unittest.TestCase):
         self.assertIn("kin_stonith_config_has_attr", verify)
         # Do not fight RefuseManualStart.
         self.assertNotIn("state: started", (root / "tasks" / "install.yml").read_text(encoding="utf-8"))
+        initialize = (root / "tasks" / "initialize.yml").read_text(encoding="utf-8")
+        self.assertIn("observability_expect_fresh_sbd", initialize)
+        self.assertIn("kin_sbd_fresh_lun_plan", (root / "filter_plugins" / "sbd_activation.py").read_text(encoding="utf-8"))
+
+
+class SbdFreshLunTests(unittest.TestCase):
+    def test_dump_failure_means_create(self) -> None:
+        self.assertTrue(sbd_device_needs_create(dump_rc=1))
+        self.assertEqual(sbd_fresh_lun_plan(dump_rc=1, expect_fresh=True), "create")
+        self.assertEqual(sbd_fresh_lun_plan(dump_rc=1, expect_fresh=False), "create")
+
+    def test_existing_header_skipped_unless_rebuild(self) -> None:
+        self.assertFalse(sbd_device_needs_create(dump_rc=0))
+        self.assertEqual(sbd_fresh_lun_plan(dump_rc=0, expect_fresh=False), "skip_existing")
+        self.assertEqual(sbd_fresh_lun_plan(dump_rc=0, expect_fresh=True), "refuse_existing")
 
 
 if __name__ == "__main__":

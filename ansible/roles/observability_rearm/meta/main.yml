@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: observability_rearm
+  description: >
+    Re-arm SBD and reconnect qdevice after a replacement Observability VM is
+    up. Uses systemctl start sbd (HA-RUNBOOK section 7), never pcs cluster
+    recycle of a Promoted mail node.
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions: ["22.04", "24.04"]
+dependencies: []

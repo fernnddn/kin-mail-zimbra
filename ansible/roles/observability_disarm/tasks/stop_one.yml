@@ -1,0 +1,10 @@
+---
+- name: Stop sbd on this mail node
+  ansible.builtin.command:
+    cmd: systemctl stop sbd
+  delegate_to: "{{ obs_stop_host }}"
+  failed_when: false
+
+- name: Wait longer than SBD_WATCHDOG_TIMEOUT
+  ansible.builtin.pause:
+    seconds: "{{ observability_watchdog_wait_sec | int }}"

@@ -23,6 +23,9 @@ CMD_STORE_PROVISIONING_SECRETS = "store_provisioning_secrets"
 CMD_RUN_HA_ORCHESTRATION = "run_ha_orchestration"
 CMD_HA_DISK_PREFLIGHT = "ha_disk_preflight"
 CMD_REMOVE_HOST = "remove_host"
+CMD_REMOVE_OBSERVABILITY = "remove_observability"
+CMD_ADD_OBSERVABILITY = "add_observability"
+CMD_STORE_OBSERVABILITY_SECRETS = "store_observability_secrets"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -40,6 +43,9 @@ ALLOWED_COMMANDS = frozenset(
         CMD_RUN_HA_ORCHESTRATION,
         CMD_HA_DISK_PREFLIGHT,
         CMD_REMOVE_HOST,
+        CMD_REMOVE_OBSERVABILITY,
+        CMD_ADD_OBSERVABILITY,
+        CMD_STORE_OBSERVABILITY_SECRETS,
     }
 )
 

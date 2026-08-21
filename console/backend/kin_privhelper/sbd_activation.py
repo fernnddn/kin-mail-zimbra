@@ -11,6 +11,32 @@ from __future__ import annotations
 import re
 
 
+def sbd_device_needs_create(*, dump_rc: int) -> bool:
+    """True when `sbd dump` failed, matching initialize.yml's create gate.
+
+    dump_rc == 0 means a readable header (fencing history) is already there.
+    Never treat that as a reason to run `sbd create`.
+    """
+    try:
+        return int(dump_rc) != 0
+    except (TypeError, ValueError):
+        return True
+
+
+def sbd_fresh_lun_plan(*, dump_rc: int, expect_fresh: bool) -> str:
+    """create | skip_existing | refuse_existing.
+
+    expect_fresh is the Observability rebuild path: a brand-new iSCSI LUN
+    must not already have a header. Greenfield HA build leaves expect_fresh
+    false so an already-initialized device is skipped, not recreated.
+    """
+    if sbd_device_needs_create(dump_rc=dump_rc):
+        return "create"
+    if expect_fresh:
+        return "refuse_existing"
+    return "skip_existing"
+
+
 def sbd_activation_plan(*, sbd_active: bool, local_mail_busy: bool) -> str:
     """Decide how to bring sbd.service up on this node.
 

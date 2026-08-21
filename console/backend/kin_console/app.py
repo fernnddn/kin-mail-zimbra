@@ -341,6 +341,8 @@ _STREAM_ACTIONS: dict[str, str] = {
     "maintenance": proto.CMD_MAINTENANCE,
     "ha_orchestration": proto.CMD_RUN_HA_ORCHESTRATION,
     "remove_host": proto.CMD_REMOVE_HOST,
+    "remove_observability": proto.CMD_REMOVE_OBSERVABILITY,
+    "add_observability": proto.CMD_ADD_OBSERVABILITY,
 }
 
 
@@ -481,6 +483,9 @@ async def wizard_deploy_stream(
         op = (request.query_params.get("op") or "apply").strip().lower()
         target = (request.query_params.get("target") or "").strip()
         stream_args = {"op": op, "target": target}
+    elif cmd in (proto.CMD_REMOVE_OBSERVABILITY, proto.CMD_ADD_OBSERVABILITY):
+        op = (request.query_params.get("op") or "apply").strip().lower()
+        stream_args = {"op": op}
 
     if not command_allowed(actor.role, cmd, args=stream_args):
         raise HTTPException(
@@ -599,6 +604,44 @@ async def cluster_status(
         "log": result.get("log"),
         "cluster": parsed,
     }
+
+
+class ObservabilitySecretsBody(BaseModel):
+    ip: str = Field(min_length=1, max_length=64)
+    hostname: str = Field(default="", max_length=253)
+    host_root_pass: str = Field(min_length=8, max_length=256)
+    kin_user_pass: str = Field(min_length=8, max_length=256)
+
+
+@app.post("/api/cluster/observability/secrets")
+async def cluster_observability_secrets(
+    body: ObservabilitySecretsBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Store replacement Observability VM credentials. Never echoed back."""
+    if not command_allowed(user.role, proto.CMD_STORE_OBSERVABILITY_SECRETS):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_STORE_OBSERVABILITY_SECRETS),
+        )
+    if not draft.valid_ipv4(body.ip.strip()):
+        raise HTTPException(status_code=400, detail="Observability IP must be an IPv4 address")
+    result = await _collect_privhelper(
+        proto.CMD_STORE_OBSERVABILITY_SECRETS,
+        user.username,
+        args={
+            "ip": body.ip.strip(),
+            "hostname": (body.hostname or "").strip(),
+            "root_pass": body.host_root_pass,
+            "kin_user_pass": body.kin_user_pass,
+        },
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or result.get("log") or "could not store credentials"),
+        )
+    return {"ok": True}
 
 
 def _spa_index() -> Path:

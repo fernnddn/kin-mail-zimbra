@@ -762,6 +762,54 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
         yield ev
 
 
+async def cmd_remove_observability(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    from .observability_ops import cmd_remove_observability as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
+async def cmd_add_observability(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    from .observability_ops import cmd_add_observability as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
+async def cmd_store_observability_secrets(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    from .observability_secrets import store_observability_secrets
+
+    args = args or {}
+    try:
+        meta = await asyncio.to_thread(
+            store_observability_secrets,
+            {
+                "ip": str(args.get("ip") or ""),
+                "hostname": str(args.get("hostname") or ""),
+                "root_pass": str(args.get("root_pass") or ""),
+                "kin_user_pass": str(args.get("kin_user_pass") or ""),
+            },
+        )
+    except ValueError as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(2)
+        return
+    except Exception as exc:  # noqa: BLE001
+        yield proto.event_stderr(f"cannot store observability secrets: {exc}\n")
+        yield proto.event_done(1)
+        return
+    yield proto.event_stdout(
+        f"observability secrets stored (encrypted); ip={meta.get('ip')}\n"
+    )
+    yield proto.event_done(0)
+
+
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     from .maintenance import cmd_maintenance as _run
 
@@ -966,6 +1014,9 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
     proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
     proto.CMD_REMOVE_HOST: _adapt(cmd_remove_host),
+    proto.CMD_REMOVE_OBSERVABILITY: _adapt(cmd_remove_observability),
+    proto.CMD_ADD_OBSERVABILITY: _adapt(cmd_add_observability),
+    proto.CMD_STORE_OBSERVABILITY_SECRETS: _adapt(cmd_store_observability_secrets),
     proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
     proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
     proto.CMD_HA_DISK_PREFLIGHT: _adapt(cmd_ha_disk_preflight),
