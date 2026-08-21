@@ -55,7 +55,7 @@ esac
 apt-get -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
-  dnsmasq tmux swaks tcpdump traceroute >/dev/null 2>&1
+  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs >/dev/null 2>&1
 ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
 
 # --- 4. local resolver -------------------------------------------------------
@@ -132,7 +132,18 @@ up=$(dig +short +time=4 A google.com 2>/dev/null | head -1)
 [ -n "$mx" ]            && ok "MX ${MAIL_DOMAIN} -> ${mx}"  || warn "MX ${MAIL_DOMAIN} -> empty"
 [ -n "$up" ]            && ok "Upstream forwarding working" || warn "Upstream forwarding failed"
 
-# --- 5. verdict --------------------------------------------------------------
+# --- 5. optional spare disk at /opt/zimbra (before 03 writes Zimbra) ---------
+# Unique blank spare: same GPT as drbd_disk_prep (data + 256 MiB unformatted
+# meta), then mkfs.ext4 + fstab UUID + mount. No/ambiguous spare: OS volume.
+say "5. Zimbra data disk"
+PREPARE_DISK="$(cd "$(dirname "$0")" && pwd)/lib/prepare-zimbra-data-disk.sh"
+if [ -f "$PREPARE_DISK" ]; then
+  bash "$PREPARE_DISK" || exit 1
+else
+  info "prepare-zimbra-data-disk.sh missing; Zimbra will install on the OS volume"
+fi
+
+# --- 6. verdict --------------------------------------------------------------
 echo
 say "DONE"
 ok "Host ready. Continue to 03-install-zimbra.sh"

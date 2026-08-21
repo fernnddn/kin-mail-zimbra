@@ -9,6 +9,7 @@ from kin_privhelper.ha_disk import (
     DEFAULT_DATA_DISK,
     combine_results,
     evaluate_node,
+    install_prepare_plan,
     parse_remote_probe,
     plan_auto_partition,
 )
@@ -583,6 +584,122 @@ class HaDiskTests(unittest.TestCase):
         )
         self.assertEqual(plan["action"], "fail")
         self.assertTrue(any("partition table" in s["reason"] for s in plan["skipped"]))
+
+    def test_install_prepare_unique_sdb_will_partition(self) -> None:
+        got = install_prepare_plan(
+            _lsblk(sdb="unpartitioned"),
+            root_source="/dev/sda2",
+        )
+        self.assertEqual(got["install_mode"], "prepare_data")
+        self.assertTrue(got["need_partition"])
+        self.assertEqual(got["disk"], "/dev/sdb")
+        self.assertEqual(got["data_disk"], "/dev/sdb1")
+        self.assertEqual(got["meta_disk"], "/dev/sdb2")
+        self.assertEqual(got["parted_argv"][0], "parted")
+        self.assertIn("/dev/sdb", got["parted_argv"])
+        self.assertEqual(got["plan"]["action"], "partition")
+
+    def test_install_prepare_ready_and_fresh_gpt_do_not_repartition(self) -> None:
+        ready = install_prepare_plan(_lsblk(sdb="ready"), root_source="/dev/sda2")
+        fresh = install_prepare_plan(_lsblk(sdb="gpt_fresh"), root_source="/dev/sda2")
+        self.assertEqual(ready["install_mode"], "prepare_data")
+        self.assertFalse(ready["need_partition"])
+        self.assertEqual(ready["plan"]["action"], "skip")
+        self.assertEqual(fresh["install_mode"], "prepare_data")
+        self.assertFalse(fresh["need_partition"])
+        self.assertEqual(fresh["plan"]["action"], "skip")
+
+    def test_install_prepare_falls_back_when_selector_would_fail(self) -> None:
+        none = install_prepare_plan(_lsblk(sdb=None), root_source="/dev/sda2")
+        extra = [
+            {
+                "name": "sdc",
+                "path": "/dev/sdc",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": None,
+            }
+        ]
+        multi = install_prepare_plan(
+            _lsblk(sdb="unpartitioned", extra=extra),
+            root_source="/dev/sda2",
+        )
+        vdb = install_prepare_plan(
+            _lsblk(
+                sdb=None,
+                extra=[
+                    {
+                        "name": "vdb",
+                        "path": "/dev/vdb",
+                        "type": "disk",
+                        "size": 107374182400,
+                        "pttype": None,
+                    }
+                ],
+            ),
+            root_source="/dev/sda2",
+        )
+        self.assertEqual(none["install_mode"], "os_root")
+        self.assertFalse(none["need_partition"])
+        self.assertEqual(none["plan"]["action"], "fail")
+        self.assertEqual(multi["install_mode"], "os_root")
+        self.assertEqual(vdb["install_mode"], "os_root")
+        self.assertIn("/dev/vdb", vdb["reason"])
+
+    def test_install_mode_stdin_is_zero_even_on_os_root(self) -> None:
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = (
+            Path(__file__).resolve().parents[3]
+            / "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
+        )
+        req = {
+            "mode": "install",
+            "lsblk": _lsblk(sdb=None),
+            "root_source": "/dev/sda2",
+            "data_disk": "/dev/sdb1",
+            "meta_disk": "/dev/sdb2",
+        }
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            input=json.dumps(req),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        body = json.loads(proc.stdout)
+        self.assertEqual(body["install_mode"], "os_root")
+        self.assertEqual(body["plan"]["action"], "fail")
+
+    def test_ha_stdin_without_mode_is_unchanged(self) -> None:
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = (
+            Path(__file__).resolve().parents[3]
+            / "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
+        )
+        req = {
+            "lsblk": _lsblk(sdb="unpartitioned"),
+            "root_source": "/dev/sda2",
+            "data_disk": "/dev/sdb1",
+            "meta_disk": "/dev/sdb2",
+        }
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            input=json.dumps(req),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        body = json.loads(proc.stdout)
+        self.assertEqual(body["action"], "partition")
+        self.assertNotIn("install_mode", body)
 
 
 if __name__ == "__main__":

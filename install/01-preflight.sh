@@ -26,8 +26,9 @@ DISK_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
 [ "$DISK_GB" -ge 40 ] && ok "Disk free: ${DISK_GB} GB" || { fail "Disk free: ${DISK_GB} GB (minimum 40)"; FATAL=1; }
 
 if ! mountpoint -q /opt 2>/dev/null; then
-  info "/opt is on the root volume. Acceptable for a PoC, but Phase 2 (DRBD)"
-  info "expects /opt/zimbra on its own volume. Moving it later needs downtime."
+  info "/opt is on the root volume right now. 02-prepare-os.sh will GPT-partition"
+  info "a unique blank spare disk (same layout as Build HA pair) and mount it at"
+  info "/opt/zimbra when that disk is unambiguous; otherwise Zimbra stays on root."
 fi
 
 # --- 2. operating system -----------------------------------------------------

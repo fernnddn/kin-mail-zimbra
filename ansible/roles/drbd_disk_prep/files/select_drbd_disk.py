@@ -370,6 +370,67 @@ def plan_auto_partition(
     }
 
 
+def install_prepare_plan(
+    lsblk: dict[str, Any],
+    *,
+    root_source: str,
+    data_disk: str = "/dev/sdb1",
+    meta_disk: str = "/dev/sdb2",
+) -> dict[str, Any]:
+    """Map plan_auto_partition onto full-install: prepare_data or os_root.
+
+    HA disk_prep still fail-closes on action=fail. Install must not: no spare,
+    two spares, or a unique spare that is not the expected parent all mean
+    "install Zimbra on the OS volume as today". Only partition/skip become
+    a data-disk prepare. parted_argv is required for partition.
+    """
+    plan = plan_auto_partition(
+        lsblk,
+        root_source=root_source,
+        data_disk=data_disk,
+        meta_disk=meta_disk,
+    )
+    action = str(plan.get("action") or "")
+    base = {
+        "plan": plan,
+        "data_disk": str(plan.get("data_disk") or data_disk),
+        "meta_disk": str(plan.get("meta_disk") or meta_disk),
+        "disk": str(plan.get("disk") or ""),
+        "parted_argv": list(plan.get("parted_argv") or []),
+    }
+    if action == "partition":
+        argv = base["parted_argv"]
+        if not argv or str(argv[0]) != "parted":
+            return {
+                **base,
+                "install_mode": "os_root",
+                "need_partition": False,
+                "reason": (
+                    "selector returned partition without a parted argv; "
+                    "refusing to guess. Zimbra will install on the OS volume."
+                ),
+            }
+        return {
+            **base,
+            "install_mode": "prepare_data",
+            "need_partition": True,
+            "reason": str(plan.get("message") or "unique blank spare disk"),
+        }
+    if action == "skip":
+        return {
+            **base,
+            "install_mode": "prepare_data",
+            "need_partition": False,
+            "reason": str(plan.get("message") or "proven GPT layout already present"),
+        }
+    return {
+        **base,
+        "install_mode": "os_root",
+        "need_partition": False,
+        "reason": str(plan.get("message") or "no unique spare disk"),
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -386,11 +447,26 @@ def main() -> int:
             sys.stdout,
         )
         return 2
+    lsblk = req.get("lsblk") if isinstance(req.get("lsblk"), dict) else {}
+    root_source = str(req.get("root_source") or "")
+    data_disk = str(req.get("data_disk") or "/dev/sdb1")
+    meta_disk = str(req.get("meta_disk") or "/dev/sdb2")
+    mode = str(req.get("mode") or "").strip().lower()
+    if mode == "install":
+        out = install_prepare_plan(
+            lsblk,
+            root_source=root_source,
+            data_disk=data_disk,
+            meta_disk=meta_disk,
+        )
+        json.dump(out, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
     plan = plan_auto_partition(
-        req.get("lsblk") if isinstance(req.get("lsblk"), dict) else {},
-        root_source=str(req.get("root_source") or ""),
-        data_disk=str(req.get("data_disk") or "/dev/sdb1"),
-        meta_disk=str(req.get("meta_disk") or "/dev/sdb2"),
+        lsblk,
+        root_source=root_source,
+        data_disk=data_disk,
+        meta_disk=meta_disk,
     )
     json.dump(plan, sys.stdout)
     sys.stdout.write("\n")

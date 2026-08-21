@@ -70,6 +70,22 @@ def plan_auto_partition(
     )
 
 
+def install_prepare_plan(
+    lsblk: dict[str, Any],
+    *,
+    root_source: str,
+    data_disk: str = DEFAULT_DATA_DISK,
+    meta_disk: str = DEFAULT_META_DISK,
+) -> dict[str, Any]:
+    """Return install_mode prepare_data or os_root. Never writes a partition table."""
+    return _load_selector().install_prepare_plan(
+        lsblk,
+        root_source=root_source,
+        data_disk=data_disk,
+        meta_disk=meta_disk,
+    )
+
+
 def data_disk_path() -> str:
     return str(os.environ.get("KIN_DRBD_DATA_DISK") or DEFAULT_DATA_DISK).strip() or DEFAULT_DATA_DISK
 
