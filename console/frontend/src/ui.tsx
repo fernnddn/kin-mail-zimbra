@@ -599,6 +599,7 @@ export const Page = styled.div`
   padding: 1.5rem 1.5rem 2rem;
   max-width: 960px;
   width: 100%;
+  margin: 0 auto;
   animation: kin-page-in ${theme.motion.page} cubic-bezier(0.16, 1, 0.3, 1);
 `;
 
