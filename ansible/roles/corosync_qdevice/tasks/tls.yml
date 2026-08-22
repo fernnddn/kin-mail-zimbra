@@ -3,8 +3,10 @@
 #   copy CA from qnetd → init/request on first mail node → sign on mon →
 #   import (-M) → distribute PKCS#12 to peers (-m).
 #
-# Idempotency marker: NSS cert9.db (present on every fully wired node).
-# PKCS#12 may exist only on the node that ran -M; peers often have NSS only.
+# Idempotency marker: kin-mail-tls-ready (touched after -M on the primary
+# and after -m on secondaries). cert9.db exists as soon as -i runs, so it
+# must not mean "fully wired" — an interrupt before -m would skip import.
+# PKCS#12 may exist only on the node that ran -M until copy/-m finish.
 # Mutating steps require not ansible_check_mode (no apply on live lab).
 
 - name: Drop stale qdevice NSS when a rebuild forces TLS reinit
@@ -42,11 +44,17 @@
   register: corosync_qdevice_nss
   tags: [qdevice, tls]
 
-- name: Flag whether all mail hosts already have qdevice TLS
+- name: Check the qdevice TLS-ready marker on the mail hosts
+  ansible.builtin.stat:
+    path: "{{ corosync_qdevice_tls_ready_marker }}"
+  register: corosync_qdevice_tls_marker
+  tags: [qdevice, tls]
+
+- name: Flag whether all mail hosts already finished qdevice TLS
   ansible.builtin.set_fact:
     corosync_qdevice_tls_ready_all: >-
       {{ ansible_play_hosts |
-         map('extract', hostvars, 'corosync_qdevice_nss') |
+         map('extract', hostvars, 'corosync_qdevice_tls_marker') |
          map(attribute='stat.exists') |
          min }}
   run_once: true
@@ -182,6 +190,19 @@
     - not ansible_check_mode
   tags: [qdevice, tls]
 
+- name: Record that the primary imported the cluster certificate
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_tls_ready_marker }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
 - name: Fetch the PKCS12 file for distribution to the other nodes
   ansible.builtin.fetch:
     src: "{{ corosync_qdevice_p12_path }}"
@@ -222,6 +243,21 @@
   ansible.builtin.command:
     cmd: >-
       corosync-qdevice-net-certutil -m -c {{ corosync_qdevice_p12_path }}
+  args:
+    creates: "{{ corosync_qdevice_tls_ready_marker }}"
+  when:
+    - inventory_hostname != ansible_play_hosts[0]
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Record that this secondary imported the cluster PKCS12
+  ansible.builtin.file:
+    path: "{{ corosync_qdevice_tls_ready_marker }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
   when:
     - inventory_hostname != ansible_play_hosts[0]
     - not corosync_qdevice_tls_ready_all
@@ -231,7 +267,7 @@
 - name: Note that qdevice TLS is not proven from scratch during a dry-run
   ansible.builtin.debug:
     msg: >-
-      One or more hosts do not have {{ corosync_qdevice_nssdb_cert9 }} yet.
+      One or more hosts do not have {{ corosync_qdevice_tls_ready_marker }} yet.
       Under --check the mutating TLS steps are skipped (not greenfield proof).
   run_once: true
   when:

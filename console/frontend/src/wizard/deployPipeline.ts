@@ -79,7 +79,7 @@ export function emptyInstallProgress(): InstallProgress {
 /** True when the deploy transcript has entered the Ansible HA sequence. */
 export function isHaOrchestrationLog(log: string): boolean {
   return (
-    /HA orchestration Slice 2/i.test(log) ||
+    /HA orchestration/i.test(log) ||
     /\bORCH_(DONE|FAILED)\b/.test(log) ||
     /\[\d+\/\d+\] START /.test(log)
   );

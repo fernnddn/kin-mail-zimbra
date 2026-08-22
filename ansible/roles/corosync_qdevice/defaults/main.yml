@@ -27,3 +27,6 @@ corosync_qdevice_controller_workdir: /tmp/kin-mail-ansible-qdevice
 # Rebuild of Observability generates a new qnetd CA. Default false so
 # greenfield HA build stays idempotent when NSS already exists.
 corosync_qdevice_force_tls_reinit: false
+# cert9.db exists after certutil -i, before -M/-m. Do not treat it as
+# "fully wired" or a retry after interrupt skips PKCS12 import forever.
+corosync_qdevice_tls_ready_marker: /etc/corosync/qdevice/net/nssdb/kin-mail-tls-ready

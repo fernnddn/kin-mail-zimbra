@@ -899,10 +899,13 @@ async def _push_peer_deploy_tree(
     src = Path(kin_mail_deploy_dir()) / "install"
     local_tgz = WORK_DIR / "peer-install.tgz"
     selector = peer_disk_selector_src()
-    try:
-        build_peer_install_archive(
-            src, local_tgz, selector=selector if selector.is_file() else None
+    if not selector.is_file():
+        return 2, (
+            f"select_drbd_disk.py missing at {selector}. "
+            "Refusing to copy a peer tree that would install Zimbra on the OS disk."
         )
+    try:
+        build_peer_install_archive(src, local_tgz, selector=selector)
     except (OSError, FileNotFoundError) as exc:
         return 2, str(exc)
     remote_tmp = "/tmp/kin-mail-peer-install.tgz"

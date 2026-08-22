@@ -182,6 +182,8 @@ class ObservabilityLifecycleTests(unittest.TestCase):
         self.assertIn("corosync_qdevice_force_tls_reinit", tls)
         self.assertIn("inventory_hostname != ansible_play_hosts[0]", tls)
         self.assertIn("corosync-qdevice-net-certutil -m", tls)
+        self.assertIn("corosync_qdevice_tls_ready_marker", tls)
+        self.assertIn("corosync_qdevice_tls_marker", tls)
 
     def test_gating_falls_out_of_status(self) -> None:
         gone = snapshot_from_texts(config_ip="", corosync_conf="quorum {\n}\n", reachable=False)

@@ -628,6 +628,8 @@ async def wizard_ha_disk_preflight(
         "errors": errors,
         "instructions": parsed.get("instructions") or "",
         "nodes": parsed.get("nodes") or [],
+        "data_disk": parsed.get("data_disk") or "",
+        "meta_disk": parsed.get("meta_disk") or "",
         "exit_code": result.get("exit_code"),
     }
 

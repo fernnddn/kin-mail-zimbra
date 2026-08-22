@@ -180,6 +180,8 @@ type HaDisk = {
   build_allowed?: boolean;
   errors: string[];
   instructions?: string;
+  data_disk?: string;
+  meta_disk?: string;
   will_auto_partition?: { label?: string; disk?: string; message?: string; size_human?: string }[];
 };
 
@@ -240,8 +242,11 @@ function HaDiskStatus({ haDisk, haDiskLoading }: { haDisk: HaDisk | null; haDisk
       ) : null}
       {haDisk?.ok && (
         <Hint style={{ marginTop: 0 }}>
-          DRBD disks look ready ({"/dev/sdb1"} data, {"/dev/sdb2"} meta) on the servers we
-          could inspect.
+          DRBD disks look ready
+          {haDisk.data_disk && haDisk.meta_disk
+            ? ` (${haDisk.data_disk} data, ${haDisk.meta_disk} meta)`
+            : ""}{" "}
+          on the servers we could inspect.
         </Hint>
       )}
     </>

@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { Button, Spinner, StatusPill } from "../../ui";
 import { theme } from "../../styles/theme";
 import { formatDeployLog } from "../ansi";
-import { parseInstallProgress } from "../deployPipeline";
+import { isHaOrchestrationLog, parseInstallProgress } from "../deployPipeline";
 
 const LOG_CACHE_KEY = "kin.deployLastLog";
 
@@ -155,6 +155,8 @@ export default function DeployLogsPage() {
 
   const progress = parseInstallProgress(log);
   const { current, total, label, complete, failed } = progress;
+  const liveUi =
+    live || (!complete && !failed && (current > 0 || isHaOrchestrationLog(log)));
 
   return (
     <Frame>
@@ -164,19 +166,21 @@ export default function DeployLogsPage() {
           <p>
             {failed
               ? `Failed: ${label}`
-              : complete
-                ? "Install finished"
-                : current > 0
+              : liveUi
+                ? current > 0
                   ? `Step ${current}/${total}: ${label}`
-                  : live
-                    ? "Install in progress"
+                  : "Install in progress"
+                : complete
+                  ? "Install finished"
+                  : current > 0
+                    ? `Step ${current}/${total}: ${label}`
                     : log
                       ? "Last run transcript"
                       : "Waiting for deploy output…"}
           </p>
         </TitleBlock>
         <Meta>
-          {live ? (
+          {liveUi ? (
             <StatusPill tone="warn">
               <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
                 <Spinner /> Live

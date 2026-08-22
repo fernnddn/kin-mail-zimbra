@@ -749,6 +749,31 @@ class CheckModeSafetyTests(unittest.TestCase):
             "inventory_hostname != ansible_play_hosts[0]",
             tls[minus_m : minus_m + 280],
         )
+        self.assertIn("corosync_qdevice_tls_ready_marker", tls)
+        self.assertIn("corosync_qdevice_tls_marker", tls)
+        activate = (
+            repo / "ansible/roles/drbd_resource/tasks/activate.yml"
+        ).read_text(encoding="utf-8")
+        force = activate.find("drbdadm primary --force")
+        self.assertGreater(force, 0)
+        force_when = activate[force : force + 700]
+        self.assertIn("not (drbd_resource_is_diskless | bool)", force_when)
+        self.assertIn("drbd_resource_dump_md.rc != 0", force_when)
+        self.assertIn("select_drbd_disk.py missing", orch)
+        pipeline = (
+            repo / "console/frontend/src/wizard/deployPipeline.ts"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/HA orchestration/i.test(log)", pipeline)
+        self.assertNotIn("HA orchestration Slice 2", pipeline)
+        deploy_step = (
+            repo / "console/frontend/src/wizard/steps/DeployStep.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("haDisk.data_disk", deploy_step)
+        self.assertNotIn('{"/dev/sdb1"}', deploy_step)
+        app = (repo / "console/backend/kin_console/app.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"data_disk": parsed.get("data_disk")', app)
         sbd_order = (
             repo / "ansible/roles/sbd_stonith/templates/kin-ordering.conf.j2"
         ).read_text(encoding="utf-8")

@@ -103,10 +103,14 @@
   ansible.builtin.command:
     cmd: drbdadm primary --force {{ drbd_resource_name }}
   # SAFETY: never check_mode: false - primary --force must not run during --check.
-  # On production migration this was Host A only after create-md; Pacemaker now
-  # owns promotion. This task is for greenfield/bootstrap labs only.
+  # Greenfield only: new metadata (dump-md failed) on node A. Pacemaker owns
+  # promotion after the clone exists. Diskless re-attach must not --force
+  # (peer may already be Promoted).
   when:
     - drbd_resource_needs_activate | bool
+    - not (drbd_resource_is_diskless | bool)
+    - drbd_resource_dump_md.rc is defined
+    - drbd_resource_dump_md.rc != 0
     - not ansible_check_mode
     - inventory_hostname == drbd_resource_node_a_name
   tags: [drbd, resource, activate]
