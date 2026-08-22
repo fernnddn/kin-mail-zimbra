@@ -39,11 +39,19 @@
     - not (pacemaker_mail_stack_constraints.stdout | kin_pcs_has_promote_then_start(pacemaker_mail_stack_drbd_clone, pacemaker_mail_stack_group))
   tags: [pacemaker, stack, constraints]
 
-# Group members are created --disabled so they do not start on a Secondary
-# before colocation exists. Enable only after constraints are in place.
-- name: Enable the kin-mail-svc group after constraints
+# Group members are created --disabled (meta target-role=Stopped on each
+# primitive) so they do not start on a Secondary before colocation exists.
+# pcs resource enable <group> only clears the group wrapper; the three
+# primitives stay Stopped (disabled) — that is the log-26 / live lab state.
+# Enable the primitives themselves after constraints are in place.
+- name: Enable the kin-mail-svc primitives after constraints
   ansible.builtin.command:
-    cmd: pcs resource enable {{ pacemaker_mail_stack_group }}
+    cmd: >-
+      pcs resource enable
+      {{ pacemaker_mail_stack_fs }}
+      {{ pacemaker_mail_stack_zimbra }}
+      {{ pacemaker_mail_stack_vip }}
+      {{ pacemaker_mail_stack_group }}
   run_once: true
   when: not ansible_check_mode
   changed_when: false

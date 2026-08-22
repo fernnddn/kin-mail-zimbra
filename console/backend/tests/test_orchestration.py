@@ -566,10 +566,15 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("nic=' ~ pacemaker_mail_stack_vip_nic", mail_svc)
 
         constraints = (root / "tasks" / "constraints.yml").read_text(encoding="utf-8")
-        enable = constraints.find("Enable the kin-mail-svc group after constraints")
+        enable = constraints.find("Enable the kin-mail-svc primitives after constraints")
         wait = constraints.find("Wait until kin-fs, kin-vip, and kin-zimbra are Started")
         self.assertGreater(enable, 0)
         self.assertGreater(wait, enable)
+        enable_block = constraints[enable:wait]
+        self.assertIn("pcs resource enable", enable_block)
+        self.assertIn("pacemaker_mail_stack_fs", enable_block)
+        self.assertIn("pacemaker_mail_stack_zimbra", enable_block)
+        self.assertIn("pacemaker_mail_stack_vip", enable_block)
         wait_block = constraints[wait : wait + 900]
         self.assertIn("retries: 90", wait_block)
         self.assertNotIn("failed_when:", wait_block)
