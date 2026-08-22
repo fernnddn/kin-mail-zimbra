@@ -1,7 +1,8 @@
 ---
-- name: Include the LDAP localhost fix steps for HA
-  ansible.builtin.import_tasks: ldap.yml
-  tags: [pacemaker, stack, ldap]
+# LDAP/memcached need /opt/zimbra mounted. mail-drbd.yml unmounts the plain
+# LUKS volume before Pacemaker starts kin-fs, so those tasks must run AFTER
+# the service group is Started — not at the top of the play (log-26 skipped
+# both on a "successful" HA apply).
 
 - name: Include the Corosync ring0_addr IP steps
   ansible.builtin.import_tasks: corosync_addrs.yml
@@ -10,10 +11,6 @@
 - name: Include the Zimbra service-hostname loopback remap
   ansible.builtin.import_tasks: hosts.yml
   tags: [pacemaker, stack, hosts]
-
-- name: Include the mailboxd memcached loopback LDAP steps
-  ansible.builtin.import_tasks: memcached.yml
-  tags: [pacemaker, stack, memcached]
 
 - name: Include the promotable DRBD resource steps
   ansible.builtin.import_tasks: drbd_clone.yml
@@ -26,6 +23,14 @@
 - name: Include the colocation and order constraint steps
   ansible.builtin.import_tasks: constraints.yml
   tags: [pacemaker, stack, constraints]
+
+- name: Include the LDAP localhost fix steps for HA
+  ansible.builtin.import_tasks: ldap.yml
+  tags: [pacemaker, stack, ldap]
+
+- name: Include the mailboxd memcached loopback LDAP steps
+  ansible.builtin.import_tasks: memcached.yml
+  tags: [pacemaker, stack, memcached]
 
 - name: Include the Pacemaker stack verification steps
   ansible.builtin.import_tasks: verify.yml

@@ -16,7 +16,11 @@ pacemaker_mail_stack_fs_options: noatime
 # collide with the real NIC. Live lab uses 10.10.40.16.
 pacemaker_mail_stack_vip_ip: ""
 pacemaker_mail_stack_vip_cidr: "24"
-pacemaker_mail_stack_vip_nic: ens33
+# Empty: omit nic= and let IPaddr2 pick the iface for the VIP subnet on
+# whichever node is Promoted. Never default to a lab NIC name (ens33) —
+# that silently creates a VIP that cannot start on ens18/eth0/enp0s3, and
+# pinning nic= to node A's NET_IFACE breaks failover if node B differs.
+pacemaker_mail_stack_vip_nic: ""
 # After a fence the survivor must stay Promoted; a node location score
 # (prefer A=50) caused automatic failback in ha-build-14. Leave disabled
 # unless an operator explicitly pins the Master to one host.

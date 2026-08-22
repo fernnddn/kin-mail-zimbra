@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .observability_status import classify_observability, observability_actions
-from .orchestration import kin_mail_deploy_dir, valid_ipv4, valid_name
+from .orchestration import (
+    kin_mail_deploy_dir,
+    observability_inventory_name,
+    valid_ipv4,
+    valid_name,
+)
 
 
 def boot_id_unchanged(before: str, after: str) -> bool:
@@ -40,14 +45,6 @@ def sbd_stop_order(*, promoted: str, hosts: list[str]) -> list[str]:
     first = [h for h in names if not is_promoted(h)]
     last = [h for h in names if is_promoted(h)]
     return first + last
-
-
-def observability_inventory_name(*, ip: str, hostname: str = "") -> str:
-    name = (hostname or "").strip()
-    if name and valid_name(name):
-        return name
-    dotted = (ip or "").strip().replace(".", "-")
-    return f"obs-{dotted}" if dotted else "observability"
 
 
 @dataclass(frozen=True)

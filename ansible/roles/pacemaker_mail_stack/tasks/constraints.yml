@@ -49,6 +49,28 @@
   changed_when: false
   tags: [pacemaker, stack, constraints]
 
+# pcs resource enable returns before IPaddr2/Filesystem/Zimbra are Started.
+# The previous verify only checked that resource names appear in pcs status,
+# so HA UI could show 12/12 while kin-vip was Stopped (wrong nic) or Zimbra
+# was still starting (OCF start timeout is 600s).
+- name: Wait until kin-fs, kin-vip, and kin-zimbra are Started
+  ansible.builtin.command:
+    cmd: pcs status
+  register: pacemaker_mail_stack_started
+  until: >-
+    pacemaker_mail_stack_started.rc == 0
+    and (pacemaker_mail_stack_started.stdout is search('kin-fs[^\n]*Started'))
+    and (pacemaker_mail_stack_started.stdout is search('kin-vip[^\n]*Started'))
+    and (pacemaker_mail_stack_started.stdout is search('kin-zimbra[^\n]*Started'))
+    and ('Promoted' in pacemaker_mail_stack_started.stdout)
+  retries: 90
+  delay: 10
+  changed_when: false
+  check_mode: false
+  run_once: true
+  when: not ansible_check_mode
+  tags: [pacemaker, stack, constraints]
+
 - name: Note that constraints are skipped during a dry-run or already exist
   ansible.builtin.debug:
     msg: >-

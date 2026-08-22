@@ -87,7 +87,7 @@
       pcs resource create {{ pacemaker_mail_stack_vip }} ocf:heartbeat:IPaddr2
       ip={{ pacemaker_mail_stack_vip_ip }}
       cidr_netmask={{ pacemaker_mail_stack_vip_cidr }}
-      nic={{ pacemaker_mail_stack_vip_nic }}
+      {{ ('nic=' ~ pacemaker_mail_stack_vip_nic) if (pacemaker_mail_stack_vip_nic | length > 0) else '' }}
       --group {{ pacemaker_mail_stack_group }}
       --disabled
   # SAFETY: never check_mode: false — would announce VIP on the network.

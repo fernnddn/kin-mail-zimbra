@@ -56,6 +56,33 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("mail.gits-it.site", inv)
         self.assertNotIn("scsi-36001405", inv)
         self.assertNotIn("10.10.40.", inv)
+        self.assertNotIn("pacemaker_mail_stack_vip_nic", inv)
+        self.assertNotIn("ens33", inv)
+
+    def test_optional_vip_nic_is_emitted_when_valid(self) -> None:
+        inv = render_inventory(
+            [
+                OrchHost("mail.example.test", "192.0.2.15", "mail"),
+                OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+            ],
+            OrchHost("mon.example.test", "192.0.2.12", "mon"),
+            vip_ip="192.0.2.16",
+            vip_nic="ens18",
+        )
+        self.assertIn("pacemaker_mail_stack_vip_nic: ens18", inv)
+        self.assertNotIn("ens33", inv)
+
+    def test_invalid_vip_nic_is_omitted(self) -> None:
+        inv = render_inventory(
+            [
+                OrchHost("mail.example.test", "192.0.2.15", "mail"),
+                OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+            ],
+            OrchHost("mon.example.test", "192.0.2.12", "mon"),
+            vip_ip="192.0.2.16",
+            vip_nic="ens18; rm -rf /",
+        )
+        self.assertNotIn("pacemaker_mail_stack_vip_nic", inv)
 
     def test_empty_vip_is_omitted_from_inventory(self) -> None:
         inv = render_inventory(
@@ -71,22 +98,62 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(redact_text("pass=hunter2 extra", ["hunter2"]), "pass=*** extra")
 
     def test_resolve_topology(self) -> None:
-        local, peer, mon = resolve_topology(
-            draft={
-                "peer_host_ip": "192.0.2.14",
-                "peer_host_name": "mail2.example.test",
-                "observability_vm_ip": "192.0.2.12",
-            },
-            config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
-        )
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"KIN_QNETD_INVENTORY_HOST": ""}, clear=False):
+            local, peer, mon = resolve_topology(
+                draft={
+                    "peer_host_ip": "192.0.2.14",
+                    "peer_host_name": "mail2.example.test",
+                    "observability_vm_ip": "192.0.2.12",
+                },
+                config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
+            )
         self.assertEqual(peer.ip, "192.0.2.14")
         self.assertEqual(mon.ip, "192.0.2.12")
         self.assertEqual(local.name, "mail.example.test")
+        self.assertEqual(mon.name, "obs-192-0-2-12")
+        self.assertNotEqual(mon.name, "mon.gits-it.site")
         with self.assertRaises(ValueError):
             resolve_topology(
                 draft={"peer_host_ip": "not-an-ip", "observability_vm_ip": "192.0.2.12"},
                 config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
             )
+
+    def test_resolve_topology_uses_env_observability_name(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(
+            os.environ, {"KIN_QNETD_INVENTORY_HOST": "mon.example.test"}, clear=False
+        ):
+            _, _, mon = resolve_topology(
+                draft={
+                    "peer_host_ip": "192.0.2.14",
+                    "peer_host_name": "mail2.example.test",
+                    "observability_vm_ip": "192.0.2.12",
+                },
+                config={"MAIL_HOST": "mail.example.test", "SERVER_IP": "192.0.2.15"},
+            )
+        self.assertEqual(mon.name, "mon.example.test")
+
+    def test_monitoring_host_from_ssh_ident(self) -> None:
+        from kin_privhelper.orchestration import monitoring_host_from_ssh_ident
+
+        current = OrchHost("obs-192-0-2-12", "192.0.2.12", "obs")
+        renamed = monitoring_host_from_ssh_ident(
+            current, "mon.example.test\n", env_locked=False
+        )
+        self.assertEqual(renamed.name, "mon.example.test")
+        locked = monitoring_host_from_ssh_ident(
+            current, "mon.example.test\n", env_locked=True
+        )
+        self.assertEqual(locked.name, current.name)
+        localhost = monitoring_host_from_ssh_ident(
+            current, "localhost\n", env_locked=False
+        )
+        self.assertEqual(localhost.name, current.name)
 
     def test_resolve_cluster_vip_rejects_collisions(self) -> None:
         from kin_privhelper.orchestration import resolve_cluster_vip
@@ -480,6 +547,46 @@ class CheckModeSafetyTests(unittest.TestCase):
         helper = paths.read_text(encoding="utf-8")
         self.assertIn("delegate_to: localhost", helper)
         self.assertNotIn("{{ role_path }}", helper)
+
+    def test_pacemaker_stack_waits_for_started_and_omits_lab_nic(self) -> None:
+        from pathlib import Path
+
+        root = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "pacemaker_mail_stack"
+        )
+        defaults = (root / "defaults" / "main.yml").read_text(encoding="utf-8")
+        self.assertIn("pacemaker_mail_stack_vip_nic: \"\"", defaults)
+        self.assertNotIn("pacemaker_mail_stack_vip_nic: ens33", defaults)
+
+        mail_svc = (root / "tasks" / "mail_svc.yml").read_text(encoding="utf-8")
+        self.assertNotIn("nic=ens33", mail_svc)
+        self.assertIn("nic=' ~ pacemaker_mail_stack_vip_nic", mail_svc)
+
+        constraints = (root / "tasks" / "constraints.yml").read_text(encoding="utf-8")
+        enable = constraints.find("Enable the kin-mail-svc group after constraints")
+        wait = constraints.find("Wait until kin-fs, kin-vip, and kin-zimbra are Started")
+        self.assertGreater(enable, 0)
+        self.assertGreater(wait, enable)
+        wait_block = constraints[wait : wait + 900]
+        self.assertIn("retries: 90", wait_block)
+        self.assertNotIn("failed_when:", wait_block)
+
+        verify = (root / "tasks" / "verify.yml").read_text(encoding="utf-8")
+        self.assertIn("kin-vip[^\\n]*Started", verify)
+        self.assertIn("'Promoted' not in pacemaker_mail_stack_status.stdout", verify)
+
+        main = (root / "tasks" / "main.yml").read_text(encoding="utf-8")
+        constraints_idx = main.find("import_tasks: constraints.yml")
+        ldap_idx = main.find("import_tasks: ldap.yml")
+        memcached_idx = main.find("import_tasks: memcached.yml")
+        verify_idx = main.find("import_tasks: verify.yml")
+        self.assertGreater(constraints_idx, 0)
+        self.assertGreater(ldap_idx, constraints_idx)
+        self.assertGreater(memcached_idx, ldap_idx)
+        self.assertGreater(verify_idx, memcached_idx)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

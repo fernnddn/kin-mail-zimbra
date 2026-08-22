@@ -12,6 +12,10 @@
     pacemaker_mail_stack_status.rc != 0
     or (pacemaker_mail_stack_drbd_clone not in pacemaker_mail_stack_status.stdout)
     or (pacemaker_mail_stack_group not in pacemaker_mail_stack_status.stdout)
+    or (pacemaker_mail_stack_status.stdout is not search('kin-fs[^\n]*Started'))
+    or (pacemaker_mail_stack_status.stdout is not search('kin-vip[^\n]*Started'))
+    or (pacemaker_mail_stack_status.stdout is not search('kin-zimbra[^\n]*Started'))
+    or ('Promoted' not in pacemaker_mail_stack_status.stdout)
   check_mode: false
   run_once: true
   tags: [pacemaker, stack, verify]

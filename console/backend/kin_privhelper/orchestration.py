@@ -147,11 +147,40 @@ def _iqn_suffix(hostname: str) -> str:
     return short[:32]
 
 
+def observability_inventory_name(*, ip: str, hostname: str = "") -> str:
+    """Ansible inventory name for the qnetd/iSCSI VM. Never a lab FQDN."""
+    name = (hostname or "").strip()
+    if name and valid_name(name):
+        return name
+    dotted = (ip or "").strip().replace(".", "-")
+    return f"obs-{dotted}" if dotted else "observability"
+
+
+def monitoring_host_from_ssh_ident(
+    current: OrchHost,
+    ident: str,
+    *,
+    env_locked: bool,
+) -> OrchHost:
+    """Prefer the live hostname so delegate_to matches the qnetd VM."""
+    if env_locked:
+        return current
+    line = (ident or "").strip().splitlines()[0] if ident else ""
+    name = line.strip().split()[0] if line else ""
+    if not name or not valid_name(name) or name == current.name:
+        return current
+    lowered = name.lower()
+    if lowered in {"localhost", "localhost.localdomain"}:
+        return current
+    return OrchHost(name, current.ip, _iqn_suffix(name))
+
+
 def render_inventory(
     mail_hosts: list[OrchHost],
     monitoring: OrchHost,
     *,
     vip_ip: str = "",
+    vip_nic: str = "",
 ) -> str:
     """YAML inventory with env-lookup passwords — no secret values in the file."""
     lines = [
@@ -187,6 +216,13 @@ def render_inventory(
         lines.append(f"    pacemaker_mail_stack_prefer_node: {primary.name}")
     if vip_ip:
         lines.append(f"    pacemaker_mail_stack_vip_ip: {vip_ip}")
+    nic = (vip_nic or "").strip()
+    if nic and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,15}", nic):
+        # IPaddr2 nic= must match the Promoted node's LAN iface. Role default
+        # used to be lab ens33; a new site with ens18/eth0 would create a VIP
+        # that never starts. Leave empty unless an operator pins a nic; IPaddr2
+        # then picks the iface for the VIP subnet on each node.
+        lines.append(f"    pacemaker_mail_stack_vip_nic: {nic}")
     if len(mail_hosts) >= 2:
         lines.extend(
             [
@@ -402,9 +438,12 @@ def resolve_topology(
     if not valid_name(peer_name):
         raise ValueError("Second server hostname is not a valid node name")
 
-    obs_name = str(os.environ.get("KIN_QNETD_INVENTORY_HOST") or "mon.gits-it.site").strip()
-    if not valid_name(obs_name):
-        obs_name = f"mon-{obs_ip.replace('.', '-')}"
+    obs_name = str(os.environ.get("KIN_QNETD_INVENTORY_HOST") or "").strip()
+    if not obs_name or not valid_name(obs_name):
+        hint = str(
+            draft.get("observability_vm_name") or config.get("OBSERVABILITY_VM_NAME") or ""
+        ).strip()
+        obs_name = observability_inventory_name(ip=obs_ip, hostname=hint)
 
     local = OrchHost(local_name, local_ip, _iqn_suffix(local_name))
     peer = OrchHost(peer_name, peer_ip, _iqn_suffix(peer_name))
@@ -1353,6 +1392,15 @@ async def cmd_run_ha_orchestration(
         )
         yield proto.event_done(1)
         return
+    env_obs = str(os.environ.get("KIN_QNETD_INVENTORY_HOST") or "").strip()
+    renamed = monitoring_host_from_ssh_ident(
+        monitoring, mon_ident, env_locked=bool(env_obs)
+    )
+    if renamed.name != monitoring.name:
+        yield emit_line(
+            f"observability inventory host {monitoring.name} -> {renamed.name} (SSH hostname)"
+        )
+        monitoring = renamed
 
     yield emit_line("Checking DRBD backing disks (read-only lsblk)…")
     disk = await _probe_ha_disks(
@@ -1407,7 +1455,9 @@ async def cmd_run_ha_orchestration(
                 ip = peer.ip
         if ip and valid_ipv4(ip) and valid_name(name):
             live_hosts.append(OrchHost(name, ip, _iqn_suffix(name)))
-    live_inv = render_inventory(live_hosts, monitoring, vip_ip=vip_ip) if live_hosts else ""
+    live_inv = (
+        render_inventory(live_hosts, monitoring, vip_ip=vip_ip) if live_hosts else ""
+    )
 
     # Sanity: generated YAML must never contain the vault plaintext.
     for blob, label in ((peer_inv, "peer"), (full_inv, "full"), (live_inv, "live")):
