@@ -70,8 +70,9 @@ export default function CredentialsStep() {
     <>
       <Title>Host credentials</Title>
       <Lede>
-        Set the root password and the admin password for the host(s) in this deployment. Both are
-        required. They are stored encrypted for later provisioning and are never shown again.
+        These must already work over SSH on mail A, mail B, and the Observability VM: the root
+        password, and the password for Linux user kin (sudo). Build HA pair logs in with those
+        accounts; Ubuntu cloud images need PasswordAuthentication enabled first.
       </Lede>
       {draft.host_credentials_set ? (
         <Hint>

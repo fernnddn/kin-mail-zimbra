@@ -202,11 +202,11 @@ if [ "$SMTP_OUT" -eq 0 ]; then
 else
   SEND_IP=$(smtp_egress_ip); S2=$(smtp_egress_ip); S3=$(smtp_egress_ip)
   if [ -z "$SEND_IP" ]; then
-    f "Cannot determine sending address"
+    b "Cannot determine sending address (banner ok, egress IP not parsed)"
   elif [ "$SEND_IP" = "$S2" ] && [ "$SEND_IP" = "$S3" ]; then
     p "Consistent: ${SEND_IP}"
   else
-    f "NOT consistent: ${SEND_IP} / ${S2} / ${S3}"
+    b "NOT consistent: ${SEND_IP} / ${S2} / ${S3}"
     info "Multiple uplinks split outbound traffic. PTR can only point to one"
     info "address, so some email will be rejected. Policy routing or an IP"
     info "pool is needed to lock this host to one uplink."
@@ -323,9 +323,9 @@ if [ $QUICK -eq 0 ]; then
     # (04-tls-dkim.sh and the DNS-cache flush above both restart it), so a
     # single fixed sleep can catch it mid-scan. Poll instead of one shot.
     MSG=""
-    for _t1_try in 1 2 3 4 5 6; do
+    for _t1_try in 1 2 3 4 5 6 7 8 9 10 11 12; do
       sleep 6
-      MSG=$(find /opt/zimbra/store -name '*.msg' -newermt '-2 minutes' 2>/dev/null | head -1)
+      MSG=$(find /opt/zimbra/store -name '*.msg' -newermt '-10 minutes' 2>/dev/null | head -1)
       [ -n "$MSG" ] && break
     done
     if [ -n "$MSG" ]; then

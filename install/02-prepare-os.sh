@@ -21,6 +21,40 @@ timedatectl set-ntp true
 ok "hostname : $(hostname -f)"
 ok "timezone : ${TIMEZONE}"
 
+# --- 1b. OS admin user + password SSH (HA ansible uses sshpass) --------------
+# Cloud images default to key-only SSH and have no `kin` user. Build HA pair
+# probes kin, then root, then ansible-ssh to every mail node and observability.
+OS_USER="${KIN_OS_USER:-kin}"
+if [ -n "${KIN_USER_PASS:-}" ] && [ "$OS_USER" != "root" ]; then
+  if ! id -u "$OS_USER" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -G sudo "$OS_USER"
+    ok "Created OS user ${OS_USER}"
+  else
+    ok "OS user ${OS_USER} already exists"
+  fi
+  echo "${OS_USER}:${KIN_USER_PASS}" | chpasswd
+  ok "Password set for ${OS_USER}"
+fi
+if [ -n "${HOST_ROOT_PASS:-}" ]; then
+  echo "root:${HOST_ROOT_PASS}" | chpasswd
+  ok "Password set for root"
+fi
+install -d -m 755 /etc/ssh/sshd_config.d
+# Must sort before 50-cloud-init.conf: sshd uses the first obtained value.
+cat > /etc/ssh/sshd_config.d/00-kin-mail.conf <<'EOF'
+# KIN Mail - password SSH for HA ansible (sshpass). Cloud-init key-only would
+# make Build HA pair fail even when the wizard passwords are correct.
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+PermitRootLogin yes
+EOF
+chmod 644 /etc/ssh/sshd_config.d/00-kin-mail.conf
+if systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1; then
+  ok "sshd allows password login for kin/root (HA ansible)"
+else
+  warn "Could not reload sshd - password SSH drop-in is in place; reboot or reload sshd"
+fi
+
 # --- 2. /etc/hosts -----------------------------------------------------------
 # The FQDN must resolve to the LAN address during Zimbra install. Ubuntu's
 # default 127.0.1.1 entry makes the installer bind services to loopback, so

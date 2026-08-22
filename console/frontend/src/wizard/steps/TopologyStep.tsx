@@ -203,12 +203,16 @@ export default function TopologyStep() {
             </Hint>
           </FieldRow>
           <Hint>
-            Each mail VM needs a second unused disk (≥20 GiB, not the OS disk, no partition table).
-            Build HA pair will GPT-partition it automatically when exactly one such disk is
-            present: /dev/sdb1 (Zimbra data) and /dev/sdb2 (~256 MiB DRBD meta, no filesystem).
-            Zero or multiple spare disks stay fail-closed; specify the disk instead of guessing.
-            If Zimbra is already on the root volume, migrate /opt/zimbra onto sdb1 after that
-            partition exists.
+            Each mail VM needs exactly one unused spare disk (≥20 GiB, not the OS disk, no
+            partition table, not formatted by cloud-init). SCSI/SATA (sdb), virtio (vdb), and
+            NVMe are all accepted. Build HA pair GPT-partitions that disk: partition 1 = Zimbra
+            data, partition 2 ≈ 256 MiB DRBD meta (no filesystem). Zero or two spare disks stay
+            fail-closed.
+          </Hint>
+          <Hint>
+            On every VM (mail A, mail B, Observability) create Linux user kin with sudo, set the
+            same root and kin passwords you will enter next, and allow SSH password login
+            (cloud images default to keys only). Build HA pair cannot use SSH keys.
           </Hint>
         </>
       ) : null}

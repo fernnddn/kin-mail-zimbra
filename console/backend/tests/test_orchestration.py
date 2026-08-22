@@ -645,6 +645,16 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn("elapsed without cancel", driver)
         tls = (repo / "install/04-tls-dkim.sh").read_text(encoding="utf-8")
         self.assertIn("wizard does not store it", tls)
+        self.assertIn('b "Cannot determine sending address', health)
+        self.assertNotIn('f "Cannot determine sending address', health)
+        self.assertIn('b "NOT consistent:', health)
+        self.assertNotIn('f "NOT consistent:', health)
+        self.assertIn("-10 minutes", health)
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        self.assertIn("00-kin-mail.conf", prepare)
+        self.assertIn("PasswordAuthentication yes", prepare)
+        self.assertIn("PermitRootLogin yes", prepare)
+        self.assertIn("useradd -m -s /bin/bash -G sudo", prepare)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

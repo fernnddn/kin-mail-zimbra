@@ -153,6 +153,14 @@ else
   bad "kin-mail.sh still fails Deploy when dead-man is not cancelled"
 fi
 
+if grep -q 'b "Cannot determine sending address' ../05-healthcheck.sh \
+  && grep -q 'b "NOT consistent:' ../05-healthcheck.sh \
+  && ! grep -q 'f "Cannot determine sending address' ../05-healthcheck.sh; then
+  pass "05-healthcheck.sh treats SMTP egress IP gaps as blocked not fail"
+else
+  bad "05-healthcheck.sh still fail-closes on sending-address probes"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf 'FAILED %s checks\n' "$fails"
   exit 1
