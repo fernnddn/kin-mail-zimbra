@@ -24,25 +24,13 @@
   check_mode: false
   tags: [drbd, resource, activate]
 
-# drbdadm status exits 0 for a connected Diskless/Secondary leftover from a
-# failed attach (backing device was busy). That must NOT be treated as "already
-# healthy": create-md/up would be skipped and the disk would never attach.
-# Tear down first, then run the normal up path.
-- name: Detect a stale Diskless DRBD resource that still needs attach
-  ansible.builtin.set_fact:
-    drbd_resource_is_diskless: >-
-      {{
-        (drbd_resource_status_pre.rc | int) == 0
-        and ('Diskless' in (drbd_resource_status_pre.stdout | default('')))
-      }}
-    drbd_resource_needs_activate: >-
-      {{
-        (drbd_resource_status_pre.rc | int) != 0
-        or (
-          (drbd_resource_status_pre.rc | int) == 0
-          and ('Diskless' in (drbd_resource_status_pre.stdout | default('')))
-        )
-      }}
+- name: Read the DRBD role before deciding whether to activate
+  ansible.builtin.command:
+    cmd: drbdadm role {{ drbd_resource_name }}
+  register: drbd_resource_role_pre
+  changed_when: false
+  failed_when: false
+  check_mode: false
   tags: [drbd, resource, activate]
 
 - name: Check whether Pacemaker already owns the DRBD clone
@@ -54,9 +42,31 @@
   check_mode: false
   tags: [drbd, resource, activate]
 
-- name: Remember whether Pacemaker owns DRBD attach and promote
+# drbdadm status exits 0 for connected Diskless leftover from a failed attach,
+# and also for "both up, both Secondary" after an interrupt between `up` and
+# `--force`. Neither is healthy first-apply: skip activate only when the clone
+# already exists (Pacemaker owns promote) or node A is already Primary.
+- name: Remember Pacemaker ownership and whether first-apply still needs activate
   ansible.builtin.set_fact:
+    drbd_resource_is_diskless: >-
+      {{
+        (drbd_resource_status_pre.rc | int) == 0
+        and ('Diskless' in (drbd_resource_status_pre.stdout | default('')))
+      }}
     drbd_resource_pacemaker_owns: "{{ (drbd_resource_pcs_clone_probe.rc | int) == 0 }}"
+    drbd_resource_needs_activate: >-
+      {{
+        not ((drbd_resource_pcs_clone_probe.rc | int) == 0)
+        and (
+          (drbd_resource_status_pre.rc | int) != 0
+          or ('Diskless' in (drbd_resource_status_pre.stdout | default('')))
+          or (
+            inventory_hostname == drbd_resource_node_a_name
+            and (drbd_resource_status_pre.rc | int) == 0
+            and ('Primary' not in (drbd_resource_role_pre.stdout | default('')))
+          )
+        )
+      }}
   tags: [drbd, resource, activate]
 
 - name: Note that Pacemaker owns DRBD so ansible will not down/up/force

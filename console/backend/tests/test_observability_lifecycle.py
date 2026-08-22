@@ -182,6 +182,12 @@ class ObservabilityLifecycleTests(unittest.TestCase):
         self.assertIn("corosync_qdevice_force_tls_reinit", tls)
         self.assertIn("inventory_hostname != ansible_play_hosts[0]", tls)
         self.assertIn("corosync-qdevice-net-certutil -m", tls)
+        minus_m = tls.find("corosync-qdevice-net-certutil -m")
+        self.assertNotIn(
+            'creates: "{{ corosync_qdevice_tls_ready_marker }}"',
+            tls[minus_m : minus_m + 500],
+        )
+        self.assertIn("corosync_qdevice_m.rc", tls)
         self.assertIn("corosync_qdevice_tls_ready_marker", tls)
         self.assertIn("corosync_qdevice_tls_marker", tls)
 

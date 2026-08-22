@@ -952,7 +952,20 @@ async def _install_staged_peer_file(
     chmod_dir = ""
     if dest_dir.rstrip("/") == "/etc/kin-mail":
         chmod_dir = f"chmod 755 {dest_dir} && "
+    # Mail B never runs console/bootstrap.sh, so kin-console may not exist yet.
+    # install -o kin-console then fails with "invalid user" and HA apply dies
+    # at peer_console_state after the cluster is already live.
+    ensure_owner = ""
+    if owner == "kin-console" or group == "kin-console":
+        ensure_owner = (
+            "getent passwd kin-console >/dev/null "
+            "|| useradd --system --home /var/lib/kin-mail-console "
+            "--shell /usr/sbin/nologin kin-console; "
+            "install -d -o kin-console -g kin-console -m 750 "
+            "/var/lib/kin-mail-console; "
+        )
     inner = (
+        f"{ensure_owner}"
         f"mkdir -p {dest_dir} && "
         f"{chmod_dir}"
         f"install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "

@@ -337,7 +337,12 @@ async def _forward_mutation(
     host: OrchHost,
     mutation: dict[str, Any],
 ) -> tuple[bool, str]:
-    from .orchestration import _scp_put, _ssh_run, _write_secure_temp
+    from .orchestration import (
+        _scp_put,
+        _ssh_run,
+        _write_secure_temp,
+        wrap_privileged_remote,
+    )
 
     user, password, secrets = await _ssh_session(host)
     raw = json.dumps(mutation, separators=(",", ":"), ensure_ascii=False)
@@ -348,12 +353,15 @@ async def _forward_mutation(
         )
         if code != 0:
             return False, SYNC_FAIL
-        cmd = (
-            "sudo -n env PYTHONPATH=/opt/kin-mail-console/backend "
+        inner = (
+            "env PYTHONPATH=/opt/kin-mail-console/backend "
             "/opt/kin-mail-console/venv/bin/python -m kin_privhelper.console_users_sync "
             f"apply-file {MUTATION_REMOTE_TMP}"
         )
-        code, text = await _ssh_run(host, user, password, secrets, cmd, timeout=40)
+        cmd = wrap_privileged_remote(inner)
+        code, text = await _ssh_run(
+            host, user, password, secrets, cmd, timeout=40, stdin_text=password
+        )
         if code != 0:
             return False, SYNC_FAIL
         if "USERS_RESULT:" not in (text or ""):

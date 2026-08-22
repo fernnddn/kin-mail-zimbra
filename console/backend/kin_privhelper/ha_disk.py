@@ -327,6 +327,13 @@ def evaluate_node(
         if can_auto
         else None
     )
+    plan_data = _norm_dev(str(plan.get("data_disk") or ""))
+    plan_meta = _norm_dev(str(plan.get("meta_disk") or ""))
+    if str(plan.get("action") or "") in ("partition", "skip") and plan_data and plan_meta:
+        # Selector may pick vdb/nvme while callers still default to sdb1.
+        # Existence checks and combine_results must use the planned paths.
+        data_disk = plan_data
+        meta_disk = plan_meta
 
     data_parent = f"/dev/{_parent_disk_name(data_disk.removeprefix('/dev/'))}"
     data_node = nodes.get(data_disk)

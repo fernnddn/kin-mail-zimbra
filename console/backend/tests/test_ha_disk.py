@@ -813,6 +813,76 @@ class HaDiskTests(unittest.TestCase):
         self.assertEqual(plan["data_disk"], "/dev/vdb1")
         self.assertEqual(plan["meta_disk"], "/dev/vdb2")
 
+    def test_evaluate_adopts_vdb_plan_paths_for_blank_and_ready(self) -> None:
+        blank_extra = [
+            {
+                "name": "vdb",
+                "path": "/dev/vdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": None,
+            }
+        ]
+        blank = evaluate_node(
+            lsblk=_lsblk(sdb=None, extra=blank_extra),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=False,
+            require_zimbra_on_data=True,
+            label="peer",
+        )
+        self.assertTrue(blank["can_auto_partition"])
+        self.assertEqual(blank["data_disk"], "/dev/vdb1")
+        self.assertEqual(blank["meta_disk"], "/dev/vdb2")
+        self.assertTrue(blank["build_allowed"])
+        pair = combine_results(blank, {**blank, "label": "this server"})
+        self.assertTrue(pair["build_allowed"])
+        self.assertEqual(pair["data_disk"], "/dev/vdb1")
+        self.assertFalse(any("different DRBD data disks" in e for e in pair["errors"]))
+
+        ready_extra = [
+            {
+                "name": "vdb",
+                "path": "/dev/vdb",
+                "type": "disk",
+                "size": 107374182400,
+                "pttype": "gpt",
+                "children": [
+                    {
+                        "name": "vdb1",
+                        "path": "/dev/vdb1",
+                        "type": "part",
+                        "size": 106954752000,
+                        "fstype": "crypto_LUKS",
+                        "mountpoint": "",
+                    },
+                    {
+                        "name": "vdb2",
+                        "path": "/dev/vdb2",
+                        "type": "part",
+                        "size": 267386880,
+                        "fstype": "",
+                        "mountpoint": "",
+                    },
+                ],
+            }
+        ]
+        ready = evaluate_node(
+            lsblk=_lsblk(sdb=None, extra=ready_extra),
+            root_source="/dev/sda2",
+            zimbra_source=LUKS_MAPPER_PATH,
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server",
+        )
+        self.assertEqual(ready["plan_action"], "skip")
+        self.assertEqual(ready["data_disk"], "/dev/vdb1")
+        self.assertEqual(ready["meta_disk"], "/dev/vdb2")
+        self.assertFalse(
+            any("expected DRBD data partition /dev/sdb1" in e for e in ready["errors"])
+        )
+        self.assertTrue(ready["ok"])
+
     def test_ready_layout_skips_partition(self) -> None:
         plan = plan_auto_partition(
             _lsblk(sdb="ready"),

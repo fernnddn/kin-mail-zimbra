@@ -119,8 +119,14 @@ class DrbdResParseTests(unittest.TestCase):
         self.assertIn("create-md", activate)
         self.assertIn("printf 'yes", activate)
         self.assertIn("drbd_resource_pacemaker_owns", activate)
+        self.assertIn("drbd_resource_role_pre", activate)
         self.assertIn("drbd_resource_role_after_up", activate)
         self.assertIn("drbdadm primary --force", activate)
+        needs = activate.find("drbd_resource_needs_activate:")
+        self.assertGreater(needs, 0)
+        needs_block = activate[needs : needs + 700]
+        self.assertIn("drbd_resource_node_a_name", needs_block)
+        self.assertIn("'Primary' not in", needs_block)
         force = activate.find("drbdadm primary --force")
         self.assertNotIn(
             "not (drbd_resource_is_diskless | bool)",

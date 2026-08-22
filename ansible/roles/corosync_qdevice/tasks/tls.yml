@@ -267,8 +267,7 @@
   ansible.builtin.command:
     cmd: >-
       corosync-qdevice-net-certutil -m -c {{ corosync_qdevice_p12_path }}
-  args:
-    creates: "{{ corosync_qdevice_tls_ready_marker }}"
+  register: corosync_qdevice_m
   when:
     - inventory_hostname != ansible_play_hosts[0]
     - not corosync_qdevice_tls_ready_all
@@ -286,6 +285,8 @@
     - inventory_hostname != ansible_play_hosts[0]
     - not corosync_qdevice_tls_ready_all
     - not ansible_check_mode
+    - corosync_qdevice_m.rc is defined
+    - corosync_qdevice_m.rc | int == 0
   tags: [qdevice, tls]
 
 - name: Note that qdevice TLS is not proven from scratch during a dry-run

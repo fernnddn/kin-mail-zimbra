@@ -749,6 +749,13 @@ class CheckModeSafetyTests(unittest.TestCase):
             "inventory_hostname != ansible_play_hosts[0]",
             tls[minus_m : minus_m + 280],
         )
+        self.assertNotIn(
+            'creates: "{{ corosync_qdevice_tls_ready_marker }}"',
+            tls[minus_m : minus_m + 500],
+        )
+        record = tls.find("Record that this secondary imported the cluster PKCS12")
+        self.assertGreater(record, minus_m)
+        self.assertIn("corosync_qdevice_m.rc", tls[record : record + 500])
         self.assertIn("corosync_qdevice_tls_ready_marker", tls)
         self.assertIn("corosync_qdevice_tls_marker", tls)
         activate = (
@@ -761,6 +768,17 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("'Primary' not in", force_when)
         self.assertNotIn("not (drbd_resource_is_diskless | bool)", force_when)
         self.assertIn("drbd_resource_pcs_clone", activate)
+        self.assertIn("drbd_resource_role_pre", activate)
+        needs = activate.find("drbd_resource_needs_activate:")
+        self.assertGreater(needs, 0)
+        needs_block = activate[needs : needs + 700]
+        self.assertIn("drbd_resource_node_a_name", needs_block)
+        self.assertIn("'Primary' not in", needs_block)
+        self.assertIn("getent passwd kin-console", orch)
+        self.assertIn(
+            "useradd --system --home /var/lib/kin-mail-console",
+            orch,
+        )
         self.assertIn("corosync_qdevice_p12_now", tls)
         self.assertIn("select_drbd_disk.py missing", orch)
         pipeline = (

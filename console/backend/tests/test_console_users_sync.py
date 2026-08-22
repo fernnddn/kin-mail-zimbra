@@ -213,6 +213,24 @@ class HaSyncWiringTests(unittest.TestCase):
         users_idx = text.find("push_local_users_to_peer")
         self.assertGreater(noop_idx, 0)
         self.assertGreater(users_idx, noop_idx)
+        self.assertIn("getent passwd kin-console", text)
+        self.assertIn(
+            "useradd --system --home /var/lib/kin-mail-console",
+            text,
+        )
+
+    def test_forward_mutation_uses_password_sudo_wrapper(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "console_users_sync.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("wrap_privileged_remote", text)
+        self.assertIn("stdin_text=password", text)
+        self.assertNotIn(
+            "sudo -n env PYTHONPATH=/opt/kin-mail-console/backend",
+            text,
+        )
 
 
 if __name__ == "__main__":
