@@ -62,6 +62,17 @@ class MailDeployedGateTests(unittest.TestCase):
 
         return patch.object(Path, "read_text", wrapped)
 
+    def _deny_is_file(self, *targets: Path):
+        real = Path.is_file
+        wanted = set(targets)
+
+        def wrapped(path_self: Path) -> bool:
+            if path_self in wanted:
+                raise PermissionError("denied")
+            return real(path_self)
+
+        return patch.object(Path, "is_file", wrapped)
+
     def _write_topology(self, topology: str, *, via: str = "config") -> None:
         if via == "config":
             self.config.write_text(f'TOPOLOGY="{topology}"\n', encoding="utf-8")
@@ -294,6 +305,49 @@ class MailDeployedGateTests(unittest.TestCase):
         self.marker.write_text("complete\n", encoding="utf-8")
         self.assertFalse(self.ha_marker.exists())
         self.assertFalse(ds.is_mail_deployed())
+
+    def test_unreadable_setup_marker_is_file_is_not_deployed(self) -> None:
+        """Live 2026-08-22: /etc/kin-mail not traversable makes Path.is_file raise."""
+        self._write_topology("1vm")
+        self.marker.write_text("complete\n", encoding="utf-8")
+        with self._deny_is_file(self.marker):
+            with self.assertLogs("kin_privhelper.deploy_state", level="WARNING") as cm:
+                self.assertFalse(ds.is_full_install_complete())
+                self.assertFalse(ds.is_mail_deployed())
+            self.assertTrue(any("permission denied" in line.lower() for line in cm.output))
+
+    def test_unreadable_ha_marker_is_file_is_not_complete(self) -> None:
+        self._write_topology("2vm")
+        self.marker.write_text("complete\n", encoding="utf-8")
+        self.ha_marker.write_text("complete\n", encoding="utf-8")
+        with self._deny_is_file(self.ha_marker):
+            with self.assertLogs("kin_privhelper.deploy_state", level="WARNING"):
+                self.assertFalse(ds.is_ha_setup_complete())
+                self.assertFalse(ds.is_mail_deployed())
+
+    def test_setup_status_payload_survives_is_mail_deployed_raise(self) -> None:
+        with patch.object(ds, "is_mail_deployed", side_effect=PermissionError("denied")):
+            with self.assertLogs("kin_privhelper.deploy_state", level="ERROR"):
+                payload = ds.setup_status_payload()
+        self.assertFalse(payload["deployed"])
+        self.assertFalse(payload["full_install_complete"])
+        self.assertFalse(payload["ha_setup_complete"])
+        self.assertFalse(payload["install_in_progress"])
+        self.assertFalse(payload["zimbra_tree_present"])
+
+    def test_ensure_kin_mail_dir_sets_0755(self) -> None:
+        d = self.root / "kin-mail-dir"
+        d.mkdir()
+        os.chmod(d, 0o700)
+        self.assertEqual(d.stat().st_mode & 0o777, 0o700)
+        ds.ensure_kin_mail_dir(d)
+        self.assertEqual(d.stat().st_mode & 0o777, 0o755)
+
+    def test_write_topology_marker_makes_parent_0755(self) -> None:
+        parent = self.topo.parent
+        os.chmod(parent, 0o700)
+        self.assertTrue(ds.write_topology_marker("1vm"))
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
 
 
 class UnexpectedInstallStopTests(unittest.TestCase):

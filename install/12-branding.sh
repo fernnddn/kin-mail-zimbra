@@ -97,6 +97,7 @@ fi
 install_brand_tree() {
   say "1. Install brand assets under ${BRAND_DIR}"
   mkdir -p "$BRAND_DIR"
+  chmod 755 "$(dirname "$BRAND_DIR")" "$BRAND_DIR" 2>/dev/null || true
   local f
   for f in brand.conf "$BRAND_LOGIN_BANNER" "$BRAND_APP_BANNER" "$BRAND_FAVICON"; do
     if [ ! -f "${BRAND_SOURCE}/${f}" ]; then

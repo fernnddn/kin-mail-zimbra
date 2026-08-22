@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { api } from "./api";
@@ -26,17 +27,23 @@ type SetupCtx = {
   /** /etc/kin-mail/setup-complete exists. Independent of the live log buffer. */
   fullInstallComplete: boolean;
   loading: boolean;
+  /** Last /api/setup/status failure. Empty after a successful fetch. */
+  statusError: string;
   refresh: () => Promise<void>;
 };
 
 const Ctx = createContext<SetupCtx | null>(null);
 
 export function SetupProvider({ children }: { children: ReactNode }) {
-  // Fail closed until loaded: require login if we cannot tell (safer for post-deploy).
-  const [deployed, setDeployed] = useState(true);
+  // Stay on "loading" until the first successful or failed fetch. Do not
+  // default deployed=true: a 500 on the 5s poll used to eject the wizard to
+  // /login even with a valid session.
+  const [deployed, setDeployed] = useState(false);
   const [installInProgress, setInstallInProgress] = useState(false);
   const [fullInstallComplete, setFullInstallComplete] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [statusError, setStatusError] = useState("");
+  const loadedOnce = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -44,10 +51,20 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       setDeployed(Boolean(st.deployed));
       setInstallInProgress(Boolean(st.install_in_progress || st.busy));
       setFullInstallComplete(Boolean(st.full_install_complete));
-    } catch {
-      setDeployed(true);
-      setInstallInProgress(false);
-      setFullInstallComplete(false);
+      setStatusError("");
+      loadedOnce.current = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Cannot reach setup status";
+      if (!loadedOnce.current) {
+        // First load failed: do not treat as deployed (that sends a fresh
+        // wizard to /login). Show the error and keep the last known defaults.
+        setDeployed(false);
+        setInstallInProgress(false);
+        setFullInstallComplete(false);
+        setStatusError(message);
+      }
+      // After a successful load, keep last known status. A transient 500
+      // must not flip deployed to true.
     } finally {
       setLoading(false);
     }
@@ -62,8 +79,15 @@ export function SetupProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ deployed, installInProgress, fullInstallComplete, loading, refresh }),
-    [deployed, installInProgress, fullInstallComplete, loading, refresh],
+    () => ({
+      deployed,
+      installInProgress,
+      fullInstallComplete,
+      loading,
+      statusError,
+      refresh,
+    }),
+    [deployed, installInProgress, fullInstallComplete, loading, statusError, refresh],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

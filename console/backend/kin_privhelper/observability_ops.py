@@ -64,7 +64,9 @@ def write_observability_vm_ip(ip: str) -> None:
     if path.is_file():
         values = parse_config(path.read_text(encoding="utf-8"))
     values["OBSERVABILITY_VM_IP"] = (ip or "").strip()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    from .deploy_state import ensure_kin_mail_dir
+
+    ensure_kin_mail_dir(path.parent)
     path.write_text(format_config(values), encoding="utf-8")
 
 

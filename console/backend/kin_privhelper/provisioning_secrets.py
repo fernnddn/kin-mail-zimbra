@@ -61,7 +61,9 @@ def _load_or_create_key(path: Path = KEY_PATH) -> bytes:
         if not key:
             raise RuntimeError(f"empty secrets key at {path}")
         return key
-    path.parent.mkdir(parents=True, exist_ok=True)
+    from .deploy_state import ensure_kin_mail_dir
+
+    ensure_kin_mail_dir(path.parent)
     key = Fernet.generate_key()
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(key + b"\n")

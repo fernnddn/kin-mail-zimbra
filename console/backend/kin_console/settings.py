@@ -30,7 +30,9 @@ class Settings(BaseSettings):
 
     static_dir: Path = Path("/opt/kin-mail-console/frontend/dist")
     cookie_name: str = "kin_console_session"
-    session_max_age_sec: int = 60 * 60 * 12  # 12h
+    session_max_age_sec: int = 60 * 60 * 12  # 12h after deploy
+    # Wizard + multi-stage deploy can outlast 12h. Used only while not deployed.
+    setup_session_max_age_sec: int = 60 * 60 * 24 * 7
 
     # Local-only privhelper socket (never a network port).
     privhelper_socket: Path = Path("/run/kin-mail/privhelper.sock")

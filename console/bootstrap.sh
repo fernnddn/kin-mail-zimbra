@@ -293,11 +293,9 @@ PY
   chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE"
   ok "Migrated admin.hash → users.json (KIN Super Admin)"
 else
-  BOOT_PASS=$("${OPT_ROOT}/venv/bin/python" - <<'PY'
-import secrets
-print(secrets.token_urlsafe(18), end="")
-PY
-)
+  # Operator-directed default (not random). Still printed once and stored
+  # root-only until the first successful local login deletes that file.
+  BOOT_PASS='E@syEmail'
   KIN_BOOT_PASS="$BOOT_PASS" KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" \
     KIN_CONSOLE_USER="$CONSOLE_USER" "${OPT_ROOT}/venv/bin/python" - <<'PY'
 import json, os

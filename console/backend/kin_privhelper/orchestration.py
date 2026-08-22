@@ -739,8 +739,12 @@ async def _install_staged_peer_file(
     if not _SCP_TMP_RE.match(remote_tmp) or not _INSTALL_DEST_RE.match(dest):
         return 2, "refusing unsafe install path"
     dest_dir = str(Path(dest).parent)
+    chmod_dir = ""
+    if dest_dir.rstrip("/") == "/etc/kin-mail":
+        chmod_dir = f"sudo -n chmod 755 {dest_dir} && "
     cmd = (
         f"sudo -n mkdir -p {dest_dir} && "
+        f"{chmod_dir}"
         f"sudo -n install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "
         f"rm -f {remote_tmp}"
     )

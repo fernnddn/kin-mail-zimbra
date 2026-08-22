@@ -730,8 +730,10 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
         lines.append(f"Backup written: {backup}\n")
 
     body = format_config(merged)
+    from .deploy_state import ensure_kin_mail_dir, write_topology_marker
+
     try:
-        CONF_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_kin_mail_dir(CONF_DIR)
         tmp = CONF_FILE.with_suffix(".tmp")
         tmp.write_text(body, encoding="utf-8")
         os.chmod(tmp, 0o600)
@@ -748,8 +750,6 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
         return 1, lines
 
     try:
-        from .deploy_state import write_topology_marker
-
         if not write_topology_marker(str(merged.get("TOPOLOGY") or "")):
             lines.append("ERROR: could not write topology marker (invalid TOPOLOGY)\n")
             return 1, lines

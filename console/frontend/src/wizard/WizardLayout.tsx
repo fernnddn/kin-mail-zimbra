@@ -2,7 +2,7 @@ import styled from "@emotion/styled";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { useSetup } from "../setup";
-import { Lede, Shell, Skeleton, Spinner } from "../ui";
+import { Lede, Shell, Skeleton, Spinner, Err } from "../ui";
 import { theme } from "../styles/theme";
 import { useDeploySession } from "./DeploySession";
 import { useWizard } from "./WizardContext";
@@ -160,7 +160,7 @@ function LoadingPage({ text }: { text: string }) {
 
 export default function WizardLayout() {
   const { loading: draftLoading, savedCurrentStep } = useWizard();
-  const { deployed, installInProgress, loading: setupLoading } = useSetup();
+  const { deployed, installInProgress, loading: setupLoading, statusError } = useSetup();
   const { pipelineBusy } = useDeploySession();
   const location = useLocation();
   const isDeployLogs = /\/wizard\/deploy\/logs\/?$/.test(location.pathname);
@@ -257,6 +257,12 @@ export default function WizardLayout() {
             <strong>{activeDef.crumb}</strong>
           </CrumbBar>
           <Content key={active}>
+            {statusError ? (
+              <Err style={{ marginBottom: "1rem" }}>
+                Setup status is temporarily unavailable ({statusError}). Staying on
+                this step; the form is not reset.
+              </Err>
+            ) : null}
             {draftLoading ? (
               <div style={{ display: "grid", gap: "0.65rem", paddingTop: "0.5rem" }}>
                 <Skeleton $h="1.4rem" $w="42%" />

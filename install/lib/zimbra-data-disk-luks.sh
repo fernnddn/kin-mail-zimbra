@@ -102,7 +102,9 @@ ensure_luks_keyfile() {
   key=$(luks_keyfile_path)
   dir=$(dirname "$key")
   mkdir -p "$dir" || return 1
-  chmod 0750 "$dir" 2>/dev/null || true
+  # 0755: kin-console must traverse /etc/kin-mail to read 0644 markers.
+  # The keyfile itself stays 0400, so directory execute does not leak the key.
+  chmod 0755 "$dir" 2>/dev/null || true
   if [ ! -f "$key" ]; then
     umask 077
     if command -v openssl >/dev/null 2>&1; then

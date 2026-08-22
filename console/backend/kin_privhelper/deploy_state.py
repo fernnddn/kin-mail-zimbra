@@ -43,6 +43,8 @@ TOPOLOGY_MARKER = Path(
 
 # Topology for the login gate: marker first, then applied config, then draft.
 KIN_MAIL_CONFIG = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+# Traversable by kin-console. Sensitive files inside stay 0600; do not use umask.
+KIN_MAIL_DIR_MODE = 0o755
 WIZARD_DRAFT_FILE = Path(
     os.environ.get("KIN_CONSOLE_DRAFT", "/var/lib/kin-mail-console/wizard-draft.json")
 )
@@ -99,6 +101,47 @@ _INSTALL_PROC_RE = re.compile(
 )
 
 _MAILBOXD_PROC_RE = re.compile(r"/opt/zimbra/.*mailboxd", re.I)
+
+
+def ensure_kin_mail_dir(path: Path | None = None) -> None:
+    """Create the config dir at 0755 so kin-console can traverse to 0644 markers.
+
+    Individual files keep their own modes (config 0600, markers 0644). A 0750
+    leftover from LUKS keyfile setup, or a umask without other-execute, makes
+    Path.is_file() raise PermissionError even when the marker itself is 0644.
+    """
+    target = path if path is not None else KIN_MAIL_CONFIG.parent
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(target, KIN_MAIL_DIR_MODE)
+    except OSError:
+        log.warning("could not chmod %s to 0755 (console needs directory execute)", target)
+
+
+def path_is_file(path: Path) -> bool:
+    """Like Path.is_file(), but never raise. PermissionError is treated as absent."""
+    try:
+        return path.is_file()
+    except PermissionError:
+        log.warning(
+            "cannot stat %s: permission denied. The directory must be 0755 so "
+            "the unprivileged console can read 0644 markers; files inside stay 0600.",
+            path,
+        )
+        return False
+    except OSError:
+        return False
+
+
+def path_exists(path: Path) -> bool:
+    """Like Path.exists(), but never raise."""
+    try:
+        return path.exists()
+    except PermissionError:
+        log.warning("cannot stat %s: permission denied", path)
+        return False
+    except OSError:
+        return False
 
 
 def full_install_in_progress() -> bool:
@@ -243,14 +286,14 @@ def write_topology_marker(topology: str) -> bool:
     body = topology_marker_body(topology)
     if not body:
         return False
-    if TOPOLOGY_MARKER.is_file():
+    if path_is_file(TOPOLOGY_MARKER):
         try:
             existing = TOPOLOGY_MARKER.read_text(encoding="utf-8")
         except OSError:
             existing = ""
         if _normalize_topology(_first_nonempty_line(existing)) == _normalize_topology(body):
             return True
-    TOPOLOGY_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    ensure_kin_mail_dir(TOPOLOGY_MARKER.parent)
     tmp = TOPOLOGY_MARKER.with_name(TOPOLOGY_MARKER.name + ".tmp")
     tmp.write_text(body, encoding="utf-8")
     os.chmod(tmp, 0o644)
@@ -290,14 +333,14 @@ def mark_ha_setup_complete() -> bool:
     Returns True when the marker exists afterwards. Skips rewrite when the file
     already starts with 'complete '.
     """
-    if HA_SETUP_COMPLETE_MARKER.is_file():
+    if path_is_file(HA_SETUP_COMPLETE_MARKER):
         try:
             existing = HA_SETUP_COMPLETE_MARKER.read_text(encoding="utf-8")
         except OSError:
             existing = ""
         if marker_already_complete(existing):
             return True
-    HA_SETUP_COMPLETE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    ensure_kin_mail_dir(HA_SETUP_COMPLETE_MARKER.parent)
     tmp = HA_SETUP_COMPLETE_MARKER.with_name(HA_SETUP_COMPLETE_MARKER.name + ".tmp")
     tmp.write_text(_complete_stamp(), encoding="utf-8")
     os.chmod(tmp, 0o644)
@@ -365,12 +408,12 @@ def is_full_install_complete() -> bool:
     Independent of last-log text (HA orchestration truncates that file) and
     independent of is_mail_deployed() (2vm stays false until HA apply succeeds).
     """
-    return SETUP_COMPLETE_MARKER.is_file()
+    return path_is_file(SETUP_COMPLETE_MARKER)
 
 
 def is_ha_setup_complete() -> bool:
     """True when join_mode=apply reached ORCH_DONE and wrote ha-setup-complete."""
-    return HA_SETUP_COMPLETE_MARKER.is_file()
+    return path_is_file(HA_SETUP_COMPLETE_MARKER)
 
 
 def is_mail_deployed() -> bool:
@@ -391,9 +434,11 @@ def is_mail_deployed() -> bool:
     if topology == "2vm":
         # Do not use mailboxd as a proxy — it is already running after the
         # single-node install, which is exactly when HA has not started yet.
-        return SETUP_COMPLETE_MARKER.is_file() and HA_SETUP_COMPLETE_MARKER.is_file()
+        return path_is_file(SETUP_COMPLETE_MARKER) and path_is_file(
+            HA_SETUP_COMPLETE_MARKER
+        )
 
-    if SETUP_COMPLETE_MARKER.is_file():
+    if path_is_file(SETUP_COMPLETE_MARKER):
         if topology == "1vm":
             return True
         # Topology unknown: fail open (pre-deploy). Locking the operator out
@@ -402,7 +447,7 @@ def is_mail_deployed() -> bool:
         # they sign in from the wizard; that is the smaller gap.
         return False
 
-    if not ZIMBRA_ROOT.exists():
+    if not path_exists(ZIMBRA_ROOT):
         return False
     # Legacy hosts (CLI install before the marker existed): only if mailboxd
     # is actually running. A menus-timeout leftover tree must not flip the gate.
@@ -447,7 +492,7 @@ def append_unexpected_stop_if_needed(log_path: Path | None = None) -> bool:
     """Stamp the transcript if it has no success/fail marker. Returns True if written."""
     path = log_path or DEPLOY_LAST_LOG
     try:
-        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        text = path.read_text(encoding="utf-8", errors="replace") if path_is_file(path) else ""
     except OSError:
         text = ""
     if transcript_has_terminal_outcome(text):
@@ -471,10 +516,36 @@ def reclaim_stale_full_install_marker() -> bool:
     Call on privhelperd startup and when serving the last-log API so an operator
     opening View logs after a crash never sees Idle with no explanation.
     """
-    if not FULL_INSTALL_RUNNING_MARKER.is_file():
+    if not path_is_file(FULL_INSTALL_RUNNING_MARKER):
         return False
     if full_install_in_progress():
         return False
     append_unexpected_stop_if_needed()
     mark_full_install_finished()
     return True
+
+
+def setup_status_payload() -> dict[str, object]:
+    """Body for GET /api/setup/status. Never raises; degrades to not-deployed."""
+    try:
+        installing = full_install_in_progress()
+        return {
+            "deployed": is_mail_deployed(),
+            "full_install_complete": is_full_install_complete(),
+            "ha_setup_complete": is_ha_setup_complete(),
+            "busy": installing,
+            "install_in_progress": installing,
+            "marker": str(ZIMBRA_ROOT),
+            "zimbra_tree_present": path_exists(ZIMBRA_ROOT),
+        }
+    except Exception:
+        log.exception("setup_status_payload failed; reporting not-deployed")
+        return {
+            "deployed": False,
+            "full_install_complete": False,
+            "ha_setup_complete": False,
+            "busy": False,
+            "install_in_progress": False,
+            "marker": str(ZIMBRA_ROOT),
+            "zimbra_tree_present": False,
+        }

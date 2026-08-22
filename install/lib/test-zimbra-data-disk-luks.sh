@@ -97,6 +97,12 @@ if ensure_luks_keyfile \
 else
   bad "ensure_luks_keyfile mode: $(stat -c '%a' "$KIN_LUKS_KEYFILE" 2>/dev/null || true)"
 fi
+dirmode=$(stat -c '%a' "$tmp" 2>/dev/null || stat -f '%OLp' "$tmp")
+if [ "$dirmode" = "755" ]; then
+  pass "ensure_luks_keyfile: parent dir mode 0755 (console can traverse)"
+else
+  bad "ensure_luks_keyfile parent dir mode: [$dirmode] (need 755)"
+fi
 # Retry must not replace an existing keyfile.
 sum1=$(cksum "$KIN_LUKS_KEYFILE" | awk '{print $1}')
 ensure_luks_keyfile

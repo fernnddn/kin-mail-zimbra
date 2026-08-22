@@ -17,6 +17,14 @@ if [ -n "${KIN_MAIL_CONFIG:-}" ]; then
   CONF_DIR=$(dirname "$CONF_FILE")
 fi
 
+# 0755 so unprivileged kin-console can traverse to 0644 markers. Do not rely
+# on umask. Sensitive files inside (config) stay 0600.
+ensure_kin_mail_conf_dir() {
+  local dir="${1:-$CONF_DIR}"
+  mkdir -p "$dir" || return 1
+  chmod 755 "$dir" 2>/dev/null || true
+}
+
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[36m'
 BLD=$'\033[1m'; DIM=$'\033[2m'; RST=$'\033[0m'
 
@@ -461,7 +469,7 @@ run_wizard() {
     ZPUSH_ENABLED=no
   fi
 
-  mkdir -p "$CONF_DIR"
+  ensure_kin_mail_conf_dir "$CONF_DIR"
   cat > "$CONF_FILE" <<EOF
 # KIN Mail - created $(date -Is)
 # Change with: sudo ./00-config.sh --reset
@@ -558,6 +566,11 @@ fi
 if [ -f "$CONF_FILE" ]; then
   # shellcheck disable=SC1090
   . "$CONF_FILE"
+  # Repair a 0750 leftover (LUKS keyfile used to chmod the parent) or a umask
+  # without other-execute. Harmless when the dir is already 0755.
+  if [ "$(id -u)" -eq 0 ]; then
+    chmod 755 "$CONF_DIR" 2>/dev/null || true
+  fi
 else
   if ! kin_tty_usable; then
     fail "no controlling terminal and no /etc/kin-mail/config present, cannot run interactively here"

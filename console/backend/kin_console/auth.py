@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from dataclasses import dataclass
@@ -11,6 +12,10 @@ from fastapi import HTTPException, Request, Response, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .settings import settings
+
+log = logging.getLogger("kin_console.auth")
+
+DEFAULT_BOOTSTRAP_PASSWORD = "E@syEmail"
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -59,17 +64,50 @@ def ensure_session_secret() -> None:
     path.chmod(0o600)
 
 
+def _mail_is_deployed() -> bool:
+    try:
+        from kin_privhelper.deploy_state import is_mail_deployed
+
+        return is_mail_deployed()
+    except OSError:
+        # Same contract as setup_status: a permission hiccup is not "deployed".
+        return False
+
+
+def cookie_max_age_sec() -> int:
+    """Browser Max-Age: 7 days during setup, 12h after deploy."""
+    if _mail_is_deployed():
+        return settings.session_max_age_sec
+    return settings.setup_session_max_age_sec
+
+
+def loads_max_age_sec() -> int:
+    """itsdangerous max_age must accept the longest cookie we issue.
+
+    A 7-day setup cookie would otherwise die on the first post-deploy request
+    if loads() suddenly used 12h.
+    """
+    return max(settings.session_max_age_sec, settings.setup_session_max_age_sec)
+
+
 def set_session_cookie(response: Response, username: str) -> None:
     token = _serializer().dumps({"u": username})
     response.set_cookie(
         key=settings.cookie_name,
         value=token,
-        max_age=settings.session_max_age_sec,
+        max_age=cookie_max_age_sec(),
         httponly=True,
         secure=True,
         samesite="strict",
         path="/",
     )
+
+
+def maybe_refresh_session(request: Request, response: Response) -> None:
+    """Sliding refresh so a long wizard does not drop a valid session."""
+    uname = current_username(request)
+    if uname:
+        set_session_cookie(response, uname)
 
 
 def clear_session_cookie(response: Response) -> None:
@@ -81,7 +119,7 @@ def current_username(request: Request) -> str | None:
     if not raw:
         return None
     try:
-        data = _serializer().loads(raw, max_age=settings.session_max_age_sec)
+        data = _serializer().loads(raw, max_age=loads_max_age_sec())
     except (BadSignature, SignatureExpired):
         return None
     user = data.get("u")
@@ -95,7 +133,7 @@ def require_user(request: Request) -> str:
     return user
 
 
-def require_console_user(request: Request):
+def require_console_user(request: Request, response: Response):
     """Return ConsoleUser for the session (fresh role from disk)."""
     from . import users as users_mod
 
@@ -103,6 +141,7 @@ def require_console_user(request: Request):
     record = users_mod.get_user(username)
     if record is None or record.disabled:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    maybe_refresh_session(request, response)
     return record
 
 
@@ -115,7 +154,7 @@ class WizardActor:
     anonymous_setup: bool = False
 
 
-def wizard_actor(request: Request) -> WizardActor:
+def wizard_actor(request: Request, response: Response) -> WizardActor:
     """Allow anonymous wizard access only until mail is genuinely deployed.
 
     After deploy (1vm: setup-complete; 2vm: setup-complete and ha-setup-complete;
@@ -128,8 +167,14 @@ def wizard_actor(request: Request) -> WizardActor:
 
     from . import users as users_mod
 
-    if is_mail_deployed():
-        user = require_console_user(request)
+    try:
+        deployed = is_mail_deployed()
+    except OSError:
+        log.warning("is_mail_deployed raised; treating host as not deployed")
+        deployed = False
+
+    if deployed:
+        user = require_console_user(request, response)
         return WizardActor(username=user.username, role=user.role, anonymous_setup=False)
 
     # Pre-deploy: prefer a real session if present, else synthetic setup identity.
@@ -137,6 +182,7 @@ def wizard_actor(request: Request) -> WizardActor:
     if uname:
         record = users_mod.get_user(uname)
         if record is not None and not record.disabled:
+            maybe_refresh_session(request, response)
             return WizardActor(
                 username=record.username, role=record.role, anonymous_setup=False
             )
@@ -151,8 +197,8 @@ def wizard_actor(request: Request) -> WizardActor:
 def require_roles(*allowed: str):
     allowed_set = frozenset(allowed)
 
-    def _dep(request: Request):
-        user = require_console_user(request)
+    def _dep(request: Request, response: Response):
+        user = require_console_user(request, response)
         if user.role not in allowed_set:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -164,4 +210,4 @@ def require_roles(*allowed: str):
 
 
 def generate_bootstrap_password() -> str:
-    return secrets.token_urlsafe(18)
+    return DEFAULT_BOOTSTRAP_PASSWORD

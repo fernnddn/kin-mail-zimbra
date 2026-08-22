@@ -393,6 +393,10 @@ async def run() -> None:
     except OSError:
         log.exception("failed to reclaim leftover full-install marker")
     try:
+        deploy_state.ensure_kin_mail_dir()
+    except OSError:
+        log.exception("failed to ensure /etc/kin-mail is traversable")
+    try:
         if deploy_state.backfill_topology_marker_from_config():
             log.info("wrote topology marker from /etc/kin-mail/config")
     except OSError:
