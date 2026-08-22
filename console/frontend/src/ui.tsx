@@ -361,10 +361,13 @@ const ButtonRoot = styled.button<{ $variant: ButtonVariant }>`
   }
 
   &:disabled {
-    opacity: 0.5;
+    opacity: 1;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+    background: ${theme.surface[100]};
+    color: ${theme.surface[400]};
+    border: 1px solid ${theme.surface[200]};
   }
 `;
 

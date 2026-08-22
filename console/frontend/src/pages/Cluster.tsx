@@ -189,6 +189,48 @@ const NodeCard = styled.div`
   box-shadow: ${theme.shadow.sm};
 `;
 
+const CardActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.85rem 0;
+  margin-top: 0.85rem;
+`;
+
+const PrepCluster = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1 1 12rem;
+  padding-right: 1rem;
+`;
+
+const PrepButtons = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+`;
+
+const RemoveCluster = styled.div<{ $solo?: boolean }>`
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 0 1 auto;
+  padding-left: ${(p) => (p.$solo ? "0" : "1rem")};
+  margin-left: ${(p) => (p.$solo ? "0" : "0.15rem")};
+  border-left: ${(p) => (p.$solo ? "0" : `1px solid ${theme.line}`)};
+
+  @media (max-width: 520px) {
+    flex-basis: 100%;
+    padding-left: 0;
+    margin-left: 0;
+    padding-top: ${(p) => (p.$solo ? "0" : "0.75rem")};
+    border-left: 0;
+    border-top: ${(p) => (p.$solo ? "0" : `1px solid ${theme.line}`)};
+  }
+`;
+
 const NodeHead = styled.div`
   display: flex;
   align-items: center;
@@ -790,51 +832,58 @@ export default function ClusterPage() {
           </CheckList>
         ) : null}
         {ops ? (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <CardActions>
             {!isOffline ? (
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() => runStream("preflight", node)}
-                >
-                  Check
-                </Button>
-                {isStandby ? (
-                  <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
-                    Exit Maintenance
-                  </Button>
-                ) : (
+              <PrepCluster>
+                <PrepButtons>
                   <Button
                     type="button"
-                    disabled={busy || !pfPassed || (!!cluster.maintenance_active && !isStandby)}
-                    onClick={() => runStream("enter", node)}
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => runStream("preflight", node)}
                   >
-                    Enter Maintenance
+                    Check
                   </Button>
-                )}
-              </>
+                  {isStandby ? (
+                    <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
+                      Exit Maintenance
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      disabled={busy || !pfPassed || (!!cluster.maintenance_active && !isStandby)}
+                      onClick={() => runStream("enter", node)}
+                    >
+                      Enter Maintenance
+                    </Button>
+                  )}
+                </PrepButtons>
+                {!isStandby && !pfPassed ? (
+                  <Hint>
+                    {pfFailed
+                      ? "Enter Maintenance stays off until every pre-flight check is green."
+                      : "Run Check first. Enter Maintenance stays off until pre-flight passes."}
+                  </Hint>
+                ) : null}
+              </PrepCluster>
             ) : null}
-            <Button
-              type="button"
-              variant="danger"
-              disabled={busy || probing}
-              onClick={() => openRemove(node)}
-            >
-              Remove Host
-            </Button>
-          </div>
+            <RemoveCluster $solo={isOffline}>
+              <Button
+                type="button"
+                variant="danger"
+                disabled={busy || probing || (!isOffline && !isStandby)}
+                onClick={() => openRemove(node)}
+              >
+                Remove Host
+              </Button>
+              {!isOffline && !isStandby ? (
+                <Hint>Remove Host stays off until this node is in maintenance.</Hint>
+              ) : null}
+            </RemoveCluster>
+          </CardActions>
         ) : (
           <Hint>Maintenance actions require KIN Super Admin or Support-Ops.</Hint>
         )}
-        {ops && !isOffline && !isStandby && !pfPassed ? (
-          <Hint>
-            {pfFailed
-              ? "Enter is blocked until every pre-flight check is green."
-              : "Run Check first. Enter stays disabled until pre-flight passes."}
-          </Hint>
-        ) : null}
       </NodeCard>
     );
   }
