@@ -260,12 +260,23 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
           if (parsed.code === "busy") {
-            // Another job owns the install; follow server state, do not look "idle".
-            setMessage("Install already running on the server, showing live progress.");
+            // Another job owns the helper. Follow it only if it is still running;
+            // a leftover busy during a just-finished fail must not look like a live install.
             onFinished(undefined, "error");
             es.close();
-            void hydrateFromServer();
-            void refreshSetup();
+            void (async () => {
+              await refreshSetup();
+              const still = await hydrateFromServer();
+              if (still) {
+                setMessage("Install already running on the server, showing live progress.");
+                setLocalBusy(true);
+              } else {
+                setMessage(
+                  "Could not start because another helper job was still finishing. Confirm and click Deploy again.",
+                );
+                setLocalBusy(false);
+              }
+            })();
             return;
           }
           setMessage(msg);

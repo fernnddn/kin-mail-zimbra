@@ -90,9 +90,69 @@ fi
 
 act=$(zimbra_install_skip_action "0" "0")
 if [ "$act" = "fail_broken" ]; then
-  pass "skip_action: unreadable/partial still fails closed"
+  pass "skip_action: unknown local tree (no 4th arg) still fails closed"
 else
   bad "skip_action fail_broken: [$act]"
+fi
+
+act=$(zimbra_install_skip_action "0" "0" "0" "0")
+if [ "$act" = "run_fresh" ]; then
+  pass "skip_action: empty /opt/zimbra mount after 02 runs the installer"
+else
+  bad "skip_action run_fresh: [$act]"
+fi
+
+act=$(zimbra_install_skip_action "0" "0" "0" "1")
+if [ "$act" = "fail_broken" ]; then
+  pass "skip_action: local zmcontrol not healthy is fail_broken"
+else
+  bad "skip_action local broken: [$act]"
+fi
+
+act=$(zimbra_install_skip_action "0" "1" "0" "0")
+if [ "$act" = "skip_mid_handoff" ]; then
+  pass "skip_action: empty mount + real data-disk install is still mid-handoff"
+else
+  bad "skip_action mid with local_zm=0: [$act]"
+fi
+
+act=$(zimbra_fail_broken_recover_action "1" "0")
+if [ "$act" = "wipe_and_run" ]; then
+  pass "recover: console first-deploy may wipe incomplete tree"
+else
+  bad "recover console: [$act]"
+fi
+
+act=$(zimbra_fail_broken_recover_action "1" "1")
+if [ "$act" = "refuse" ]; then
+  pass "recover: setup-complete refuses wipe"
+else
+  bad "recover after complete: [$act]"
+fi
+
+act=$(zimbra_fail_broken_recover_action "0" "0")
+if [ "$act" = "refuse" ]; then
+  pass "recover: CLI without console confirm refuses wipe"
+else
+  bad "recover CLI: [$act]"
+fi
+
+wipe_root=$(mktemp -d)
+mkdir -p "$wipe_root/bin" "$wipe_root/lost+found"
+echo stub >"$wipe_root/bin/zmcontrol"
+echo keep >"$wipe_root/lost+found/x"
+if wipe_incomplete_zimbra_tree "$wipe_root" \
+  && [ ! -e "$wipe_root/bin" ] \
+  && [ -f "$wipe_root/lost+found/x" ]; then
+  pass "wipe_incomplete_zimbra_tree: removes tree, keeps lost+found"
+else
+  bad "wipe_incomplete_zimbra_tree did not clear stub tree"
+fi
+rm -rf "$wipe_root"
+if ! wipe_incomplete_zimbra_tree /opt; then
+  pass "wipe_incomplete_zimbra_tree: refuses /opt"
+else
+  bad "wipe_incomplete_zimbra_tree allowed /opt"
 fi
 
 # Prefer healthy over mid-handoff when both signals are true.
@@ -200,11 +260,13 @@ rm -rf "$sysfs2"
 if grep -q 'zimbra_install_skip_action' ../03-install-zimbra.sh \
   && grep -q 'zimbra-data-disk-probe.sh' ../03-install-zimbra.sh \
   && grep -q 'skip_drbd_secondary' ../03-install-zimbra.sh \
+  && grep -q 'run_fresh' ../03-install-zimbra.sh \
+  && grep -q 'wipe_incomplete_zimbra_tree' ../03-install-zimbra.sh \
   && grep -q 'skip_offline' ../03-install-zimbra.sh \
   && grep -q 'SKIP_REASON' ../03-install-zimbra.sh; then
-  pass "03-install-zimbra.sh uses shared probe, Secondary skip, and offline verify"
+  pass "03-install-zimbra.sh uses shared probe, Secondary skip, run_fresh, and offline verify"
 else
-  bad "03-install-zimbra.sh missing shared probe / Secondary / verify wiring"
+  bad "03-install-zimbra.sh missing shared probe / Secondary / run_fresh / verify wiring"
 fi
 
 if grep -q 'zimbra-data-disk-probe.sh' ./prepare-zimbra-data-disk.sh \

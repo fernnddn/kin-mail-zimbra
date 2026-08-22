@@ -267,6 +267,7 @@ SKIP_INSTALLER=0
 # none | healthy | mid_handoff | drbd_secondary - drives section 3 verification
 SKIP_REASON=none
 DATA_DISK="${KIN_DRBD_DATA_DISK:-/dev/sdb1}"
+SETUP_COMPLETE_MARKER="${KIN_SETUP_COMPLETE_MARKER:-/etc/kin-mail/setup-complete}"
 if [ -d /opt/zimbra ]; then
   STATUS_PRE=$(su - zimbra -c "zmcontrol status" 2>&1) || STATUS_PRE=""
   STOPPED_PRE=$(printf '%s' "$STATUS_PRE" | grep -v Running | grep -vE "^Host|^$" | wc -l | tr -d ' ')
@@ -278,11 +279,15 @@ if [ -d /opt/zimbra ]; then
   if data_disk_held_by_drbd "$DATA_DISK"; then
     DRBD_HELD_PRE=1
   fi
+  LOCAL_ZM=0
+  if mount_has_zmcontrol /opt/zimbra; then
+    LOCAL_ZM=1
+  fi
   ON_DATA_PRE=0
-  if [ "$HEALTHY_PRE" -eq 0 ] && zimbra_data_disk_has_real_install "$DATA_DISK"; then
+  if [ "$HEALTHY_PRE" -eq 0 ] && [ "$LOCAL_ZM" -eq 0 ] && zimbra_data_disk_has_real_install "$DATA_DISK"; then
     ON_DATA_PRE=1
   fi
-  case "$(zimbra_install_skip_action "$HEALTHY_PRE" "$ON_DATA_PRE" "$DRBD_HELD_PRE")" in
+  case "$(zimbra_install_skip_action "$HEALTHY_PRE" "$ON_DATA_PRE" "$DRBD_HELD_PRE" "$LOCAL_ZM")" in
     skip_healthy)
       say "2. Installer skipped - Zimbra already installed and healthy"
       ok "/opt/zimbra exists; zmcontrol status: all services Running"
@@ -304,14 +309,44 @@ if [ -d /opt/zimbra ]; then
       SKIP_INSTALLER=1
       SKIP_REASON=mid_handoff
       ;;
+    run_fresh)
+      info "/opt/zimbra is a data-disk mount without a Zimbra tree (typical after 02-prepare-os)."
+      info "Running the installer into that mount."
+      ;;
     *)
-      fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
-      info "This script will not re-run the installer on a partial/broken installation."
-      info "Fix manually first: repair stopped services, or uninstall cleanly then run 03 again."
-      if [ -n "$STATUS_PRE" ]; then
-        printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
+      CONSOLE_CONFIRMED=0
+      case "${KIN_CONSOLE_CONFIRMED:-0}" in
+        1|yes|YES|true|TRUE) CONSOLE_CONFIRMED=1 ;;
+      esac
+      SETUP_DONE=0
+      if [ -f "$SETUP_COMPLETE_MARKER" ]; then
+        SETUP_DONE=1
       fi
-      exit 1
+      if [ "$(zimbra_fail_broken_recover_action "$CONSOLE_CONFIRMED" "$SETUP_DONE")" = "wipe_and_run" ]; then
+        warn "Incomplete Zimbra tree at /opt/zimbra (not all services Running, or status unreadable)."
+        info "First-time console Deploy: clearing the tree (keeping the mount) and re-running the installer."
+        if id zimbra >/dev/null 2>&1 && [ -x /opt/zimbra/bin/zmcontrol ]; then
+          su - zimbra -c "zmcontrol stop" >/dev/null 2>&1 || true
+        fi
+        tmux kill-session -t "$SESS" 2>/dev/null || true
+        pkill -f 'install\.sh --platform-override --skip-activation-check' >/dev/null 2>&1 || true
+        pkill -f 'zmsetup\.pl' >/dev/null 2>&1 || true
+        if ! wipe_incomplete_zimbra_tree /opt/zimbra; then
+          fail "Could not clear the incomplete tree at /opt/zimbra"
+          exit 1
+        fi
+        ok "Cleared incomplete /opt/zimbra contents (lost+found kept)"
+      else
+        fail "Zimbra exists at /opt/zimbra but not all services are Running (or status unreadable)."
+        info "This script will not re-run the installer on a partial/broken installation."
+        info "Fix manually first: repair stopped services, or uninstall cleanly then run 03 again."
+        if [ -n "$STATUS_PRE" ]; then
+          printf '%s\n' "$STATUS_PRE" | sed 's/^/    /'
+        else
+          info "zmcontrol produced no output (zimbra user missing, or binary not runnable)."
+        fi
+        exit 1
+      fi
       ;;
   esac
 fi
