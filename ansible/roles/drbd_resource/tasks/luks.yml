@@ -78,6 +78,7 @@
 - name: Require the DRBD backing device to exist
   ansible.builtin.stat:
     path: "{{ drbd_resource_backing_disk }}"
+    follow: true
   register: drbd_resource_backing_stat
   when: not ansible_check_mode
   tags: [drbd, resource, luks]
@@ -90,6 +91,7 @@
     fail_msg: >-
       DRBD backing {{ drbd_resource_backing_disk }} is not a block device
       after LUKS ensure. Raw partition is {{ drbd_resource_disk }}.
+      /dev/mapper/* is a symlink to /dev/dm-*; this check follows it.
   when: not ansible_check_mode
   tags: [drbd, resource, luks]
 

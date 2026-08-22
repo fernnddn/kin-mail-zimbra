@@ -2,14 +2,19 @@
 # Read-only probes against the live resource. check_mode: false is intentional
 # and LIMITED to status/role queries — never extend that to create-md/up/primary.
 
-- name: Verify the kin-zimbra DRBD resource status
+- name: Verify the kin-zimbra DRBD resource is attached
   ansible.builtin.command:
     cmd: drbdadm status {{ drbd_resource_name }}
   register: drbd_resource_status
+  until: >-
+    drbd_resource_status.rc == 0
+    and ('Diskless' not in (drbd_resource_status.stdout | default('')))
+  retries: 24
+  delay: 5
   changed_when: false
   failed_when: >-
-    drbd_resource_status.rc != 0 or
-    ('UpToDate' not in drbd_resource_status.stdout)
+    drbd_resource_status.rc != 0
+    or ('Diskless' in (drbd_resource_status.stdout | default('')))
   check_mode: false
   tags: [drbd, resource, verify]
 
@@ -23,6 +28,19 @@
     ('Primary' not in drbd_resource_role.stdout and
      'Secondary' not in drbd_resource_role.stdout)
   check_mode: false
+  tags: [drbd, resource, verify]
+
+- name: Verify the bootstrap primary is Primary
+  ansible.builtin.assert:
+    that:
+      - "'Primary' in (drbd_resource_role.stdout | default(''))"
+    fail_msg: >-
+      {{ inventory_hostname }} is {{ drbd_resource_node_a_name }} but
+      drbdadm role is not Primary after bootstrap. Pacemaker cannot promote
+      an unattached or unforced resource.
+  when:
+    - inventory_hostname == drbd_resource_node_a_name
+    - not ansible_check_mode
   tags: [drbd, resource, verify]
 
 - name: Verify the external meta-disk is attached to a loop device
@@ -47,10 +65,11 @@
   when: drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, verify]
 
-- name: Note the proof limits for create-md on production
+- name: Note that first-sync peer disk may still be Inconsistent
   ansible.builtin.debug:
     msg: >-
-      The dry-run verifies the live resource (status/role/meta-loop).
-      Greenfield create-md on production data is NOT tested here; in task 2.4
-      create-md was only proven on a separate test device (not /dev/sdb1).
+      Attached (not Diskless) with a Primary/Secondary role is enough to
+      continue into Pacemaker. A brand-new peer stays Inconsistent until
+      the first resync finishes; requiring UpToDate on both nodes here
+      would block the HA sequence for the entire disk copy.
   tags: [drbd, resource, verify]

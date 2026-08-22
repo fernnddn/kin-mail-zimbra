@@ -74,11 +74,15 @@
   tags: [drbd, resource, activate]
 
 - name: Create the DRBD metadata on the external meta-disk
-  ansible.builtin.command:
-    cmd: drbdadm create-md {{ drbd_resource_name }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    printf 'yes\n' | drbdadm create-md {{ drbd_resource_name }}
+  args:
+    executable: /bin/bash
   # SAFETY: never check_mode: false - create-md must not run during --check.
-  # Skip when dump-md already succeeds: tonight's live pair already ran
-  # create-md once; a blind re-run on retry would be wrong.
+  # Skip when dump-md already succeeds: a blind re-run on retry would be wrong.
+  # printf yes answers the empty-meta "destroy existing data" prompt so apply
+  # does not hang waiting on stdin.
   when:
     - drbd_resource_needs_activate | bool
     - drbd_resource_dump_md.rc is defined

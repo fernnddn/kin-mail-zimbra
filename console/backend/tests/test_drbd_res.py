@@ -96,6 +96,28 @@ class DrbdResParseTests(unittest.TestCase):
             drop,
         )
 
+    def test_luks_stat_follows_mapper_symlinks(self) -> None:
+        luks = (
+            REPO_ROOT / "ansible" / "roles" / "drbd_resource" / "tasks" / "luks.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("follow: true", luks)
+        self.assertIn("drbd_resource_backing_stat", luks)
+
+    def test_verify_does_not_require_uptodate_on_both_nodes(self) -> None:
+        verify = (
+            REPO_ROOT / "ansible" / "roles" / "drbd_resource" / "tasks" / "verify.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("'UpToDate' not in", verify)
+        self.assertIn("Diskless", verify)
+        self.assertIn("Primary", verify)
+
+    def test_create_md_answers_yes_prompt(self) -> None:
+        activate = (
+            REPO_ROOT / "ansible" / "roles" / "drbd_resource" / "tasks" / "activate.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("create-md", activate)
+        self.assertIn("printf 'yes", activate)
+
 
 if __name__ == "__main__":
     unittest.main()

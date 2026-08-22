@@ -3,12 +3,14 @@
 - name: Check the DRBD data backing device
   ansible.builtin.stat:
     path: "{{ drbd_resource_disk }}"
+    follow: true
   register: drbd_resource_disk_stat
   tags: [drbd, resource, detect]
 
 - name: Check the DRBD meta device
   ansible.builtin.stat:
     path: "{{ drbd_resource_meta_disk }}"
+    follow: true
   register: drbd_resource_meta_stat
   tags: [drbd, resource, detect]
 
