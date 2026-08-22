@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import styled from "@emotion/styled";
+import { api } from "../api";
 import { Button, Hint } from "../ui";
 import { theme } from "../styles/theme";
 import {
+  dkimPanelName,
+  parseMailDnsHintsFromLog,
   preparedMailDnsRecords,
   type DkimDnsRecord,
   type MailDnsRow,
@@ -46,7 +49,7 @@ const Meta = styled.div`
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.45rem 0.85rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.45rem;
   font-size: 0.78rem;
   color: ${theme.muted};
 `;
@@ -57,14 +60,42 @@ const TypePill = styled.span`
   color: ${theme.ink};
 `;
 
-const Name = styled.span`
+const ZoneHint = styled.span`
   font-family: ${theme.mono};
-  font-size: 0.8rem;
-  color: ${theme.ink};
-  word-break: break-all;
+  font-size: 0.78rem;
 `;
 
-const Value = styled.pre`
+const Fields = styled.div`
+  display: grid;
+  gap: 0.4rem;
+`;
+
+const Field = styled.div`
+  display: grid;
+  grid-template-columns: 7.2rem minmax(0, 1fr) auto;
+  gap: 0.45rem 0.65rem;
+  align-items: start;
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "label copy"
+      "value value";
+  }
+`;
+
+const FieldLabel = styled.span`
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: ${theme.muted};
+  padding-top: 0.2rem;
+  @media (max-width: 640px) {
+    grid-area: label;
+  }
+`;
+
+const FieldValue = styled.pre`
   margin: 0;
   font-family: ${theme.mono};
   font-size: 0.78rem;
@@ -72,11 +103,25 @@ const Value = styled.pre`
   white-space: pre-wrap;
   word-break: break-all;
   color: ${theme.ink};
+  padding-top: 0.12rem;
+  @media (max-width: 640px) {
+    grid-area: value;
+  }
 `;
 
 const Pending = styled.span`
   color: ${theme.warn};
   font-size: 0.82rem;
+  @media (max-width: 640px) {
+    grid-area: value;
+  }
+`;
+
+const CopySlot = styled.div`
+  @media (max-width: 640px) {
+    grid-area: copy;
+    justify-self: end;
+  }
 `;
 
 const RowFoot = styled.div`
@@ -84,7 +129,7 @@ const RowFoot = styled.div`
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
-  margin-top: 0.5rem;
+  margin-top: 0.55rem;
 `;
 
 const Note = styled.p`
@@ -148,22 +193,55 @@ function CopyValue({
   );
 }
 
-function DnsRow({ row }: { row: MailDnsRow }) {
+function DnsField({
+  label,
+  value,
+  pendingText,
+  copyLabel = "Copy",
+}: {
+  label: string;
+  value: string;
+  pendingText?: string;
+  copyLabel?: string;
+}) {
+  const pending = Boolean(pendingText);
+  return (
+    <Field>
+      <FieldLabel>{label}</FieldLabel>
+      {pending ? <Pending>{pendingText}</Pending> : <FieldValue>{value}</FieldValue>}
+      <CopySlot>
+        <CopyValue text={value} label={copyLabel} disabled={pending || !value} />
+      </CopySlot>
+    </Field>
+  );
+}
+
+function DnsRow({ row, lookingUpIp }: { row: MailDnsRow; lookingUpIp?: boolean }) {
+  const aPendingText = lookingUpIp
+    ? "Looking up this server's public IPv4…"
+    : "Not known here yet — paste the public IPv4 from the network team (not 10.x / 192.168.x).";
   return (
     <Row>
       <Meta>
         <TypePill>{row.type}</TypePill>
-        <Name>{row.name}</Name>
+        {row.fqdnHint ? <ZoneHint>resolves {row.fqdnHint}</ZoneHint> : null}
       </Meta>
-      {row.pending ? (
-        <Pending>Value not known here — wait for the public IP from the network team.</Pending>
-      ) : (
-        <Value>{row.value}</Value>
-      )}
-      <RowFoot>
-        {!row.pending ? <CopyValue text={row.value} /> : null}
-        {row.note ? <Note>{row.note}</Note> : null}
-      </RowFoot>
+      <Fields>
+        <DnsField label="Host / Name" value={row.name} />
+        {row.type === "MX" ? (
+          <>
+            <DnsField label="Priority" value={row.mxPriority || "10"} />
+            <DnsField label="Mail server" value={row.mxTarget || row.value} />
+          </>
+        ) : (
+          <DnsField
+            label={row.type === "A" ? "IPv4" : "Content"}
+            value={row.value}
+            pendingText={row.pending ? aPendingText : undefined}
+          />
+        )}
+      </Fields>
+      <RowFoot>{row.note ? <Note>{row.note}</Note> : null}</RowFoot>
     </Row>
   );
 }
@@ -171,54 +249,109 @@ function DnsRow({ row }: { row: MailDnsRow }) {
 export function DnsRecordsPanel({
   mailDomain,
   mailHost,
+  ruaEmail = "",
+  preferredAIp = "",
+  installLog = "",
   dkimPendingNote = true,
 }: {
   mailDomain: string;
   mailHost: string;
+  ruaEmail?: string;
+  preferredAIp?: string;
+  installLog?: string;
   dkimPendingNote?: boolean;
 }) {
-  const rows = preparedMailDnsRecords({ mailDomain, mailHost });
+  const [probedIp, setProbedIp] = useState("");
+  const [lookingUpIp, setLookingUpIp] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setLookingUpIp(true);
+    void api<{ ipv4?: string }>("/api/wizard/public-ip")
+      .then((data) => {
+        if (!cancelled) setProbedIp((data.ipv4 || "").trim());
+      })
+      .catch(() => {
+        if (!cancelled) setProbedIp("");
+      })
+      .finally(() => {
+        if (!cancelled) setLookingUpIp(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const fromLog = parseMailDnsHintsFromLog(installLog);
+  const httpEgressIp = fromLog.httpEgressIp || probedIp;
+  const rows = preparedMailDnsRecords({
+    mailDomain,
+    mailHost,
+    httpEgressIp,
+    smtpSendIp: fromLog.smtpSendIp,
+    preferredAIp,
+    ruaEmail,
+  });
   if (!rows) return null;
+  const zone = mailDomain.trim().replace(/\.$/, "");
+  const aPending = Boolean(rows.find((r) => r.id === "a")?.pending);
   return (
     <Panel>
       <Heading>DNS records to prepare</Heading>
       <Intro>
-        Publish these at your DNS provider while install runs. Mail works after they are live —
-        you do not need to wait until the last health-check step to look them up.
+        Paste these into zone <strong>{zone}</strong>. Host / Name is relative to that zone
+        (<code>@</code>, <code>mail</code>, <code>_dmarc</code>) — do not paste the full hostname
+        or the panel will create a doubled name. TTL Auto or 300. TXT content has no quotes.
       </Intro>
       <Rows>
         {rows.map((row) => (
-          <DnsRow key={row.id} row={row} />
+          <DnsRow
+            key={row.id}
+            row={row}
+            lookingUpIp={row.id === "a" && row.pending && lookingUpIp}
+          />
         ))}
       </Rows>
       {dkimPendingNote ? (
         <Hint style={{ margin: "0.75rem 0 0" }}>
-          The DKIM record will appear here after install reaches the Certificates & DKIM stage.
+          The DKIM TXT appears here after install reaches Certificates & DKIM. Publish it as
+          soon as it shows — you do not have to wait for the last health-check step.
+        </Hint>
+      ) : null}
+      {aPending && !lookingUpIp ? (
+        <Hint style={{ margin: "0.55rem 0 0" }}>
+          This console could not see a public IPv4 (the host may only have a private NIC). Ask
+          the network team for the WAN address that should receive mail, then paste it as the A
+          record.
         </Hint>
       ) : null}
     </Panel>
   );
 }
 
-export function DkimPublishBox({ dkim }: { dkim: DkimDnsRecord | null }) {
+export function DkimPublishBox({
+  dkim,
+  mailDomain = "",
+}: {
+  dkim: DkimDnsRecord | null;
+  mailDomain?: string;
+}) {
   if (!dkim) return null;
+  const name = mailDomain ? dkimPanelName(dkim.name, mailDomain) : dkim.name;
   return (
     <ContinueBox>
       <ContinueHeading>Publish DKIM in your DNS panel</ContinueHeading>
       <Intro style={{ marginBottom: "0.65rem" }}>
-        Certificates & DKIM has generated the key. Paste this as one TXT value (already joined —
-        do not keep BIND line-breaks).
+        Certificates & DKIM has generated the key. Host / Name is relative to the zone. Paste
+        Content as one TXT value (already joined — no quotes, no BIND line-breaks).
       </Intro>
       <Row>
         <Meta>
           <TypePill>TXT</TypePill>
-          <Name>{dkim.name}</Name>
+          <ZoneHint>TTL Auto / 300</ZoneHint>
         </Meta>
-        <Value>{dkim.value}</Value>
-        <RowFoot>
-          <CopyValue text={dkim.value} label="Copy value" />
-          <CopyValue text={dkim.name} label="Copy name" />
-        </RowFoot>
+        <Fields>
+          <DnsField label="Host / Name" value={name} />
+          <DnsField label="Content" value={dkim.value} />
+        </Fields>
       </Row>
     </ContinueBox>
   );

@@ -66,6 +66,16 @@ def setup_status(request: Request, response: Response) -> dict[str, object]:
     return payload
 
 
+@app.get("/api/wizard/public-ip")
+def wizard_public_ip(
+    _actor: auth.WizardActor = Depends(auth.wizard_actor),
+) -> dict[str, str]:
+    """Public IPv4 this host presents on HTTP, for A/SPF paste. Empty if unknown."""
+    from .public_ip import probe_public_ipv4
+
+    return {"ipv4": probe_public_ipv4()}
+
+
 @app.get("/api/wizard/deploy/last-log")
 def wizard_deploy_last_log(
     _actor: auth.WizardActor = Depends(auth.wizard_actor),

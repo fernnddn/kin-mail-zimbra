@@ -378,9 +378,12 @@ export default function DeployStep() {
             <DnsRecordsPanel
               mailDomain={draft.mail_domain}
               mailHost={draft.mail_host}
+              ruaEmail={draft.le_email}
+              preferredAIp={draft.topology === "2vm" ? draft.cluster_vip_ip : ""}
+              installLog={log}
               dkimPendingNote={!dkim}
             />
-            <DkimPublishBox dkim={dkim} />
+            <DkimPublishBox dkim={dkim} mailDomain={draft.mail_domain} />
           </div>
         </DnsReference>
       ) : (
@@ -388,9 +391,12 @@ export default function DeployStep() {
           <DnsRecordsPanel
             mailDomain={draft.mail_domain}
             mailHost={draft.mail_host}
+            ruaEmail={draft.le_email}
+            preferredAIp={draft.topology === "2vm" ? draft.cluster_vip_ip : ""}
+            installLog={log}
             dkimPendingNote={!dkim}
           />
-          <DkimPublishBox dkim={dkim} />
+          <DkimPublishBox dkim={dkim} mailDomain={draft.mail_domain} />
         </>
       )}
 

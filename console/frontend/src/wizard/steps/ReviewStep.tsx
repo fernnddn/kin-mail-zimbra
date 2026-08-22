@@ -79,7 +79,12 @@ export default function ReviewStep() {
         <dt>Trusted admin IPs</dt>
         <dd>{draft.kin_admin_ips || "Not set (can configure later)"}</dd>
       </SummaryTable>
-      <DnsRecordsPanel mailDomain={draft.mail_domain} mailHost={draft.mail_host} />
+      <DnsRecordsPanel
+        mailDomain={draft.mail_domain}
+        mailHost={draft.mail_host}
+        ruaEmail={draft.le_email}
+        preferredAIp={draft.topology === "2vm" ? draft.cluster_vip_ip : ""}
+      />
       <Err>{error}</Err>
       <NavRow>
         <Button type="button" variant="ghost" onClick={() => navigate("/wizard/firewall")}>
