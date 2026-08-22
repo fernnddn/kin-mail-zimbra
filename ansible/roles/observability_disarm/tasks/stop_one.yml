@@ -1,10 +1,35 @@
 ---
+- name: Capture boot_id before stopping sbd
+  ansible.builtin.command:
+    cmd: cat /proc/sys/kernel/random/boot_id
+  delegate_to: "{{ obs_stop_host }}"
+  register: observability_boot_id_before
+  changed_when: false
+
 - name: Stop sbd on this mail node
   ansible.builtin.command:
     cmd: systemctl stop sbd
   delegate_to: "{{ obs_stop_host }}"
-  failed_when: false
 
 - name: Wait longer than SBD_WATCHDOG_TIMEOUT
   ansible.builtin.pause:
     seconds: "{{ observability_watchdog_wait_sec | int }}"
+
+- name: Capture boot_id after the watchdog wait
+  ansible.builtin.command:
+    cmd: cat /proc/sys/kernel/random/boot_id
+  delegate_to: "{{ obs_stop_host }}"
+  register: observability_boot_id_after
+  changed_when: false
+
+- name: Fail if this mail node rebooted during sbd stop
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_boot_id_before.stdout
+        | kin_boot_id_unchanged(observability_boot_id_after.stdout)
+    fail_msg: >-
+      boot_id changed on {{ obs_stop_host }} during sbd stop.
+      before={{ observability_boot_id_before.stdout | trim }}
+      after={{ observability_boot_id_after.stdout | trim }}.
+      Refusing to continue the disarm loop.

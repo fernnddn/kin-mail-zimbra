@@ -13,6 +13,19 @@ from .observability_status import classify_observability, observability_actions
 from .orchestration import kin_mail_deploy_dir, valid_ipv4, valid_name
 
 
+def boot_id_unchanged(before: str, after: str) -> bool:
+    """True only when both boot_id reads are non-empty and identical.
+
+    Empty either side fails closed: we cannot prove the node stayed up
+    through the SBD watchdog window (HA-RUNBOOK section 7).
+    """
+    left = (before or "").strip()
+    right = (after or "").strip()
+    if not left or not right:
+        return False
+    return left == right
+
+
 def sbd_stop_order(*, promoted: str, hosts: list[str]) -> list[str]:
     """Unpromoted first, then Promoted (HA-RUNBOOK section 7)."""
     names = [h.strip() for h in hosts if h and str(h).strip()]

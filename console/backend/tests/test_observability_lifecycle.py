@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from kin_privhelper.observability_lifecycle import (
+    boot_id_unchanged,
     observability_inventory_name,
     plan_add_observability,
     plan_remove_observability,
@@ -184,6 +185,59 @@ class ObservabilityLifecycleTests(unittest.TestCase):
         gone = snapshot_from_texts(config_ip="", corosync_conf="quorum {\n}\n", reachable=False)
         self.assertTrue(gone["can_add"])
         self.assertFalse(gone["can_remove"])
+
+    def test_boot_id_unchanged_fails_closed(self) -> None:
+        same = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        self.assertTrue(boot_id_unchanged(same, same + "\n"))
+        self.assertFalse(boot_id_unchanged(same, "ffffffff-ffff-ffff-ffff-ffffffffffff"))
+        self.assertFalse(boot_id_unchanged("", same))
+        self.assertFalse(boot_id_unchanged(same, ""))
+        self.assertFalse(boot_id_unchanged("  ", "  "))
+
+    def test_disarm_stop_checks_boot_id_and_fails_closed(self) -> None:
+        stop_one = (
+            REPO
+            / "ansible"
+            / "roles"
+            / "observability_disarm"
+            / "tasks"
+            / "stop_one.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/proc/sys/kernel/random/boot_id", stop_one)
+        self.assertIn("kin_boot_id_unchanged", stop_one)
+        self.assertIn("systemctl stop sbd", stop_one)
+        self.assertNotIn("failed_when: false", stop_one)
+        self.assertIn("observability_boot_id_before", stop_one)
+        self.assertIn("observability_boot_id_after", stop_one)
+
+    def test_ansible_boot_id_filter_is_the_same_function(self) -> None:
+        path = (
+            REPO
+            / "ansible"
+            / "roles"
+            / "observability_disarm"
+            / "filter_plugins"
+            / "boot_id.py"
+        )
+        spec = importlib.util.spec_from_file_location("ansible_boot_id_filter", path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertIs(mod.boot_id_unchanged, boot_id_unchanged)
+        self.assertTrue(
+            mod.FilterModule().filters()["kin_boot_id_unchanged"](
+                "aaa\n", "aaa"
+            )
+        )
+        rearm_start = (
+            REPO
+            / "ansible"
+            / "roles"
+            / "observability_rearm"
+            / "tasks"
+            / "start_one.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("boot_id", rearm_start)
 
 
 if __name__ == "__main__":
