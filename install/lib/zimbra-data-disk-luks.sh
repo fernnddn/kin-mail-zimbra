@@ -150,12 +150,40 @@ open_luks_mapper() {
 }
 
 # Format (once) and open. Caller must have already chosen format_luks.
+# Extra gates: blkid can miss TYPE; never luksFormat if cryptsetup/mapper
+# already show a LUKS volume (would destroy the header).
+luks_format_blocked_reason() {
+  local disk="$1"
+  local fstype="${2:-}"
+  local mapper
+  mapper=$(luks_mapper_path)
+  if [ -n "$fstype" ]; then
+    if [ "$fstype" = "crypto_LUKS" ]; then
+      printf '%s\n' "already_crypto_LUKS"
+      return 0
+    fi
+  elif data_disk_is_luks "$disk"; then
+    printf '%s\n' "already_crypto_LUKS"
+    return 0
+  fi
+  if [ -b "$mapper" ]; then
+    printf '%s\n' "mapper_already_open"
+    return 0
+  fi
+  if command -v cryptsetup >/dev/null 2>&1 && cryptsetup isLuks "$disk" 2>/dev/null; then
+    printf '%s\n' "cryptsetup_isLuks"
+    return 0
+  fi
+  return 1
+}
+
 luks_format_and_open() {
   local disk="$1"
-  local key
+  local key reason
   key=$(luks_keyfile_path)
-  if data_disk_is_luks "$disk"; then
-    printf '%s\n' "refusing luksFormat: ${disk} is already crypto_LUKS" >&2
+  reason=$(luks_format_blocked_reason "$disk" || true)
+  if [ -n "$reason" ]; then
+    printf '%s\n' "refusing luksFormat: ${disk} (${reason})" >&2
     return 1
   fi
   cryptsetup luksFormat --batch-mode --type luks2 --key-file "$key" "$disk" || return 1
@@ -194,6 +222,17 @@ encrypt_zimbra_data_disk_enabled && ENCRYPT=1
 FSTYPE=$(data_disk_fstype "$DATA_DISK")
 ACTION=$(luks_prepare_action "$ENCRYPT" "$FSTYPE")
 BACKING="$DATA_DISK"
+
+# blkid TYPE="" on a live LUKS partition would choose format_luks. If the
+# mapper is already open or cryptsetup isLuks, open instead of destroying.
+if [ "$ACTION" = "format_luks" ]; then
+  _blocked=$(luks_format_blocked_reason "$DATA_DISK" || true)
+  if [ -n "$_blocked" ]; then
+    printf '%s\n' "ensure-zimbra-data-luks: not formatting (${_blocked}); opening existing LUKS" >&2
+    ACTION="open_luks"
+  fi
+  unset _blocked
+fi
 
 case "$ACTION" in
   die_unknown)

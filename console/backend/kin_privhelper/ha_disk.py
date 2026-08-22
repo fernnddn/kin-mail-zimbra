@@ -154,6 +154,9 @@ def _source_is_on_data_disk(
     data = _norm_dev(data_disk)
     if not src or not data:
         return False
+    src_uuid = ""
+    if src.upper().startswith("UUID="):
+        src_uuid = src.split("=", 1)[1].strip().lower()
 
     def walk(devices: list[Any], under_data: bool) -> bool:
         for dev in devices:
@@ -161,7 +164,10 @@ def _source_is_on_data_disk(
                 continue
             path = _norm_dev(_dev_path(dev))
             here = under_data or path == data
+            node_uuid = str(dev.get("uuid") or "").strip().lower()
             if here and path == src:
+                return True
+            if here and src_uuid and node_uuid == src_uuid:
                 return True
             kids = dev.get("children")
             if isinstance(kids, list) and walk(kids, here):
@@ -537,7 +543,7 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
 
 REMOTE_PROBE = (
     "echo '---LSBLK---'; "
-    "lsblk -J -b -o NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,PTTYPE; "
+    "lsblk -J -b -o NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,PTTYPE,UUID; "
     "echo '---ROOT---'; "
     "findmnt -n -o SOURCE /; "
     "echo '---ZIMBRA---'; "
@@ -615,7 +621,7 @@ def collect_local_facts() -> dict[str, Any]:
             "-J",
             "-b",
             "-o",
-            "NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,PTTYPE",
+            "NAME,PATH,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,PTTYPE,UUID",
         ]
     )
     lsblk: dict[str, Any] = {}

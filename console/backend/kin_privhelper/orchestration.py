@@ -2006,8 +2006,6 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(exit_code or 1)
         return
     if join_mode == "apply":
-        if record_ha_orchestration_success(join_mode=join_mode):
-            yield emit_line("ha-setup-complete marker written on this node")
         yield emit_line("Syncing console deployed state to the peer")
         peer_ok, peer_notes = await sync_peer_ha_console_state(
             peer, ssh_user, ssh_pass, secrets
@@ -2021,5 +2019,7 @@ async def cmd_run_ha_orchestration(
             )
             yield proto.event_done(1)
             return
+        if record_ha_orchestration_success(join_mode=join_mode):
+            yield emit_line("ha-setup-complete marker written on this node")
     yield emit_line(f"ORCH_DONE join_mode={join_mode}")
     yield proto.event_done(0)

@@ -195,6 +195,7 @@ def _lsblk(
                                 "path": "/dev/mapper/kin-zimbra-crypt",
                                 "type": "crypt",
                                 "fstype": "ext4",
+                                "uuid": "11111111-2222-3333-4444-555555555555",
                                 "mountpoint": "/opt/zimbra",
                             }
                         ],
@@ -349,6 +350,18 @@ class HaDiskTests(unittest.TestCase):
         self.assertEqual(r["errors"], [])
         self.assertTrue(r["ok"])
         self.assertEqual(r["zimbra_source"], LUKS_MAPPER_PATH)
+
+    def test_ready_luks_findmnt_uuid_source_passes(self) -> None:
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source="UUID=11111111-2222-3333-4444-555555555555",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
 
     def test_luks_primary_and_gpt_peer_combine_ok(self) -> None:
         """Tonight's resume: A already LUKS, B already GPT from the refused run."""

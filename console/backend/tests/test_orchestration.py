@@ -322,6 +322,9 @@ class InventoryTests(unittest.TestCase):
         self.assertLess(sync_idx, done_idx)
         self.assertGreater(fail_idx, 0)
         self.assertLess(fail_idx, done_idx)
+        marker_idx = text.find("ha-setup-complete marker written on this node")
+        self.assertGreater(marker_idx, fail_idx)
+        self.assertGreater(marker_idx, sync_idx)
 
     def test_disk_preflight_refuse_stamps_orch_failed(self) -> None:
         from pathlib import Path

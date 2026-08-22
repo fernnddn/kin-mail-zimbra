@@ -61,6 +61,23 @@ else
   bad "unknown fstype: [$act]"
 fi
 
+if [ "$(luks_format_blocked_reason /dev/sdb1 crypto_LUKS)" = "already_crypto_LUKS" ]; then
+  pass "luks_format_blocked_reason: crypto_LUKS"
+else
+  bad "luks_format_blocked_reason crypto_LUKS"
+fi
+if luks_format_blocked_reason /dev/sdb1 ext4; then
+  bad "luks_format_blocked_reason blocked ext4 without mapper"
+else
+  pass "luks_format_blocked_reason: ext4 not blocked"
+fi
+if grep -q 'cryptsetup isLuks' ./zimbra-data-disk-luks.sh \
+  && grep -q 'mapper_already_open' ./zimbra-data-disk-luks.sh; then
+  pass "luksFormat extra gates: isLuks + open mapper"
+else
+  bad "luksFormat extra gates missing"
+fi
+
 if data_disk_is_luks "/dev/sdb1" "crypto_LUKS"; then
   pass "data_disk_is_luks: crypto_LUKS"
 else
