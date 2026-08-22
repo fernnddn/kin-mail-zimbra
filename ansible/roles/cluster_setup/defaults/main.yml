@@ -15,3 +15,9 @@ cluster_setup_debian_stub: false
 cluster_setup_throwaway_cib: false
 # True when leftover cib.xml must be classified (debian stub, or no corosync.conf).
 cluster_setup_inspect_leftover_cib: false
+# cluster_name from the slurped corosync.conf (empty when absent or unparseable).
+cluster_setup_conf_name: ""
+# pcsd default request timeout is 60s. After SBD_DELAY_START is configured,
+# cluster start waits ~msgwait and systemd TimeoutStartSec (180s). Retry of a
+# stopped kin-mail pair must outlive that or pcsd returns 0 bytes received.
+cluster_setup_pcs_request_timeout: 300

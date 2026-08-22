@@ -30,7 +30,7 @@
 
 - name: Start the cluster on both nodes (fresh setup only)
   ansible.builtin.command:
-    cmd: pcs cluster start --all
+    cmd: pcs --request-timeout={{ cluster_setup_pcs_request_timeout }} cluster start --all
   # SAFETY: never check_mode: false.
   run_once: true
   when:

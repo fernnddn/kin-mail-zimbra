@@ -71,6 +71,22 @@ def is_debian_corosync_stub(text: Any) -> bool:
     return True
 
 
+def parse_corosync_cluster_name(text: Any) -> str | None:
+    """Return the sole active cluster_name from corosync.conf, or None."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    names: list[str] = []
+    for line in _active_lines(text):
+        name_match = _CLUSTER_NAME_RE.match(line)
+        if name_match:
+            names.append(name_match.group(1).strip().strip("\"'"))
+    if len(names) != 1:
+        return None
+    return names[0]
+
+
 def parse_resource_instance_count(status_text: str) -> int | None:
     """Return N from 'N resource instances configured', or None if absent."""
     if not status_text:

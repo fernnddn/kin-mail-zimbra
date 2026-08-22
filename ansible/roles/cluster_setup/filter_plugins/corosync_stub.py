@@ -22,9 +22,15 @@ def _ensure_backend() -> None:
 
 
 _ensure_backend()
-from kin_privhelper.corosync_stub import is_debian_corosync_stub  # noqa: E402
+from kin_privhelper.corosync_stub import (  # noqa: E402
+    is_debian_corosync_stub,
+    parse_corosync_cluster_name,
+)
 
 
 class FilterModule:
     def filters(self) -> dict[str, Any]:
-        return {"kin_is_debian_corosync_stub": is_debian_corosync_stub}
+        return {
+            "kin_is_debian_corosync_stub": is_debian_corosync_stub,
+            "kin_parse_corosync_cluster_name": parse_corosync_cluster_name,
+        }

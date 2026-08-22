@@ -50,7 +50,7 @@
 
 - name: Start the cluster services on the new node from the survivor
   ansible.builtin.command:
-    cmd: pcs cluster start {{ cluster_add_host_new_name }}
+    cmd: pcs --request-timeout=300 cluster start {{ cluster_add_host_new_name }}
   # SAFETY: never check_mode: false.
   when:
     - not ansible_check_mode

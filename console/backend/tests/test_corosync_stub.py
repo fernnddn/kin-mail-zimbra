@@ -9,6 +9,7 @@ from pathlib import Path
 from kin_privhelper.corosync_stub import (
     is_debian_corosync_stub,
     is_harmless_package_stub_cluster,
+    parse_corosync_cluster_name,
     parse_pcs_cluster_name,
     parse_resource_instance_count,
 )
@@ -246,7 +247,37 @@ class DebianCorosyncStubTests(unittest.TestCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.assertIs(mod.is_debian_corosync_stub, is_debian_corosync_stub)
-        self.assertTrue(mod.FilterModule().filters()["kin_is_debian_corosync_stub"](LIVE_STUB_NAME_COMMENTED))
+        self.assertIs(mod.parse_corosync_cluster_name, parse_corosync_cluster_name)
+        filters = mod.FilterModule().filters()
+        self.assertTrue(filters["kin_is_debian_corosync_stub"](LIVE_STUB_NAME_COMMENTED))
+        self.assertEqual(
+            filters["kin_parse_corosync_cluster_name"](LIVE_STUB_NAME_COMMENTED),
+            "debian",
+        )
+        self.assertEqual(filters["kin_parse_corosync_cluster_name"](REAL_TWO_NODE), "kin-mail")
+
+    def test_parse_corosync_cluster_name(self) -> None:
+        self.assertEqual(parse_corosync_cluster_name(LIVE_STUB_NAME_COMMENTED), "debian")
+        self.assertEqual(parse_corosync_cluster_name(REAL_TWO_NODE), "kin-mail")
+        self.assertEqual(parse_corosync_cluster_name(REAL_TWO_NODE.encode()), "kin-mail")
+        self.assertIsNone(parse_corosync_cluster_name(""))
+        self.assertIsNone(parse_corosync_cluster_name(None))
+        self.assertIsNone(parse_corosync_cluster_name("totem {\nversion: 2\n}\n"))
+
+    def test_detect_yml_resumes_stopped_kin_mail_instead_of_only_refusing(self) -> None:
+        detect = (
+            Path(__file__).resolve().parents[3]
+            / "ansible"
+            / "roles"
+            / "cluster_setup"
+            / "tasks"
+            / "detect.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kin_parse_corosync_cluster_name", detect)
+        self.assertIn("cluster start", detect)
+        self.assertIn("request-timeout", detect)
+        self.assertIn("cluster_setup_pcs_request_timeout", detect)
+        self.assertIn("throttle: 1", detect)
 
     def test_resource_instance_count_from_live_pcs_and_crm(self) -> None:
         self.assertEqual(parse_resource_instance_count(LIVE_PCS_STATUS), 0)

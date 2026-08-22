@@ -69,6 +69,7 @@
 - name: Classify a Debian package-default Corosync stub
   ansible.builtin.set_fact:
     cluster_setup_debian_stub: "{{ (cluster_setup_corosync_conf_body.content | b64decode) | kin_is_debian_corosync_stub }}"
+    cluster_setup_conf_name: "{{ (cluster_setup_corosync_conf_body.content | b64decode) | kin_parse_corosync_cluster_name }}"
   when: cluster_setup_corosync_conf.stat.exists | default(false)
   tags: [cluster, setup, detect]
 
@@ -277,24 +278,74 @@
     cluster_setup_formed_this_run: false
   tags: [cluster, setup, detect]
 
+- name: Start the existing kin-mail cluster when Pacemaker is down
+  ansible.builtin.command:
+    cmd: pcs --request-timeout={{ cluster_setup_pcs_request_timeout }} cluster start
+  # SAFETY: never check_mode: false. Never pcs cluster destroy / --overwrite.
+  # After mail-fencing SBD_DELAY_START is in place, start waits ~msgwait;
+  # pcsd's 60s default times out with 0 bytes received (log-25).
+  throttle: 1
+  when:
+    - cluster_setup_configured | bool
+    - not (cluster_setup_running | bool)
+    - not (cluster_setup_debian_stub | bool)
+    - (cluster_setup_conf_name | default('')) == (cluster_setup_name | default('kin-mail'))
+    - not ansible_check_mode
+  register: cluster_setup_resume_start
+  tags: [cluster, setup, detect]
+
+- name: Re-probe Pacemaker after resuming a stopped kin-mail cluster
+  ansible.builtin.command:
+    cmd: pcs status
+  register: cluster_setup_pcs_status_after_resume
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - cluster_setup_configured | bool
+    - not (cluster_setup_debian_stub | bool)
+    - (cluster_setup_conf_name | default('')) == (cluster_setup_name | default('kin-mail'))
+    - not ansible_check_mode
+    - cluster_setup_resume_start is not skipped
+  tags: [cluster, setup, detect]
+
+- name: Flag Pacemaker running after a successful resume start
+  ansible.builtin.set_fact:
+    cluster_setup_running: "{{ (cluster_setup_pcs_status_after_resume.rc | default(1) | int) == 0 }}"
+  when:
+    - cluster_setup_resume_start is not skipped
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
 - name: Refuse pcs cluster setup when a corosync.conf already exists
   ansible.builtin.assert:
     that:
       - cluster_setup_running | bool
     fail_msg: >-
       /etc/corosync/corosync.conf exists but pcs status is not running on
-      {{ inventory_hostname }}. Refusing pcs cluster setup (would need
-      destroy/overwrite). Start the existing cluster by hand
-      (`pcs cluster start --all`) or inspect the leftover config.
+      {{ inventory_hostname }} (cluster_name={{ cluster_setup_conf_name | default('') }}).
+      Refusing pcs cluster setup (would need destroy/overwrite). This role
+      auto-starts only when cluster_name is {{ cluster_setup_name }}.
+      Inspect the leftover config; this role never runs pcs cluster destroy.
   when:
     - cluster_setup_configured | bool
     - not (cluster_setup_running | bool)
   tags: [cluster, setup, detect]
 
+- name: Read Corosync node names for membership assert
+  ansible.builtin.command:
+    cmd: pcs status nodes corosync
+  register: cluster_setup_nodes_for_assert
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: cluster_setup_running | bool
+  tags: [cluster, setup, detect]
+
 - name: Refuse to form a cluster that already has unexpected members
   ansible.builtin.assert:
     that:
-      - item in (cluster_setup_nodes_corosync.stdout | default(''))
+      - item in (cluster_setup_nodes_for_assert.stdout | default(''))
     fail_msg: >-
       A Corosync cluster is already running but {{ item }} is not in
       `pcs status nodes corosync`. Refusing to re-run pcs cluster setup

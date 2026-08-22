@@ -73,11 +73,15 @@
     if [ -z "$node" ]; then
       node="{{ inventory_hostname_short }}"
     fi
-    pcs cluster stop "$node"
-    pcs cluster start "$node"
+    timeout_sec="{{ sbd_stonith_pcs_request_timeout }}"
+    pcs --request-timeout="$timeout_sec" cluster stop "$node"
+    # pcsd stays up across cluster stop; wait so start is not racing a restart.
+    systemctl is-active pcsd >/dev/null
+    pcs --request-timeout="$timeout_sec" cluster start "$node"
   args:
     executable: /bin/bash
   register: sbd_stonith_recycle
+  throttle: 1
   when:
     - sbd_stonith_activation == 'recycle_local'
     - not ansible_check_mode
@@ -88,7 +92,7 @@
     cmd: systemctl is-active sbd
   register: sbd_stonith_active_after
   until: sbd_stonith_active_after.stdout | trim == 'active'
-  retries: "{{ ((sbd_stonith_timeout_start_sec | int) / 5) | int }}"
+  retries: "{{ ((sbd_stonith_pcs_request_timeout | int) / 5) | int }}"
   delay: 5
   changed_when: false
   when:

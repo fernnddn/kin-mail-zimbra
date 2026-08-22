@@ -9,6 +9,10 @@ sbd_stonith_watchdog_timeout: 35
 sbd_stonith_msgwait: 70
 sbd_stonith_delay_start: "yes"
 sbd_stonith_timeout_start_sec: 180
+# pcsd defaults to 60s. SBD_DELAY_START waits ~msgwait inside TimeoutStartSec;
+# cluster stop/start must use a request timeout above that or start fails with
+# "0 bytes received" while sbd.service is still delaying.
+sbd_stonith_pcs_request_timeout: "{{ (sbd_stonith_timeout_start_sec | int) + 120 }}"
 sbd_stonith_pcmk_delay_max: 5s
 sbd_stonith_pcmk_reboot_timeout: 120
 sbd_stonith_pcmk_off_timeout: 120
