@@ -82,6 +82,16 @@ if same_as_data_backing "/dev/mapper/kin-zimbra-crypt" "/dev/sdb1"; then
 else
   bad "same_as_data_backing mapper"
 fi
+if same_as_data_backing $'/dev/mapper/kin-zimbra-crypt\n/dev/mapper/kin-zimbra-crypt' "/dev/sdb1"; then
+  pass "same_as_data_backing: duplicate findmnt lines"
+else
+  bad "same_as_data_backing duplicate findmnt lines"
+fi
+if same_as_data_backing "/dev/mapper/kin-zimbra-crypt[/]" "/dev/sdb1"; then
+  pass "same_as_data_backing: findmnt mapper[/] suffix"
+else
+  bad "same_as_data_backing mapper suffix"
+fi
 if ! same_as_data_backing "/dev/sda1" "/dev/sdb1"; then
   pass "same_as_data_backing: other disk is false"
 else

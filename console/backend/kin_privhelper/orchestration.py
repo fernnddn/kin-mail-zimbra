@@ -1655,6 +1655,10 @@ async def cmd_run_ha_orchestration(
                 for err in disk.get("errors") or []:
                     yield emit_line(f"Refusing: {err}", err=True)
                 yield emit_line(str(disk.get("instructions") or ""), err=True)
+                yield emit_line(
+                    f"ORCH_FAILED step=disk_preflight join_mode={join_mode}",
+                    err=True,
+                )
                 yield proto.event_done(2)
                 return
             yield emit_line("DRBD disk preflight ok after auto-partition")

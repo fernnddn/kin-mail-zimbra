@@ -64,6 +64,16 @@ FULL_INSTALL_RUNNING_MARKER = Path(
     )
 )
 
+# Written for the whole HA orchestration (disk prep, peer SSH install, Ansible).
+# last-log / setup status cannot see the daemon lock, so the wizard used to
+# show Idle while ansible-playbook was still writing the transcript.
+HA_ORCH_RUNNING_MARKER = Path(
+    os.environ.get(
+        "KIN_HA_ORCH_RUNNING_MARKER",
+        "/var/lib/kin-mail-console/ha-orchestration.running",
+    )
+)
+
 UNEXPECTED_STOP_LINE = (
     "[FAIL] Install stopped unexpectedly -- process ended without a success "
     "or failure marker. Check journalctl -u kin-mail-privhelperd for crashes/OOM.\n"
@@ -148,6 +158,19 @@ def path_exists(path: Path) -> bool:
 def full_install_in_progress() -> bool:
     """True when kin-mail full-install (or stage 03 / zmsetup) appears to be running."""
     return _ps_matches(_INSTALL_PROC_RE)
+
+
+def ha_orchestration_in_progress() -> bool:
+    """True while Build HA pair holds its running marker.
+
+    Ansible and the peer SSH install are not matched by full_install_in_progress().
+    """
+    return path_is_file(HA_ORCH_RUNNING_MARKER)
+
+
+def pipeline_in_progress() -> bool:
+    """True when Deploy or Build HA pair is still running on this host."""
+    return full_install_in_progress() or ha_orchestration_in_progress()
 
 
 def mailboxd_running() -> bool:
@@ -489,6 +512,23 @@ def mark_full_install_finished() -> None:
         return
 
 
+def mark_ha_orchestration_started() -> None:
+    HA_ORCH_RUNNING_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    HA_ORCH_RUNNING_MARKER.write_text(f"started {stamp}\n", encoding="utf-8")
+    try:
+        os.chmod(HA_ORCH_RUNNING_MARKER, 0o640)
+    except OSError:
+        pass
+
+
+def mark_ha_orchestration_finished() -> None:
+    try:
+        HA_ORCH_RUNNING_MARKER.unlink()
+    except FileNotFoundError:
+        return
+
+
 def append_unexpected_stop_if_needed(log_path: Path | None = None) -> bool:
     """Stamp the transcript if it has no success/fail marker. Returns True if written."""
     path = log_path or DEPLOY_LAST_LOG
@@ -526,10 +566,46 @@ def reclaim_stale_full_install_marker() -> bool:
     return True
 
 
+def reclaim_stale_ha_orchestration_marker() -> bool:
+    """If HA left a running marker across a helper restart, stamp ORCH_FAILED.
+
+    Only call on privhelperd startup. last-log must not reclaim: peer Zimbra
+    install holds this marker for a long time with no ansible-playbook on A.
+    """
+    if not path_is_file(HA_ORCH_RUNNING_MARKER):
+        return False
+    try:
+        text = (
+            DEPLOY_LAST_LOG.read_text(encoding="utf-8", errors="replace")
+            if path_is_file(DEPLOY_LAST_LOG)
+            else ""
+        )
+    except OSError:
+        text = ""
+    if not re.search(r"\bORCH_(DONE|FAILED)\b", text):
+        try:
+            DEPLOY_LAST_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with DEPLOY_LAST_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    "ORCH_FAILED step=interrupted join_mode=unknown\n"
+                    "[FAIL] HA orchestration stopped unexpectedly -- helper "
+                    "restarted without ORCH_DONE or ORCH_FAILED. Check "
+                    "journalctl -u kin-mail-privhelperd.\n"
+                )
+            try:
+                os.chmod(DEPLOY_LAST_LOG, 0o640)
+            except OSError:
+                pass
+        except OSError:
+            pass
+    mark_ha_orchestration_finished()
+    return True
+
+
 def setup_status_payload() -> dict[str, object]:
     """Body for GET /api/setup/status. Never raises; degrades to not-deployed."""
     try:
-        installing = full_install_in_progress()
+        installing = pipeline_in_progress()
         return {
             "deployed": is_mail_deployed(),
             "full_install_complete": is_full_install_complete(),

@@ -90,6 +90,9 @@ same_as_data_backing() {
   local src="$1"
   local data="${2:-${KIN_DRBD_DATA_DISK:-/dev/sdb1}}"
   local mapper
+  src="${src%%$'\n'*}"
+  src="${src%%[*}"
+  src="${src%% *}"
   mapper=$(luks_mapper_path)
   [ -n "$src" ] || return 1
   [ "$src" = "$data" ] && return 0

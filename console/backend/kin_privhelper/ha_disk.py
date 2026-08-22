@@ -135,12 +135,43 @@ def drbd_backing_device(*, data_disk: str, fstype: str, encrypt: bool | None = N
 
 def _norm_dev(value: str) -> str:
     text = (value or "").strip()
-    if text.startswith("/dev/mapper/"):
-        return text
-    # findmnt may return "/dev/sda2[ /]" or UUID=… — keep /dev/* prefix only.
+    if not text:
+        return ""
+    # findmnt -n SOURCE can print the mapper twice (bind over LUKS). Taking
+    # the whole blob made "Zimbra is on mapper\nmapper, not /dev/sdb1".
+    text = text.splitlines()[0].strip()
+    # findmnt SOURCE may also be "/dev/sda2[ /]" or "/dev/mapper/foo[/opt/zimbra]".
     if text.startswith("/dev/"):
         return text.split("[", 1)[0].split(" ", 1)[0]
     return text
+
+
+def _source_is_on_data_disk(
+    lsblk: dict[str, Any], *, source: str, data_disk: str
+) -> bool:
+    """True when findmnt SOURCE is the data partition or a child (LUKS crypt)."""
+    src = _norm_dev(source)
+    data = _norm_dev(data_disk)
+    if not src or not data:
+        return False
+
+    def walk(devices: list[Any], under_data: bool) -> bool:
+        for dev in devices:
+            if not isinstance(dev, dict):
+                continue
+            path = _norm_dev(_dev_path(dev))
+            here = under_data or path == data
+            if here and path == src:
+                return True
+            kids = dev.get("children")
+            if isinstance(kids, list) and walk(kids, here):
+                return True
+        return False
+
+    block = lsblk.get("blockdevices") if isinstance(lsblk, dict) else None
+    if not isinstance(block, list):
+        return False
+    return walk(block, False)
 
 
 def _parent_disk_name(part_name: str) -> str:
@@ -371,6 +402,10 @@ def evaluate_node(
         if zimbra_src.startswith("/dev/drbd"):
             pass
         elif zimbra_src in allowed:
+            pass
+        elif _source_is_on_data_disk(
+            lsblk, source=zimbra_src, data_disk=data_disk
+        ):
             pass
         elif (
             not zimbra_src

@@ -336,6 +336,70 @@ class HaDiskTests(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertTrue(r["build_allowed"])
 
+    def test_ready_luks_findmnt_duplicate_lines_pass(self) -> None:
+        """Live 2026-08-22: findmnt printed the mapper twice; HA refused LUKS."""
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/mapper/kin-zimbra-crypt\n/dev/mapper/kin-zimbra-crypt",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server (mail.gits-it.site)",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["zimbra_source"], LUKS_MAPPER_PATH)
+
+    def test_luks_primary_and_gpt_peer_combine_ok(self) -> None:
+        """Tonight's resume: A already LUKS, B already GPT from the refused run."""
+        local = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/mapper/kin-zimbra-crypt\n/dev/mapper/kin-zimbra-crypt",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server (mail.gits-it.site)",
+        )
+        peer = evaluate_node(
+            lsblk=_lsblk(sdb="ready"),
+            root_source="/dev/sda2",
+            zimbra_source="",
+            zimbra_exists=False,
+            require_zimbra_on_data=True,
+            label="second server (mail2.gits-it.site)",
+        )
+        comb = combine_results(local, peer)
+        self.assertEqual(comb["errors"], [])
+        self.assertTrue(comb["ok"])
+        self.assertTrue(comb["build_allowed"])
+        self.assertEqual(comb["will_auto_partition"], [])
+
+    def test_ready_luks_findmnt_mapper_suffix_passes(self) -> None:
+        """util-linux findmnt SOURCE for crypt is often mapper[/] or mapper[ /]."""
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/mapper/kin-zimbra-crypt[/]",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server (mail.gits-it.site)",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["zimbra_source"], LUKS_MAPPER_PATH)
+
+    def test_ready_luks_crypt_child_matches_data_disk_tree(self) -> None:
+        r = evaluate_node(
+            lsblk=_lsblk(sdb="ready_luks"),
+            root_source="/dev/sda2",
+            zimbra_source="/dev/mapper/kin-zimbra-crypt[ /opt/zimbra]",
+            zimbra_exists=True,
+            require_zimbra_on_data=True,
+            label="this server",
+        )
+        self.assertEqual(r["errors"], [])
+        self.assertTrue(r["ok"])
+
     def test_ready_luks_unmounted_mid_handoff(self) -> None:
         r = evaluate_node(
             lsblk=_lsblk(sdb="ready_luks_unmounted"),

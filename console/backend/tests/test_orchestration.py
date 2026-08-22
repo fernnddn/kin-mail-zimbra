@@ -323,6 +323,16 @@ class InventoryTests(unittest.TestCase):
         self.assertGreater(fail_idx, 0)
         self.assertLess(fail_idx, done_idx)
 
+    def test_disk_preflight_refuse_stamps_orch_failed(self) -> None:
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "orchestration.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ORCH_FAILED step=disk_preflight", text)
+
     def test_ansible_cfg_uses_absolute_roles_path(self) -> None:
         from pathlib import Path
 

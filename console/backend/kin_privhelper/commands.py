@@ -21,6 +21,8 @@ from .deploy_state import (
     full_install_in_progress,
     mark_full_install_finished,
     mark_full_install_started,
+    mark_ha_orchestration_finished,
+    mark_ha_orchestration_started,
     reclaim_stale_full_install_marker,
 )
 
@@ -789,8 +791,31 @@ async def cmd_run_ha_orchestration(
 ) -> AsyncIterator[dict[str, Any]]:
     from .orchestration import cmd_run_ha_orchestration as _run
 
-    async for ev in _run(args):
-        yield ev
+    args = args or {}
+    join_mode = str(args.get("join_mode") or "apply").strip().lower() or "apply"
+    mark_ha_orchestration_started()
+    saw_orch_failed = False
+    try:
+        async for ev in _run(args):
+            data = str(ev.get("data") or "")
+            if "ORCH_FAILED" in data:
+                saw_orch_failed = True
+            if ev.get("type") == "done":
+                try:
+                    code = int(ev.get("exit_code") or 0)
+                except (TypeError, ValueError):
+                    code = 1
+                if code != 0 and not saw_orch_failed:
+                    line = f"ORCH_FAILED step=preflight join_mode={join_mode}\n"
+                    try:
+                        with DEPLOY_LAST_LOG.open("a", encoding="utf-8") as fh:
+                            fh.write(line)
+                    except OSError:
+                        pass
+                    yield proto.event_stderr(line)
+            yield ev
+    finally:
+        mark_ha_orchestration_finished()
 
 
 async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:

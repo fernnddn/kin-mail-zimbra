@@ -488,6 +488,11 @@ async def run() -> None:
     except OSError:
         log.exception("failed to reclaim leftover full-install marker")
     try:
+        if deploy_state.reclaim_stale_ha_orchestration_marker():
+            log.warning("stamped ORCH_FAILED on leftover HA orchestration marker")
+    except OSError:
+        log.exception("failed to reclaim leftover HA orchestration marker")
+    try:
         deploy_state.ensure_kin_mail_dir()
     except OSError:
         log.exception("failed to ensure /etc/kin-mail is traversable")

@@ -81,7 +81,7 @@ def wizard_deploy_last_log(
     _actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
     """Read-only last deploy transcript (no privhelper — safe during busy install)."""
-    from kin_privhelper.deploy_state import DEPLOY_LAST_LOG, full_install_in_progress
+    from kin_privhelper.deploy_state import DEPLOY_LAST_LOG, pipeline_in_progress
 
     text = ""
     missing = not DEPLOY_LAST_LOG.is_file()
@@ -97,7 +97,7 @@ def wizard_deploy_last_log(
         "path": str(DEPLOY_LAST_LOG),
         "missing": missing,
         "text": text,
-        "install_in_progress": full_install_in_progress(),
+        "install_in_progress": pipeline_in_progress(),
         "mtime": (
             DEPLOY_LAST_LOG.stat().st_mtime if DEPLOY_LAST_LOG.is_file() else None
         ),

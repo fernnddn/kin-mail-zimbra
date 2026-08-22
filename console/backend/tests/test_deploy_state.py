@@ -356,14 +356,18 @@ class UnexpectedInstallStopTests(unittest.TestCase):
         self.root = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
         self.running = self.root / "full-install.running"
+        self.ha_running = self.root / "ha-orchestration.running"
         self.log = self.root / "deploy-last.log"
         self._old_m = ds.FULL_INSTALL_RUNNING_MARKER
+        self._old_ha = ds.HA_ORCH_RUNNING_MARKER
         self._old_l = ds.DEPLOY_LAST_LOG
         ds.FULL_INSTALL_RUNNING_MARKER = self.running
+        ds.HA_ORCH_RUNNING_MARKER = self.ha_running
         ds.DEPLOY_LAST_LOG = self.log
 
     def tearDown(self) -> None:
         ds.FULL_INSTALL_RUNNING_MARKER = self._old_m
+        ds.HA_ORCH_RUNNING_MARKER = self._old_ha
         ds.DEPLOY_LAST_LOG = self._old_l
 
     def test_transcript_detects_success_and_fail(self) -> None:
@@ -396,6 +400,36 @@ class UnexpectedInstallStopTests(unittest.TestCase):
             self.assertTrue(ds.reclaim_stale_full_install_marker())
         self.assertNotIn("Install stopped unexpectedly", self.log.read_text(encoding="utf-8"))
         self.assertFalse(self.running.exists())
+
+    def test_ha_marker_makes_pipeline_busy(self) -> None:
+        self.assertFalse(ds.ha_orchestration_in_progress())
+        ds.mark_ha_orchestration_started()
+        self.assertTrue(ds.ha_orchestration_in_progress())
+        with patch.object(ds, "full_install_in_progress", return_value=False):
+            self.assertTrue(ds.pipeline_in_progress())
+            payload = ds.setup_status_payload()
+        self.assertTrue(payload["install_in_progress"])
+        self.assertTrue(payload["busy"])
+        ds.mark_ha_orchestration_finished()
+        self.assertFalse(ds.ha_orchestration_in_progress())
+
+    def test_reclaim_stale_ha_stamps_orch_failed(self) -> None:
+        ds.mark_ha_orchestration_started()
+        self.log.write_text("=== HA orchestration Slice 2 ===\n", encoding="utf-8")
+        self.assertTrue(ds.reclaim_stale_ha_orchestration_marker())
+        body = self.log.read_text(encoding="utf-8")
+        self.assertIn("ORCH_FAILED step=interrupted", body)
+        self.assertFalse(self.ha_running.exists())
+
+    def test_reclaim_stale_ha_keeps_existing_orch_failed(self) -> None:
+        ds.mark_ha_orchestration_started()
+        self.log.write_text("ORCH_FAILED step=disk_preflight join_mode=apply\n", encoding="utf-8")
+        self.assertTrue(ds.reclaim_stale_ha_orchestration_marker())
+        self.assertEqual(
+            self.log.read_text(encoding="utf-8").count("ORCH_FAILED"),
+            1,
+        )
+        self.assertFalse(self.ha_running.exists())
 
 
 if __name__ == "__main__":

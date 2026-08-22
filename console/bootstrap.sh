@@ -27,33 +27,38 @@ need_root() {
   [ "$(id -u)" -eq 0 ] || { fail "Run as root: sudo $0"; exit 1; }
 }
 
-# Keep in sync with kin_privhelper.deploy_state._INSTALL_PROC_RE (re.I).
-# kin-mail.sh --full-install is a child of privhelperd; systemd default
-# KillMode=control-group would kill the whole install on restart.
+# Keep in sync with kin_privhelper.deploy_state._INSTALL_PROC_RE (re.I) and
+# HA_ORCH_RUNNING_MARKER. kin-mail.sh --full-install and HA orchestration are
+# children of privhelperd; systemd default KillMode=control-group would kill
+# the whole job on restart.
 full_install_in_progress() {
   ps -eo args= 2>/dev/null | grep -Eiq \
     'kin-mail\.sh[[:space:]]+--full-install|/03-install-zimbra\.sh\b|/05-healthcheck\.sh\b|install\.sh --platform-override|zmsetup\.pl'
 }
 
+ha_orchestration_in_progress() {
+  [ -f /var/lib/kin-mail-console/ha-orchestration.running ]
+}
+
 # Restart privhelperd unless a live full-install would be killed with it.
 # Override: type CONFIRM at the prompt (or CONFIRM on /dev/tty).
 restart_privhelperd_unless_installing() {
-  if ! full_install_in_progress; then
+  if ! full_install_in_progress && ! ha_orchestration_in_progress; then
     systemctl restart kin-mail-privhelperd.service
     return 0
   fi
 
-  warn "A KIN Mail full-install is running (kin-mail.sh --full-install / 03-install-zimbra / zmsetup)."
+  warn "A KIN Mail full-install or HA orchestration is running."
   warn "Restarting kin-mail-privhelperd.service will kill it (systemd KillMode=control-group)."
   warn "Wait until it finishes or fails, then re-run bootstrap to load new privhelperd code."
-  warn "To restart anyway and kill the install, type CONFIRM."
+  warn "To restart anyway and kill the job, type CONFIRM."
 
   local reply=""
   if [ -r /dev/tty ]; then
     printf '%s' "  ${YLW}[WARN]${RST}   Type CONFIRM to override: "
     IFS= read -r reply < /dev/tty || true
   else
-    warn "No TTY — refusing to restart privhelperd while a full-install is running."
+    warn "No TTY — refusing to restart privhelperd while a full-install or HA job is running."
   fi
 
   if [ "${reply}" = "CONFIRM" ]; then

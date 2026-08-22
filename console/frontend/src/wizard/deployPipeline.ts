@@ -198,7 +198,8 @@ export function parseHaOrchProgress(log: string): InstallProgress {
       total = Number(skip[2]);
     }
   }
-  const failed = /\bORCH_FAILED\b/.test(log) || /\] FAIL /.test(log);
+  const failed =
+    /\bORCH_FAILED\b/.test(log) || /\] FAIL /.test(log) || /^Refusing:/m.test(log);
   const complete = /\bORCH_DONE\b/.test(log);
   const resolvedTotal = total || HA_ORCH_STAGE_COUNT;
   if (complete) {
@@ -219,6 +220,16 @@ export function parseHaOrchProgress(log: string): InstallProgress {
       script,
       complete: false,
       failed: true,
+    };
+  }
+  if (!current && /Auto-partition:|Re-checking DRBD backing disks/.test(log)) {
+    return {
+      current: 0,
+      total: resolvedTotal,
+      label: "Preparing disks",
+      script: "",
+      complete: false,
+      failed: false,
     };
   }
   return {
