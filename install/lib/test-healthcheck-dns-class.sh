@@ -130,6 +130,8 @@ if grep -q 'healthcheck-dns-class.sh' ../05-healthcheck.sh \
   && grep -q 'healthcheck_opendkim_classify' ../05-healthcheck.sh \
   && grep -q 'healthcheck_a_vs_send' ../05-healthcheck.sh \
   && grep -q 'healthcheck_spf_cover' ../05-healthcheck.sh \
+  && grep -q '|| b "MX not published yet"' ../05-healthcheck.sh \
+  && ! grep -q '|| f "MX not published yet"' ../05-healthcheck.sh \
   && grep -q 'KIN_DKIM_WAIT_SEC' ../kin-mail.sh; then
   pass "05-healthcheck.sh and kin-mail.sh wire the classifier and DKIM wait"
 else

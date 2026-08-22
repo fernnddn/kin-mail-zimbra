@@ -59,6 +59,29 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("pacemaker_mail_stack_vip_nic", inv)
         self.assertNotIn("ens33", inv)
 
+    def test_inventory_uses_discovered_drbd_disks(self) -> None:
+        inv = render_inventory(
+            [
+                OrchHost("mail.example.test", "192.0.2.15", "mail"),
+                OrchHost("mail2.example.test", "192.0.2.14", "mail2"),
+            ],
+            OrchHost("mon.example.test", "192.0.2.12", "mon"),
+            vip_ip="192.0.2.16",
+            data_disk="/dev/vdb1",
+            meta_disk="/dev/vdb2",
+        )
+        self.assertIn("drbd_resource_disk: /dev/vdb1", inv)
+        self.assertIn("drbd_resource_meta_disk: /dev/vdb2", inv)
+        self.assertNotIn("drbd_resource_disk: /dev/sdb1", inv)
+
+    def test_hostnames_compatible(self) -> None:
+        from kin_privhelper.orchestration import hostnames_compatible
+
+        self.assertTrue(hostnames_compatible("mail.example.test", "mail.example.test"))
+        self.assertTrue(hostnames_compatible("mail.example.test", "mail"))
+        self.assertFalse(hostnames_compatible("mail.example.test", "ubuntu"))
+        self.assertFalse(hostnames_compatible("mail2.example.test", "mail.example.test"))
+
     def test_optional_vip_nic_is_emitted_when_valid(self) -> None:
         inv = render_inventory(
             [
@@ -307,6 +330,7 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertIn("roles_path = /opt/kin-mail-console/ansible/roles", cfg)
         self.assertIn("local_tmp = /var/lib/example/.ansible/tmp", cfg)
+        self.assertIn("timeout = 180", cfg)
 
     def test_inventory_sets_kin_mail_deploy_dir(self) -> None:
         import os
@@ -592,6 +616,24 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertGreater(ldap_idx, constraints_idx)
         self.assertGreater(memcached_idx, ldap_idx)
         self.assertGreater(verify_idx, memcached_idx)
+
+    def test_greenfield_iscsi_pcsd_and_dns_healthcheck_gates(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        initiator = (
+            repo / "ansible/roles/iscsi_initiator/tasks/initiatorname.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Restart iscsid so login uses the inventory InitiatorName", initiator)
+        auth = (repo / "ansible/roles/cluster_setup/tasks/auth.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Wait until pcsd is listening before host auth", auth)
+        health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
+        self.assertIn('b "MX not published yet"', health)
+        self.assertNotIn('f "MX not published yet"', health)
+        self.assertIn('b "SPF not published yet"', health)
+        self.assertIn('b "DMARC not published yet"', health)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

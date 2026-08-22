@@ -713,6 +713,29 @@ class HaDiskTests(unittest.TestCase):
         self.assertIn("mklabel", plan["parted_argv"])
         self.assertIn("Selected /dev/sdb", plan["message"])
 
+    def test_unique_vdb_spare_is_used(self) -> None:
+        plan = plan_auto_partition(
+            _lsblk(
+                sdb=None,
+                extra=[
+                    {
+                        "name": "vdb",
+                        "path": "/dev/vdb",
+                        "type": "disk",
+                        "size": 107374182400,
+                        "pttype": None,
+                    }
+                ],
+            ),
+            root_source="/dev/sda2",
+            data_disk="/dev/sdb1",
+            meta_disk="/dev/sdb2",
+        )
+        self.assertEqual(plan["action"], "partition")
+        self.assertEqual(plan["disk"], "/dev/vdb")
+        self.assertEqual(plan["data_disk"], "/dev/vdb1")
+        self.assertEqual(plan["meta_disk"], "/dev/vdb2")
+
     def test_ready_layout_skips_partition(self) -> None:
         plan = plan_auto_partition(
             _lsblk(sdb="ready"),
@@ -878,8 +901,10 @@ class HaDiskTests(unittest.TestCase):
         self.assertFalse(none["need_partition"])
         self.assertEqual(none["plan"]["action"], "fail")
         self.assertEqual(multi["install_mode"], "os_root")
-        self.assertEqual(vdb["install_mode"], "os_root")
-        self.assertIn("/dev/vdb", vdb["reason"])
+        self.assertEqual(vdb["install_mode"], "prepare_data")
+        self.assertEqual(vdb["disk"], "/dev/vdb")
+        self.assertEqual(vdb["data_disk"], "/dev/vdb1")
+        self.assertEqual(vdb["meta_disk"], "/dev/vdb2")
 
     def test_install_mode_stdin_is_zero_even_on_os_root(self) -> None:
         import subprocess

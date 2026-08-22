@@ -28,6 +28,16 @@
   no_log: true
   tags: [cluster, setup, auth]
 
+- name: Wait until pcsd is listening before host auth
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 2224
+    timeout: 60
+  when:
+    - not (cluster_setup_running | bool)
+    - not ansible_check_mode
+  tags: [cluster, setup, auth]
+
 - name: Authenticate both mail nodes to pcsd (new cluster only)
   ansible.builtin.command:
     cmd: >-

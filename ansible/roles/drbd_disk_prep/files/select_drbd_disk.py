@@ -279,9 +279,27 @@ def plan_auto_partition(
     if ready:
         return ready
 
-    candidates, skipped = find_candidates(lsblk, root_source)
     expected_parent = f"/dev/{parent_disk_name(data_disk.removeprefix('/dev/'))}"
-    cand_paths = [str(c["path"]) for c in candidates]
+    root_parent = _root_parent(root_source)
+    seen_parents = {expected_parent}
+    for node in flatten_lsblk(lsblk):
+        if str(node.get("type") or "") != "disk":
+            continue
+        path = dev_path(node)
+        name = _name(node)
+        if not path or _is_skip_disk_name(name) or name == root_parent:
+            continue
+        if path in seen_parents:
+            continue
+        seen_parents.add(path)
+        p1, p2 = partition_paths(path)
+        alt = layout_ready(
+            lsblk, data_disk=p1, meta_disk=p2, root_source=root_source
+        )
+        if alt:
+            return alt
+
+    candidates, skipped = find_candidates(lsblk, root_source)
     listed = ", ".join(
         f"{c['path']} ({c['size_human']})" for c in candidates
     ) or "(none)"
@@ -323,17 +341,6 @@ def plan_auto_partition(
         )
 
     chosen = candidates[0]
-    if str(chosen["path"]) != expected_parent:
-        return fail(
-            [
-                f"unique spare disk is {chosen['path']} but Build HA expects partitions "
-                f"on {expected_parent} ({data_disk} / {meta_disk}). Refusing to guess. "
-                f"Set KIN_DRBD_DATA_DISK to {partition_paths(str(chosen['path']))[0]} "
-                f"if that disk is the intended DRBD data device."
-            ],
-            f"Refusing: unique spare {chosen['path']} is not {expected_parent}.",
-        )
-
     p1, p2 = partition_paths(str(chosen["path"]))
     msg = (
         f"Selected {chosen['path']} ({chosen['size_human']}) — not the OS disk, "
@@ -382,9 +389,9 @@ def install_prepare_plan(
 ) -> dict[str, Any]:
     """Map plan_auto_partition onto full-install: prepare_data or os_root.
 
-    HA disk_prep still fail-closes on action=fail. Install must not: no spare,
-    two spares, or a unique spare that is not the expected parent all mean
-    "install Zimbra on the OS volume as today". Only partition/skip become
+    HA disk_prep still fail-closes on action=fail. Install must not: no spare
+    or two spares mean "install Zimbra on the OS volume as today". A unique
+    blank spare (sdb/vdb/nvme) is partitioned. Only partition/skip become
     a data-disk prepare. parted_argv is required for partition.
     """
     plan = plan_auto_partition(

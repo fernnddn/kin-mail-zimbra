@@ -55,10 +55,18 @@
   vars:
     os_hardening_inventory_admin_tokens: "{{ os_hardening_admin_ips.split() if os_hardening_admin_ips is string else (os_hardening_admin_ips | default([])) }}"
     os_hardening_default_tokens: "{{ ['127.0.0.1/8', '::1'] + ([os_hardening_lan_cidr] if os_hardening_lan_cidr is defined else []) }}"
+    os_hardening_mail_ips: "{{ groups['mail_nodes'] | default([]) | map('extract', hostvars, 'ansible_host') | select('match', '^[0-9.]+$') | list }}"
+    os_hardening_mon_ips: "{{ groups['monitoring'] | default([]) | map('extract', hostvars, 'ansible_host') | select('match', '^[0-9.]+$') | list }}"
+    os_hardening_vip_tokens: "{{ [pacemaker_mail_stack_vip_ip] if (pacemaker_mail_stack_vip_ip | default('') | length > 0) else [] }}"
+    os_hardening_qnetd_tokens: "{{ [corosync_qdevice_qnetd_ip] if (corosync_qdevice_qnetd_ip | default('') | length > 0) else [] }}"
     os_hardening_ignoreip_tokens: "{{ (
         (os_hardening_ignoreip.split() if os_hardening_ignoreip | length > 0 else os_hardening_default_tokens)
         + (os_hardening_config_admin_ips | default([]))
         + (os_hardening_inventory_admin_tokens | default([]))
+        + (os_hardening_mail_ips | default([]))
+        + (os_hardening_mon_ips | default([]))
+        + (os_hardening_vip_tokens | default([]))
+        + (os_hardening_qnetd_tokens | default([]))
       ) | unique | list }}"
   tags: [hardening, os, fail2ban]
 

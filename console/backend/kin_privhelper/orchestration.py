@@ -147,6 +147,19 @@ def _iqn_suffix(hostname: str) -> str:
     return short[:32]
 
 
+def hostnames_compatible(expected: str, live: str) -> bool:
+    """True when inventory name and hostname -f / uname share an identity."""
+    exp = (expected or "").strip().lower().rstrip(".")
+    got = (live or "").strip().splitlines()[0].strip().split()[0].lower().rstrip(".")
+    if not exp or not got:
+        return False
+    if got in {"localhost", "localhost.localdomain"}:
+        return False
+    if exp == got:
+        return True
+    return exp.split(".", 1)[0] == got.split(".", 1)[0]
+
+
 def observability_inventory_name(*, ip: str, hostname: str = "") -> str:
     """Ansible inventory name for the qnetd/iSCSI VM. Never a lab FQDN."""
     name = (hostname or "").strip()
@@ -181,8 +194,16 @@ def render_inventory(
     *,
     vip_ip: str = "",
     vip_nic: str = "",
+    data_disk: str = "",
+    meta_disk: str = "",
 ) -> str:
     """YAML inventory with env-lookup passwords — no secret values in the file."""
+    disk = (data_disk or "").strip() or "/dev/sdb1"
+    meta = (meta_disk or "").strip() or "/dev/sdb2"
+    if not re.fullmatch(r"/dev/[A-Za-z0-9/._+-]+", disk):
+        disk = "/dev/sdb1"
+    if not re.fullmatch(r"/dev/[A-Za-z0-9/._+-]+", meta):
+        meta = "/dev/sdb2"
     lines = [
         "all:",
         "  vars:",
@@ -197,9 +218,8 @@ def render_inventory(
         "    iscsi_initiator_portal: \"" + monitoring.ip + ":3260\"",
         "    cluster_node_base_hacluster_password: '{{ lookup(\"env\", \"KIN_HACLUSTER_PASSWORD\") }}'",
         "    cluster_setup_name: kin-mail",
-        # Proven HA layout — not the old loop-meta default. Preflight checks these.
-        "    drbd_resource_disk: /dev/sdb1",
-        "    drbd_resource_meta_disk: /dev/sdb2",
+        "    drbd_resource_disk: " + disk,
+        "    drbd_resource_meta_disk: " + meta,
         # Proven rebuild uses /dev/sdb2. Do not keep the old-lab loop unit.
         '    pacemaker_agents_keep_meta_loop_unit: ""',
         # Console ansible/ is not next to install/. Roles copy helper scripts
@@ -265,12 +285,12 @@ def render_ansible_cfg(*, local_tmp: Path, roles_path: Path) -> str:
         "display_ok_hosts = True\n"
         f"local_tmp = {local_tmp}\n"
         "remote_tmp = /tmp/.ansible-kin-mail\n"
-        "timeout = 60\n"
+        "timeout = 180\n"
         "\n"
         "[privilege_escalation]\n"
         "become = True\n"
         "become_method = sudo\n"
-        "become_timeout = 60\n"
+        "become_timeout = 120\n"
         "\n"
         "[ssh_connection]\n"
         "pipelining = False\n"
@@ -1286,6 +1306,24 @@ async def cmd_run_ha_orchestration(
     yield emit_line(f"observability={monitoring.name} ({monitoring.ip})")
     yield emit_line(f"cluster_vip={vip_ip}")
 
+    live_names = [os.uname().nodename]
+    try:
+        import socket
+
+        live_names.append(socket.gethostname())
+        live_names.append(socket.getfqdn())
+    except OSError:
+        pass
+    if not any(hostnames_compatible(local.name, name) for name in live_names):
+        yield emit_line(
+            f"Refusing: this server hostname is {live_names[0]!r} but MAIL_HOST is "
+            f"{local.name!r}. Pacemaker/DRBD node names must match. Set MAIL_HOST "
+            "to `hostname -f` (or hostnamectl set-hostname to MAIL_HOST) and retry.",
+            err=True,
+        )
+        yield proto.event_done(2)
+        return
+
     from .maintenance import gather_status, parse_corosync_ring_addrs
     from .corosync_stub import is_harmless_package_stub_cluster
 
@@ -1379,6 +1417,18 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(1)
         return
 
+    if skip_remote and not hostnames_compatible(peer.name, ident):
+        got = (ident.splitlines()[0] if ident else "").strip()
+        yield emit_line(
+            f"Refusing: second server hostname is {got!r} but the wizard name is "
+            f"{peer.name!r}. Pacemaker/DRBD use the wizard name. Align them, or "
+            "run Build HA pair without skipping remote install so the peer hostname "
+            "is set from the wizard.",
+            err=True,
+        )
+        yield proto.event_done(2)
+        return
+
     mon_code, mon_ident = await _ssh_probe(monitoring, ssh_user, ssh_pass, secrets)
     yield emit_line(
         f"ssh_probe monitoring user={ssh_user} exit={mon_code} "
@@ -1419,9 +1469,12 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(2)
         return
     need_disk_prep = bool(disk.get("will_auto_partition")) and not bool(disk.get("ok"))
+    data_disk = str(disk.get("data_disk") or "").strip()
+    meta_disk = str(disk.get("meta_disk") or "").strip()
     if disk.get("ok"):
         yield emit_line(
             f"DRBD disk preflight ok data={local.name} / {peer.name}"
+            + (f" disk={data_disk} meta={meta_disk}" if data_disk else "")
         )
     else:
         yield emit_line(
@@ -1442,8 +1495,16 @@ async def cmd_run_ha_orchestration(
         "ANSIBLE_LOCAL_TEMP": str(WORK_DIR / ".ansible" / "tmp"),
     }
 
-    peer_inv = render_inventory([peer], monitoring, vip_ip=vip_ip)
-    full_inv = render_inventory([local, peer], monitoring, vip_ip=vip_ip)
+    peer_inv = render_inventory(
+        [peer], monitoring, vip_ip=vip_ip, data_disk=data_disk, meta_disk=meta_disk
+    )
+    full_inv = render_inventory(
+        [local, peer],
+        monitoring,
+        vip_ip=vip_ip,
+        data_disk=data_disk,
+        meta_disk=meta_disk,
+    )
     live_hosts = []
     for name in live_nodes:
         ip = ring.get(name, "")
@@ -1456,7 +1517,15 @@ async def cmd_run_ha_orchestration(
         if ip and valid_ipv4(ip) and valid_name(name):
             live_hosts.append(OrchHost(name, ip, _iqn_suffix(name)))
     live_inv = (
-        render_inventory(live_hosts, monitoring, vip_ip=vip_ip) if live_hosts else ""
+        render_inventory(
+            live_hosts,
+            monitoring,
+            vip_ip=vip_ip,
+            data_disk=data_disk,
+            meta_disk=meta_disk,
+        )
+        if live_hosts
+        else ""
     )
 
     # Sanity: generated YAML must never contain the vault plaintext.

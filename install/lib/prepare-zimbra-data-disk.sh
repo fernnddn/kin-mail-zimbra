@@ -6,11 +6,11 @@
 # (the same plan_auto_partition GPT as ansible drbd_disk_prep). Does not
 # reimplement disk detection.
 #
-#   unique blank spare matching KIN_DRBD_DATA_DISK parent
+#   unique blank spare (sdb/vdb/nvme)
 #       -> GPT data + 256 MiB unformatted meta, mkfs.ext4 data, fstab UUID, mount
 #   proven GPT already present
 #       -> mkfs data if empty, fstab UUID, mount (never rewrite GPT)
-#   no spare / two spares / unique spare is not the expected parent
+#   no spare / two spares
 #       -> exit 0, Zimbra installs on the OS volume (today's behaviour)
 #
 # After GPT/mkfs/fstab/mount has started, errors fail the install (exit 1).

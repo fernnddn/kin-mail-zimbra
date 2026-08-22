@@ -99,13 +99,13 @@ else
 fi
 
 MX=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" MX 2>/dev/null | tr '\n' ' ')
-[ -n "$MX" ] && p "MX     : $MX" || f "MX not published yet"
+[ -n "$MX" ] && p "MX     : $MX" || b "MX not published yet"
 
 SPF=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" TXT 2>/dev/null | grep -i spf1 | tr -d '"')
-[ -n "$SPF" ] && p "SPF    : $SPF" || f "SPF not published yet"
+[ -n "$SPF" ] && p "SPF    : $SPF" || b "SPF not published yet"
 
 DM=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "_dmarc.${MAIL_DOMAIN}" TXT 2>/dev/null | tr -d '"')
-[ -n "$DM" ] && p "DMARC  : $DM" || f "DMARC not published yet"
+[ -n "$DM" ] && p "DMARC  : $DM" || b "DMARC not published yet"
 
 A=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_HOST" A 2>/dev/null | tr '\n' ' ')
 [ -n "$A" ] && p "A      : $A" || b "A record not published yet - need public IP from the network team"

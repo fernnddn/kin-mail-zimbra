@@ -445,6 +445,32 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
     pending = bool(will)
     blocked = any(_node_blocks_pair_prep(n) for n in nodes) if nodes else True
     build_allowed = ok or (pending and not blocked)
+    uniq_data = {
+        str(n.get("data_disk") or "").strip()
+        for n in nodes
+        if str(n.get("data_disk") or "").strip()
+    }
+    uniq_meta = {
+        str(n.get("meta_disk") or "").strip()
+        for n in nodes
+        if str(n.get("meta_disk") or "").strip()
+    }
+    for item in will:
+        d = str(item.get("data_disk") or "").strip()
+        m = str(item.get("meta_disk") or "").strip()
+        if d:
+            uniq_data.add(d)
+        if m:
+            uniq_meta.add(m)
+    if len(uniq_data) > 1:
+        errors.append(
+            "mail nodes would use different DRBD data disks ("
+            + ", ".join(sorted(uniq_data))
+            + "). Both VMs need the same device path."
+        )
+        build_allowed = False
+    data_disk = next(iter(uniq_data)) if len(uniq_data) == 1 else ""
+    meta_disk = next(iter(uniq_meta)) if len(uniq_meta) == 1 else ""
     if will:
         instructions = (
             "Build HA pair will GPT-partition the unique blank spare disk on each "
@@ -469,6 +495,8 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "will_auto_partition": will,
         "instructions": instructions,
+        "data_disk": data_disk,
+        "meta_disk": meta_disk,
     }
 
 

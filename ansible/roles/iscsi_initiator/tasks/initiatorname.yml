@@ -15,8 +15,18 @@
     owner: root
     group: root
     mode: "0644"
+  register: iscsi_initiator_name_write
   when:
     - iscsi_initiator_name_slurp.content is not defined
       or ((iscsi_initiator_name_slurp.content | b64decode | trim) != ('InitiatorName=' ~ iscsi_initiator_name))
+    - not ansible_check_mode
+  tags: [iscsi, initiator, name]
+
+- name: Restart iscsid so login uses the inventory InitiatorName
+  ansible.builtin.systemd:
+    name: iscsid
+    state: restarted
+  when:
+    - iscsi_initiator_name_write is changed
     - not ansible_check_mode
   tags: [iscsi, initiator, name]
