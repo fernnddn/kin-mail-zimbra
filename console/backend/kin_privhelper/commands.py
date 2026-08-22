@@ -399,13 +399,30 @@ async def _stream_subprocess(
             await proc.wait()
         stop_follow.set()
         if follow_tasks:
-            await asyncio.gather(*follow_tasks)
+            try:
+                await asyncio.wait_for(asyncio.gather(*follow_tasks), timeout=3)
+            except asyncio.TimeoutError:
+                for task in follow_tasks:
+                    task.cancel()
+                await asyncio.gather(*follow_tasks, return_exceptions=True)
         await queue.put(None)
 
     waiter = asyncio.create_task(_waiter())
     try:
+        idle_after_exit = 0.0
         while True:
-            item = await queue.get()
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=2.0)
+            except asyncio.TimeoutError:
+                if waiter.done():
+                    break
+                if proc.returncode is not None:
+                    stop_follow.set()
+                    idle_after_exit += 2.0
+                    if idle_after_exit >= 6.0:
+                        break
+                continue
+            idle_after_exit = 0.0
             if item is None:
                 break
             kind, text = item
@@ -421,7 +438,18 @@ async def _stream_subprocess(
                 yield proto.event_stderr(text)
     finally:
         stop_follow.set()
-        await waiter
+        try:
+            await asyncio.wait_for(asyncio.shield(waiter), timeout=5)
+        except asyncio.TimeoutError:
+            waiter.cancel()
+            try:
+                await waiter
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            try:
+                await queue.put(None)
+            except Exception:  # noqa: BLE001
+                pass
         if log_fh is not None:
             try:
                 log_fh.close()

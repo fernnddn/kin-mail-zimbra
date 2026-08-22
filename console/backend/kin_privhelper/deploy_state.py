@@ -96,6 +96,7 @@ SETUP_ALLOWED_COMMANDS = frozenset(
 
 _INSTALL_PROC_RE = re.compile(
     r"(?:kin-mail\.sh\s+--full-install|/03-install-zimbra\.sh\b|"
+    r"/05-healthcheck\.sh\b|"
     r"install\.sh --platform-override|zmsetup\.pl)",
     re.I,
 )

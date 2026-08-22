@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import stat
+import time
 from collections.abc import AsyncIterator, Callable
 from logging.handlers import WatchedFileHandler
 from pathlib import Path
@@ -24,7 +25,23 @@ SOCKET_GROUP = os.environ.get("PRIVHELPER_SOCKET_GROUP", "kin-console")
 
 _gate = asyncio.Lock()
 _running = False
+# Incremented on every successful acquire. A hung previous handler must not
+# clear _running in its finally if a later Deploy already stole the slot.
+_run_gen = 0
+_running_since = 0.0
 _audit = logging.getLogger("kin_privhelper.audit")
+
+# Wizard pipeline: wait for a just-finished job instead of immediate busy.
+# A leftover _running after 05-healthcheck.sh exits (SSE consumer stalled)
+# used to make "Deploy again" impossible even though the pipeline had stopped.
+PIPELINE_WAIT_CMDS = frozenset(
+    {
+        proto.CMD_APPLY_WIZARD_DRAFT,
+        proto.CMD_RUN_FULL_INSTALL,
+        proto.CMD_RUN_HA_ORCHESTRATION,
+    }
+)
+BUSY_WAIT_SEC = 8.0
 
 
 def _setup_logging() -> None:
@@ -195,8 +212,87 @@ def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> t
     return role, None
 
 
-async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+def reset_run_slot_for_tests() -> None:
+    global _running, _run_gen, _running_since
+    _running = False
+    _run_gen = 0
+    _running_since = 0.0
+
+
+def mark_run_slot_busy_for_tests() -> int:
+    """Hold the helper lock without a real job (unit tests)."""
+    global _running, _run_gen, _running_since
+    _run_gen += 1
+    _running = True
+    _running_since = time.monotonic() - 60.0
+    return _run_gen
+
+
+async def acquire_run_slot(
+    cmd: str,
+    *,
+    wait_sec: float | None = None,
+    is_installing: Callable[[], bool] | None = None,
+) -> int | None:
+    """Take the single-flight slot. None means the caller should send busy.
+
+    Pipeline commands wait briefly for a job that has already printed
+    Pipeline stopped but whose Python waiter has not released yet. If no
+    kin-mail.sh/zmsetup process remains, steal the stale lock so Deploy
+    can run again.
+    """
+    global _running, _run_gen, _running_since
+    installing_fn = is_installing or deploy_state.full_install_in_progress
+    timeout = BUSY_WAIT_SEC if wait_sec is None else wait_sec
+    can_wait = cmd in PIPELINE_WAIT_CMDS
+    deadline = time.monotonic() + (timeout if can_wait else 0.0)
+
+    while True:
+        steal = False
+        token = 0
+        async with _gate:
+            if not _running:
+                _run_gen += 1
+                _running = True
+                _running_since = time.monotonic()
+                return _run_gen
+            if not can_wait:
+                return None
+            try:
+                live_install = bool(installing_fn())
+            except Exception:  # noqa: BLE001
+                live_install = False
+            if live_install:
+                return None
+            held_for = time.monotonic() - _running_since
+            # Fresh holders (apply_draft still writing) must not be stolen.
+            if held_for >= max(timeout, 0.05) and time.monotonic() >= deadline:
+                steal = True
+                _run_gen += 1
+                _running = True
+                _running_since = time.monotonic()
+                token = _run_gen
+        if steal:
+            logging.getLogger("kin_privhelper").warning(
+                "stale helper lock stolen for cmd=%s (no install process)",
+                cmd,
+            )
+            return token
+        if timeout <= 0:
+            return None
+        await asyncio.sleep(0.2)
+
+
+async def release_run_slot(token: int | None) -> None:
     global _running
+    if token is None:
+        return
+    async with _gate:
+        if _run_gen == token:
+            _running = False
+
+
+async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     peer = writer.get_extra_info("peername")
     username = "unknown"
     cmd = "unknown"
@@ -307,16 +403,16 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             and str(args.get("op") or "").strip().lower() == "probe"
         ) or cmd == proto.CMD_HA_DISK_PREFLIGHT
 
+        slot_token: int | None = None
         if not bypass_busy:
-            async with _gate:
-                if _running:
-                    await _send(
-                        writer,
-                        proto.event_error("busy", "another privileged execution is in progress"),
-                    )
-                    _audit_line(username, audit_cmd, "busy")
-                    return
-                _running = True
+            slot_token = await acquire_run_slot(cmd)
+            if slot_token is None:
+                await _send(
+                    writer,
+                    proto.event_error("busy", "another privileged execution is in progress"),
+                )
+                _audit_line(username, audit_cmd, "busy")
+                return
 
         try:
             await _send(writer, proto.event_accepted(cmd))
@@ -353,8 +449,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                 _audit_line(username, audit_cmd, "exec_failed", 1)
         finally:
             if not bypass_busy:
-                async with _gate:
-                    _running = False
+                await release_run_slot(slot_token)
     except asyncio.TimeoutError:
         await _send(writer, proto.event_error("timeout", "request timed out"))
         _audit_line(username, cmd, "timeout")

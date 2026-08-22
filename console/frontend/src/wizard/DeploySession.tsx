@@ -24,6 +24,8 @@ export type DeployActionId =
   | "cancel_firewall_deadman"
   | "ha_orchestration";
 
+type FinishReason = "done" | "error" | "disconnect" | "busy";
+
 type StreamEvent = {
   type: string;
   cmd?: string;
@@ -229,7 +231,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     (
       action: DeployActionId,
       es: EventSource,
-      onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
+      onFinished: (exit?: number, reason?: FinishReason) => void,
     ) => {
       es.onmessage = (ev) => {
         lastSseAtRef.current = Date.now();
@@ -260,26 +262,13 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
           if (parsed.code === "busy") {
-            // Another job owns the helper. Follow it only if it is still running;
-            // a leftover busy during a just-finished fail must not look like a live install.
-            onFinished(undefined, "error");
+            onFinished(undefined, "busy");
             es.close();
-            void (async () => {
-              await refreshSetup();
-              const still = await hydrateFromServer();
-              if (still) {
-                setMessage("Install already running on the server, showing live progress.");
-                setLocalBusy(true);
-              } else {
-                setMessage(
-                  "Could not start because another helper job was still finishing. Confirm and click Deploy again.",
-                );
-                setLocalBusy(false);
-              }
-            })();
             return;
           }
           setMessage(msg);
+          onFinished(undefined, "error");
+          es.close();
           return;
         }
         if (parsed.type === "done") {
@@ -322,8 +311,9 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const openStream = useCallback(
     (
       action: DeployActionId,
-      onFinished: (exit?: number, reason?: "done" | "error" | "disconnect") => void,
+      onFinished: (exit?: number, reason?: FinishReason) => void,
       extraQuery?: string,
+      attempt = 0,
     ) => {
       localStreamRef.current = true;
       lastSseAtRef.current = Date.now();
@@ -332,7 +322,45 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       const es = new EventSource(
         `/api/wizard/deploy/stream?action=${encodeURIComponent(action)}${qs}`,
       );
-      const wrapped = (exit?: number, reason?: "done" | "error" | "disconnect") => {
+      const wrapped = (exit?: number, reason?: FinishReason) => {
+        if (reason === "busy") {
+          if (attempt < 12) {
+            setMessage("Waiting for the previous job to finish…");
+            window.setTimeout(() => {
+              pipelineEsRef.current = openStream(
+                action,
+                onFinished,
+                extraQuery,
+                attempt + 1,
+              );
+            }, 1000);
+            return;
+          }
+          void (async () => {
+            await refreshSetup();
+            const still = await hydrateFromServer();
+            if (still) {
+              setMessage("Install already running on the server, showing live progress.");
+              setLocalBusy(true);
+              if (pipelineEsRef.current === es) {
+                pipelineEsRef.current = null;
+                localStreamRef.current = false;
+              }
+              onFinished(undefined, "error");
+              return;
+            }
+            setMessage(
+              "Could not start because another helper job was still finishing. Confirm and click Deploy again.",
+            );
+            if (pipelineEsRef.current === es) {
+              pipelineEsRef.current = null;
+              localStreamRef.current = false;
+            }
+            setLocalBusy(false);
+            onFinished(undefined, "error");
+          })();
+          return;
+        }
         if (pipelineEsRef.current !== es) return;
         localStreamRef.current = false;
         pipelineEsRef.current = null;
@@ -341,7 +369,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       attachStream(action, es, wrapped);
       return es;
     },
-    [attachStream],
+    [attachStream, hydrateFromServer, refreshSetup],
   );
 
   const openLogsTab = useCallback(() => {
@@ -395,7 +423,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     );
     setLocalBusy(true);
 
-    const onInstallFinished = (_exit?: number, reason?: "done" | "error" | "disconnect") => {
+    const onInstallFinished = (_exit?: number, reason?: FinishReason) => {
       pipelineStartRef.current = false;
       void refreshSetup();
       void hydrateFromServer().then((still) => {

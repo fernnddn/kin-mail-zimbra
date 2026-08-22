@@ -32,7 +32,7 @@ need_root() {
 # KillMode=control-group would kill the whole install on restart.
 full_install_in_progress() {
   ps -eo args= 2>/dev/null | grep -Eiq \
-    'kin-mail\.sh[[:space:]]+--full-install|/03-install-zimbra\.sh\b|install\.sh --platform-override|zmsetup\.pl'
+    'kin-mail\.sh[[:space:]]+--full-install|/03-install-zimbra\.sh\b|/05-healthcheck\.sh\b|install\.sh --platform-override|zmsetup\.pl'
 }
 
 # Restart privhelperd unless a live full-install would be killed with it.
