@@ -79,8 +79,10 @@ class InventoryTests(unittest.TestCase):
 
         self.assertTrue(hostnames_compatible("mail.example.test", "mail.example.test"))
         self.assertTrue(hostnames_compatible("mail.example.test", "mail"))
+        self.assertTrue(hostnames_compatible("mail", "mail.example.test"))
         self.assertFalse(hostnames_compatible("mail.example.test", "ubuntu"))
         self.assertFalse(hostnames_compatible("mail2.example.test", "mail.example.test"))
+        self.assertFalse(hostnames_compatible("mail.example.test", "mail.customer.test"))
 
     def test_optional_vip_nic_is_emitted_when_valid(self) -> None:
         inv = render_inventory(
@@ -634,6 +636,15 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn('f "MX not published yet"', health)
         self.assertIn('b "SPF not published yet"', health)
         self.assertIn('b "DMARC not published yet"', health)
+        self.assertIn('b "Certificate is still self-signed', health)
+        self.assertNotIn('f "No trusted certificate yet', health)
+        self.assertIn('TLS_METHOD:-}" = "customer"', health)
+        self.assertIn("No Let's Encrypt deploy hook (expected when TLS_METHOD=customer)", health)
+        driver = (repo / "install/kin-mail.sh").read_text(encoding="utf-8")
+        self.assertIn("Dead-man stays armed", driver)
+        self.assertNotIn("elapsed without cancel", driver)
+        tls = (repo / "install/04-tls-dkim.sh").read_text(encoding="utf-8")
+        self.assertIn("wizard does not store it", tls)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

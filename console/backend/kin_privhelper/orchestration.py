@@ -157,7 +157,12 @@ def hostnames_compatible(expected: str, live: str) -> bool:
         return False
     if exp == got:
         return True
-    return exp.split(".", 1)[0] == got.split(".", 1)[0]
+    exp_short = exp.split(".", 1)[0]
+    got_short = got.split(".", 1)[0]
+    if exp_short != got_short:
+        return False
+    # Same short name: allow mail vs mail.example.test, not two different FQDNs.
+    return "." not in exp or "." not in got
 
 
 def observability_inventory_name(*, ip: str, hostname: str = "") -> str:

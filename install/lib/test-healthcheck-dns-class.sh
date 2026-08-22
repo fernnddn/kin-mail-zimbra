@@ -138,6 +138,21 @@ else
   bad "05 or kin-mail.sh missing classifier / DKIM wait wiring"
 fi
 
+if grep -q 'b "Certificate is still self-signed' ../05-healthcheck.sh \
+  && ! grep -q 'f "No trusted certificate yet' ../05-healthcheck.sh \
+  && grep -q 'TLS_METHOD:-}" = "customer"' ../05-healthcheck.sh; then
+  pass "05-healthcheck.sh treats self-signed / customer hook as blocked not fail"
+else
+  bad "05-healthcheck.sh still fail-closes TLS for commercial or customer certs"
+fi
+
+if grep -q 'Dead-man stays armed' ../kin-mail.sh \
+  && ! grep -q 'elapsed without cancel' ../kin-mail.sh; then
+  pass "kin-mail.sh console dead-man does not fail the pipeline"
+else
+  bad "kin-mail.sh still fails Deploy when dead-man is not cancelled"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf 'FAILED %s checks\n' "$fails"
   exit 1

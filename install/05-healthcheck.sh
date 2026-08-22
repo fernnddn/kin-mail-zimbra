@@ -53,7 +53,12 @@ done
 echo; say "TLS certificate"
 SUB=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MAIL_HOST" 2>/dev/null \
       | openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
-if printf '%s' "$SUB" | grep -qi "Let's Encrypt"; then
+ISSUER=$(printf '%s' "$SUB" | sed -n 's/^issuer=//p' | head -1)
+SUBJECT=$(printf '%s' "$SUB" | sed -n 's/^subject=//p' | head -1)
+if [ -z "$SUB" ]; then
+  f "No TLS certificate presented on :443"
+elif printf '%s' "$SUB" | grep -qi "Let's Encrypt" \
+  || { [ -n "$ISSUER" ] && [ -n "$SUBJECT" ] && [ "$ISSUER" != "$SUBJECT" ]; }; then
   p "Trusted certificate installed"
   printf '%s\n' "$SUB" | sed 's/^/      /'
   EXP=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MAIL_HOST" 2>/dev/null \
@@ -61,10 +66,16 @@ if printf '%s' "$SUB" | grep -qi "Let's Encrypt"; then
   DAYS=$(( ( $(date -d "$EXP" +%s) - $(date +%s) ) / 86400 ))
   [ "$DAYS" -gt 20 ] && p "Valid for ${DAYS} days" || f "Only ${DAYS} days left - check renewal"
 else
-  f "No trusted certificate yet (still self-signed)"
+  b "Certificate is still self-signed - finish TLS (04) before production mail"
 fi
-[ -x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh ] \
-  && p "Deploy hook installed" || f "Deploy hook missing - TLS will break in 90 days"
+if [ "${TLS_METHOD:-}" = "customer" ]; then
+  [ -x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh ] \
+    && p "Deploy hook installed" \
+    || b "No Let's Encrypt deploy hook (expected when TLS_METHOD=customer)"
+else
+  [ -x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh ] \
+    && p "Deploy hook installed" || f "Deploy hook missing - TLS will break in 90 days"
+fi
 
 # --- flush caches before DNS assertions --------------------------------------
 # Long-lived processes cache negative DNS answers. A record added after they

@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from kin_privhelper.apply_config import (
+    cloudflare_creds_error,
     ensure_topology_2vm,
     format_config,
     iface_for_ipv4,
@@ -181,6 +182,30 @@ class PeerPayloadTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("cf_body", payload)
         self.assertEqual(payload["TLS_METHOD"], "manual")
+
+
+class CloudflareCredsTests(unittest.TestCase):
+    def test_missing_file_is_an_error(self) -> None:
+        err = cloudflare_creds_error("/etc/letsencrypt/cloudflare.ini", None)
+        self.assertIsNotNone(err)
+        self.assertIn("cloudflare.ini", err or "")
+        self.assertIn("Manual", err or "")
+
+    def test_paste_placeholder_is_an_error(self) -> None:
+        err = cloudflare_creds_error(
+            "/etc/letsencrypt/cloudflare.ini",
+            "dns_cloudflare_api_token = PASTE_TOKEN_HERE\n",
+        )
+        self.assertIsNotNone(err)
+        self.assertIn("PASTE", err or "")
+
+    def test_real_token_is_ok(self) -> None:
+        self.assertIsNone(
+            cloudflare_creds_error(
+                "/etc/letsencrypt/cloudflare.ini",
+                "dns_cloudflare_api_token = TESTTOKEN_not_a_real_key\n",
+            )
+        )
 
 
 class PeerReadinessParseTests(unittest.TestCase):

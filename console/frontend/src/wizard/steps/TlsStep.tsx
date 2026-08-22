@@ -57,6 +57,13 @@ export default function TlsStep() {
           <span>Skip automatic issuance; install the customer&apos;s certificate files later.</span>
         </Choice>
       </ChoiceGrid>
+      {draft.tls_method === "cloudflare" && (
+        <Hint>
+          Before Deploy, put a Cloudflare API token in /etc/letsencrypt/cloudflare.ini
+          on this host (dns_cloudflare_api_token = ..., mode 600). The wizard does not
+          store the token. If you cannot do that now, choose Manual or Customer instead.
+        </Hint>
+      )}
       {draft.tls_method === "manual" && (
         <Hint>Manual mode needs an operator available each time a certificate is issued or renewed.</Hint>
       )}

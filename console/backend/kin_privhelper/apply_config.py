@@ -31,6 +31,24 @@ def valid_ipv4(value: str) -> bool:
     return bool(_IPV4_RE.match((value or "").strip()))
 
 
+def cloudflare_creds_error(path: str, text: str | None) -> str | None:
+    """Non-interactive Cloudflare TLS cannot prompt for a token."""
+    dest = (path or "/etc/letsencrypt/cloudflare.ini").strip()
+    body = (text or "").strip()
+    if not body:
+        return (
+            f"TLS_METHOD=cloudflare needs a real API token in {dest} "
+            "(the wizard does not store it). Write dns_cloudflare_api_token = ... "
+            "there with mode 600, or choose Manual / Customer TLS."
+        )
+    if "PASTE" in body:
+        return (
+            f"{dest} still contains PASTE; replace it with a real Cloudflare API token "
+            "or choose Manual / Customer TLS."
+        )
+    return None
+
+
 CONF_DIR = Path("/etc/kin-mail")
 CONF_FILE = CONF_DIR / "config"
 DRAFT_FILE = Path(
@@ -714,6 +732,16 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
 
     before_fp = _config_fingerprint(existing) if not created_new else {}
     merged = merge_draft(draft, existing)
+    if str(merged.get("TLS_METHOD") or "").strip() == "cloudflare":
+        cf_path = str(merged.get("CF_CREDS") or "/etc/letsencrypt/cloudflare.ini").strip()
+        try:
+            cf_text = Path(cf_path).read_text(encoding="utf-8")
+        except OSError:
+            cf_text = None
+        cf_err = cloudflare_creds_error(cf_path, cf_text)
+        if cf_err:
+            lines.append(f"ERROR: {cf_err}\n")
+            return 1, lines
     after_fp = _config_fingerprint(merged)
 
     if not created_new:

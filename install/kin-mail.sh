@@ -287,27 +287,11 @@ run_firewall_stage_interactive() {
   info "sudo ./10-host-firewall.sh cancel-deadman"
 
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
-    # Independent safety net — never cancelled as a side-effect of full-install confirm.
-    # Wait for the operator's explicit cancel_firewall_deadman before later stages
-    # (05-healthcheck can run longer than the dead-man window).
-    local deadman_sec="${KIN_UFW_DEADMAN_SEC:-300}"
-    local waited=0
-    warn "Leaving dead-man ARMED — waiting for explicit cancel before continuing"
-    info "Verify SSH + cluster + mail, then console action: cancel_firewall_deadman"
-    info "Or: sudo ./10-host-firewall.sh cancel-deadman"
-    while [ ! -f /run/kin-ufw-deadman.cancel ]; do
-      if [ "$waited" -ge "$deadman_sec" ]; then
-        fail "Dead-man window (${deadman_sec}s) elapsed without cancel — stopping pipeline"
-        info "Check: ufw status; sudo ./10-host-firewall.sh status"
-        return 1
-      fi
-      if [ $((waited % 30)) -eq 0 ]; then
-        warn "Dead-man still armed (${waited}s / ${deadman_sec}s) — cancel from console after verify"
-      fi
-      sleep 5
-      waited=$((waited + 5))
-    done
-    ok "Dead-man cancel detected — continuing pipeline"
+    # Dead-man stays armed in the background. Do not stall or fail Deploy
+    # waiting for cancel — the operator cancels from the console after SSH
+    # still works. If they never cancel, ufw reverts when the timer ends.
+    warn "Dead-man stays armed. Verify SSH, then cancel from the console (or sudo ./10-host-firewall.sh cancel-deadman)."
+    info "Continuing the install; ufw will auto-disable if you do not cancel in time."
     return 0
   fi
 

@@ -253,6 +253,11 @@ tls_cloudflare() {
   if [ -s "$CF_CREDS" ] && ! grep -q "PASTE" "$CF_CREDS"; then
     ok "Credentials already at ${CF_CREDS}"
   else
+    if [ ! -t 0 ]; then
+      fail "TLS_METHOD=cloudflare needs ${CF_CREDS} with a real API token (wizard does not store it)."
+      info "Write dns_cloudflare_api_token = … into that file, or choose Manual DNS-01 in the wizard."
+      exit 1
+    fi
     info "Create at Cloudflare: My Profile -> API Tokens -> Create Token"
     info "Template 'Edit zone DNS', restrict to zone ${MAIL_DOMAIN} only."
     ask_secret CF_TOKEN "Paste Cloudflare API token"
