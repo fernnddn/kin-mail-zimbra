@@ -10,6 +10,33 @@ export KIN_HEALTHCHECK_DNS_SOURCE_ONLY=1
 # shellcheck source=healthcheck-dns-class.sh
 . ./healthcheck-dns-class.sh
 
+if healthcheck_host_is_not_published_mx "mail2.example.test" "mail.example.test"; then
+  pass "non-MX host is not the published MX"
+else
+  bad "mail2 vs mail MX"
+fi
+
+if healthcheck_host_is_not_published_mx "mail.example.test" "mail.example.test"; then
+  bad "primary MAIL_HOST should match published MX"
+else
+  pass "primary MAIL_HOST matches published MX"
+fi
+
+if healthcheck_host_is_not_published_mx "mail.example.test" ""; then
+  bad "empty MX must not classify as non-MX (keep primary FAIL path)"
+else
+  pass "empty MX does not trip non-MX heuristic"
+fi
+
+if grep -q 'b "DKIM key not created on this host' ../05-healthcheck.sh \
+  && grep -q 'HA peer key cannot match DNS' ../05-healthcheck.sh \
+  && grep -q 'f "DKIM key not created yet"' ../05-healthcheck.sh \
+  && grep -q 'not creating a DKIM key' ../04-tls-dkim.sh; then
+  pass "HA peer DKIM is skipped / blocked, primary still fail-closes missing key"
+else
+  bad "HA peer DKIM landmine still fail-closes 05 after peer zmsetup"
+fi
+
 act=$(healthcheck_opendkim_classify "opendkim-testkey: key OK")
 if [ "$act" = "pass" ]; then
   pass "opendkim: key OK is pass"

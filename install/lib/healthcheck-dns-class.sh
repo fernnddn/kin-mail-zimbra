@@ -99,6 +99,17 @@ healthcheck_ptr_chain() {
   printf '%s\n' "blocked_chain"
 }
 
+# True when this host is not the published MX (HA peer / mail2). A local DKIM
+# key cannot match the primary's public TXT.
+# mx_host: lowest-preference MX hostname, no trailing dot. Empty = unknown.
+healthcheck_host_is_not_published_mx() {
+  local mail_host="$1"
+  local mx_host="$2"
+  mail_host=$(printf '%s' "$mail_host" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+  mx_host=$(printf '%s' "$mx_host" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+  [ -n "$mx_host" ] && [ "$mail_host" != "$mx_host" ]
+}
+
 # True when public TXT for selector._domainkey.domain looks like DKIM.
 healthcheck_dkim_txt_visible() {
   local domain="$1"

@@ -113,6 +113,7 @@ _KEY_ORDER = [
     "CONTRACTED_SEATS",
     "KIN_ADMIN_IPS",
     "ZPUSH_ENABLED",
+    "KIN_HA_PEER_INSTALL",
 ]
 
 _ASSIGN_RE = re.compile(
@@ -317,6 +318,9 @@ def peer_install_config(
     out["TLS_METHOD"] = "customer"
     out["ZPUSH_ENABLED"] = "no"
     out["AD_AUTH_ENABLED"] = "no"
+    # 04 must not mint a second DKIM key; 05 must not FAIL when public DNS
+    # still has the primary's selector. DRBD later overwrites B's tree anyway.
+    out["KIN_HA_PEER_INSTALL"] = "yes"
     return out
 
 

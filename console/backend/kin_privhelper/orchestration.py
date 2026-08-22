@@ -122,11 +122,14 @@ def wrap_privileged_remote(inner: str) -> str:
     passwordless sudo, else ``sudo -S`` (password on stdin, never in argv).
     """
     quoted = inner.strip().replace("'", "'\"'\"'")
+    # Close stdin on the root and sudo -n branches. HA still pipes the SSH
+    # password for sudo -S; without </dev/null, NOPASSWD sudo would leak that
+    # line into kin-mail.sh / zmsetup as a bogus prompt answer.
     return (
         "if [ \"$(id -u)\" -eq 0 ]; then "
-        f"bash -c '{quoted}'; "
-        "elif sudo -n true >/dev/null 2>&1; then "
-        f"sudo -n bash -c '{quoted}'; "
+        f"bash -c '{quoted}' </dev/null; "
+        "elif sudo -n true </dev/null >/dev/null 2>&1; then "
+        f"sudo -n bash -c '{quoted}' </dev/null; "
         "else "
         f"sudo -S -p '' bash -c '{quoted}'; "
         "fi"
@@ -337,6 +340,16 @@ class Step:
 # node; skip_remote_install=1 leaves it to a prior local Deploy on that host.
 STEPS: tuple[Step, ...] = (
     Step("peer_os_prep", "OS prep + Zimbra install on the new node", None, "remote_install"),
+    # Nginx snippets live on the OS disk; the Zimbra template on DRBD includes
+    # them. Full Z-Push (PHP/PPA/zmproxy) stays off on B. tags=snippets only.
+    Step(
+        "mail_zpush_snippets",
+        "mail-zpush.yml tags=snippets (nginx includes on every mail node)",
+        "playbooks/mail-zpush.yml",
+        "ansible",
+        tags=("snippets",),
+        peer_only_on_join_check=True,
+    ),
     Step(
         "os_hardening",
         "mail-os-hardening.yml (fail2ban + unattended-upgrades)",
@@ -1850,7 +1863,7 @@ async def cmd_run_ha_orchestration(
             remote_cmd = (
                 "if [ -x /opt/kin-mail-deploy/install/kin-mail.sh ]; then "
                 + wrap_privileged_remote(
-                    "env KIN_CONSOLE_CONFIRMED=1 "
+                    "env KIN_CONSOLE_CONFIRMED=1 KIN_HA_PEER_INSTALL=1 "
                     "/opt/kin-mail-deploy/install/kin-mail.sh --full-install"
                 )
                 + "; "

@@ -38,6 +38,16 @@ need_root() {
   [ "$(id -u)" -eq 0 ] || { fail "Run as root:  sudo $0"; exit 1; }
 }
 
+# True on the HA peer full-install (mail2). Primary + public DNS own domain DKIM;
+# DRBD later replaces this node's Zimbra tree. Must not mint a second key or
+# fail-close healthcheck against the published selector.
+kin_ha_peer_install() {
+  case "${KIN_HA_PEER_INSTALL:-}" in
+    1|yes|true|YES|TRUE) return 0 ;;
+  esac
+  return 1
+}
+
 # An SMTP port is only usable if it returns a 220 banner. A bare TCP connect
 # is NOT proof: inline security devices complete the handshake and then drop
 # the session, which reads as "open" but delivers nothing.
@@ -616,3 +626,4 @@ case "${ZPUSH_ENABLED}" in
   yes|no) ;;
   *) ZPUSH_ENABLED=yes ;;
 esac
+: "${KIN_HA_PEER_INSTALL:=no}"

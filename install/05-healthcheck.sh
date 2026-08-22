@@ -23,6 +23,7 @@ fi
 
 QUICK=0; [ "${1:-}" = "--quick" ] && QUICK=1
 PASS=0; FAILED=0; BLOCKED=0
+MX_HOST=""
 p() { ok   "$*"; PASS=$((PASS+1)); }
 f() { fail "$*"; FAILED=$((FAILED+1)); }
 b() { warn "$*"; BLOCKED=$((BLOCKED+1)); }
@@ -111,6 +112,8 @@ fi
 
 MX=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" MX 2>/dev/null | tr '\n' ' ')
 [ -n "$MX" ] && p "MX     : $MX" || b "MX not published yet"
+MX_HOST=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" MX 2>/dev/null \
+  | sort -n | awk '{print $2; exit}' | sed 's/\.$//')
 
 SPF=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" TXT 2>/dev/null | grep -i spf1 | tr -d '"')
 [ -n "$SPF" ] && p "SPF    : $SPF" || b "SPF not published yet"
@@ -169,7 +172,12 @@ if [ -n "$SEL" ]; then
     esac
   fi
 else
-  f "DKIM key not created yet"
+  if healthcheck_host_is_not_published_mx "$MAIL_HOST" "${MX_HOST:-}" \
+    || kin_ha_peer_install; then
+    b "DKIM key not created on this host (not the published MX; expected on HA peer)"
+  else
+    f "DKIM key not created yet"
+  fi
 fi
 
 # --- outbound SMTP -----------------------------------------------------------
@@ -334,7 +342,14 @@ if [ $QUICK -eq 0 ]; then
       AR=$(grep -i '^Authentication-Results' -A1 "$MSG" | tr '\n' ' ')
       case "$(healthcheck_auth_results_dkim "$AR")" in
         pass)    p "Verification: dkim=pass" ;;
-        fail)    f "dkim=fail - signature did not verify against the published key" ;;
+        fail)
+          if healthcheck_host_is_not_published_mx "$MAIL_HOST" "${MX_HOST:-}" \
+            || kin_ha_peer_install; then
+            b "dkim=fail on ${MAIL_HOST} (published MX is ${MX_HOST:-unknown}; HA peer key cannot match DNS)"
+          else
+            f "dkim=fail - signature did not verify against the published key"
+          fi
+          ;;
         *)       b "dkim not pass yet (TXT missing or still propagating); message was signed" ;;
       esac
       grep -q "status=sent" /var/log/zimbra.log 2>/dev/null && p "LMTP delivered to mailbox"

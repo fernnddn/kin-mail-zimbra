@@ -443,31 +443,38 @@ case "$TLS_METHOD" in
 esac
 
 # --- DKIM (independent of TLS method) ----------------------------------------
-say "DKIM"
-if su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" >/dev/null 2>&1; then
-  ok "DKIM key already exists"
+# HA peer: skip. A second zmdkimkeyutil -a here would sign mail with a key that
+# is not in public DNS (the primary already published one). 05 would then see
+# dkim=fail and stop the HA sequence after ~90 min of zmsetup.
+if kin_ha_peer_install; then
+  warn "HA peer: not creating a DKIM key for ${MAIL_DOMAIN} (primary + public DNS own it)"
 else
-  su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -a -d ${MAIL_DOMAIN}" >/dev/null 2>&1
-  ok "DKIM key created"
+  say "DKIM"
+  if su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" >/dev/null 2>&1; then
+    ok "DKIM key already exists"
+  else
+    su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -a -d ${MAIL_DOMAIN}" >/dev/null 2>&1
+    ok "DKIM key created"
+  fi
+
+  Q=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>/dev/null)
+  SEL=$(printf '%s' "$Q" | awk '/DKIM Selector/{getline; while($0==""){getline}; print; exit}')
+  VAL=$(printf '%s' "$Q" | awk '/DKIM Public signature/,0' | grep -oE '"[^"]*"' | tr -d '"' | tr -d '\n')
+
+  echo
+  printf '%s\n' "${BLD}  PASTE DKIM RECORD IN DNS PANEL (zone ${MAIL_DOMAIN})${RST}"
+  echo   "  ----------------------------------------------------------------"
+  echo   "  Type    : TXT"
+  echo   "  Name    : ${SEL}._domainkey"
+  echo   "  TTL     : Auto / 300"
+  echo   "  Content :"
+  echo   "$VAL" | fold -w 76 | sed 's/^/    /'
+  echo   "  ----------------------------------------------------------------"
+  info "One line, without quotes or parentheses. The DNS provider splits it as needed."
+  info "Paste the PUBLIC key. The private key stays in Zimbra LDAP."
+  echo
+  warn "After the record is published, run: ./05-healthcheck.sh (from the install/ folder)"
+  info "Running processes cache negative DNS results, so 05 will"
+  info "restart dnsmasq, amavis, and opendkim before verifying DKIM."
+  echo
 fi
-
-Q=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>/dev/null)
-SEL=$(printf '%s' "$Q" | awk '/DKIM Selector/{getline; while($0==""){getline}; print; exit}')
-VAL=$(printf '%s' "$Q" | awk '/DKIM Public signature/,0' | grep -oE '"[^"]*"' | tr -d '"' | tr -d '\n')
-
-echo
-printf '%s\n' "${BLD}  PASTE DKIM RECORD IN DNS PANEL (zone ${MAIL_DOMAIN})${RST}"
-echo   "  ----------------------------------------------------------------"
-echo   "  Type    : TXT"
-echo   "  Name    : ${SEL}._domainkey"
-echo   "  TTL     : Auto / 300"
-echo   "  Content :"
-echo   "$VAL" | fold -w 76 | sed 's/^/    /'
-echo   "  ----------------------------------------------------------------"
-info "One line, without quotes or parentheses. The DNS provider splits it as needed."
-info "Paste the PUBLIC key. The private key stays in Zimbra LDAP."
-echo
-warn "After the record is published, run: ./05-healthcheck.sh (from the install/ folder)"
-info "Running processes cache negative DNS results, so 05 will"
-info "restart dnsmasq, amavis, and opendkim before verifying DKIM."
-echo

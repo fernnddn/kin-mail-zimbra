@@ -84,6 +84,7 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertEqual(out["TLS_METHOD"], "customer")
         self.assertEqual(out["ZPUSH_ENABLED"], "no")
         self.assertEqual(out["AD_AUTH_ENABLED"], "no")
+        self.assertEqual(out["KIN_HA_PEER_INSTALL"], "yes")
         self.assertEqual(out["AD_SEARCH_BIND_PASSWORD"], "AdBindSecret")
         self.assertEqual(out["ZCS_FILE"], _PRIMARY["ZCS_FILE"])
         self.assertEqual(out["CLUSTER_VIP_IP"], "192.0.2.16")
@@ -164,6 +165,7 @@ class PeerPayloadTests(unittest.TestCase):
         self.assertEqual(parsed["NET_IFACE"], "ens34")
         self.assertEqual(parsed["ADMIN_PASS"], "PrimaryAdminPass9")
         self.assertEqual(parsed["TOPOLOGY"], "2vm")
+        self.assertEqual(parsed["KIN_HA_PEER_INSTALL"], "yes")
         self.assertEqual(payload["topology"], "2vm")
         self.assertEqual(payload["TLS_METHOD"], "customer")
         self.assertNotIn("cf_body", payload)
@@ -251,6 +253,10 @@ class PrivilegedRemoteWrapTests(unittest.TestCase):
         self.assertIn("sudo -S", wrapped)
         self.assertIn("mkdir -p /etc/kin-mail", wrapped)
         self.assertNotIn("NOPASSWD", wrapped)
+        self.assertIn("sudo -n bash -c", wrapped)
+        self.assertIn("</dev/null", wrapped)
+        self.assertRegex(wrapped, r"sudo -n bash -c '.*' </dev/null")
+        self.assertNotRegex(wrapped, r"sudo -S[^;]*</dev/null")
 
 
 if __name__ == "__main__":

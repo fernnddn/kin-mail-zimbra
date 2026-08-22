@@ -224,9 +224,10 @@ class InventoryTests(unittest.TestCase):
     def test_step_order(self) -> None:
         ids = [s.step_id for s in STEPS]
         self.assertEqual(
-            ids[:6],
+            ids[:7],
             [
                 "peer_os_prep",
+                "mail_zpush_snippets",
                 "os_hardening",
                 "mon_qnetd",
                 "mail_cluster_setup",
@@ -489,6 +490,9 @@ class CheckModeSafetyTests(unittest.TestCase):
             {"configure", "service", "verify"},
         )
         self.assertTrue(by_id["os_hardening"].peer_only_on_join_check)
+        self.assertTrue(by_id["mail_zpush_snippets"].peer_only_on_join_check)
+        self.assertEqual(by_id["mail_zpush_snippets"].tags, ("snippets",))
+        self.assertEqual(by_id["mail_zpush_snippets"].playbook, "playbooks/mail-zpush.yml")
         self.assertTrue(by_id["mail_drbd_install"].peer_only_on_join_check)
         self.assertEqual(by_id["mail_drbd_install"].tags, ("install",))
         self.assertTrue(by_id["mail_pacemaker_agents"].peer_only_on_join_check)
@@ -660,6 +664,19 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn("elapsed without cancel", driver)
         tls = (repo / "install/04-tls-dkim.sh").read_text(encoding="utf-8")
         self.assertIn("wizard does not store it", tls)
+        self.assertIn("kin_ha_peer_install", tls)
+        self.assertIn("not creating a DKIM key", tls)
+        health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
+        self.assertIn("healthcheck_host_is_not_published_mx", health)
+        self.assertIn('b "DKIM key not created on this host', health)
+        self.assertIn("HA peer key cannot match DNS", health)
+        self.assertIn('f "DKIM key not created yet"', health)
+        orch = (repo / "console/backend/kin_privhelper/orchestration.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("KIN_HA_PEER_INSTALL=1", orch)
+        self.assertIn("mail-zpush.yml", orch)
+        self.assertIn("tags=snippets", orch)
         self.assertIn('b "Cannot determine sending address', health)
         self.assertNotIn('f "Cannot determine sending address', health)
         self.assertIn('b "NOT consistent:', health)

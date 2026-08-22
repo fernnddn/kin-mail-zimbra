@@ -36,6 +36,7 @@ export const FULL_INSTALL_STAGE_COUNT = FULL_INSTALL_STAGES.length;
  */
 export const HA_ORCH_STAGES: readonly InstallStage[] = [
   { script: "peer_os_prep", label: "OS prep + Zimbra install on the new node" },
+  { script: "mail_zpush_snippets", label: "mail-zpush.yml tags=snippets (nginx includes on every mail node)" },
   { script: "os_hardening", label: "mail-os-hardening.yml (fail2ban + unattended-upgrades)" },
   { script: "mon_qnetd", label: "mon-qnetd.yml (qdevice witness)" },
   { script: "mail_cluster_setup", label: "mail-cluster-setup.yml (pcsd + pcs cluster setup)" },
