@@ -22,9 +22,15 @@ def _ensure_backend() -> None:
 
 
 _ensure_backend()
-from kin_privhelper.pacemaker_cib import is_empty_skeleton_cib  # noqa: E402
+from kin_privhelper.pacemaker_cib import (  # noqa: E402
+    is_empty_skeleton_cib,
+    is_throwaway_package_cib,
+)
 
 
 class FilterModule:
     def filters(self) -> dict[str, Any]:
-        return {"kin_is_empty_skeleton_cib": is_empty_skeleton_cib}
+        return {
+            "kin_is_empty_skeleton_cib": is_empty_skeleton_cib,
+            "kin_is_throwaway_package_cib": is_throwaway_package_cib,
+        }

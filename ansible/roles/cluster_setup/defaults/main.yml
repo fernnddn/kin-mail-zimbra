@@ -9,5 +9,9 @@ cluster_setup_stonith_enabled_until_fencing: false
 cluster_setup_no_quorum_policy: stop
 # Set in detect.yml. True only for the Debian/Ubuntu package-default stub.
 cluster_setup_debian_stub: false
-# Set in detect.yml when the stub path also finds an empty cib.xml skeleton.
-cluster_setup_empty_cib: false
+# Set in detect.yml when leftover cib.xml is a throwaway package-first-start CIB
+# (no resources, cluster-name is not kin-mail). Nodes/status history from the
+# debian loopback cluster are allowed.
+cluster_setup_throwaway_cib: false
+# True when leftover cib.xml must be classified (debian stub, or no corosync.conf).
+cluster_setup_inspect_leftover_cib: false

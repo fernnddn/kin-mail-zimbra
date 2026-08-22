@@ -102,8 +102,11 @@ def is_harmless_package_stub_cluster(
     Conf must match is_debian_corosync_stub. Any parsed resource instance
     count above zero, a pcs cluster name other than debian, or more than
     one live node means this is not safe to treat as throwaway. When
-    cib_text is provided and non-empty, it must also parse as an empty
-    Pacemaker CIB skeleton (see pacemaker_cib.is_empty_skeleton_cib).
+    cib_text is provided and non-empty, it must also parse as a
+    throwaway package-first-start CIB (see
+    pacemaker_cib.is_throwaway_package_cib): no resources or constraints,
+    and cluster-name is not kin-mail. First-start nodes/status history
+    from the debian loopback cluster are allowed.
     """
     if not is_debian_corosync_stub(conf):
         return False
@@ -116,8 +119,8 @@ def is_harmless_package_stub_cluster(
     if live_nodes is not None and len(live_nodes) > 1:
         return False
     if cib_text is not None and str(cib_text).strip():
-        from .pacemaker_cib import is_empty_skeleton_cib
+        from .pacemaker_cib import is_throwaway_package_cib
 
-        if not is_empty_skeleton_cib(cib_text):
+        if not is_throwaway_package_cib(cib_text):
             return False
     return True

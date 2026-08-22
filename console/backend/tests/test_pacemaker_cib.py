@@ -6,7 +6,10 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-from kin_privhelper.pacemaker_cib import is_empty_skeleton_cib
+from kin_privhelper.pacemaker_cib import (
+    is_empty_skeleton_cib,
+    is_throwaway_package_cib,
+)
 
 
 # Shape matches the ~17-line package-first-start cib.xml observed live on
@@ -125,6 +128,61 @@ CONSTRAINTS_ONLY = """\
 </cib>
 """
 
+# Shape matches Ubuntu 22.04 after corosync.deb auto-starts Pacemaker on the
+# package stub (cluster_name debian): local hostname joins, status records
+# that member, no resources. log-23.txt classified this as "not an empty
+# skeleton" and then still ran pcs cluster setup, which refused leftover CIB.
+DEBIAN_STUB_FIRST_START_CIB = """\
+<?xml version="1.0"?>
+<cib crm_feature_set="3.0.14" validate-with="pacemaker-3.5" epoch="5" \
+num_updates="4" admin_epoch="0" have-quorum="1" dc-uuid="1">
+  <configuration>
+    <crm_config>
+      <cluster_property_set id="cib-bootstrap-options">
+        <nvpair id="cib-bootstrap-options-have-watchdog" name="have-watchdog" value="false"/>
+        <nvpair id="cib-bootstrap-options-dc-version" name="dc-version" value="2.1.2-4"/>
+        <nvpair id="cib-bootstrap-options-cluster-infrastructure" name="cluster-infrastructure" value="corosync"/>
+        <nvpair id="cib-bootstrap-options-cluster-name" name="cluster-name" value="debian"/>
+        <nvpair id="cib-bootstrap-options-stonith-enabled" name="stonith-enabled" value="true"/>
+      </cluster_property_set>
+    </crm_config>
+    <nodes>
+      <node id="1" uname="mail.gits-it.site"/>
+    </nodes>
+    <resources/>
+    <constraints/>
+  </configuration>
+  <status>
+    <node_state id="1" uname="mail.gits-it.site" in_ccm="true" crmd="online" join="member" expected="member">
+      <lrm id="1">
+        <lrm_resources/>
+      </lrm>
+    </node_state>
+  </status>
+</cib>
+"""
+
+# pcs cluster setup wrote kin-mail + both nodes, then failed before resources.
+# Must not be treated as throwaway leftover.
+KIN_MAIL_NODES_ONLY_CIB = """\
+<cib epoch="1" num_updates="1" admin_epoch="0">
+  <configuration>
+    <crm_config>
+      <cluster_property_set id="cib-bootstrap-options">
+        <nvpair id="cib-bootstrap-options-cluster-name" name="cluster-name" value="kin-mail"/>
+      </cluster_property_set>
+    </crm_config>
+    <nodes>
+      <node id="1" uname="mail.gits-it.site"/>
+      <node id="2" uname="mail2.gits-it.site"/>
+    </nodes>
+    <resources/>
+    <constraints/>
+  </configuration>
+  <status/>
+</cib>
+"""
+
 
 class EmptySkeletonCibTests(unittest.TestCase):
     def test_live_style_empty_skeleton_is_empty(self) -> None:
@@ -148,6 +206,37 @@ class EmptySkeletonCibTests(unittest.TestCase):
     def test_constraints_only_is_not_empty(self) -> None:
         self.assertFalse(is_empty_skeleton_cib(CONSTRAINTS_ONLY))
 
+    def test_debian_stub_first_start_is_not_an_empty_skeleton(self) -> None:
+        self.assertFalse(is_empty_skeleton_cib(DEBIAN_STUB_FIRST_START_CIB))
+        self.assertFalse(is_empty_skeleton_cib(NODES_ONLY_CIB))
+        self.assertFalse(is_empty_skeleton_cib(STATUS_HISTORY_ONLY))
+
+    def test_throwaway_accepts_package_first_start_with_local_member(self) -> None:
+        self.assertTrue(is_throwaway_package_cib(EMPTY_SKELETON_CIB))
+        self.assertTrue(is_throwaway_package_cib(EMPTY_SKELETON_EXPANDED))
+        self.assertTrue(is_throwaway_package_cib(DEBIAN_STUB_FIRST_START_CIB))
+        self.assertTrue(is_throwaway_package_cib(NODES_ONLY_CIB))
+        self.assertTrue(is_throwaway_package_cib(STATUS_HISTORY_ONLY))
+        self.assertTrue(is_throwaway_package_cib(DEBIAN_STUB_FIRST_START_CIB.encode()))
+
+    def test_throwaway_rejects_real_or_reserved_cluster(self) -> None:
+        self.assertFalse(is_throwaway_package_cib(REAL_CIB_WITH_RESOURCES))
+        self.assertFalse(is_throwaway_package_cib(CONSTRAINTS_ONLY))
+        self.assertFalse(is_throwaway_package_cib(KIN_MAIL_NODES_ONLY_CIB))
+        self.assertFalse(is_throwaway_package_cib(KIN_MAIL_NODES_ONLY_CIB, "kin-mail"))
+
+    def test_throwaway_respects_reserved_cluster_name(self) -> None:
+        self.assertFalse(is_throwaway_package_cib(DEBIAN_STUB_FIRST_START_CIB, "debian"))
+        self.assertTrue(is_throwaway_package_cib(DEBIAN_STUB_FIRST_START_CIB, "kin-mail"))
+
+    def test_throwaway_fail_closed_on_missing_or_invalid(self) -> None:
+        self.assertFalse(is_throwaway_package_cib(""))
+        self.assertFalse(is_throwaway_package_cib(None))
+        self.assertFalse(is_throwaway_package_cib("   "))
+        self.assertFalse(is_throwaway_package_cib("<not-cib/>"))
+        self.assertFalse(is_throwaway_package_cib("<cib><configuration/></cib>"))
+        self.assertFalse(is_throwaway_package_cib("not xml at all"))
+
     def test_missing_or_invalid_is_fail_closed(self) -> None:
         self.assertFalse(is_empty_skeleton_cib(""))
         self.assertFalse(is_empty_skeleton_cib(None))
@@ -170,8 +259,16 @@ class EmptySkeletonCibTests(unittest.TestCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.assertIs(mod.is_empty_skeleton_cib, is_empty_skeleton_cib)
+        self.assertIs(mod.is_throwaway_package_cib, is_throwaway_package_cib)
+        filters = mod.FilterModule().filters()
+        self.assertTrue(filters["kin_is_empty_skeleton_cib"](EMPTY_SKELETON_CIB))
         self.assertTrue(
-            mod.FilterModule().filters()["kin_is_empty_skeleton_cib"](EMPTY_SKELETON_CIB)
+            filters["kin_is_throwaway_package_cib"](
+                DEBIAN_STUB_FIRST_START_CIB, "kin-mail"
+            )
+        )
+        self.assertFalse(
+            filters["kin_is_throwaway_package_cib"](REAL_CIB_WITH_RESOURCES)
         )
 
 

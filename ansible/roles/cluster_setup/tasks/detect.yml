@@ -5,10 +5,13 @@
 # Exception: Debian/Ubuntu corosync.deb auto-starts a throwaway loopback
 # cluster from the package example config (cluster_name debian). That is
 # not real membership. detect.yml stops those units and removes the stub
-# corosync.conf. When that stub classifier matches, it also removes a
-# confirmed-empty Pacemaker cib.xml skeleton (same package first-start)
-# so pcs cluster setup is not blocked by leftover CIB files. A CIB with
-# nodes, resources, or status history is left alone (fail closed).
+# corosync.conf. It also removes a throwaway Pacemaker cib.xml left by
+# that first-start (empty resources, cluster-name is not kin-mail). Nodes
+# and status history from the debian loopback cluster are allowed; a CIB
+# with resources, constraints, or cluster-name kin-mail is left alone and
+# pcs cluster setup is refused (fail closed). The same CIB cleanup runs
+# on retry after corosync.conf is already gone so leftover cib.xml cannot
+# block pcs cluster setup a second time.
 - name: Require exactly two mail_nodes for cluster setup
   ansible.builtin.assert:
     that:
@@ -75,9 +78,17 @@
       {{ inventory_hostname }} has the Debian/Ubuntu package-default
       Corosync stub (cluster_name debian, loopback-only). That is not a
       real cluster. This role will stop the throwaway service, remove the
-      stub corosync.conf, and remove an empty Pacemaker cib.xml skeleton
-      when present so pcs cluster setup can write a real config.
+      stub corosync.conf, and remove a throwaway Pacemaker cib.xml
+      (package first-start, including local node/status history) so pcs
+      cluster setup can write a real config.
   when: cluster_setup_debian_stub | bool
+  tags: [cluster, setup, detect]
+
+- name: Flag leftover CIB that must not block greenfield pcs cluster setup
+  ansible.builtin.set_fact:
+    cluster_setup_inspect_leftover_cib: >-
+      {{ (cluster_setup_debian_stub | bool)
+         or (not (cluster_setup_corosync_conf.stat.exists | default(false))) }}
   tags: [cluster, setup, detect]
 
 - name: Stop and disable the throwaway Debian Corosync stub
@@ -115,46 +126,61 @@
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
-- name: Check for a Pacemaker cib.xml left by the package stub
+- name: Check for a leftover Pacemaker cib.xml
   ansible.builtin.stat:
     path: /var/lib/pacemaker/cib/cib.xml
   register: cluster_setup_cib_xml
   check_mode: false
-  when: cluster_setup_debian_stub | bool
   tags: [cluster, setup, detect]
 
-- name: Slurp cib.xml when the Debian stub is present
+- name: Slurp leftover cib.xml when there is no real Corosync membership
   ansible.builtin.slurp:
     src: /var/lib/pacemaker/cib/cib.xml
   register: cluster_setup_cib_xml_body
   check_mode: false
   when:
-    - cluster_setup_debian_stub | bool
+    - cluster_setup_inspect_leftover_cib | bool
     - cluster_setup_cib_xml.stat.exists | default(false)
   tags: [cluster, setup, detect]
 
-- name: Classify an empty Pacemaker cib.xml skeleton
+- name: Classify a throwaway package-first-start cib.xml
   ansible.builtin.set_fact:
-    cluster_setup_empty_cib: "{{ (cluster_setup_cib_xml_body.content | b64decode) | kin_is_empty_skeleton_cib }}"
+    cluster_setup_throwaway_cib: "{{ (cluster_setup_cib_xml_body.content | b64decode) | kin_is_throwaway_package_cib(cluster_setup_name) }}"
   when:
-    - cluster_setup_debian_stub | bool
+    - cluster_setup_inspect_leftover_cib | bool
     - cluster_setup_cib_xml.stat.exists | default(false)
   tags: [cluster, setup, detect]
 
-- name: Note a non-empty cib.xml beside the Debian Corosync stub
-  ansible.builtin.debug:
-    msg: >-
-      {{ inventory_hostname }} has the Debian Corosync stub but
-      /var/lib/pacemaker/cib/cib.xml is not an empty skeleton. Leaving
-      that CIB untouched (fail closed). pcs cluster setup will refuse
-      until an operator inspects or runs pcs cluster destroy by hand.
+- name: Refuse leftover real CIB when Corosync is not a formed kin-mail cluster
+  ansible.builtin.assert:
+    that:
+      - cluster_setup_throwaway_cib | bool
+    fail_msg: >-
+      {{ inventory_hostname }} has /var/lib/pacemaker/cib/cib.xml that is not
+      a throwaway Debian/Ubuntu package-first-start CIB (it has resources,
+      constraints, or cluster-name {{ cluster_setup_name }}). Refusing pcs
+      cluster setup so a real cluster is not overwritten. Inspect the CIB
+      or restore corosync.conf; this role never runs pcs cluster destroy.
   when:
-    - cluster_setup_debian_stub | bool
+    - cluster_setup_inspect_leftover_cib | bool
     - cluster_setup_cib_xml.stat.exists | default(false)
-    - not (cluster_setup_empty_cib | bool)
+    - not (cluster_setup_throwaway_cib | bool)
   tags: [cluster, setup, detect]
 
-- name: Keep a copy of the empty Pacemaker cib.xml skeleton
+- name: Stop Pacemaker before removing leftover package CIB files
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - pacemaker
+    - corosync
+  when:
+    - cluster_setup_throwaway_cib | bool
+    - not ansible_check_mode
+  tags: [cluster, setup, detect]
+
+- name: Keep a copy of the throwaway Pacemaker cib.xml
   ansible.builtin.copy:
     src: /var/lib/pacemaker/cib/cib.xml
     dest: /var/lib/pacemaker/cib/cib.xml.kin-package-stub
@@ -162,19 +188,23 @@
     force: true
     mode: "0600"
   when:
-    - cluster_setup_debian_stub | bool
-    - cluster_setup_empty_cib | bool
+    - cluster_setup_throwaway_cib | bool
     - not ansible_check_mode
     - cluster_setup_cib_xml.stat.exists | default(false)
   tags: [cluster, setup, detect]
 
-- name: Remove the empty Pacemaker cib.xml so pcs cluster setup can write
+- name: Remove throwaway Pacemaker CIB files so pcs cluster setup can write
   ansible.builtin.file:
-    path: /var/lib/pacemaker/cib/cib.xml
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /var/lib/pacemaker/cib/cib.xml
+    - /var/lib/pacemaker/cib/cib.xml.sig
+    - /var/lib/pacemaker/cib/cib.xml.last
+    - /var/lib/pacemaker/cib/cib.xml.diffs
+    - /etc/corosync/authkey
   when:
-    - cluster_setup_debian_stub | bool
-    - cluster_setup_empty_cib | bool
+    - cluster_setup_throwaway_cib | bool
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
@@ -183,7 +213,7 @@
 # or .stat; sharing cluster_setup_pcs_status / cluster_setup_corosync_conf
 # with the unconditional probes above broke greenfield hosts (no stub, no
 # corosync.conf) after pcs cluster destroy.
-- name: Re-probe Pacemaker after clearing the Debian stub
+- name: Re-probe Pacemaker after clearing leftover package files
   ansible.builtin.command:
     cmd: pcs status
   register: cluster_setup_pcs_status_after_stub
@@ -191,43 +221,56 @@
   failed_when: false
   check_mode: false
   when:
-    - cluster_setup_debian_stub | bool
+    - (cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool)
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
-- name: Re-check corosync.conf after clearing the Debian stub
+- name: Re-check corosync.conf after clearing leftover package files
   ansible.builtin.stat:
     path: /etc/corosync/corosync.conf
   register: cluster_setup_corosync_conf_after_stub
   check_mode: false
   when:
-    - cluster_setup_debian_stub | bool
+    - (cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool)
     - not ansible_check_mode
   tags: [cluster, setup, detect]
 
-# Pick the live probe when stub cleanup actually ran; otherwise the initial
-# unconditional probe. check_mode + stub: treat as not running/configured so
-# dry-run does not claim the throwaway package cluster is real membership.
+# Pick the live probe when stub/CIB cleanup actually ran; otherwise the
+# initial unconditional probe. check_mode + leftover package files: treat
+# as not running/configured so dry-run does not claim the throwaway
+# package cluster is real membership.
 - name: Flag whether this host is already in a running cluster
   ansible.builtin.set_fact:
     cluster_setup_running: >-
       {{ false
-         if (cluster_setup_debian_stub | bool and ansible_check_mode)
+         if (
+           ((cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool))
+           and ansible_check_mode
+         )
          else (
            (
              cluster_setup_pcs_status_after_stub.rc
-             if (cluster_setup_debian_stub | bool and not ansible_check_mode)
+             if (
+               ((cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool))
+               and not ansible_check_mode
+             )
              else cluster_setup_pcs_status.rc
            ) == 0
          ) }}
     cluster_setup_configured: >-
       {{ false
-         if (cluster_setup_debian_stub | bool and ansible_check_mode)
+         if (
+           ((cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool))
+           and ansible_check_mode
+         )
          else (
            (
              cluster_setup_corosync_conf_after_stub.stat.exists | default(false)
            )
-           if (cluster_setup_debian_stub | bool and not ansible_check_mode)
+           if (
+             ((cluster_setup_debian_stub | bool) or (cluster_setup_throwaway_cib | bool))
+             and not ansible_check_mode
+           )
            else (cluster_setup_corosync_conf.stat.exists | default(false))
          ) }}
     cluster_setup_expected_names: "{{ groups['mail_nodes'] }}"
