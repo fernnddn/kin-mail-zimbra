@@ -321,6 +321,9 @@ def peer_install_config(
     # 04 must not mint a second DKIM key; 05 must not FAIL when public DNS
     # still has the primary's selector. DRBD later overwrites B's tree anyway.
     out["KIN_HA_PEER_INSTALL"] = "yes"
+    # T2 against an operator mailbox is a primary healthcheck. On mail2 it
+    # FAILs the 90-minute peer install when the address rejects the new host.
+    out["EXTERNAL_TEST_ADDRESS"] = ""
     return out
 
 

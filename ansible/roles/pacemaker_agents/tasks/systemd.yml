@@ -11,6 +11,23 @@
   when: pacemaker_agents_disable_drbd_service | bool
   tags: [pacemaker, agents, systemd]
 
+- name: Check whether Zimbra still has a SysV boot unit
+  ansible.builtin.stat:
+    path: /etc/init.d/zimbra
+  register: pacemaker_agents_zimbra_sysv
+  check_mode: false
+  tags: [pacemaker, agents, systemd]
+
+- name: Disable the Zimbra boot unit so Pacemaker owns start after reboot
+  ansible.builtin.systemd:
+    name: zimbra
+    enabled: false
+    masked: false
+  when:
+    - pacemaker_agents_disable_zimbra_service | bool
+    - pacemaker_agents_zimbra_sysv.stat.exists | default(false)
+  tags: [pacemaker, agents, systemd]
+
 # Rebuild uses external meta on a real partition (/dev/sdb2). The old lab used
 # kin-drbd-meta-loop.service (/dev/loop21). Only assert the unit when configured
 # and present — empty/absent is a documented topology difference, not a failure.

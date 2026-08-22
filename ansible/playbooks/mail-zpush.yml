@@ -9,12 +9,27 @@
 # Snippets only (safe on Host B, no zmproxy restart):
 #   ansible-playbook playbooks/mail-zpush.yml --tags snippets
 #
+# Role-level tags: [zpush] on the full-install play would skip the entire
+# role when HA orchestration passes --tags snippets. Keep snippets in a
+# separate play so that tag actually writes the files.
+#
 # Dry-run against live lab:
 #   ansible-playbook playbooks/mail-zpush.yml --limit mail.gits-it.site --check
 #
 # PRODUCTION WARNING: nginx template edits + zmproxyctl restart are gated with
 # `when: not ansible_check_mode` and only run when snippets/template change.
 # Do not add check_mode: false on those mutating tasks.
+
+- name: Deploy Z-Push nginx snippets on every mail node
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Include Z-Push nginx snippets
+      ansible.builtin.import_role:
+        name: zpush_install
+        tasks_from: snippets.yml
+      tags: [zpush, snippets]
 
 - name: Install Z-Push with Zimbra backend on enabled mail nodes
   hosts: mail_nodes

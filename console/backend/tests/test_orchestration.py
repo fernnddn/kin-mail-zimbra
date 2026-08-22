@@ -677,6 +677,17 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("KIN_HA_PEER_INSTALL=1", orch)
         self.assertIn("mail-zpush.yml", orch)
         self.assertIn("tags=snippets", orch)
+        self.assertIn("select_drbd_disk.py", orch)
+        zpush_play = (repo / "ansible/playbooks/mail-zpush.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("tasks_from: snippets.yml", zpush_play)
+        agents_sys = (
+            repo / "ansible/roles/pacemaker_agents/tasks/systemd.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Disable the Zimbra boot unit", agents_sys)
+        health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
+        self.assertIn("T2 skipped on HA peer", health)
         self.assertIn('b "Cannot determine sending address', health)
         self.assertNotIn('f "Cannot determine sending address', health)
         self.assertIn('b "NOT consistent:', health)
@@ -981,6 +992,31 @@ class PeerInstallArchiveTests(unittest.TestCase):
                 names = {info.name.replace("\\", "/") for info in tar.getmembers()}
             self.assertIn("install/kin-mail.sh", names)
             self.assertIn("install/nested/helper.sh", names)
+            self.assertNotIn(
+                "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py", names
+            )
+
+    def test_archive_includes_disk_selector_when_provided(self) -> None:
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.orchestration import build_peer_install_archive
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "install"
+            src.mkdir()
+            (src / "kin-mail.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            selector = Path(td) / "select_drbd_disk.py"
+            selector.write_text("print('ok')\n", encoding="utf-8")
+            dest = Path(td) / "peer-install.tgz"
+            build_peer_install_archive(src, dest, selector=selector)
+            with tarfile.open(dest, "r:gz") as tar:
+                names = {info.name.replace("\\", "/") for info in tar.getmembers()}
+            self.assertIn("install/kin-mail.sh", names)
+            self.assertIn(
+                "ansible/roles/drbd_disk_prep/files/select_drbd_disk.py", names
+            )
 
     def test_archive_refuses_missing_driver(self) -> None:
         import tempfile

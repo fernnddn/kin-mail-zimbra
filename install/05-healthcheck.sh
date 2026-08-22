@@ -360,7 +360,9 @@ if [ $QUICK -eq 0 ]; then
     f "Submission rejected"; printf '%s' "$OUT" | tail -4 | sed 's/^/      /'
   fi
 
-  if [ -n "${EXTERNAL_TEST_ADDRESS}" ] && [ "$SMTP_OUT" -eq 1 ]; then
+  if kin_ha_peer_install; then
+    b "T2 skipped on HA peer (external send is verified on the published MX)"
+  elif [ -n "${EXTERNAL_TEST_ADDRESS}" ] && [ "$SMTP_OUT" -eq 1 ]; then
     echo; say "T2 - send to external address"
     swaks --to "$EXTERNAL_TEST_ADDRESS" --from "$TEST_USER_1" \
           --server 127.0.0.1:587 --auth LOGIN \

@@ -798,14 +798,39 @@ def parse_peer_prep_readiness(text: str, exit_code: int) -> tuple[bool, list[str
     return False, labels
 
 
-def build_peer_install_archive(src_install: Path, dest_tgz: Path) -> None:
-    """Tar install/ so the peer extracts /opt/kin-mail-deploy/install/."""
+def peer_disk_selector_src() -> Path:
+    """select_drbd_disk.py on the controller (console ansible tree)."""
+    ansible_dir = Path(os.environ.get("KIN_ANSIBLE_DIR", str(ANSIBLE_DIR)))
+    return ansible_dir / "roles/drbd_disk_prep/files/select_drbd_disk.py"
+
+
+def build_peer_install_archive(
+    src_install: Path,
+    dest_tgz: Path,
+    *,
+    selector: Path | None = None,
+) -> None:
+    """Tar install/ (and the DRBD disk selector) for /opt/kin-mail-deploy on the peer.
+
+    02-prepare-os.sh on the peer calls prepare-zimbra-data-disk.sh, which needs
+    select_drbd_disk.py. The install/ tarball alone does not include ansible/.
+    Without the selector, B falls back to the OS volume and later DRBD handoff
+    fights a mounted /opt/zimbra on sda.
+    """
     src = src_install.resolve()
     if not (src / "kin-mail.sh").is_file():
         raise FileNotFoundError(f"kin-mail.sh missing under {src}")
     dest_tgz.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest_tgz, "w:gz") as tar:
         tar.add(src, arcname="install", filter=_peer_install_tarinfo)
+        if selector is not None:
+            sel = selector.resolve()
+            if sel.is_file():
+                tar.add(
+                    sel,
+                    arcname="ansible/roles/drbd_disk_prep/files/select_drbd_disk.py",
+                    filter=_peer_install_tarinfo,
+                )
 
 
 def _peer_install_tarinfo(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
@@ -873,8 +898,11 @@ async def _push_peer_deploy_tree(
     """Copy this host's install/ tree to /opt/kin-mail-deploy on the peer."""
     src = Path(kin_mail_deploy_dir()) / "install"
     local_tgz = WORK_DIR / "peer-install.tgz"
+    selector = peer_disk_selector_src()
     try:
-        build_peer_install_archive(src, local_tgz)
+        build_peer_install_archive(
+            src, local_tgz, selector=selector if selector.is_file() else None
+        )
     except (OSError, FileNotFoundError) as exc:
         return 2, str(exc)
     remote_tmp = "/tmp/kin-mail-peer-install.tgz"
@@ -887,6 +915,9 @@ async def _push_peer_deploy_tree(
         "mkdir -p /opt/kin-mail-deploy && "
         "tar -C /opt/kin-mail-deploy -xzf /tmp/kin-mail-peer-install.tgz && "
         "find /opt/kin-mail-deploy/install -type f -name '*.sh' -exec chmod a+rx {} + && "
+        "( test ! -d /opt/kin-mail-deploy/ansible || "
+        "find /opt/kin-mail-deploy/ansible -type f -name 'select_drbd_disk.py' "
+        "-exec chmod a+r {} + ) && "
         "rm -f /tmp/kin-mail-peer-install.tgz && "
         "test -x /opt/kin-mail-deploy/install/kin-mail.sh"
     )

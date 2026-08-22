@@ -85,12 +85,24 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertEqual(out["ZPUSH_ENABLED"], "no")
         self.assertEqual(out["AD_AUTH_ENABLED"], "no")
         self.assertEqual(out["KIN_HA_PEER_INSTALL"], "yes")
+        self.assertEqual(out["EXTERNAL_TEST_ADDRESS"], "")
         self.assertEqual(out["AD_SEARCH_BIND_PASSWORD"], "AdBindSecret")
         self.assertEqual(out["ZCS_FILE"], _PRIMARY["ZCS_FILE"])
         self.assertEqual(out["CLUSTER_VIP_IP"], "192.0.2.16")
         self.assertEqual(out["PEER_HOST_IP"], "192.0.2.15")
         self.assertEqual(out["PEER_HOST_NAME"], "mail.example.test")
         self.assertEqual(out["TOPOLOGY"], "2vm")
+
+    def test_peer_drops_external_test_address(self) -> None:
+        primary = dict(_PRIMARY)
+        primary["EXTERNAL_TEST_ADDRESS"] = "ops@example.test"
+        out = peer_install_config(
+            primary,
+            peer_host="mail2.example.test",
+            peer_ip="192.0.2.14",
+            peer_iface="ens34",
+        )
+        self.assertEqual(out["EXTERNAL_TEST_ADDRESS"], "")
 
     def test_rejects_cloned_hostname_or_ip(self) -> None:
         with self.assertRaises(ValueError):

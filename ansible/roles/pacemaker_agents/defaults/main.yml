@@ -8,6 +8,9 @@ pacemaker_agents_fail2ban_jails_path: /usr/local/sbin/kin-fail2ban-jails
 pacemaker_agents_assert_path: /usr/local/sbin/kin-assert-no-dual-primary.sh
 # Pacemaker owns DRBD bring-up; systemd drbd.service must stay disabled (2.7).
 pacemaker_agents_disable_drbd_service: true
+# Zimbra SysV (/etc/init.d/zimbra) would start on reboot in parallel with
+# ocf:kin:zimbra and fight the mount. Disable boot start; Pacemaker starts it.
+pacemaker_agents_disable_zimbra_service: true
 pacemaker_agents_keep_meta_loop_unit: kin-drbd-meta-loop.service
 pacemaker_agents_luks_dropin_dir: /etc/systemd/system/pacemaker.service.d
 pacemaker_agents_luks_dropin_path: /etc/systemd/system/pacemaker.service.d/kin-luks-cryptsetup.conf

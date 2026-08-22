@@ -37,6 +37,15 @@ else
   bad "HA peer DKIM landmine still fail-closes 05 after peer zmsetup"
 fi
 
+if grep -q 'T2 skipped on HA peer' ../05-healthcheck.sh \
+  && grep -q 'tasks_from: snippets.yml' ../../ansible/playbooks/mail-zpush.yml \
+  && grep -q 'Disable the Zimbra boot unit' \
+    ../../ansible/roles/pacemaker_agents/tasks/systemd.yml; then
+  pass "HA peer T2 skip, snippets play, and Zimbra boot disable are wired"
+else
+  bad "HA peer T2 / snippets play / Zimbra boot disable missing"
+fi
+
 act=$(healthcheck_opendkim_classify "opendkim-testkey: key OK")
 if [ "$act" = "pass" ]; then
   pass "opendkim: key OK is pass"
