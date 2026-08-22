@@ -747,6 +747,17 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
         lines.append(f"ERROR: write failed: {exc}\n")
         return 1, lines
 
+    try:
+        from .deploy_state import write_topology_marker
+
+        if not write_topology_marker(str(merged.get("TOPOLOGY") or "")):
+            lines.append("ERROR: could not write topology marker (invalid TOPOLOGY)\n")
+            return 1, lines
+        lines.append("Wrote topology marker (mode 644)\n")
+    except OSError as exc:
+        lines.append(f"ERROR: topology marker write failed: {exc}\n")
+        return 1, lines
+
     if created_new:
         lines.append(f"Created new {CONF_FILE} (mode 600)\n")
         lines.append("Apply result: created (first config on this host)\n")

@@ -153,6 +153,7 @@ class PeerPayloadTests(unittest.TestCase):
         self.assertEqual(parsed["NET_IFACE"], "ens34")
         self.assertEqual(parsed["ADMIN_PASS"], "PrimaryAdminPass9")
         self.assertEqual(parsed["TOPOLOGY"], "2vm")
+        self.assertEqual(payload["topology"], "2vm")
         self.assertEqual(payload["cf_body"].strip(), token)
 
     def test_cloudflare_missing_creds_refuses(self) -> None:

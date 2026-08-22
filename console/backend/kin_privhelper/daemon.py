@@ -386,6 +386,11 @@ async def run() -> None:
             log.warning("stamped unexpected-stop on leftover full-install marker")
     except OSError:
         log.exception("failed to reclaim leftover full-install marker")
+    try:
+        if deploy_state.backfill_topology_marker_from_config():
+            log.info("wrote topology marker from /etc/kin-mail/config")
+    except OSError:
+        log.exception("failed to backfill topology marker")
 
     server = await asyncio.start_unix_server(_handle, path=str(SOCKET_PATH))
     await _chmod_socket()

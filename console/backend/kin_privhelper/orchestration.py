@@ -24,7 +24,12 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from . import protocol as proto
-from .deploy_state import DEPLOY_LAST_LOG, plan_peer_ha_console_state, record_ha_orchestration_success
+from .deploy_state import (
+    DEPLOY_LAST_LOG,
+    plan_peer_ha_console_state,
+    record_ha_orchestration_success,
+    topology_marker_body,
+)
 from .provisioning_secrets import load_secrets
 
 ANSIBLE_DIR = Path(
@@ -649,7 +654,7 @@ _PEER_READY_LABELS = {
 
 _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
-    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete)|etc/letsencrypt/[A-Za-z0-9._-]+)$"
+    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology)|etc/letsencrypt/[A-Za-z0-9._-]+)$"
 )
 
 
@@ -793,10 +798,14 @@ PEER_CONSOLE_PROBE_CMD = (
     "if [ -f /etc/kin-mail/ha-setup-complete ]; then echo HA=1; else echo HA=0; fi; "
     "if [ -f /etc/kin-mail/setup-complete ]; then echo SETUP=1; else echo SETUP=0; fi; "
     "if [ -f /etc/kin-mail/config ]; then echo CFG=1; else echo CFG=0; fi; "
+    "if [ -f /etc/kin-mail/topology ]; then echo TOPO=1; else echo TOPO=0; fi; "
     "echo KIN_PEER_STATE_END; "
     "echo KIN_PEER_HA_BEGIN; "
     "if [ -f /etc/kin-mail/ha-setup-complete ]; then cat /etc/kin-mail/ha-setup-complete; fi; "
     "echo KIN_PEER_HA_END; "
+    "echo KIN_PEER_TOPO_BEGIN; "
+    "if [ -f /etc/kin-mail/topology ]; then cat /etc/kin-mail/topology; fi; "
+    "echo KIN_PEER_TOPO_END; "
     "echo KIN_PEER_CFG_BEGIN; "
     "if [ -f /etc/kin-mail/config ]; then sudo -n cat /etc/kin-mail/config; fi; "
     "echo KIN_PEER_CFG_END"
@@ -825,7 +834,9 @@ def parse_peer_console_probe(text: str) -> dict[str, Any]:
         "ha_present": flags.get("HA") == "1",
         "setup_present": flags.get("SETUP") == "1",
         "cfg_present": flags.get("CFG") == "1",
+        "topology_present": flags.get("TOPO") == "1",
         "ha_text": _block_between(blob, "KIN_PEER_HA_BEGIN", "KIN_PEER_HA_END"),
+        "topology_text": _block_between(blob, "KIN_PEER_TOPO_BEGIN", "KIN_PEER_TOPO_END"),
         "config_text": _block_between(blob, "KIN_PEER_CFG_BEGIN", "KIN_PEER_CFG_END"),
         "ok": "KIN_PEER_STATE_BEGIN" in blob and "KIN_PEER_STATE_END" in blob,
     }
@@ -864,6 +875,7 @@ async def sync_peer_ha_console_state(
         ha_marker_present=bool(probe.get("ha_present")),
         ha_marker_text=str(probe.get("ha_text") or ""),
         setup_marker_present=bool(probe.get("setup_present")),
+        topology_marker_text=str(probe.get("topology_text") or ""),
     )
     if plan["noop"]:
         notes.append(
@@ -890,6 +902,26 @@ async def sync_peer_ha_console_state(
             )
             return False, notes
         notes.append("Wrote TOPOLOGY=2vm into the peer /etc/kin-mail/config")
+
+    if plan["write_topology_marker"]:
+        code, text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=str(plan["topology_marker_body"]),
+            remote_tmp="/tmp/kin-mail-peer-topology",
+            dest="/etc/kin-mail/topology",
+            mode="644",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write /etc/kin-mail/topology on the peer (exit {code}). "
+                "That node will still show the from-scratch wizard until this is retried. "
+                "No auto-retry, no auto-rollback."
+            )
+            return False, notes
+        notes.append("Wrote topology marker on the peer")
 
     if plan["write_ha_marker"]:
         code, text = await _push_peer_text_file(
@@ -964,6 +996,21 @@ async def _push_peer_install_files(
             local_cfg.unlink()
         except OSError:
             pass
+    topo = topology_marker_body(payload.get("topology") or "2vm")
+    if not topo:
+        return 2, "refusing empty topology marker"
+    code, text = await _push_peer_text_file(
+        host,
+        user,
+        password,
+        secrets,
+        body=topo,
+        remote_tmp="/tmp/kin-mail-peer-topology",
+        dest="/etc/kin-mail/topology",
+        mode="644",
+    )
+    if code != 0:
+        return code, text or "install of /etc/kin-mail/topology failed"
     cf_body = payload.get("cf_body")
     if not cf_body:
         return 0, ""
@@ -1038,6 +1085,7 @@ def build_peer_install_payload(
         "MAIL_DOMAIN": str(values.get("MAIL_DOMAIN") or ""),
         "TLS_METHOD": tls,
         "cf_dest": cf_dest,
+        "topology": str(values.get("TOPOLOGY") or "2vm"),
     }
     if tls == "cloudflare":
         if not _INSTALL_DEST_RE.match(cf_dest):

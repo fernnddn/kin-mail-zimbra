@@ -11,12 +11,15 @@ the Deploy progress view.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("kin_privhelper.deploy_state")
 
 # Override only for tests / unusual layouts — production uses /opt/zimbra.
 ZIMBRA_ROOT = Path(os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra"))
@@ -32,7 +35,13 @@ HA_SETUP_COMPLETE_MARKER = Path(
     os.environ.get("KIN_HA_SETUP_COMPLETE_MARKER", "/etc/kin-mail/ha-setup-complete")
 )
 
-# Topology for the login gate: applied config first, then the wizard draft.
+# World-readable companion to TOPOLOGY in /etc/kin-mail/config (0600 root:root).
+# The unprivileged console cannot read that config; this marker is 0644.
+TOPOLOGY_MARKER = Path(
+    os.environ.get("KIN_TOPOLOGY_MARKER", "/etc/kin-mail/topology")
+)
+
+# Topology for the login gate: marker first, then applied config, then draft.
 KIN_MAIL_CONFIG = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
 WIZARD_DRAFT_FILE = Path(
     os.environ.get("KIN_CONSOLE_DRAFT", "/var/lib/kin-mail-console/wizard-draft.json")
@@ -154,9 +163,41 @@ def _normalize_topology(raw: str) -> str:
     return ""
 
 
+def topology_marker_body(topology: str) -> str:
+    """Single-line body for /etc/kin-mail/topology. Empty if topology is unknown."""
+    normalized = _normalize_topology(topology)
+    if not normalized:
+        return ""
+    return f"{normalized}\n"
+
+
+def _first_nonempty_line(text: str) -> str:
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            return line
+    return (text or "").strip()
+
+
+def _topology_from_marker() -> str:
+    try:
+        text = TOPOLOGY_MARKER.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return _normalize_topology(_first_nonempty_line(text))
+
+
 def _topology_from_config() -> str:
     try:
         text = KIN_MAIL_CONFIG.read_text(encoding="utf-8")
+    except PermissionError:
+        log.warning(
+            "cannot read %s: permission denied. The unprivileged console cannot "
+            "use this file for topology; %s is the intended source.",
+            KIN_MAIL_CONFIG,
+            TOPOLOGY_MARKER,
+        )
+        return ""
     except OSError:
         return ""
     for raw in text.splitlines():
@@ -182,14 +223,53 @@ def _topology_from_draft() -> str:
 def saved_wizard_topology() -> str:
     """Return '1vm', '2vm', or '' if topology cannot be determined.
 
-    Applied /etc/kin-mail/config wins (what Deploy actually used). The wizard
-    draft is the fallback when config is missing or has no TOPOLOGY.
+    /etc/kin-mail/topology is preferred (world-readable, no secrets). Applied
+    /etc/kin-mail/config and the wizard draft remain fallbacks for hosts that
+    have not picked up the marker yet.
     """
-    for reader in (_topology_from_config, _topology_from_draft):
+    for reader in (_topology_from_marker, _topology_from_config, _topology_from_draft):
         found = reader()
         if found:
             return found
     return ""
+
+
+def write_topology_marker(topology: str) -> bool:
+    """Write /etc/kin-mail/topology at 0644. Companion to TOPOLOGY in config.
+
+    Idempotent: skips rewrite when the file already holds the same value.
+    Returns False when topology is not 1vm/2vm (does not write).
+    """
+    body = topology_marker_body(topology)
+    if not body:
+        return False
+    if TOPOLOGY_MARKER.is_file():
+        try:
+            existing = TOPOLOGY_MARKER.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        if _normalize_topology(_first_nonempty_line(existing)) == _normalize_topology(body):
+            return True
+    TOPOLOGY_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOPOLOGY_MARKER.with_name(TOPOLOGY_MARKER.name + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    tmp.replace(TOPOLOGY_MARKER)
+    return True
+
+
+def backfill_topology_marker_from_config() -> bool:
+    """Write the topology marker from config when the marker is missing or stale.
+
+    privhelperd runs as root, so it can read 0600 /etc/kin-mail/config. The
+    unprivileged console cannot. Returns True when a write happened.
+    """
+    topology = _topology_from_config()
+    if not topology:
+        return False
+    if _topology_from_marker() == topology:
+        return False
+    return write_topology_marker(topology)
 
 
 def _complete_stamp() -> str:
@@ -233,6 +313,7 @@ def record_ha_orchestration_success(*, join_mode: str) -> bool:
     if str(join_mode or "").strip().lower() != "apply":
         return False
     mark_ha_setup_complete()
+    write_topology_marker("2vm")
     return True
 
 
@@ -242,12 +323,15 @@ def plan_peer_ha_console_state(
     ha_marker_present: bool,
     ha_marker_text: str = "",
     setup_marker_present: bool,
+    topology_marker_text: str = "",
 ) -> dict[str, Any]:
     """Decide which peer console files to write after a successful HA apply.
 
     Idempotent: already-2vm config and existing complete markers are left alone.
     setup-complete is required by is_mail_deployed() for topology 2vm; write it
     only when the file is missing (peer_os_prep normally already created it).
+    The world-readable topology marker is written whenever it is missing or
+    not already 2vm, even if config and completion markers are already right.
     """
     from .apply_config import ensure_topology_2vm, format_config, parse_config
 
@@ -255,15 +339,23 @@ def plan_peer_ha_console_state(
     new_values, config_changed = ensure_topology_2vm(values)
     write_ha = not (ha_marker_present and marker_already_complete(ha_marker_text))
     write_setup = not setup_marker_present
+    write_topo = _normalize_topology(_first_nonempty_line(topology_marker_text)) != "2vm"
     stamp = _complete_stamp()
     return {
         "write_config": config_changed,
         "config_body": format_config(new_values) if config_changed else "",
         "write_ha_marker": write_ha,
         "write_setup_marker": write_setup,
+        "write_topology_marker": write_topo,
         "ha_marker_body": stamp if write_ha else "",
         "setup_marker_body": stamp if write_setup else "",
-        "noop": (not config_changed and not write_ha and not write_setup),
+        "topology_marker_body": topology_marker_body("2vm") if write_topo else "",
+        "noop": (
+            not config_changed
+            and not write_ha
+            and not write_setup
+            and not write_topo
+        ),
     }
 
 

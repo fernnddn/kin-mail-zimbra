@@ -7,6 +7,7 @@ import unittest
 from kin_privhelper.orchestration import (
     STEPS,
     OrchHost,
+    _INSTALL_DEST_RE,
     kin_mail_deploy_dir,
     parse_peer_console_probe,
     redact_text,
@@ -188,6 +189,26 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(parsed["setup_present"])
         self.assertTrue(parsed["cfg_present"])
         self.assertIn('TOPOLOGY="1vm"', parsed["config_text"])
+        self.assertFalse(parsed["topology_present"])
+        self.assertEqual(parsed["topology_text"].strip(), "")
+
+    def test_peer_console_probe_parses_topology_marker(self) -> None:
+        blob = (
+            "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
+            "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
+            "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
+            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+        )
+        parsed = parse_peer_console_probe(blob)
+        self.assertTrue(parsed["ok"])
+        self.assertTrue(parsed["topology_present"])
+        self.assertEqual(parsed["topology_text"].strip(), "2vm")
+
+    def test_install_dest_allows_topology_marker(self) -> None:
+        self.assertTrue(_INSTALL_DEST_RE.match("/etc/kin-mail/topology"))
+        self.assertTrue(_INSTALL_DEST_RE.match("/etc/kin-mail/config"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/etc/kin-mail/config.bak"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/tmp/topology"))
 
     def test_orch_done_is_after_peer_console_sync(self) -> None:
         from pathlib import Path

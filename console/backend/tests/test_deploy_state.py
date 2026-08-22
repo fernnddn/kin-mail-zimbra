@@ -20,17 +20,20 @@ class MailDeployedGateTests(unittest.TestCase):
         self.zimbra = self.root / "zimbra"
         self.marker = self.root / "setup-complete"
         self.ha_marker = self.root / "ha-setup-complete"
+        self.topo = self.root / "topology"
         self.config = self.root / "config"
         self.draft = self.root / "wizard-draft.json"
         self.pidfile = self.root / "zmmailboxd_pid"
         self._old_root = ds.ZIMBRA_ROOT
         self._old_marker = ds.SETUP_COMPLETE_MARKER
         self._old_ha = ds.HA_SETUP_COMPLETE_MARKER
+        self._old_topo = ds.TOPOLOGY_MARKER
         self._old_conf = ds.KIN_MAIL_CONFIG
         self._old_draft = ds.WIZARD_DRAFT_FILE
         ds.ZIMBRA_ROOT = self.zimbra
         ds.SETUP_COMPLETE_MARKER = self.marker
         ds.HA_SETUP_COMPLETE_MARKER = self.ha_marker
+        ds.TOPOLOGY_MARKER = self.topo
         ds.KIN_MAIL_CONFIG = self.config
         ds.WIZARD_DRAFT_FILE = self.draft
         os.environ["KIN_MAILBOXD_PID"] = str(self.pidfile)
@@ -44,9 +47,20 @@ class MailDeployedGateTests(unittest.TestCase):
         ds.ZIMBRA_ROOT = self._old_root
         ds.SETUP_COMPLETE_MARKER = self._old_marker
         ds.HA_SETUP_COMPLETE_MARKER = self._old_ha
+        ds.TOPOLOGY_MARKER = self._old_topo
         ds.KIN_MAIL_CONFIG = self._old_conf
         ds.WIZARD_DRAFT_FILE = self._old_draft
         os.environ.pop("KIN_MAILBOXD_PID", None)
+
+    def _deny_config_read(self):
+        real = Path.read_text
+
+        def wrapped(path_self: Path, *args: object, **kwargs: object) -> str:
+            if path_self == ds.KIN_MAIL_CONFIG:
+                raise PermissionError("denied")
+            return real(path_self, *args, **kwargs)
+
+        return patch.object(Path, "read_text", wrapped)
 
     def _write_topology(self, topology: str, *, via: str = "config") -> None:
         if via == "config":
@@ -56,6 +70,8 @@ class MailDeployedGateTests(unittest.TestCase):
                 json.dumps({"topology": topology}),
                 encoding="utf-8",
             )
+        elif via == "marker":
+            self.topo.write_text(f"{topology}\n", encoding="utf-8")
         else:
             raise AssertionError(via)
 
@@ -142,6 +158,53 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertEqual(ds.saved_wizard_topology(), "2vm")
         self.assertFalse(ds.is_mail_deployed())
 
+    def test_marker_wins_over_config_and_draft(self) -> None:
+        self._write_topology("1vm", via="config")
+        self._write_topology("1vm", via="draft")
+        self._write_topology("2vm", via="marker")
+        self.assertEqual(ds.saved_wizard_topology(), "2vm")
+
+    def test_unreadable_config_uses_topology_marker(self) -> None:
+        """Live .52: config is 0600 and kin-console cannot read it."""
+        self._write_topology("1vm", via="config")
+        self._write_topology("2vm", via="marker")
+        self.marker.write_text("complete\n", encoding="utf-8")
+        self.ha_marker.write_text("complete\n", encoding="utf-8")
+        with self._deny_config_read():
+            with self.assertLogs("kin_privhelper.deploy_state", level="WARNING") as cm:
+                self.assertEqual(ds._topology_from_config(), "")
+            self.assertTrue(any("permission denied" in line.lower() for line in cm.output))
+            self.assertEqual(ds.saved_wizard_topology(), "2vm")
+            self.assertTrue(ds.is_mail_deployed())
+
+    def test_unreadable_config_without_marker_matches_live_bug(self) -> None:
+        """Both completion markers present, but topology unreadable => wizard."""
+        self._write_topology("2vm", via="config")
+        self.marker.write_text("complete\n", encoding="utf-8")
+        self.ha_marker.write_text("complete\n", encoding="utf-8")
+        with self._deny_config_read():
+            with self.assertLogs("kin_privhelper.deploy_state", level="WARNING"):
+                self.assertEqual(ds.saved_wizard_topology(), "")
+                self.assertFalse(ds.is_mail_deployed())
+
+    def test_missing_config_is_not_logged_as_permission_denied(self) -> None:
+        with self.assertNoLogs("kin_privhelper.deploy_state", level="WARNING"):
+            self.assertEqual(ds._topology_from_config(), "")
+
+    def test_write_topology_marker_is_0644_and_idempotent(self) -> None:
+        self.assertTrue(ds.write_topology_marker("2vm"))
+        self.assertEqual(self.topo.read_text(encoding="utf-8"), "2vm\n")
+        self.assertEqual(self.topo.stat().st_mode & 0o777, 0o644)
+        first = self.topo.read_text(encoding="utf-8")
+        self.assertTrue(ds.write_topology_marker("2vm"))
+        self.assertEqual(self.topo.read_text(encoding="utf-8"), first)
+
+    def test_backfill_writes_marker_from_readable_config(self) -> None:
+        self._write_topology("2vm", via="config")
+        self.assertTrue(ds.backfill_topology_marker_from_config())
+        self.assertEqual(self.topo.read_text(encoding="utf-8"), "2vm\n")
+        self.assertFalse(ds.backfill_topology_marker_from_config())
+
     def test_unknown_topology_with_setup_complete_stays_pre_deploy(self) -> None:
         """Unreadable topology: do not lock the operator out of the wizard."""
         self.marker.write_text("complete\n", encoding="utf-8")
@@ -153,6 +216,7 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertTrue(self.ha_marker.is_file())
         body = self.ha_marker.read_text(encoding="utf-8")
         self.assertTrue(body.startswith("complete "))
+        self.assertEqual(self.topo.read_text(encoding="utf-8"), "2vm\n")
 
     def test_apply_success_does_not_rewrite_existing_ha_marker(self) -> None:
         self.ha_marker.write_text("complete 2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -172,6 +236,8 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertIn('TOPOLOGY="2vm"', plan["config_body"])
         self.assertTrue(plan["write_ha_marker"])
         self.assertTrue(plan["write_setup_marker"])
+        self.assertTrue(plan["write_topology_marker"])
+        self.assertEqual(plan["topology_marker_body"], "2vm\n")
         self.assertTrue(plan["ha_marker_body"].startswith("complete "))
         self.assertFalse(plan["noop"])
 
@@ -181,21 +247,41 @@ class MailDeployedGateTests(unittest.TestCase):
             ha_marker_present=True,
             ha_marker_text="complete 2026-08-21T00:00:00Z\n",
             setup_marker_present=True,
+            topology_marker_text="2vm\n",
         )
         self.assertTrue(plan["noop"])
         self.assertFalse(plan["write_config"])
         self.assertFalse(plan["write_ha_marker"])
         self.assertFalse(plan["write_setup_marker"])
+        self.assertFalse(plan["write_topology_marker"])
+
+    def test_peer_plan_writes_topology_marker_when_only_that_is_missing(self) -> None:
+        """Live backfill: peer already has 2vm config + completion markers."""
+        plan = ds.plan_peer_ha_console_state(
+            config_text='TOPOLOGY="2vm"\nMAIL_HOST="mail2.example.test"\n',
+            ha_marker_present=True,
+            ha_marker_text="complete 2026-08-21T00:00:00Z\n",
+            setup_marker_present=True,
+            topology_marker_text="",
+        )
+        self.assertFalse(plan["noop"])
+        self.assertFalse(plan["write_config"])
+        self.assertFalse(plan["write_ha_marker"])
+        self.assertFalse(plan["write_setup_marker"])
+        self.assertTrue(plan["write_topology_marker"])
+        self.assertEqual(plan["topology_marker_body"], "2vm\n")
 
     def test_peer_plan_adds_ha_marker_only_when_topology_already_2vm(self) -> None:
         plan = ds.plan_peer_ha_console_state(
             config_text='TOPOLOGY="2vm"\n',
             ha_marker_present=False,
             setup_marker_present=True,
+            topology_marker_text="2vm\n",
         )
         self.assertFalse(plan["write_config"])
         self.assertTrue(plan["write_ha_marker"])
         self.assertFalse(plan["write_setup_marker"])
+        self.assertFalse(plan["write_topology_marker"])
         self.assertFalse(plan["noop"])
 
     def test_check_mode_does_not_write_ha_marker(self) -> None:
