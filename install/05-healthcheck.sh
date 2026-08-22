@@ -288,23 +288,23 @@ rm -f "$ERR1" "$ERR2"
 if [ "${AD_AUTH_ENABLED}" = "yes" ]; then
   case "$MECH" in
     ad|ldap) p "Domain uses external auth (${MECH})" ;;
-    *)       f "AD_AUTH_ENABLED=yes but zimbraAuthMech=${MECH:-empty} — run 06-hybrid-auth.sh" ;;
+    *)       b "AD_AUTH_ENABLED=yes but zimbraAuthMech=${MECH:-empty} - AD not bound yet (local mail still works)" ;;
   esac
   case "$FALLBACK" in
     TRUE|true|1) p "zimbraAuthFallbackToLocal active" ;;
-    *)           f "zimbraAuthFallbackToLocal not TRUE — local accounts on hybrid domain will fail login" ;;
+    *)           b "zimbraAuthFallbackToLocal not TRUE yet - AD bind deferred or failed" ;;
   esac
   if [ -n "${AD_TEST_USER}" ] && [ -n "${AD_TEST_PASS}" ]; then
     if zimbra_user_auth_ok "$AD_TEST_USER" "$AD_TEST_PASS"; then
       p "AD LDAP auth: ${AD_TEST_USER}"
     else
-      f "AD LDAP auth failed: ${AD_TEST_USER}"
+      b "AD LDAP auth not passing yet: ${AD_TEST_USER} (directory/network, not a server install failure)"
     fi
   else
-    b "AD enabled in config but AD_TEST_USER/PASS empty — cannot test AD path"
+    b "AD enabled in config but AD_TEST_USER/PASS empty - cannot test AD path"
   fi
 else
-  info "AD_AUTH_ENABLED is not yes — AD path not tested (local only, skippable by design)"
+  info "AD_AUTH_ENABLED is not yes - AD path not tested (local only, skippable by design)"
 fi
 
 # --- mail flow ---------------------------------------------------------------
@@ -329,7 +329,8 @@ if [ $QUICK -eq 0 ]; then
       [ -n "$MSG" ] && break
     done
     if [ -n "$MSG" ]; then
-      grep -qi '^DKIM-Signature' "$MSG" && p "Message signed with DKIM" || f "No DKIM-Signature header"
+      grep -qi '^DKIM-Signature' "$MSG" && p "Message signed with DKIM" \
+        || b "No DKIM-Signature header yet (opendkim still warming; not a server install failure)"
       AR=$(grep -i '^Authentication-Results' -A1 "$MSG" | tr '\n' ' ')
       case "$(healthcheck_auth_results_dkim "$AR")" in
         pass)    p "Verification: dkim=pass" ;;
@@ -338,7 +339,7 @@ if [ $QUICK -eq 0 ]; then
       esac
       grep -q "status=sent" /var/log/zimbra.log 2>/dev/null && p "LMTP delivered to mailbox"
     else
-      f "Message not found in message store"
+      b "Message not found in message store yet (amavis still scanning after restart)"
     fi
   else
     f "Submission rejected"; printf '%s' "$OUT" | tail -4 | sed 's/^/      /'

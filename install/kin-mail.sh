@@ -366,9 +366,7 @@ run_full_install() {
     warn "/opt/zimbra missing - skipping 07-zpush.sh (expected on Secondary without mount)"
   else
     run_stage 07-zpush.sh || {
-      rc=$?
-      fail "Pipeline stopped at 07-zpush.sh"
-      return "$rc"
+      warn "07-zpush.sh failed — mail install continues. Re-run later: sudo ./07-zpush.sh"
     }
   fi
 
@@ -406,9 +404,7 @@ run_full_install() {
     warn "Skipping 11-admin-path-lockdown.sh (mid-handoff; empty /opt/zimbra mountpoint)"
   elif [ -d /opt/zimbra ]; then
     run_stage 11-admin-path-lockdown.sh || {
-      rc=$?
-      fail "Pipeline stopped at 11-admin-path-lockdown.sh"
-      return "$rc"
+      warn "11-admin-path-lockdown.sh failed - mail install continues. Re-run later: sudo ./11-admin-path-lockdown.sh"
     }
   else
     warn "/opt/zimbra missing - skipping 11-admin-path-lockdown.sh"

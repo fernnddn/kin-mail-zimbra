@@ -72,7 +72,8 @@ export default function CredentialsStep() {
       <Lede>
         These must already work over SSH on mail A, mail B, and the Observability VM: the root
         password, and the password for Linux user kin (sudo). Build HA pair logs in with those
-        accounts; Ubuntu cloud images need PasswordAuthentication enabled first.
+        accounts; Ubuntu cloud images need PasswordAuthentication enabled first. Mail B does
+        not need a console bootstrap; the install tree is copied from this host.
       </Lede>
       {draft.host_credentials_set ? (
         <Hint>

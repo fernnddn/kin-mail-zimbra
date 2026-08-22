@@ -18,6 +18,7 @@ import asyncio
 import os
 import re
 import shutil
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -752,7 +753,7 @@ PEER_OS_PREP_READINESS_CMD = (
 _PEER_READY_LABELS = {
     "deploy-tree": (
         "missing /opt/kin-mail-deploy/install/kin-mail.sh "
-        "(run console/bootstrap.sh on the peer)"
+        "(Build HA pair copies it from this host when missing)"
     ),
     "sudo-n": "cannot sudo -n (NOPASSWD sudo for this SSH user)",
 }
@@ -777,6 +778,23 @@ def parse_peer_prep_readiness(text: str, exit_code: int) -> tuple[bool, list[str
         tokens = ["unknown"]
     labels = [_PEER_READY_LABELS.get(t, t) for t in tokens]
     return False, labels
+
+
+def build_peer_install_archive(src_install: Path, dest_tgz: Path) -> None:
+    """Tar install/ so the peer extracts /opt/kin-mail-deploy/install/."""
+    src = src_install.resolve()
+    if not (src / "kin-mail.sh").is_file():
+        raise FileNotFoundError(f"kin-mail.sh missing under {src}")
+    dest_tgz.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(dest_tgz, "w:gz") as tar:
+        tar.add(src, arcname="install", filter=_peer_install_tarinfo)
+
+
+def _peer_install_tarinfo(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    name = info.name.replace("\\", "/")
+    if name.startswith("/") or ".." in Path(name).parts:
+        return None
+    return info
 
 
 async def _scp_put(
@@ -822,6 +840,35 @@ async def _scp_put(
     err = redact_text(err_b.decode("utf-8", errors="replace"), secrets)
     text = (out or err).strip()
     return int(proc.returncode or 0), text
+
+
+async def _push_peer_deploy_tree(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> tuple[int, str]:
+    """Copy this host's install/ tree to /opt/kin-mail-deploy on the peer."""
+    src = Path(kin_mail_deploy_dir()) / "install"
+    local_tgz = WORK_DIR / "peer-install.tgz"
+    try:
+        build_peer_install_archive(src, local_tgz)
+    except (OSError, FileNotFoundError) as exc:
+        return 2, str(exc)
+    remote_tmp = "/tmp/kin-mail-peer-install.tgz"
+    scp_code, scp_text = await _scp_put(
+        host, user, password, secrets, local_tgz, remote_tmp, timeout=120
+    )
+    if scp_code != 0:
+        return scp_code, scp_text
+    extract = wrap_privileged_remote(
+        "mkdir -p /opt/kin-mail-deploy && "
+        "tar -C /opt/kin-mail-deploy -xzf /tmp/kin-mail-peer-install.tgz && "
+        "find /opt/kin-mail-deploy/install -type f -name '*.sh' -exec chmod a+rx {} + && "
+        "rm -f /tmp/kin-mail-peer-install.tgz && "
+        "test -x /opt/kin-mail-deploy/install/kin-mail.sh"
+    )
+    return await _ssh_run(host, user, password, secrets, extract, timeout=60)
 
 
 async def _install_staged_peer_file(
@@ -1665,6 +1712,34 @@ async def cmd_run_ha_orchestration(
                 timeout=20,
             )
             ready_ok, ready_missing = parse_peer_prep_readiness(ready_text, ready_code)
+            if not ready_ok and (
+                "deploy-tree" in ready_text
+                or any("kin-mail.sh" in item for item in ready_missing)
+            ):
+                yield emit_line(
+                    "Peer is missing /opt/kin-mail-deploy/install; copying it from this host."
+                )
+                tree_code, tree_text = await _push_peer_deploy_tree(
+                    peer, ssh_user, ssh_pass, secrets
+                )
+                if tree_code != 0:
+                    yield emit_line(
+                        f"Could not copy the install tree to the peer (exit {tree_code}): {tree_text}",
+                        err=True,
+                    )
+                else:
+                    yield emit_line("Install tree is on the peer.")
+                    ready_code, ready_text = await _ssh_run(
+                        peer,
+                        ssh_user,
+                        ssh_pass,
+                        secrets,
+                        PEER_OS_PREP_READINESS_CMD,
+                        timeout=20,
+                    )
+                    ready_ok, ready_missing = parse_peer_prep_readiness(
+                        ready_text, ready_code
+                    )
             if not ready_ok:
                 yield emit_line(
                     "Peer is not ready for remote full-install. Fix all of these, then retry:",
@@ -1731,7 +1806,8 @@ async def cmd_run_ha_orchestration(
 
             yield emit_line(
                 "Staging /etc/kin-mail/config on the peer "
-                "(host identity detected on that machine; domain/TLS/AD copied)."
+                "(host identity detected there; domain and admin password copied; "
+                "TLS/Z-Push/AD skipped so HA join does not re-issue mail2 certs)."
             )
             push_code, push_text = await _push_peer_install_files(
                 peer,

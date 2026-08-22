@@ -81,7 +81,9 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertEqual(out["NET_IFACE"], "ens34")
         self.assertEqual(out["MAIL_DOMAIN"], "example.test")
         self.assertEqual(out["ADMIN_PASS"], "PrimaryAdminPass9")
-        self.assertEqual(out["TLS_METHOD"], "cloudflare")
+        self.assertEqual(out["TLS_METHOD"], "customer")
+        self.assertEqual(out["ZPUSH_ENABLED"], "no")
+        self.assertEqual(out["AD_AUTH_ENABLED"], "no")
         self.assertEqual(out["AD_SEARCH_BIND_PASSWORD"], "AdBindSecret")
         self.assertEqual(out["ZCS_FILE"], _PRIMARY["ZCS_FILE"])
         self.assertEqual(out["CLUSTER_VIP_IP"], "192.0.2.16")
@@ -163,9 +165,10 @@ class PeerPayloadTests(unittest.TestCase):
         self.assertEqual(parsed["ADMIN_PASS"], "PrimaryAdminPass9")
         self.assertEqual(parsed["TOPOLOGY"], "2vm")
         self.assertEqual(payload["topology"], "2vm")
-        self.assertEqual(payload["cf_body"].strip(), token)
+        self.assertEqual(payload["TLS_METHOD"], "customer")
+        self.assertNotIn("cf_body", payload)
 
-    def test_cloudflare_missing_creds_refuses(self) -> None:
+    def test_peer_does_not_need_cloudflare_creds(self) -> None:
         peer = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
         code, logs, payload = build_peer_install_payload(
             primary=_PRIMARY,
@@ -173,9 +176,10 @@ class PeerPayloadTests(unittest.TestCase):
             ip_addr_text=_PEER_IP_ADDR,
             cloudflare_text=None,
         )
-        self.assertEqual(code, 2)
-        self.assertEqual(payload, {})
-        self.assertTrue(any("cloudflare" in line.lower() for line in logs))
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["TLS_METHOD"], "customer")
+        self.assertNotIn("cf_body", payload)
+        self.assertFalse(any("cloudflare" in line.lower() and "usable" in line.lower() for line in logs))
 
     def test_manual_tls_does_not_need_cloudflare_file(self) -> None:
         primary = dict(_PRIMARY)
@@ -189,7 +193,7 @@ class PeerPayloadTests(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertNotIn("cf_body", payload)
-        self.assertEqual(payload["TLS_METHOD"], "manual")
+        self.assertEqual(payload["TLS_METHOD"], "customer")
 
 
 class CloudflareCredsTests(unittest.TestCase):

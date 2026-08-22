@@ -275,10 +275,12 @@ def peer_install_config(
 ) -> dict[str, str]:
     """Config for a fresh HA peer full-install.
 
-    Cluster-identical keys (domain, TLS, AD, seats, ZCS artefact, admin
-    password) are copied from the primary. Host identity is not: 02-prepare-os
-    runs hostnamectl set-hostname MAIL_HOST and writes SERVER_IP into
-    /etc/hosts, so those must be this machine, not the primary's values.
+    Domain, seats, ZCS artefact, and admin password are copied from the
+    primary. Host identity is not: 02-prepare-os runs hostnamectl set-hostname
+    MAIL_HOST and writes SERVER_IP into /etc/hosts, so those must be this
+    machine. TLS/Z-Push/AD are forced off: repeating them on mail B is how HA
+    join failed after a successful node-A Deploy (second ACME wait, Ondrej PPA,
+    AD bind).
     """
     peer_host = (peer_host or "").strip()
     peer_ip = (peer_ip or "").strip()
@@ -308,6 +310,13 @@ def peer_install_config(
         out["PEER_HOST_IP"] = primary_ip
     if primary_host:
         out["PEER_HOST_NAME"] = primary_host
+    # Remote peer install must not re-issue Let's Encrypt for mail2, add a
+    # second Z-Push, or bind AD. Those live on the primary DRBD copy; repeating
+    # them is how HA join failed after a successful node-A Deploy (manual DNS-01
+    # 25-minute wait, Cloudflare without mail2, Ondrej PPA).
+    out["TLS_METHOD"] = "customer"
+    out["ZPUSH_ENABLED"] = "no"
+    out["AD_AUTH_ENABLED"] = "no"
     return out
 
 

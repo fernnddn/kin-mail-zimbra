@@ -656,7 +656,33 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("PermitRootLogin yes", prepare)
         self.assertIn("useradd -m -s /bin/bash -G sudo", prepare)
         self.assertIn("PasswordAuthentication[[:space:]]+no", prepare)
-        self.assertIn("choose_shared_ssh_user", (repo / "console/backend/kin_privhelper/orchestration.py").read_text(encoding="utf-8"))
+        orch = (repo / "console/backend/kin_privhelper/orchestration.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("choose_shared_ssh_user", orch)
+        self.assertIn("_push_peer_deploy_tree", orch)
+        driver = (repo / "install/kin-mail.sh").read_text(encoding="utf-8")
+        self.assertIn("07-zpush.sh failed — mail install continues", driver)
+        self.assertNotIn('fail "Pipeline stopped at 07-zpush.sh"', driver)
+        self.assertIn("11-admin-path-lockdown.sh failed - mail install continues", driver)
+        self.assertNotIn('fail "Pipeline stopped at 11-admin-path-lockdown.sh"', driver)
+        health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
+        self.assertIn('b "Message not found in message store yet', health)
+        self.assertNotIn('f "Message not found in message store"', health)
+        self.assertIn('b "AD LDAP auth not passing yet', health)
+        self.assertNotIn('f "AD LDAP auth failed', health)
+        preflight = (repo / "install/01-preflight.sh").read_text(encoding="utf-8")
+        self.assertIn("TLS_METHOD=customer", preflight)
+        self.assertIn("stopping it (Zimbra ships its own)", preflight)
+        self.assertNotIn("is running - Zimbra ships its own and will conflict", preflight)
+        hybrid = (repo / "install/06-hybrid-auth.sh").read_text(encoding="utf-8")
+        self.assertIn("AD path not verified. Local mail still works", hybrid)
+        self.assertNotIn("auth path(s) failed", hybrid)
+        topo = (repo / "console/frontend/src/wizard/steps/TopologyStep.tsx").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Mail B does not need console/bootstrap.sh", topo)
+        self.assertIn("copies", topo)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
@@ -888,6 +914,42 @@ class SshLoginCandidateTests(unittest.TestCase):
             self.assertNotIn("ansible_user: cursor", text, msg=str(path))
             if "ansible_user:" in text:
                 self.assertIn("ansible_user: kin", text, msg=str(path))
+
+
+class PeerInstallArchiveTests(unittest.TestCase):
+    def test_archive_extracts_install_kin_mail_sh(self) -> None:
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.orchestration import build_peer_install_archive
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "install"
+            src.mkdir()
+            (src / "kin-mail.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (src / "nested").mkdir()
+            (src / "nested" / "helper.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            dest = Path(td) / "peer-install.tgz"
+            build_peer_install_archive(src, dest)
+            self.assertTrue(dest.is_file())
+            with tarfile.open(dest, "r:gz") as tar:
+                names = {info.name.replace("\\", "/") for info in tar.getmembers()}
+            self.assertIn("install/kin-mail.sh", names)
+            self.assertIn("install/nested/helper.sh", names)
+
+    def test_archive_refuses_missing_driver(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.orchestration import build_peer_install_archive
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "install"
+            src.mkdir()
+            dest = Path(td) / "peer-install.tgz"
+            with self.assertRaises(FileNotFoundError):
+                build_peer_install_archive(src, dest)
 
 
 if __name__ == "__main__":

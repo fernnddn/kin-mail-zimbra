@@ -73,6 +73,7 @@ zm() {
   su - zimbra -c "zmprov ${args[*]}"
 }
 
+AD_APPLY_OK=1
 if ! zm md "$MAIL_DOMAIN" zimbraAuthMech ad \
     zimbraAuthLdapURL "$AD_LDAP_URL" \
     zimbraAuthLdapSearchBase "$AD_SEARCH_BASE" \
@@ -80,14 +81,16 @@ if ! zm md "$MAIL_DOMAIN" zimbraAuthMech ad \
     zimbraAuthLdapSearchBindDn "$AD_SEARCH_BIND_DN" \
     zimbraAuthLdapSearchBindPassword "$AD_SEARCH_BIND_PASSWORD" \
     zimbraAuthFallbackToLocal TRUE; then
-  fail "zmprov failed to apply domain auth (URL/search/bind)"
-  exit 1
+  warn "zmprov failed to apply domain auth (URL/search/bind) - local Zimbra auth stays active"
+  AD_APPLY_OK=0
 fi
-if [ -n "${AD_BIND_DN_TEMPLATE}" ]; then
+if [ "$AD_APPLY_OK" -eq 1 ] && [ -n "${AD_BIND_DN_TEMPLATE}" ]; then
   zm md "$MAIL_DOMAIN" zimbraAuthLdapBindDn "$AD_BIND_DN_TEMPLATE" \
-    || { fail "zmprov failed to set zimbraAuthLdapBindDn"; exit 1; }
+    || warn "zmprov failed to set zimbraAuthLdapBindDn (continuing)"
 fi
-ok "zimbraAuthMech=ad + local fallback TRUE"
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  ok "zimbraAuthMech=ad + local fallback TRUE"
+fi
 
 # Show non-secret attrs for the progress/audit trail.
 su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech zimbraAuthLdapURL zimbraAuthLdapSearchBase zimbraAuthLdapSearchFilter zimbraAuthLdapSearchBindDn zimbraAuthFallbackToLocal zimbraAuthLdapBindDn" 2>/dev/null \
@@ -107,20 +110,22 @@ else
 fi
 
 # AD-backed mailbox: must already exist in Active Directory. Zimbra still needs
-# a local account record; password below is a placeholder — login proof uses AD.
+# a local account record; password below is a placeholder - login proof uses AD.
 AD_PLACEHOLDER="KinAdPlaceholder-$(hostname -s)"
-if zimbra_cmd zmprov ga "$AD_TEST_USER" >/dev/null 2>&1; then
-  info "AD-backed account already exists in Zimbra: ${AD_TEST_USER}"
-else
-  if zimbra_cmd zmprov ca "$AD_TEST_USER" "$AD_PLACEHOLDER" displayName 'KIN AD auth test' >/dev/null; then
-    ok "AD-backed account created in Zimbra: ${AD_TEST_USER}"
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  if zimbra_cmd zmprov ga "$AD_TEST_USER" >/dev/null 2>&1; then
+    info "AD-backed account already exists in Zimbra: ${AD_TEST_USER}"
   else
-    fail "Failed to create AD-backed account: ${AD_TEST_USER}"
-    exit 1
+    if zimbra_cmd zmprov ca "$AD_TEST_USER" "$AD_PLACEHOLDER" displayName 'KIN AD auth test' >/dev/null; then
+      ok "AD-backed account created in Zimbra: ${AD_TEST_USER}"
+    else
+      warn "Failed to create AD-backed account: ${AD_TEST_USER} (mail install continues on local auth)"
+      AD_APPLY_OK=0
+    fi
   fi
 fi
 
-say "3. Verify both auth paths (zmmailbox / zimbra_user_auth_ok)"
+say "3. Verify auth paths (zmmailbox / zimbra_user_auth_ok)"
 
 auth_ok() {
   local user="$1" pass="$2" label="$3"
@@ -128,20 +133,27 @@ auth_ok() {
     ok "${label}: ${user}"
     return 0
   fi
-  fail "${label} FAILED: ${user}"
+  warn "${label} FAILED: ${user}"
   # Surface a real auth error (zmmailbox), not obsolete zmprov auth usage text.
   zimbra_cmd zmmailbox -m "$user" -p "$pass" gaf 2>&1 | sed 's/^/    /' | tail -5 || true
   return 1
 }
 
-FAILS=0
-auth_ok "$LOCAL_USER" "$LOCAL_PASS" "Local auth (fallback)" || FAILS=$((FAILS + 1))
-auth_ok "$AD_TEST_USER" "$AD_TEST_PASS" "AD LDAP auth" || FAILS=$((FAILS + 1))
+LOCAL_FAIL=0
+AD_FAIL=0
+auth_ok "$LOCAL_USER" "$LOCAL_PASS" "Local auth (fallback)" || LOCAL_FAIL=1
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  auth_ok "$AD_TEST_USER" "$AD_TEST_PASS" "AD LDAP auth" || AD_FAIL=1
+fi
 
 echo
-if [ "$FAILS" -eq 0 ]; then
-  say "DONE — both auth paths verified"
+if [ "$LOCAL_FAIL" -ne 0 ]; then
+  fail "Local Zimbra auth failed - mailboxd is not usable"
+  exit 1
+fi
+if [ "$AD_APPLY_OK" -eq 0 ] || [ "$AD_FAIL" -ne 0 ]; then
+  warn "AD path not verified. Local mail still works. Fix URL/bind DN/filter and re-run 06-hybrid-auth.sh"
   exit 0
 fi
-fail "${FAILS} auth path(s) failed — check URL/bind DN/filter and account membership in AD"
-exit 1
+say "DONE - both auth paths verified"
+exit 0

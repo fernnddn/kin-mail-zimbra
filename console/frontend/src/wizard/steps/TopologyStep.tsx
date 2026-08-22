@@ -210,9 +210,9 @@ export default function TopologyStep() {
             fail-closed.
           </Hint>
           <Hint>
-            On every VM (mail A, mail B, Observability) create Linux user kin with sudo, set the
-            same root and kin passwords you will enter next, and allow SSH password login
-            (cloud images default to keys only). Build HA pair cannot use SSH keys.
+            Mail B does not need console/bootstrap.sh. Build HA pair copies
+            /opt/kin-mail-deploy/install from this host. Mail B still needs user
+            kin, matching passwords, SSH password login, and one blank spare disk.
           </Hint>
         </>
       ) : null}

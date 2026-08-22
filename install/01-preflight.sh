@@ -45,11 +45,21 @@ case "${VERSION_ID:-}" in
 esac
 
 # --- 3. clean host -----------------------------------------------------------
+# Ubuntu images often ship postfix. 02 purges these later; stopping them here
+# lets a greenfield Deploy continue instead of dying before Zimbra.
 echo; say "3. Conflicting services"
 CONFLICT=0
 for s in postfix apache2 nginx bind9 exim4 dovecot-core sendmail; do
   if systemctl is-active --quiet "$s" 2>/dev/null; then
-    fail "$s is running - Zimbra ships its own and will conflict"; CONFLICT=1; FATAL=1
+    warn "$s is running - stopping it (Zimbra ships its own)"
+    systemctl disable --now "$s" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$s" 2>/dev/null; then
+      fail "$s is still running after stop - Zimbra will conflict"
+      CONFLICT=1
+      FATAL=1
+    else
+      ok "$s stopped"
+    fi
   fi
 done
 [ $CONFLICT -eq 0 ] && ok "No conflicting mail or web services running"
@@ -57,7 +67,7 @@ done
 
 # --- 4. outbound reachability for installation -------------------------------
 echo; say "4. Outbound access needed to INSTALL"
-for u in "https://github.com" "http://archive.ubuntu.com" "https://repo.zimbra.com" "https://acme-v02.api.letsencrypt.org/directory"; do
+for u in "https://github.com" "http://archive.ubuntu.com" "https://repo.zimbra.com"; do
   code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$u" 2>/dev/null)
   if [ -n "$code" ] && [ "$code" != "000" ]; then
     ok "$(printf '%-46s' "$u") HTTP $code"
@@ -65,6 +75,17 @@ for u in "https://github.com" "http://archive.ubuntu.com" "https://repo.zimbra.c
     fail "$(printf '%-46s' "$u") unreachable"; FATAL=1
   fi
 done
+if [ "${TLS_METHOD:-}" != "customer" ]; then
+  u="https://acme-v02.api.letsencrypt.org/directory"
+  code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$u" 2>/dev/null)
+  if [ -n "$code" ] && [ "$code" != "000" ]; then
+    ok "$(printf '%-46s' "$u") HTTP $code"
+  else
+    fail "$(printf '%-46s' "$u") unreachable"; FATAL=1
+  fi
+else
+  info "TLS_METHOD=customer — skipping Let's Encrypt API reachability"
+fi
 
 # --- 5. outbound SMTP - the decisive test ------------------------------------
 echo; say "5. Outbound SMTP  ${DIM}(banner grab, not a connect test)${RST}"

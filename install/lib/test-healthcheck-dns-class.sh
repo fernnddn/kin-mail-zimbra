@@ -161,6 +161,42 @@ else
   bad "05-healthcheck.sh still fail-closes on sending-address probes"
 fi
 
+if grep -q 'b "Message not found in message store yet' ../05-healthcheck.sh \
+  && grep -q 'b "No DKIM-Signature header yet' ../05-healthcheck.sh \
+  && ! grep -q 'f "Message not found in message store"' ../05-healthcheck.sh; then
+  pass "05-healthcheck.sh treats amavis warmup / missing DKIM header as blocked"
+else
+  bad "05-healthcheck.sh still fail-closes T1 warmup"
+fi
+
+if grep -q '07-zpush.sh failed — mail install continues' ../kin-mail.sh \
+  && grep -q '11-admin-path-lockdown.sh failed - mail install continues' ../kin-mail.sh \
+  && ! grep -q 'Pipeline stopped at 11-admin-path-lockdown.sh' ../kin-mail.sh; then
+  pass "kin-mail.sh does not stop Deploy on Z-Push or admin-path lockdown"
+else
+  bad "kin-mail.sh still fail-closes optional post-Zimbra stages"
+fi
+
+if grep -q 'stopping it (Zimbra ships its own)' ../01-preflight.sh \
+  && ! grep -q 'is running - Zimbra ships its own and will conflict' ../01-preflight.sh; then
+  pass "01-preflight.sh stops stock postfix/nginx instead of aborting"
+else
+  bad "01-preflight.sh still fail-closes on stock conflicting services"
+fi
+
+if grep -q 'AD path not verified. Local mail still works' ../06-hybrid-auth.sh; then
+  pass "06-hybrid-auth.sh does not abort Deploy when AD is unreachable"
+else
+  bad "06-hybrid-auth.sh still fail-closes on AD bind"
+fi
+
+if grep -q 'b "AD LDAP auth not passing yet' ../05-healthcheck.sh \
+  && ! grep -q 'f "AD LDAP auth failed' ../05-healthcheck.sh; then
+  pass "05-healthcheck.sh treats AD bind gaps as blocked not fail"
+else
+  bad "05-healthcheck.sh still fail-closes on AD LDAP"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf 'FAILED %s checks\n' "$fails"
   exit 1
