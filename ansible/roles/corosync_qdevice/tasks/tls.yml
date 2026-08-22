@@ -190,6 +190,30 @@
     - not ansible_check_mode
   tags: [qdevice, tls]
 
+- name: Confirm the primary PKCS12 exists before marking TLS ready
+  ansible.builtin.stat:
+    path: "{{ corosync_qdevice_p12_path }}"
+  register: corosync_qdevice_p12_now
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
+- name: Require the primary PKCS12 before distributing it
+  ansible.builtin.assert:
+    that:
+      - corosync_qdevice_p12_now.stat.exists | default(false)
+    fail_msg: >-
+      corosync-qdevice-net-certutil -M did not leave
+      {{ corosync_qdevice_p12_path }} on the primary. Cannot import TLS on
+      the secondary.
+  run_once: true
+  when:
+    - not corosync_qdevice_tls_ready_all
+    - not ansible_check_mode
+  tags: [qdevice, tls]
+
 - name: Record that the primary imported the cluster certificate
   ansible.builtin.file:
     path: "{{ corosync_qdevice_tls_ready_marker }}"

@@ -756,9 +756,12 @@ class CheckModeSafetyTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         force = activate.find("drbdadm primary --force")
         self.assertGreater(force, 0)
-        force_when = activate[force : force + 700]
-        self.assertIn("not (drbd_resource_is_diskless | bool)", force_when)
-        self.assertIn("drbd_resource_dump_md.rc != 0", force_when)
+        force_when = activate[force : force + 900]
+        self.assertIn("not (drbd_resource_pacemaker_owns | bool)", force_when)
+        self.assertIn("'Primary' not in", force_when)
+        self.assertNotIn("not (drbd_resource_is_diskless | bool)", force_when)
+        self.assertIn("drbd_resource_pcs_clone", activate)
+        self.assertIn("corosync_qdevice_p12_now", tls)
         self.assertIn("select_drbd_disk.py missing", orch)
         pipeline = (
             repo / "console/frontend/src/wizard/deployPipeline.ts"

@@ -45,13 +45,37 @@
       }}
   tags: [drbd, resource, activate]
 
+- name: Check whether Pacemaker already owns the DRBD clone
+  ansible.builtin.command:
+    cmd: pcs resource config {{ drbd_resource_pcs_clone }}
+  register: drbd_resource_pcs_clone_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [drbd, resource, activate]
+
+- name: Remember whether Pacemaker owns DRBD attach and promote
+  ansible.builtin.set_fact:
+    drbd_resource_pacemaker_owns: "{{ (drbd_resource_pcs_clone_probe.rc | int) == 0 }}"
+  tags: [drbd, resource, activate]
+
+- name: Note that Pacemaker owns DRBD so ansible will not down/up/force
+  ansible.builtin.debug:
+    msg: >-
+      {{ drbd_resource_pcs_clone }} is already in the CIB. Skipping create-md,
+      drbdadm down/up, and primary --force so a retry cannot fight the clone.
+  when: drbd_resource_pacemaker_owns | bool
+  tags: [drbd, resource, activate]
+
 - name: Note a stale Diskless resource will be torn down before re-attach
   ansible.builtin.debug:
     msg: >-
       Resource {{ drbd_resource_name }} is up but Diskless (likely a leftover from
       an earlier failed attach while the data disk was still mounted). Running
       drbdadm down then drbdadm up so the backing device can attach cleanly.
-  when: drbd_resource_is_diskless | bool
+  when:
+    - drbd_resource_is_diskless | bool
+    - not (drbd_resource_pacemaker_owns | bool)
   tags: [drbd, resource, activate]
 
 - name: Tear down a stale Diskless resource before a clean attach
@@ -60,6 +84,7 @@
   # SAFETY: never check_mode: false - down must not run during --check.
   when:
     - drbd_resource_is_diskless | bool
+    - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
@@ -70,7 +95,9 @@
   changed_when: false
   failed_when: false
   check_mode: false
-  when: drbd_resource_needs_activate | bool
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
   tags: [drbd, resource, activate]
 
 - name: Create the DRBD metadata on the external meta-disk
@@ -87,6 +114,7 @@
     - drbd_resource_needs_activate | bool
     - drbd_resource_dump_md.rc is defined
     - drbd_resource_dump_md.rc != 0
+    - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
@@ -96,6 +124,19 @@
   # SAFETY: never check_mode: false - up must not run during --check.
   when:
     - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Read the DRBD role after attach
+  ansible.builtin.command:
+    cmd: drbdadm role {{ drbd_resource_name }}
+  register: drbd_resource_role_after_up
+  changed_when: false
+  failed_when: false
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
@@ -103,24 +144,27 @@
   ansible.builtin.command:
     cmd: drbdadm primary --force {{ drbd_resource_name }}
   # SAFETY: never check_mode: false - primary --force must not run during --check.
-  # Greenfield only: new metadata (dump-md failed) on node A. Pacemaker owns
-  # promotion after the clone exists. Diskless re-attach must not --force
-  # (peer may already be Promoted).
+  # After attach, node A must be Primary so Pacemaker can take over. Do not
+  # trust the pre-down Diskless fact (stale after down/up). Do not --force
+  # once kin-drbd-clone exists (Pacemaker owns promotion).
   when:
     - drbd_resource_needs_activate | bool
-    - not (drbd_resource_is_diskless | bool)
-    - drbd_resource_dump_md.rc is defined
-    - drbd_resource_dump_md.rc != 0
+    - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
     - inventory_hostname == drbd_resource_node_a_name
+    - drbd_resource_role_after_up.rc is defined
+    - drbd_resource_role_after_up.rc | int == 0
+    - "'Primary' not in (drbd_resource_role_after_up.stdout | default(''))"
   tags: [drbd, resource, activate]
 
 - name: Note that DRBD activation is skipped during a dry-run
   ansible.builtin.debug:
     msg: >-
-      Resource {{ drbd_resource_name }} is already up with a disk attached, or
-      this is --check mode: create-md / up / primary are NOT executed.
-      Greenfield create-md in task 2.4 was only tested on a test device
-      (kin-drbd-test), not the production disk.
-  when: ansible_check_mode or not (drbd_resource_needs_activate | bool)
+      Resource {{ drbd_resource_name }} is already up with a disk attached,
+      Pacemaker already owns {{ drbd_resource_pcs_clone }}, or this is
+      --check mode: create-md / up / primary are NOT executed.
+  when: >-
+    ansible_check_mode
+    or not (drbd_resource_needs_activate | bool)
+    or (drbd_resource_pacemaker_owns | bool)
   tags: [drbd, resource, activate]

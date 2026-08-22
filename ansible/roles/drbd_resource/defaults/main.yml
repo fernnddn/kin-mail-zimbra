@@ -31,3 +31,6 @@ drbd_resource_node_b_name: mail2.gits-it.site
 drbd_resource_node_b_address: ""
 drbd_resource_meta_loop_script: /usr/local/sbin/kin-drbd-meta-loop.sh
 drbd_resource_meta_loop_unit: kin-drbd-meta-loop.service
+# After mail-pacemaker.yml the clone owns attach/promote. Ansible must not
+# drbdadm down/up/primary --force on a retry (would fight self-heal).
+drbd_resource_pcs_clone: kin-drbd-clone

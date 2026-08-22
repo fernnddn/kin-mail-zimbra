@@ -110,6 +110,7 @@ class DrbdResParseTests(unittest.TestCase):
         self.assertNotIn("'UpToDate' not in", verify)
         self.assertIn("Diskless", verify)
         self.assertIn("Primary", verify)
+        self.assertIn("drbd_resource_pacemaker_owns", verify)
 
     def test_create_md_answers_yes_prompt(self) -> None:
         activate = (
@@ -117,6 +118,14 @@ class DrbdResParseTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("create-md", activate)
         self.assertIn("printf 'yes", activate)
+        self.assertIn("drbd_resource_pacemaker_owns", activate)
+        self.assertIn("drbd_resource_role_after_up", activate)
+        self.assertIn("drbdadm primary --force", activate)
+        force = activate.find("drbdadm primary --force")
+        self.assertNotIn(
+            "not (drbd_resource_is_diskless | bool)",
+            activate[force : force + 900],
+        )
 
 
 if __name__ == "__main__":

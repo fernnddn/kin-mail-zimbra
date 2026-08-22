@@ -41,6 +41,7 @@
   when:
     - inventory_hostname == drbd_resource_node_a_name
     - not ansible_check_mode
+    - not (drbd_resource_pacemaker_owns | default(false) | bool)
   tags: [drbd, resource, verify]
 
 - name: Verify the external meta-disk is attached to a loop device
