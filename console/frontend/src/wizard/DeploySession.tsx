@@ -88,7 +88,7 @@ const LOG_BASELINE = "# Deployment activity\n";
 
 export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const { draft, save } = useWizard();
-  const { installInProgress, refresh: refreshSetup } = useSetup();
+  const { installInProgress, refresh: refreshSetup, fullInstallComplete } = useSetup();
   const [log, setLog] = useState(LOG_BASELINE);
   const [message, setMessage] = useState("");
   const [localBusy, setLocalBusy] = useState(false);
@@ -396,6 +396,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       setMessage("Tick the confirmation box before starting Deploy.");
       return;
     }
+    if (fullInstallComplete) {
+      setMessage(
+        "Mail is already installed on this host. Do not run Deploy again. On a 2-server pair use Build HA pair.",
+      );
+      return;
+    }
     setMessage("");
 
     try {
@@ -463,6 +469,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     confirmFull,
     draft.mail_domain,
     draft.topology,
+    fullInstallComplete,
     hydrateFromServer,
     openStream,
     pipelineBusy,

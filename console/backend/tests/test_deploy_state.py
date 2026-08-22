@@ -432,5 +432,23 @@ class UnexpectedInstallStopTests(unittest.TestCase):
         self.assertFalse(self.ha_running.exists())
 
 
+class FullInstallRefuseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_refuses_when_setup_complete(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.commands import cmd_run_full_install
+
+        with patch(
+            "kin_privhelper.maintenance.gather_status",
+            new=AsyncMock(return_value={"standby": []}),
+        ), patch(
+            "kin_privhelper.commands.is_full_install_complete",
+            return_value=True,
+        ):
+            events = [ev async for ev in cmd_run_full_install()]
+        self.assertTrue(any("Refusing:" in str(ev.get("data") or "") for ev in events))
+        self.assertEqual(events[-1], {"type": "done", "exit_code": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

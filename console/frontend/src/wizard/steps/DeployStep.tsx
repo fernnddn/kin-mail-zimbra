@@ -265,7 +265,7 @@ function stageState(
 export default function DeployStep() {
   const { draft } = useWizard();
   const { user } = useAuth();
-  const { deployed, installInProgress, fullInstallComplete, loading } = useSetup();
+  const { deployed, installInProgress, fullInstallComplete, haSetupComplete, loading } = useSetup();
   const navigate = useNavigate();
   const canOps = !deployed || isOpsRole(user?.role);
   const {
@@ -304,7 +304,8 @@ export default function DeployStep() {
   const pct = complete ? 100 : current > 0 ? (current / total) * 100 : activeRun ? 4 : 0;
   const showProgress = activeRun || current > 0 || complete || failed;
   // Hide setup cards while any install is active on this host (SSE or server-side).
-  const showSetupCards = canOps && !activeRun;
+  // After setup-complete, never offer Deploy again (would re-run kin-mail.sh on live mail).
+  const showSetupCards = canOps && !activeRun && !fullInstallComplete;
 
   const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
   const [haDiskLoading, setHaDiskLoading] = useState(false);
@@ -464,6 +465,17 @@ export default function DeployStep() {
         </ProgressCard>
       )}
 
+      {fullInstallComplete && canOps && !activeRun && (
+        <StepCard>
+          <StepHeading>Mail is already installed on this host</StepHeading>
+          <StepBody>
+            Deploy stays hidden so a second full-install cannot start on live mail. On a 2-server
+            pair continue with Build HA pair below. After a failed HA attempt, fix then re-run
+            Build HA pair from the top; do not click Deploy.
+          </StepBody>
+        </StepCard>
+      )}
+
       {showSetupCards && (
         <>
           <StepCard>
@@ -518,6 +530,9 @@ export default function DeployStep() {
             Pacemaker). Progress streams into View logs with a checkpoint per playbook. A
             failure stops there; nothing is retried or rolled back automatically. After a
             manual fix, run this again from the top; the playbooks are idempotent.
+            {haSetupComplete
+              ? " HA is already marked complete on this host. Re-run only after a failed attempt that you have already fixed."
+              : " Do not click Deploy on this host; mail is already installed."}
           </StepBody>
           <HaDiskStatus haDisk={haDisk} haDiskLoading={haDiskLoading} />
           <label

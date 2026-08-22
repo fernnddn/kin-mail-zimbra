@@ -264,6 +264,32 @@ class InventoryTests(unittest.TestCase):
         expected = [(s.step_id, s.label) for s in STEPS]
         self.assertEqual(pairs, expected)
 
+    def test_frontend_hides_deploy_after_setup_complete(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        step = (repo / "console/frontend/src/wizard/steps/DeployStep.tsx").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "showSetupCards = canOps && !activeRun && !fullInstallComplete",
+            step,
+        )
+        self.assertIn("Mail is already installed on this host", step)
+        session = (
+            repo / "console/frontend/src/wizard/DeploySession.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if (fullInstallComplete)", session)
+        pipeline = (
+            repo / "console/frontend/src/wizard/deployPipeline.ts"
+        ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(pipeline.count("/^Refusing:/m.test(log)"), 2)
+        cmds = (
+            repo / "console/backend/kin_privhelper/commands.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if is_full_install_complete():", cmds)
+        self.assertIn("Do not run Deploy again", cmds)
+
     def test_event_exit_code_zero_is_success(self) -> None:
         from kin_privhelper.orchestration import _event_exit_code
 

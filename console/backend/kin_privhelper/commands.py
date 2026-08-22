@@ -19,6 +19,7 @@ from .deploy_state import (
     ZIMBRA_INSTALL_LOG,
     append_unexpected_stop_if_needed,
     full_install_in_progress,
+    is_full_install_complete,
     mark_full_install_finished,
     mark_full_install_started,
     mark_ha_orchestration_finished,
@@ -597,6 +598,14 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
         yield proto.event_stderr(
             "Refusing full install while a node is in maintenance "
             f"(standby={st['standby']}). Exit maintenance first.\n"
+        )
+        yield proto.event_done(1)
+        return
+    if is_full_install_complete():
+        yield proto.event_stderr(
+            "Refusing: mail is already installed on this host "
+            "(/etc/kin-mail/setup-complete). Do not run Deploy again. "
+            "On a 2-server pair use Build HA pair instead.\n"
         )
         yield proto.event_done(1)
         return

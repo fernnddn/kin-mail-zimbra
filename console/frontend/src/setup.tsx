@@ -26,6 +26,8 @@ type SetupCtx = {
   installInProgress: boolean;
   /** /etc/kin-mail/setup-complete exists. Independent of the live log buffer. */
   fullInstallComplete: boolean;
+  /** /etc/kin-mail/ha-setup-complete exists (2vm HA apply reached ORCH_DONE). */
+  haSetupComplete: boolean;
   loading: boolean;
   /** Last /api/setup/status failure. Empty after a successful fetch. */
   statusError: string;
@@ -41,6 +43,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
   const [deployed, setDeployed] = useState(false);
   const [installInProgress, setInstallInProgress] = useState(false);
   const [fullInstallComplete, setFullInstallComplete] = useState(false);
+  const [haSetupComplete, setHaSetupComplete] = useState(false);
   const [loading, setLoading] = useState(true);
   const [statusError, setStatusError] = useState("");
   const loadedOnce = useRef(false);
@@ -51,6 +54,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       setDeployed(Boolean(st.deployed));
       setInstallInProgress(Boolean(st.install_in_progress || st.busy));
       setFullInstallComplete(Boolean(st.full_install_complete));
+      setHaSetupComplete(Boolean(st.ha_setup_complete));
       setStatusError("");
       loadedOnce.current = true;
     } catch (err) {
@@ -61,6 +65,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         setDeployed(false);
         setInstallInProgress(false);
         setFullInstallComplete(false);
+        setHaSetupComplete(false);
         setStatusError(message);
       }
       // After a successful load, keep last known status. A transient 500
@@ -83,11 +88,20 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       deployed,
       installInProgress,
       fullInstallComplete,
+      haSetupComplete,
       loading,
       statusError,
       refresh,
     }),
-    [deployed, installInProgress, fullInstallComplete, loading, statusError, refresh],
+    [
+      deployed,
+      installInProgress,
+      fullInstallComplete,
+      haSetupComplete,
+      loading,
+      statusError,
+      refresh,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
