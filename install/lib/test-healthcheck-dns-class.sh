@@ -171,8 +171,10 @@ fi
 
 if grep -q '07-zpush.sh failed — mail install continues' ../kin-mail.sh \
   && grep -q '11-admin-path-lockdown.sh failed - mail install continues' ../kin-mail.sh \
-  && ! grep -q 'Pipeline stopped at 11-admin-path-lockdown.sh' ../kin-mail.sh; then
-  pass "kin-mail.sh does not stop Deploy on Z-Push or admin-path lockdown"
+  && grep -q '09-hardening.sh failed - mail install continues' ../kin-mail.sh \
+  && ! grep -q 'Pipeline stopped at 11-admin-path-lockdown.sh' ../kin-mail.sh \
+  && ! grep -q 'Pipeline stopped at 09-hardening.sh' ../kin-mail.sh; then
+  pass "kin-mail.sh does not stop Deploy on Z-Push, hardening, or admin-path lockdown"
 else
   bad "kin-mail.sh still fail-closes optional post-Zimbra stages"
 fi
@@ -195,6 +197,13 @@ if grep -q 'b "AD LDAP auth not passing yet' ../05-healthcheck.sh \
   pass "05-healthcheck.sh treats AD bind gaps as blocked not fail"
 else
   bad "05-healthcheck.sh still fail-closes on AD LDAP"
+fi
+
+if grep -q 'b "Zimbra still warming after DNS-cache flush restarts' ../05-healthcheck.sh \
+  && ! grep -q 'f "Zimbra not healthy after DNS-cache flush restarts"' ../05-healthcheck.sh; then
+  pass "05-healthcheck.sh treats post-flush warmup as blocked not fail"
+else
+  bad "05-healthcheck.sh still fail-closes after amavis/opendkim restart"
 fi
 
 if [ "$fails" -ne 0 ]; then

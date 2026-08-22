@@ -153,7 +153,8 @@ def render_remove_host_inventory(
         "    ansible_password: '{{ lookup(\"env\", \"KIN_ANSIBLE_PASSWORD\") }}'",
         "    ansible_become: true",
         "    ansible_become_password: '{{ lookup(\"env\", \"KIN_ANSIBLE_BECOME_PASSWORD\") }}'",
-        "    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new'",
+        "    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new "
+        "-o ServerAliveInterval=30 -o ServerAliveCountMax=120'",
         f"    cluster_remove_host_survivor_name: {survivor.name}",
         f"    cluster_remove_host_survivor_address: {survivor.ip}",
         f"    cluster_remove_host_retired_name: {retired.name}",

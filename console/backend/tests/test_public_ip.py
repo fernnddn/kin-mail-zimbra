@@ -33,7 +33,7 @@ class PublicIpTests(unittest.TestCase):
         reset_public_ip_cache()
 
     def test_private_and_cgnat_rejected(self) -> None:
-        self.assertFalse(is_public_ipv4("10.10.40.3"))
+        self.assertFalse(is_public_ipv4("10.0.0.1"))
         self.assertFalse(is_public_ipv4("192.168.1.8"))
         self.assertFalse(is_public_ipv4("172.16.0.1"))
         self.assertFalse(is_public_ipv4("127.0.0.1"))
@@ -56,7 +56,7 @@ class PublicIpTests(unittest.TestCase):
     def test_probe_skips_private_echo_and_uses_next_source(self) -> None:
         with patch(
             "kin_console.public_ip.urllib.request.urlopen",
-            side_effect=[_Resp(b"10.10.40.3"), _Resp(b"8.8.8.8")],
+            side_effect=[_Resp(b"10.0.0.1"), _Resp(b"8.8.8.8")],
         ):
             ip = probe_public_ipv4(now=20.0)
         self.assertEqual(ip, "8.8.8.8")

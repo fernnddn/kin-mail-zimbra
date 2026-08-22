@@ -110,7 +110,7 @@ export function emptyDraft(): WizardDraft {
     ad_test_user: "",
     ad_test_pass: "",
     ad_test_pass_set: false,
-    zpush_enabled: true,
+    zpush_enabled: false,
     contracted_seats: "PLACEHOLDER_UNSET",
     kin_admin_ips: "",
   };

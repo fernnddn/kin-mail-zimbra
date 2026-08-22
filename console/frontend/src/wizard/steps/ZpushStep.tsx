@@ -16,8 +16,9 @@ export default function ZpushStep() {
     <>
       <Title>Email on phones</Title>
       <Lede>
-        Choose whether staff can sync mail on mobile devices (ActiveSync). You can skip this if
-        phones are not needed for this customer.
+        Choose whether staff can sync mail on mobile devices (ActiveSync). Skip is the
+        default so a first-night Deploy does not depend on the Ondrej PHP PPA. You can
+        enable it later with sudo ./07-zpush.sh.
       </Lede>
       <ChoiceGrid>
         <Choice

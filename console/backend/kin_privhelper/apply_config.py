@@ -437,7 +437,7 @@ def build_base_config() -> dict[str, str]:
         "EXTERNAL_TEST_ADDRESS": "",
         "CONTRACTED_SEATS": "PLACEHOLDER_UNSET",
         "KIN_ADMIN_IPS": "",
-        "ZPUSH_ENABLED": "yes",
+        "ZPUSH_ENABLED": "no",
         "AD_AUTH_ENABLED": "no",
         "AD_LDAP_URL": "",
         "AD_SEARCH_BASE": "",
@@ -654,7 +654,7 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["KIN_ADMIN_IPS"] = draft_ips
     elif "KIN_ADMIN_IPS" not in out:
         out["KIN_ADMIN_IPS"] = ""
-    out["ZPUSH_ENABLED"] = "yes" if draft.get("zpush_enabled", True) else "no"
+    out["ZPUSH_ENABLED"] = "yes" if draft.get("zpush_enabled", False) else "no"
 
     # Keep test users aligned to domain (passwords preserved if already set).
     out["TEST_USER_1"] = f"test1@{domain}"

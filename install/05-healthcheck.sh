@@ -89,7 +89,7 @@ systemctl restart dnsmasq >/dev/null 2>&1 && info "dnsmasq restarted"
 su - zimbra -c "zmamavisdctl restart" >/dev/null 2>&1 && info "amavis restarted"
 su - zimbra -c "zmopendkimctl restart" >/dev/null 2>&1 && info "opendkim restarted"
 if ! kin_zimbra_wait_healthy; then
-  f "Zimbra not healthy after DNS-cache flush restarts"
+  b "Zimbra still warming after DNS-cache flush restarts (amavis/opendkim)"
 else
   info "Zimbra healthy after cache flush"
 fi

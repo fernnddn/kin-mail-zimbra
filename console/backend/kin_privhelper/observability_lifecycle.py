@@ -163,7 +163,8 @@ def render_observability_inventory(
         "  vars:",
         "    ansible_become: true",
         "    ansible_become_password: '{{ lookup(\"env\", \"KIN_ANSIBLE_BECOME_PASSWORD\") }}'",
-        "    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new'",
+        "    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new "
+        "-o ServerAliveInterval=30 -o ServerAliveCountMax=120'",
         f"    corosync_qdevice_qnetd_ip: {obs_ip}",
         f"    corosync_qdevice_qnetd_inventory_host: {obs_name}",
         f'    iscsi_initiator_portal: "{obs_ip}:3260"',

@@ -90,7 +90,7 @@ class WizardDraft(BaseModel):
     ad_test_pass: str = ""
 
     # e. Z-Push
-    zpush_enabled: bool = True
+    zpush_enabled: bool = False
 
     # f. Licensing
     contracted_seats: str = "PLACEHOLDER_UNSET"

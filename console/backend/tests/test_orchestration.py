@@ -58,6 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("10.10.40.", inv)
         self.assertNotIn("pacemaker_mail_stack_vip_nic", inv)
         self.assertNotIn("ens33", inv)
+        self.assertIn("ServerAliveInterval=30", inv)
+        self.assertIn("ServerAliveCountMax=120", inv)
 
     def test_inventory_uses_discovered_drbd_disks(self) -> None:
         inv = render_inventory(
@@ -666,9 +668,15 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn('fail "Pipeline stopped at 07-zpush.sh"', driver)
         self.assertIn("11-admin-path-lockdown.sh failed - mail install continues", driver)
         self.assertNotIn('fail "Pipeline stopped at 11-admin-path-lockdown.sh"', driver)
+        self.assertIn("09-hardening.sh failed - mail install continues", driver)
+        self.assertNotIn('fail "Pipeline stopped at 09-hardening.sh"', driver)
+        self.assertIn("ServerAliveInterval=30", orch)
+        self.assertIn("ServerAliveCountMax=120", orch)
         health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
         self.assertIn('b "Message not found in message store yet', health)
         self.assertNotIn('f "Message not found in message store"', health)
+        self.assertIn('b "Zimbra still warming after DNS-cache flush restarts', health)
+        self.assertNotIn('f "Zimbra not healthy after DNS-cache flush restarts"', health)
         self.assertIn('b "AD LDAP auth not passing yet', health)
         self.assertNotIn('f "AD LDAP auth failed', health)
         preflight = (repo / "install/01-preflight.sh").read_text(encoding="utf-8")
@@ -683,6 +691,12 @@ class CheckModeSafetyTests(unittest.TestCase):
         )
         self.assertIn("Mail B does not need console/bootstrap.sh", topo)
         self.assertIn("copies", topo)
+        checks = (repo / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+        self.assertIn("--exclude='test_*.py'", checks)
+        types = (repo / "console/frontend/src/wizard/types.ts").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("zpush_enabled: false", types)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

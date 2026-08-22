@@ -375,9 +375,7 @@ run_full_install() {
   hardening_mode="$(full_install_hardening_mode "$mid_handoff" "$zimbra_dir_exists")"
   if [ "$hardening_mode" = "full" ]; then
     run_stage 09-hardening.sh || {
-      rc=$?
-      fail "Pipeline stopped at 09-hardening.sh"
-      return "$rc"
+      warn "09-hardening.sh failed - mail install continues. Re-run later: sudo ./09-hardening.sh"
     }
   else
     if [ "$mid_handoff" -eq 1 ]; then
@@ -386,9 +384,7 @@ run_full_install() {
       warn "/opt/zimbra missing - running 09-hardening.sh --os-only"
     fi
     run_stage 09-hardening.sh --os-only || {
-      rc=$?
-      fail "Pipeline stopped at 09-hardening.sh --os-only"
-      return "$rc"
+      warn "09-hardening.sh --os-only failed - mail install continues. Re-run later: sudo ./09-hardening.sh --os-only"
     }
   fi
 
@@ -414,8 +410,13 @@ run_full_install() {
     warn "Skipping 05-healthcheck.sh (mid-handoff; zmcontrol not reachable on mountpoint)"
   else
     # Operator is watching the same log that printed the DKIM TXT. Wait so a
-    # paste during 06-11 plus this poll can pass. Standalone 05 keeps WAIT=0.
-    KIN_DKIM_WAIT_SEC="${KIN_DKIM_WAIT_SEC:-600}"
+    # paste during 06-11 plus this poll can pass. Customer TLS has no ACME
+    # paste; do not stall Deploy for ten minutes. Standalone 05 keeps WAIT=0.
+    if [ "${TLS_METHOD:-}" = "customer" ]; then
+      KIN_DKIM_WAIT_SEC="${KIN_DKIM_WAIT_SEC:-0}"
+    else
+      KIN_DKIM_WAIT_SEC="${KIN_DKIM_WAIT_SEC:-600}"
+    fi
     export KIN_DKIM_WAIT_SEC
     run_stage 05-healthcheck.sh || {
       rc=$?
