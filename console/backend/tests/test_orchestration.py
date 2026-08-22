@@ -207,8 +207,10 @@ class InventoryTests(unittest.TestCase):
     def test_install_dest_allows_topology_marker(self) -> None:
         self.assertTrue(_INSTALL_DEST_RE.match("/etc/kin-mail/topology"))
         self.assertTrue(_INSTALL_DEST_RE.match("/etc/kin-mail/config"))
+        self.assertTrue(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/users.json"))
         self.assertFalse(_INSTALL_DEST_RE.match("/etc/kin-mail/config.bak"))
         self.assertFalse(_INSTALL_DEST_RE.match("/tmp/topology"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/users.json.bak"))
 
     def test_orch_done_is_after_peer_console_sync(self) -> None:
         from pathlib import Path
@@ -315,6 +317,46 @@ class OrchRbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "add_observability"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "add_observability"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "store_observability_secrets"))
+        self.assertFalse(
+            command_allowed(
+                ROLE_CUSTOMER_ADMIN,
+                "mutate_console_users",
+                args={"op": "create"},
+                username="alice",
+            )
+        )
+        self.assertFalse(
+            command_allowed(
+                ROLE_SUPPORT_OPS,
+                "mutate_console_users",
+                args={"op": "delete", "username": "bob"},
+                username="ops",
+            )
+        )
+        self.assertTrue(
+            command_allowed(
+                ROLE_SUPER_ADMIN,
+                "mutate_console_users",
+                args={"op": "create"},
+                username="admin",
+            )
+        )
+        self.assertTrue(
+            command_allowed(
+                ROLE_CUSTOMER_ADMIN,
+                "mutate_console_users",
+                args={"op": "set_password", "username": "alice"},
+                username="alice",
+            )
+        )
+        self.assertFalse(
+            command_allowed(
+                ROLE_CUSTOMER_ADMIN,
+                "mutate_console_users",
+                args={"op": "set_password", "username": "admin"},
+                username="alice",
+            )
+        )
         # Status is read-only; apply is the sensitive mutation.
         self.assertTrue(
             command_allowed(ROLE_CUSTOMER_ADMIN, "run_script:09-hardening.sh --status")

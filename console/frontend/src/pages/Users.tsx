@@ -160,6 +160,11 @@ export default function UsersPage() {
           </Hint>
         )}
         {error && <Hint>{error}</Hint>}
+        <Hint>
+          User and password changes apply on the Promoted mail node, then copy to the
+          other node. If that copy fails, the change is not kept. Login still works
+          on whichever node you can reach.
+        </Hint>
         <TableWrap>
           <DataTable>
             <thead>

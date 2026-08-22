@@ -126,8 +126,9 @@ def load_users() -> list[ConsoleUser]:
     return _parse_users(data)
 
 
-def save_users(users: list[ConsoleUser]) -> None:
-    payload = {
+def users_payload(users: list[ConsoleUser]) -> dict[str, Any]:
+    """JSON object for users.json. Caller must not log this (contains hashes)."""
+    return {
         "version": 1,
         "users": [
             {
@@ -141,7 +142,14 @@ def save_users(users: list[ConsoleUser]) -> None:
             for u in users
         ],
     }
-    _atomic_write(users_file(), payload)
+
+
+def save_users(users: list[ConsoleUser]) -> None:
+    _atomic_write(users_file(), users_payload(users))
+
+
+def users_json_text(users: list[ConsoleUser]) -> str:
+    return json.dumps(users_payload(users), indent=2, ensure_ascii=False) + "\n"
 
 
 def get_user(username: str) -> ConsoleUser | None:
@@ -240,34 +248,42 @@ def list_public_users() -> list[dict[str, Any]]:
     return [u.public() for u in load_users()]
 
 
-def create_user(
+def apply_create_user(
+    users: list[ConsoleUser],
     username: str,
     role: str,
     *,
     auth_type: str = AUTH_LOCAL,
     password: str = "",
+    password_hash: str = "",
     ad_username: str = "",
-) -> ConsoleUser:
+) -> tuple[ConsoleUser, list[ConsoleUser]]:
+    """Return (created, new_list). Does not write disk."""
     username = validate_username(username)
     role = validate_role(role)
     auth_type = validate_auth_type(auth_type)
-    users = load_users()
     if any(u.username == username for u in users):
         raise ValueError(f"user {username!r} already exists")
 
     if auth_type == AUTH_LOCAL:
-        if len(password) < 8:
-            raise ValueError("password must be at least 8 characters")
+        hashed = (password_hash or "").strip()
+        if hashed:
+            if password:
+                raise ValueError("pass password or password_hash, not both")
+        else:
+            if len(password) < 8:
+                raise ValueError("password must be at least 8 characters")
+            hashed = auth.hash_password(password)
         created = ConsoleUser(
             username=username,
             role=role,
             auth_type=AUTH_LOCAL,
-            password_hash=auth.hash_password(password),
+            password_hash=hashed,
             ad_username="",
             disabled=False,
         )
     else:
-        if password:
+        if password or password_hash:
             raise ValueError("AD users must not have a local password")
         ad_id = validate_username(ad_username.strip() or username)
         created = ConsoleUser(
@@ -279,14 +295,17 @@ def create_user(
             disabled=False,
         )
 
-    users.append(created)
-    save_users(users)
-    return created
+    return created, [*users, created]
 
 
-def delete_user(username: str, *, actor: str) -> None:
+def apply_delete_user(
+    users: list[ConsoleUser],
+    username: str,
+    *,
+    actor: str,
+) -> list[ConsoleUser]:
+    """Return the list with username removed. Does not write disk."""
     username = username.strip()
-    users = load_users()
     target = next((u for u in users if u.username == username), None)
     if target is None:
         raise KeyError(username)
@@ -296,39 +315,85 @@ def delete_user(username: str, *, actor: str) -> None:
     supers = [u for u in remaining if u.role == ROLE_SUPER_ADMIN and not u.disabled]
     if target.role == ROLE_SUPER_ADMIN and not supers:
         raise ValueError("cannot delete the last KIN Super Admin")
-    save_users(remaining)
+    return remaining
 
 
-def set_local_password(username: str, password: str) -> ConsoleUser:
-    """Rotate a local user's password; drop any root-only first-boot plaintext."""
+def apply_set_local_password(
+    users: list[ConsoleUser],
+    username: str,
+    *,
+    password: str = "",
+    password_hash: str = "",
+) -> tuple[ConsoleUser, list[ConsoleUser]]:
+    """Return (updated, new_list). Does not write disk."""
     username = validate_username(username)
-    if len(password) < 8:
-        raise ValueError("password must be at least 8 characters")
-    users = load_users()
+    hashed = (password_hash or "").strip()
+    if hashed:
+        if password:
+            raise ValueError("pass password or password_hash, not both")
+    else:
+        if len(password) < 8:
+            raise ValueError("password must be at least 8 characters")
+        hashed = auth.hash_password(password)
     idx = next((i for i, u in enumerate(users) if u.username == username), None)
     if idx is None:
         raise KeyError(username)
     target = users[idx]
     if target.auth_type != AUTH_LOCAL:
         raise ValueError("cannot set a local password on an AD-backed account")
-    users[idx] = ConsoleUser(
+    updated = ConsoleUser(
         username=target.username,
         role=target.role,
         auth_type=AUTH_LOCAL,
-        password_hash=auth.hash_password(password),
+        password_hash=hashed,
         ad_username="",
         disabled=target.disabled,
     )
-    save_users(users)
-    # Keep legacy admin.hash aligned when rotating the bootstrap console user.
+    out = list(users)
+    out[idx] = updated
+    return updated, out
+
+
+def finalize_password_side_effects(username: str, password_hash: str) -> None:
+    """Keep legacy admin.hash aligned; drop first-boot plaintext when possible."""
     if username == (settings.console_user.strip() or "admin"):
-        auth.write_password_hash(users[idx].password_hash)
-    # Root tooling (reset scripts) can unlink directly; unprivileged callers also
-    # go through privhelper after login — best-effort here when we are root.
+        auth.write_password_hash(password_hash)
     try:
         from kin_privhelper.initial_password import clear_initial_password_file
 
         clear_initial_password_file()
     except OSError:
         pass
-    return users[idx]
+
+
+def create_user(
+    username: str,
+    role: str,
+    *,
+    auth_type: str = AUTH_LOCAL,
+    password: str = "",
+    ad_username: str = "",
+) -> ConsoleUser:
+    created, users = apply_create_user(
+        load_users(),
+        username,
+        role,
+        auth_type=auth_type,
+        password=password,
+        ad_username=ad_username,
+    )
+    save_users(users)
+    return created
+
+
+def delete_user(username: str, *, actor: str) -> None:
+    remaining = apply_delete_user(load_users(), username, actor=actor)
+    save_users(remaining)
+
+
+def set_local_password(username: str, password: str) -> ConsoleUser:
+    """Rotate a local user's password; drop any root-only first-boot plaintext."""
+    updated, users = apply_set_local_password(load_users(), username, password=password)
+    save_users(users)
+    finalize_password_side_effects(updated.username, updated.password_hash)
+    return updated

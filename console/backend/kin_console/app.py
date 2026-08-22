@@ -217,7 +217,48 @@ def ad_status(
     return {"ad": load_ad_settings().public_summary()}
 
 
-# --- Local users (KIN Super Admin only) -------------------------------------
+# --- Local users (KIN Super Admin only for create/delete) -------------------
+
+
+class SetPasswordBody(BaseModel):
+    password: str = Field(min_length=8, max_length=256)
+
+
+async def _mutate_console_users(
+    actor: str,
+    args: dict,
+) -> dict[str, object]:
+    result = await _collect_privhelper(
+        proto.CMD_MUTATE_CONSOLE_USERS,
+        actor,
+        args=args,
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "USERS_RESULT:")
+    error = str(parsed.get("error") or result.get("error") or "").strip()
+    code = str(parsed.get("code") or "")
+    if result.get("ok") and parsed.get("ok"):
+        return parsed
+    if result.get("error") and "busy" in str(result.get("error")).lower():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A privileged action is already running. Retry in a moment.",
+        )
+    if "denied" in str(result.get("error") or "").lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error or "Not allowed to change console users",
+        )
+    if code == "not_found":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if code == "invalid":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error or "Invalid user change",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=error or "Could not sync console users to the other mail node. The change was not applied.",
+    )
 
 
 @app.get("/api/users")
@@ -228,34 +269,63 @@ def api_list_users(
 
 
 @app.post("/api/users")
-def api_create_user(
+async def api_create_user(
     body: CreateUserBody,
-    _user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+    actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
 ) -> dict[str, object]:
-    try:
-        created = users.create_user(
-            body.username,
-            body.role,
-            auth_type=body.auth_type,
-            password=body.password,
-            ad_username=body.ad_username,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return {"user": created.public()}
+    parsed = await _mutate_console_users(
+        actor.username,
+        {
+            "op": "create",
+            "username": body.username,
+            "role": body.role,
+            "auth_type": body.auth_type,
+            "password": body.password,
+            "ad_username": body.ad_username,
+        },
+    )
+    return {"user": parsed.get("user")}
 
 
 @app.delete("/api/users/{username}")
-def api_delete_user(
+async def api_delete_user(
     username: str,
     actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
 ) -> dict[str, str]:
-    try:
-        users.delete_user(username, actor=actor.username)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await _mutate_console_users(
+        actor.username,
+        {"op": "delete", "username": username},
+    )
+    return {"status": "ok"}
+
+
+@app.post("/api/users/{username}/password")
+async def api_set_user_password(
+    username: str,
+    body: SetPasswordBody,
+    actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, str]:
+    await _mutate_console_users(
+        actor.username,
+        {"op": "set_password", "username": username, "password": body.password},
+    )
+    return {"status": "ok"}
+
+
+@app.post("/api/me/password")
+async def api_set_own_password(
+    body: SetPasswordBody,
+    actor: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, str]:
+    if actor.auth_type != users.AUTH_LOCAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AD-backed accounts change their password in Active Directory, not here.",
+        )
+    await _mutate_console_users(
+        actor.username,
+        {"op": "set_password", "username": actor.username, "password": body.password},
+    )
     return {"status": "ok"}
 
 

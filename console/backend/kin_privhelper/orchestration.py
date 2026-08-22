@@ -654,7 +654,7 @@ _PEER_READY_LABELS = {
 
 _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
-    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology)|etc/letsencrypt/[A-Za-z0-9._-]+)$"
+    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/users\.json)$"
 )
 
 
@@ -728,16 +728,20 @@ async def _install_staged_peer_file(
     remote_tmp: str,
     dest: str,
     mode: str = "600",
+    owner: str = "root",
+    group: str = "root",
 ) -> tuple[int, str]:
     """sudo-install a staged /tmp file to dest, then remove the temp copy."""
     if mode not in ("600", "644"):
         return 2, "refusing unsafe install mode"
+    if owner not in ("root", "kin-console") or group not in ("root", "kin-console"):
+        return 2, "refusing unsafe install owner"
     if not _SCP_TMP_RE.match(remote_tmp) or not _INSTALL_DEST_RE.match(dest):
         return 2, "refusing unsafe install path"
     dest_dir = str(Path(dest).parent)
     cmd = (
         f"sudo -n mkdir -p {dest_dir} && "
-        f"sudo -n install -m {mode} -o root -g root {remote_tmp} {dest} && "
+        f"sudo -n install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "
         f"rm -f {remote_tmp}"
     )
     return await _ssh_run(host, user, password, secrets, cmd, timeout=20)
@@ -770,6 +774,8 @@ async def _push_peer_text_file(
     remote_tmp: str,
     dest: str,
     mode: str,
+    owner: str = "root",
+    group: str = "root",
 ) -> tuple[int, str]:
     """scp + sudo-install a small text file onto the peer."""
     local = _write_secure_temp(body)
@@ -785,6 +791,8 @@ async def _push_peer_text_file(
             remote_tmp=remote_tmp,
             dest=dest,
             mode=mode,
+            owner=owner,
+            group=group,
         )
     finally:
         try:
@@ -881,88 +889,93 @@ async def sync_peer_ha_console_state(
         notes.append(
             "Peer console already has TOPOLOGY=2vm and completion markers; nothing to write."
         )
-        return True, notes
-
-    if plan["write_config"]:
-        code, text = await _push_peer_text_file(
-            host,
-            user,
-            password,
-            secrets,
-            body=str(plan["config_body"]),
-            remote_tmp="/tmp/kin-mail-peer-config",
-            dest="/etc/kin-mail/config",
-            mode="600",
-        )
-        if code != 0:
-            notes.append(
-                f"Failed to write TOPOLOGY=2vm on the peer config (exit {code}). "
-                "That node will still show the from-scratch wizard until this is retried. "
-                "No auto-retry, no auto-rollback."
+    else:
+        if plan["write_config"]:
+            code, text = await _push_peer_text_file(
+                host,
+                user,
+                password,
+                secrets,
+                body=str(plan["config_body"]),
+                remote_tmp="/tmp/kin-mail-peer-config",
+                dest="/etc/kin-mail/config",
+                mode="600",
             )
-            return False, notes
-        notes.append("Wrote TOPOLOGY=2vm into the peer /etc/kin-mail/config")
+            if code != 0:
+                notes.append(
+                    f"Failed to write TOPOLOGY=2vm on the peer config (exit {code}). "
+                    "That node will still show the from-scratch wizard until this is retried. "
+                    "No auto-retry, no auto-rollback."
+                )
+                return False, notes
+            notes.append("Wrote TOPOLOGY=2vm into the peer /etc/kin-mail/config")
 
-    if plan["write_topology_marker"]:
-        code, text = await _push_peer_text_file(
-            host,
-            user,
-            password,
-            secrets,
-            body=str(plan["topology_marker_body"]),
-            remote_tmp="/tmp/kin-mail-peer-topology",
-            dest="/etc/kin-mail/topology",
-            mode="644",
-        )
-        if code != 0:
-            notes.append(
-                f"Failed to write /etc/kin-mail/topology on the peer (exit {code}). "
-                "That node will still show the from-scratch wizard until this is retried. "
-                "No auto-retry, no auto-rollback."
+        if plan["write_topology_marker"]:
+            code, text = await _push_peer_text_file(
+                host,
+                user,
+                password,
+                secrets,
+                body=str(plan["topology_marker_body"]),
+                remote_tmp="/tmp/kin-mail-peer-topology",
+                dest="/etc/kin-mail/topology",
+                mode="644",
             )
-            return False, notes
-        notes.append("Wrote topology marker on the peer")
+            if code != 0:
+                notes.append(
+                    f"Failed to write /etc/kin-mail/topology on the peer (exit {code}). "
+                    "That node will still show the from-scratch wizard until this is retried. "
+                    "No auto-retry, no auto-rollback."
+                )
+                return False, notes
+            notes.append("Wrote topology marker on the peer")
 
-    if plan["write_ha_marker"]:
-        code, text = await _push_peer_text_file(
-            host,
-            user,
-            password,
-            secrets,
-            body=str(plan["ha_marker_body"]),
-            remote_tmp="/tmp/kin-mail-peer-ha-setup",
-            dest="/etc/kin-mail/ha-setup-complete",
-            mode="644",
-        )
-        if code != 0:
-            notes.append(
-                f"Failed to write /etc/kin-mail/ha-setup-complete on the peer (exit {code}). "
-                "That node will still show the from-scratch wizard until this is retried. "
-                "No auto-retry, no auto-rollback."
+        if plan["write_ha_marker"]:
+            code, text = await _push_peer_text_file(
+                host,
+                user,
+                password,
+                secrets,
+                body=str(plan["ha_marker_body"]),
+                remote_tmp="/tmp/kin-mail-peer-ha-setup",
+                dest="/etc/kin-mail/ha-setup-complete",
+                mode="644",
             )
-            return False, notes
-        notes.append("Wrote ha-setup-complete on the peer")
+            if code != 0:
+                notes.append(
+                    f"Failed to write /etc/kin-mail/ha-setup-complete on the peer (exit {code}). "
+                    "That node will still show the from-scratch wizard until this is retried. "
+                    "No auto-retry, no auto-rollback."
+                )
+                return False, notes
+            notes.append("Wrote ha-setup-complete on the peer")
 
-    if plan["write_setup_marker"]:
-        code, text = await _push_peer_text_file(
-            host,
-            user,
-            password,
-            secrets,
-            body=str(plan["setup_marker_body"]),
-            remote_tmp="/tmp/kin-mail-peer-setup-complete",
-            dest="/etc/kin-mail/setup-complete",
-            mode="644",
-        )
-        if code != 0:
-            notes.append(
-                f"Failed to write /etc/kin-mail/setup-complete on the peer (exit {code}). "
-                "That node will still show the from-scratch wizard until this is retried. "
-                "No auto-retry, no auto-rollback."
+        if plan["write_setup_marker"]:
+            code, text = await _push_peer_text_file(
+                host,
+                user,
+                password,
+                secrets,
+                body=str(plan["setup_marker_body"]),
+                remote_tmp="/tmp/kin-mail-peer-setup-complete",
+                dest="/etc/kin-mail/setup-complete",
+                mode="644",
             )
-            return False, notes
-        notes.append("Wrote setup-complete on the peer (was missing)")
+            if code != 0:
+                notes.append(
+                    f"Failed to write /etc/kin-mail/setup-complete on the peer (exit {code}). "
+                    "That node will still show the from-scratch wizard until this is retried. "
+                    "No auto-retry, no auto-rollback."
+                )
+                return False, notes
+            notes.append("Wrote setup-complete on the peer (was missing)")
 
+    from .console_users_sync import push_local_users_to_peer
+
+    users_ok, users_note = await push_local_users_to_peer(host, user, password, secrets)
+    notes.append(users_note)
+    if not users_ok:
+        return False, notes
     return True, notes
 
 

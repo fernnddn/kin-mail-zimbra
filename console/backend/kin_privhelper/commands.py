@@ -1001,6 +1001,8 @@ def _adapt(fn: Callable[..., AsyncIterator[dict[str, Any]]]) -> CommandHandler:
     return _wrapped
 
 
+from .console_users_sync import cmd_mutate_console_users
+
 HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_GET_STATUS: _adapt(cmd_get_status),
     proto.CMD_RUN_HARDENING_STATUS: _adapt(cmd_run_hardening_status),
@@ -1020,6 +1022,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_STORE_PROVISIONING_SECRETS: _adapt(cmd_store_provisioning_secrets),
     proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
     proto.CMD_HA_DISK_PREFLIGHT: _adapt(cmd_ha_disk_preflight),
+    proto.CMD_MUTATE_CONSOLE_USERS: _adapt(cmd_mutate_console_users),
 }
 
 

@@ -190,7 +190,7 @@ def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> t
     role = _role_for_username(username)
     if role is None:
         return None, "denied_no_user"
-    if not rbac.command_allowed(role, cmd, args=args):
+    if not rbac.command_allowed(role, cmd, args=args, username=username):
         return None, "denied_rbac"
     return role, None
 
@@ -274,6 +274,12 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             audit_cmd = f"{cmd}:{aop}"
         elif cmd == proto.CMD_STORE_OBSERVABILITY_SECRETS:
             audit_cmd = f"{cmd}:redacted"
+        elif cmd == proto.CMD_MUTATE_CONSOLE_USERS:
+            mop = str(args.get("op") or "")[:16]
+            tgt = str(args.get("username") or "")[:80]
+            audit_cmd = f"{cmd}:{mop}" + (f":{tgt}" if tgt else "")
+            args = dict(args)
+            args["actor"] = username
 
         # Safety override: canceling the ufw dead-man must work while full install
         # is still streaming later stages (11 / 05-healthcheck can outlast the timer).

@@ -51,11 +51,28 @@ def role_label(role: str) -> str:
     return ROLE_LABELS.get(role, role)
 
 
-def command_allowed(role: str, cmd: str, *, args: dict | None = None) -> bool:
+def command_allowed(
+    role: str,
+    cmd: str,
+    *,
+    args: dict | None = None,
+    username: str | None = None,
+) -> bool:
     if role not in ALL_ROLES:
         return False
     if cmd in SUPER_ONLY_COMMANDS:
         return role == ROLE_SUPER_ADMIN
+    if cmd == "mutate_console_users":
+        op = str((args or {}).get("op") or "").strip().lower()
+        if op in ("create", "delete"):
+            return role == ROLE_SUPER_ADMIN
+        if op == "set_password":
+            target = str((args or {}).get("username") or "").strip()
+            actor = (username or "").strip()
+            if target and actor and target == actor:
+                return True
+            return role == ROLE_SUPER_ADMIN
+        return False
     if cmd in SENSITIVE_OPS_COMMANDS:
         return role in OPS_ROLES
     if cmd == "maintenance":
@@ -77,4 +94,6 @@ def deny_message(role: str, cmd: str) -> str:
             f"Denied: {cmd} requires KIN Super Admin or KIN Support-Ops "
             f"(your role: {label})"
         )
+    if cmd == "mutate_console_users":
+        return f"Denied: console user change not allowed for {label}"
     return f"Denied: {cmd} not allowed for {label}"

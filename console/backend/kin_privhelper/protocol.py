@@ -26,6 +26,7 @@ CMD_REMOVE_HOST = "remove_host"
 CMD_REMOVE_OBSERVABILITY = "remove_observability"
 CMD_ADD_OBSERVABILITY = "add_observability"
 CMD_STORE_OBSERVABILITY_SECRETS = "store_observability_secrets"
+CMD_MUTATE_CONSOLE_USERS = "mutate_console_users"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -46,6 +47,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_REMOVE_OBSERVABILITY,
         CMD_ADD_OBSERVABILITY,
         CMD_STORE_OBSERVABILITY_SECRETS,
+        CMD_MUTATE_CONSOLE_USERS,
     }
 )
 
