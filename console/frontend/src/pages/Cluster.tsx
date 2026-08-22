@@ -194,13 +194,15 @@ const CardActions = styled.div`
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 0.85rem 0;
-  margin-top: 0.85rem;
+  margin-top: 0.35rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid ${theme.line};
 `;
 
 const PrepCluster = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
   min-width: 0;
   flex: 1 1 12rem;
   padding-right: 1rem;
@@ -215,7 +217,7 @@ const PrepButtons = styled.div`
 const RemoveCluster = styled.div<{ $solo?: boolean }>`
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
   flex: 0 1 auto;
   padding-left: ${(p) => (p.$solo ? "0" : "1rem")};
   margin-left: ${(p) => (p.$solo ? "0" : "0.15rem")};
@@ -268,11 +270,16 @@ const InlineStatus = styled.span<{ $tone: "ok" | "idle" | "warn" }>`
 `;
 
 const Kv = styled.dl`
-  margin: 0.35rem 0 1rem;
+  margin: 0.45rem 0 0;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 0;
   font-size: 0.86rem;
+
+  dt:nth-last-child(-n + 2),
+  dd:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
 `;
 
 const KvLabel = styled.dt`
@@ -292,7 +299,7 @@ const KvValue = styled.dd`
 `;
 
 const CheckList = styled.ul`
-  margin: 0 0 1rem;
+  margin: 0.35rem 0 0;
   padding: 0;
   list-style: none;
 `;
@@ -332,6 +339,14 @@ const CheckDetail = styled.span`
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+`;
+
+const CardHint = styled.p`
+  margin: 0;
+  max-width: 20rem;
+  color: ${theme.muted};
+  font-size: 0.78rem;
+  line-height: 1.45;
 `;
 
 function parseTaggedJson(log: string, prefix: string): Record<string, unknown> | null {
@@ -859,11 +874,11 @@ export default function ClusterPage() {
                   )}
                 </PrepButtons>
                 {!isStandby && !pfPassed ? (
-                  <Hint>
+                  <CardHint>
                     {pfFailed
-                      ? "Enter Maintenance stays off until every pre-flight check is green."
-                      : "Run Check first. Enter Maintenance stays off until pre-flight passes."}
-                  </Hint>
+                      ? "All checks must pass before you can enter maintenance."
+                      : "Run Check first to enable Enter Maintenance."}
+                  </CardHint>
                 ) : null}
               </PrepCluster>
             ) : null}
@@ -877,12 +892,14 @@ export default function ClusterPage() {
                 Remove Host
               </Button>
               {!isOffline && !isStandby ? (
-                <Hint>Remove Host stays off until this node is in maintenance.</Hint>
+                <CardHint>Put this node in maintenance before Remove Host.</CardHint>
               ) : null}
             </RemoveCluster>
           </CardActions>
         ) : (
-          <Hint>Maintenance actions require KIN Super Admin or Support-Ops.</Hint>
+          <CardActions>
+            <CardHint>Maintenance actions require KIN Super Admin or Support-Ops.</CardHint>
+          </CardActions>
         )}
       </NodeCard>
     );
@@ -894,7 +911,7 @@ export default function ClusterPage() {
         <PageHeader
           icon={<ClusterIcon />}
           title="Cluster"
-          subtitle="Take one mail node out of service for planned work. Pre-flight must pass before Enter is allowed. Closing this browser does not take the node out of maintenance; use Exit."
+          subtitle="Take one mail node offline for planned work. Run Check, then Enter Maintenance. Closing the browser does not exit maintenance; use Exit Maintenance."
         />
         {cluster.maintenance_active ? (
           <WarnBox>
