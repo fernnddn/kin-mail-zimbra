@@ -141,6 +141,19 @@ def ssh_password_candidates(kin_pass: str, root_pass: str) -> tuple[tuple[str, s
     return (("kin", kin_pass), ("root", root_pass))
 
 
+def choose_shared_ssh_user(
+    ok: dict[tuple[str, str], bool],
+    *,
+    hosts: tuple[str, ...],
+    users: tuple[str, ...] = ("kin", "root"),
+) -> str:
+    """First username that succeeded on every host. Empty if none is shared."""
+    for user in users:
+        if all(bool(ok.get((host, user))) for host in hosts):
+            return user
+    return ""
+
+
 def _iqn_suffix(hostname: str) -> str:
     short = hostname.split(".")[0].lower()
     short = re.sub(r"[^a-z0-9-]", "", short) or "mail"
@@ -1403,24 +1416,36 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(2)
         return
 
-    # kin first, root last. A missing username first trips fail2ban on a
-    # freshly hardened peer.
-    ssh_user = "root"
-    ssh_pass = root_pass
-    for user, pwd in ssh_password_candidates(kin_pass, root_pass):
-        code, ident = await _ssh_probe(peer, user, pwd, secrets)
-        yield emit_line(f"ssh_probe user={user} exit={code} ident={ident.splitlines()[0] if ident else ''}")
-        if code == 0:
-            ssh_user = user
-            ssh_pass = pwd
-            break
-    else:
+    # Need one account that works on BOTH the peer and observability. Using
+    # whichever user answered first on the peer (then forcing it on mon)
+    # fails when mail B has `kin` but the witness VM only has root.
+    probe_ok: dict[tuple[str, str], bool] = {}
+    probe_ident: dict[tuple[str, str], str] = {}
+    cand = ssh_password_candidates(kin_pass, root_pass)
+    for user, pwd in cand:
+        for label, host in (("peer", peer), ("monitoring", monitoring)):
+            code, ident = await _ssh_probe(host, user, pwd, secrets)
+            probe_ok[(label, user)] = code == 0
+            probe_ident[(label, user)] = ident
+            yield emit_line(
+                f"ssh_probe {label} user={user} exit={code} "
+                f"ident={ident.splitlines()[0] if ident else ''}"
+            )
+    ssh_user = choose_shared_ssh_user(
+        probe_ok, hosts=("peer", "monitoring"), users=tuple(u for u, _ in cand)
+    )
+    if not ssh_user:
         yield emit_line(
-            "Refusing: could not SSH to the peer with stored provisioning credentials.",
+            "Refusing: no SSH user (kin, then root) works on BOTH the second "
+            "mail server and the observability VM. Create Linux user kin with "
+            "sudo and the wizard password on every VM, and enable SSH password "
+            "login (cloud images default to keys only).",
             err=True,
         )
         yield proto.event_done(1)
         return
+    ssh_pass = dict(cand)[ssh_user]
+    ident = probe_ident.get(("peer", ssh_user), "")
 
     if skip_remote and not hostnames_compatible(peer.name, ident):
         got = (ident.splitlines()[0] if ident else "").strip()
@@ -1434,19 +1459,7 @@ async def cmd_run_ha_orchestration(
         yield proto.event_done(2)
         return
 
-    mon_code, mon_ident = await _ssh_probe(monitoring, ssh_user, ssh_pass, secrets)
-    yield emit_line(
-        f"ssh_probe monitoring user={ssh_user} exit={mon_code} "
-        f"ident={(mon_ident.splitlines()[0] if mon_ident else '')}"
-    )
-    if mon_code != 0:
-        yield emit_line(
-            "Refusing: could not SSH to the observability VM with the same credentials "
-            "(needed for qnetd/iSCSI playbooks).",
-            err=True,
-        )
-        yield proto.event_done(1)
-        return
+    mon_ident = probe_ident.get(("monitoring", ssh_user), "")
     env_obs = str(os.environ.get("KIN_QNETD_INVENTORY_HOST") or "").strip()
     renamed = monitoring_host_from_ssh_ident(
         monitoring, mon_ident, env_locked=bool(env_obs)

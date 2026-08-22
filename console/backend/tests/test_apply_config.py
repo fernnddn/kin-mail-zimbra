@@ -12,6 +12,7 @@ from kin_privhelper.apply_config import (
     parse_config,
     parse_ip_dash_o_v4,
     peer_install_config,
+    pick_host_network,
 )
 from kin_privhelper.orchestration import (
     OrchHost,
@@ -58,6 +59,13 @@ class IfaceParseTests(unittest.TestCase):
         self.assertEqual(iface_for_ipv4(text, "192.0.2.1"), "ens33")
         self.assertEqual(iface_for_ipv4(text, "192.0.2.99"), "")
         self.assertEqual(parse_ip_dash_o_v4(text)[1], ("192.0.2.14", "ens34"))
+        self.assertEqual(
+            pick_host_network(
+                text, "default via 192.0.2.254 dev ens34 proto static\n"
+            ),
+            ("192.0.2.14", "ens34"),
+        )
+        self.assertEqual(pick_host_network(text, ""), ("192.0.2.1", "ens33"))
 
 
 class PeerInstallConfigTests(unittest.TestCase):

@@ -271,8 +271,19 @@ ask_yn() {
 
 # --- detect sensible defaults from the running system ------------------------
 detect_defaults() {
-  DEF_IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
-  DEF_IFACE=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2}' | head -1)
+  DEF_IFACE=$(ip -4 route show default 2>/dev/null | awk '/default/ {
+    for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
+  }')
+  if [ -n "$DEF_IFACE" ]; then
+    DEF_IP=$(ip -4 -o addr show dev "$DEF_IFACE" scope global 2>/dev/null \
+      | awk '{print $4}' | cut -d/ -f1 | head -1)
+  else
+    DEF_IP=""
+  fi
+  if [ -z "$DEF_IP" ] || [ -z "$DEF_IFACE" ]; then
+    DEF_IP=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    DEF_IFACE=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2}' | head -1)
+  fi
   DEF_HOST=$(hostname -f 2>/dev/null || hostname)
   case "$DEF_HOST" in
     *.*.*) DEF_DOMAIN="${DEF_HOST#*.}" ;;

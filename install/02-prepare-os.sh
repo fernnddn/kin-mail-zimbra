@@ -25,22 +25,36 @@ ok "timezone : ${TIMEZONE}"
 # Cloud images default to key-only SSH and have no `kin` user. Build HA pair
 # probes kin, then root, then ansible-ssh to every mail node and observability.
 OS_USER="${KIN_OS_USER:-kin}"
+if ! getent group sudo >/dev/null 2>&1; then
+  apt-get -qq update
+  apt-get -y install sudo
+fi
 if [ -n "${KIN_USER_PASS:-}" ] && [ "$OS_USER" != "root" ]; then
   if ! id -u "$OS_USER" >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -G sudo "$OS_USER"
+    useradd -m -s /bin/bash -G sudo "$OS_USER" || {
+      fail "useradd ${OS_USER} failed"
+      exit 1
+    }
     ok "Created OS user ${OS_USER}"
   else
     ok "OS user ${OS_USER} already exists"
   fi
-  echo "${OS_USER}:${KIN_USER_PASS}" | chpasswd
+  printf '%s:%s\n' "$OS_USER" "$KIN_USER_PASS" | chpasswd || {
+    fail "chpasswd ${OS_USER} failed"
+    exit 1
+  }
   ok "Password set for ${OS_USER}"
 fi
 if [ -n "${HOST_ROOT_PASS:-}" ]; then
-  echo "root:${HOST_ROOT_PASS}" | chpasswd
+  printf '%s:%s\n' root "$HOST_ROOT_PASS" | chpasswd || {
+    fail "chpasswd root failed"
+    exit 1
+  }
   ok "Password set for root"
 fi
 install -d -m 755 /etc/ssh/sshd_config.d
-# Must sort before 50-cloud-init.conf: sshd uses the first obtained value.
+# OpenSSH uses the first obtained value; Include position varies by image.
+# Write our drop-in AND comment key-only lines in other drop-ins / sshd_config.
 cat > /etc/ssh/sshd_config.d/00-kin-mail.conf <<'EOF'
 # KIN Mail - password SSH for HA ansible (sshpass). Cloud-init key-only would
 # make Build HA pair fail even when the wizard passwords are correct.
@@ -49,6 +63,22 @@ KbdInteractiveAuthentication yes
 PermitRootLogin yes
 EOF
 chmod 644 /etc/ssh/sshd_config.d/00-kin-mail.conf
+shopt -s nullglob
+for f in /etc/ssh/sshd_config.d/*.conf; do
+  [ "$(basename "$f")" = "00-kin-mail.conf" ] && continue
+  sed -i -E \
+    -e 's/^([[:space:]]*PasswordAuthentication[[:space:]]+no)/# KIN Mail: \1/' \
+    -e 's/^([[:space:]]*KbdInteractiveAuthentication[[:space:]]+no)/# KIN Mail: \1/' \
+    -e 's/^([[:space:]]*PermitRootLogin[[:space:]]+(no|prohibit-password|without-password))/# KIN Mail: \1/' \
+    "$f"
+done
+if [ -f /etc/ssh/sshd_config ]; then
+  sed -i -E \
+    -e 's/^#?[[:space:]]*PasswordAuthentication[[:space:]].*/PasswordAuthentication yes/' \
+    -e 's/^#?[[:space:]]*KbdInteractiveAuthentication[[:space:]].*/KbdInteractiveAuthentication yes/' \
+    -e 's/^#?[[:space:]]*PermitRootLogin[[:space:]].*/PermitRootLogin yes/' \
+    /etc/ssh/sshd_config
+fi
 if systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1; then
   ok "sshd allows password login for kin/root (HA ansible)"
 else

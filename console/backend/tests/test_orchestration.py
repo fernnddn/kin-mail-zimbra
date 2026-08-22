@@ -655,6 +655,8 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication yes", prepare)
         self.assertIn("PermitRootLogin yes", prepare)
         self.assertIn("useradd -m -s /bin/bash -G sudo", prepare)
+        self.assertIn("PasswordAuthentication[[:space:]]+no", prepare)
+        self.assertIn("choose_shared_ssh_user", (repo / "console/backend/kin_privhelper/orchestration.py").read_text(encoding="utf-8"))
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
@@ -818,6 +820,45 @@ class SshLoginCandidateTests(unittest.TestCase):
         self.assertNotIn("cursor", users)
         self.assertEqual(pairs[0], ("kin", "kin-secret"))
         self.assertEqual(pairs[1], ("root", "root-secret"))
+
+    def test_shared_user_prefers_kin_when_both_hosts_accept_it(self) -> None:
+        from kin_privhelper.orchestration import choose_shared_ssh_user
+
+        ok = {
+            ("peer", "kin"): True,
+            ("peer", "root"): True,
+            ("monitoring", "kin"): True,
+            ("monitoring", "root"): True,
+        }
+        self.assertEqual(
+            choose_shared_ssh_user(ok, hosts=("peer", "monitoring")),
+            "kin",
+        )
+
+    def test_shared_user_falls_back_to_root_when_mon_has_no_kin(self) -> None:
+        from kin_privhelper.orchestration import choose_shared_ssh_user
+
+        ok = {
+            ("peer", "kin"): True,
+            ("peer", "root"): True,
+            ("monitoring", "kin"): False,
+            ("monitoring", "root"): True,
+        }
+        self.assertEqual(
+            choose_shared_ssh_user(ok, hosts=("peer", "monitoring")),
+            "root",
+        )
+
+    def test_shared_user_empty_when_hosts_disagree(self) -> None:
+        from kin_privhelper.orchestration import choose_shared_ssh_user
+
+        ok = {
+            ("peer", "kin"): True,
+            ("peer", "root"): False,
+            ("monitoring", "kin"): False,
+            ("monitoring", "root"): True,
+        }
+        self.assertEqual(choose_shared_ssh_user(ok, hosts=("peer", "monitoring")), "")
 
     def test_privhelper_sources_have_no_cursor_ssh_username(self) -> None:
         from pathlib import Path

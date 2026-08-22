@@ -208,6 +208,33 @@ def parse_ip_dash_o_v4(text: str) -> list[tuple[str, str]]:
     return rows
 
 
+_DEFAULT_DEV_RE = re.compile(r"\bdev\s+(\S+)")
+
+
+def default_route_iface(route_text: str) -> str:
+    """Iface from `ip -4 route show default` (first default line)."""
+    for line in (route_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("default") or stripped.startswith("0.0.0.0/0"):
+            match = _DEFAULT_DEV_RE.search(stripped)
+            if match:
+                return match.group(1)
+    return ""
+
+
+def pick_host_network(addr_text: str, route_text: str = "") -> tuple[str, str]:
+    """Prefer the default-route NIC; fall back to the first global IPv4."""
+    rows = parse_ip_dash_o_v4(addr_text)
+    if not rows:
+        return "", ""
+    want = default_route_iface(route_text)
+    if want:
+        for ip, iface in rows:
+            if iface == want:
+                return ip, iface
+    return rows[0][0], rows[0][1]
+
+
 def iface_for_ipv4(text: str, ipv4: str) -> str:
     """Return the iface that owns ipv4 in `ip -4 -o addr` text, else empty."""
     want = (ipv4 or "").strip()
@@ -227,10 +254,16 @@ def detect_host_network() -> tuple[str, str]:
         )
     except (OSError, subprocess.CalledProcessError):
         return "", ""
-    rows = parse_ip_dash_o_v4(out)
-    if not rows:
-        return "", ""
-    return rows[0][0], rows[0][1]
+    route = ""
+    try:
+        route = subprocess.check_output(
+            ["ip", "-4", "route", "show", "default"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        route = ""
+    return pick_host_network(out, route)
 
 
 def peer_install_config(
