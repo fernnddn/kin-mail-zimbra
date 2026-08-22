@@ -12,8 +12,10 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
-# shellcheck disable=SC1091
+# shellcheck source=lib/zimbra-data-disk-probe.sh
 . ./lib/zimbra-data-disk-probe.sh
+# shellcheck source=lib/healthcheck-dns-class.sh
+. ./lib/healthcheck-dns-class.sh
 if zimbra_is_mid_handoff; then
   warn "Mid-handoff: /opt/zimbra is unmounted; skipping healthcheck (zmcontrol not reachable)."
   exit 0
@@ -114,18 +116,46 @@ SEL=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>
       | awk '/DKIM Selector/{getline; while($0==""){getline}; print; exit}')
 if [ -n "$SEL" ]; then
   p "Selector: ${SEL}"
+  WAIT="${KIN_DKIM_WAIT_SEC:-0}"
+  case "$WAIT" in
+    ''|*[!0-9]*) WAIT=0 ;;
+  esac
+  if [ "$QUICK" -eq 0 ] && [ "$WAIT" -gt 0 ]; then
+    info "Waiting up to ${WAIT}s for ${SEL}._domainkey.${MAIL_DOMAIN} TXT (paste from 04, then this check passes)."
+    _dkim_wait_start=$(date +%s)
+    while true; do
+      if healthcheck_dkim_txt_visible "$MAIL_DOMAIN" "$SEL" "$DNS_UPSTREAM_1"; then
+        ok "DKIM TXT is visible on ${DNS_UPSTREAM_1}"
+        break
+      fi
+      if [ $(( $(date +%s) - _dkim_wait_start )) -ge "$WAIT" ]; then
+        info "Still no public DKIM TXT after ${WAIT}s (operator DNS). Continuing."
+        break
+      fi
+      sleep 10
+    done
+  fi
   TK=$(ls /opt/zimbra/common/sbin/opendkim-testkey /usr/sbin/opendkim-testkey 2>/dev/null | head -1)
-  if [ -n "$TK" ]; then
+  if [ -z "$TK" ]; then
+    f "opendkim-testkey not found (Zimbra/opendkim package)"
+  else
     # -vvv is required. Without it the tool prints nothing at all on success
     # and signals the result only through its exit status, so grepping the
     # output reports a healthy key as broken.
     TKOUT=$(su - zimbra -c "$TK -d ${MAIL_DOMAIN} -s ${SEL} -vvv" 2>&1)
-    if printf '%s' "$TKOUT" | grep -qi "key OK"; then
-      p "Private key matches published record"
-    else
-      f "opendkim-testkey failed - record missing or does not match"
-      printf '%s\n' "$TKOUT" | tail -3 | sed 's/^/      /'
-    fi
+    case "$(healthcheck_opendkim_classify "$TKOUT")" in
+      pass)
+        p "Private key matches published record"
+        ;;
+      blocked_missing)
+        b "DKIM TXT not in public DNS yet (paste the record from 04, then re-run 05)"
+        printf '%s\n' "$TKOUT" | tail -3 | sed 's/^/      /'
+        ;;
+      *)
+        b "opendkim-testkey did not confirm the key (DNS still propagating or TXT does not match)"
+        printf '%s\n' "$TKOUT" | tail -3 | sed 's/^/      /'
+        ;;
+    esac
   fi
 else
   f "DKIM key not created yet"
@@ -178,38 +208,44 @@ if [ -n "$SEND_IP" ]; then
   info "the result must return to the same sender IP."
 
   A_REC=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "$MAIL_HOST" 2>/dev/null | head -1)
-  if [ "$A_REC" = "$SEND_IP" ]; then
-    p "A ${MAIL_HOST} = ${A_REC} = sending address"
-  elif [ -z "$A_REC" ]; then
-    # Same external dependency as the "A record not published yet" check
-    # above - do not fail the server for a record it does not control yet.
-    b "A ${MAIL_HOST} not published yet - need public IP from the network team"
-  else
-    f "A ${MAIL_HOST} = ${A_REC}, but sending from ${SEND_IP}"
-  fi
+  case "$(healthcheck_a_vs_send "$A_REC" "$SEND_IP")" in
+    pass)
+      p "A ${MAIL_HOST} = ${A_REC} = sending address"
+      ;;
+    blocked_missing)
+      b "A ${MAIL_HOST} not published yet - need public IP from the network team"
+      ;;
+    *)
+      b "A ${MAIL_HOST} = ${A_REC}, but SMTP sends from ${SEND_IP} (align A, or add ip4:${SEND_IP} to SPF if NAT is intentional)"
+      ;;
+  esac
 
   PTR=$(dig +short +time=5 -x "$SEND_IP" 2>/dev/null | head -1)
-  if [ -z "$PTR" ]; then
-    # Reverse DNS belongs to the owner of the IP block, so this is an external
-    # dependency rather than a server fault. Counting it as a failure would
-    # make the summary blame a host that is configured correctly.
-    b "PTR ${SEND_IP} not set yet - request from the IP block owner (ISP), not in Cloudflare"
-  elif [ "$PTR" = "${MAIL_HOST}." ]; then
-    p "PTR ${SEND_IP} -> ${PTR}"
-    BACK=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "${PTR%.}" 2>/dev/null | head -1)
-    [ "$BACK" = "$SEND_IP" ] \
-      && p "Chain complete and matching" \
-      || f "Chain broken: ${PTR%.} points to ${BACK:-empty}, not ${SEND_IP}"
-  else
-    b "PTR ${SEND_IP} -> ${PTR} (not ${MAIL_HOST}, OK if its A record returns to this IP)"
+  PTR_A=""
+  if [ -n "$PTR" ]; then
+    PTR_A=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "${PTR%.}" 2>/dev/null | head -1)
   fi
+  case "$(healthcheck_ptr_chain "$SEND_IP" "$MAIL_HOST" "$PTR" "$PTR_A")" in
+    pass_hostname)
+      p "PTR ${SEND_IP} -> ${PTR}"
+      p "Chain complete and matching"
+      ;;
+    pass_other_name)
+      p "PTR ${SEND_IP} -> ${PTR} (not ${MAIL_HOST}; A still returns to ${SEND_IP})"
+      ;;
+    blocked_missing)
+      b "PTR ${SEND_IP} not set yet - request from the IP block owner (ISP), not in Cloudflare"
+      ;;
+    *)
+      b "PTR ${SEND_IP} -> ${PTR:-none}; ${PTR%.} A is ${PTR_A:-empty}, not ${SEND_IP} (ask the ISP)"
+      ;;
+  esac
 
-  case "$SPF" in
-    *"ip4:${SEND_IP}"*) p "SPF explicitly lists the sending address" ;;
-    *mx*) [ "$A_REC" = "$SEND_IP" ] \
-            && p "SPF 'mx' covers the sending address" \
-            || f "SPF 'mx' does NOT cover ${SEND_IP} - add ip4:${SEND_IP}" ;;
-    *) b "SPF does not clearly cover ${SEND_IP}" ;;
+  case "$(healthcheck_spf_cover "$SPF" "$SEND_IP" "$A_REC")" in
+    pass_explicit) p "SPF explicitly lists the sending address" ;;
+    pass_mx)       p "SPF 'mx' covers the sending address" ;;
+    blocked_mx)    b "SPF 'mx' does not cover ${SEND_IP} - add ip4:${SEND_IP} in DNS (not a server change)" ;;
+    *)             b "SPF does not clearly cover ${SEND_IP}" ;;
   esac
 fi
 
@@ -284,10 +320,10 @@ if [ $QUICK -eq 0 ]; then
     if [ -n "$MSG" ]; then
       grep -qi '^DKIM-Signature' "$MSG" && p "Message signed with DKIM" || f "No DKIM-Signature header"
       AR=$(grep -i '^Authentication-Results' -A1 "$MSG" | tr '\n' ' ')
-      case "$AR" in
-        *"dkim=pass"*)    p "Verification: dkim=pass" ;;
-        *"dkim=neutral"*) f "dkim=neutral - record not yet visible to verifier" ;;
-        *)                b "Verification result unreadable" ;;
+      case "$(healthcheck_auth_results_dkim "$AR")" in
+        pass)    p "Verification: dkim=pass" ;;
+        fail)    f "dkim=fail - signature did not verify against the published key" ;;
+        *)       b "dkim not pass yet (TXT missing or still propagating); message was signed" ;;
       esac
       grep -q "status=sent" /var/log/zimbra.log 2>/dev/null && p "LMTP delivered to mailbox"
     else

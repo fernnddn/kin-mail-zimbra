@@ -134,6 +134,12 @@ if [ $BLOCKED_SMTP -eq 0 ] && command -v swaks >/dev/null 2>&1; then
   s1=$(smtp_ip); s2=$(smtp_ip)
   if [ -n "$s1" ] && [ "$s1" = "$s2" ]; then
     ok "SMTP sending address is consistent: ${s1}"
+    a_mail=$(dig +short +time=5 @"$DNS_UPSTREAM_1" A "$MAIL_HOST" 2>/dev/null | head -1)
+    if [ -n "$a_mail" ] && [ "$a_mail" != "$s1" ]; then
+      warn "A ${MAIL_HOST} is ${a_mail}, SMTP sends from ${s1}"
+      info "Inbound MX follows the A record. Outbound SPF alignment uses ${s1}."
+      info "Point A at ${s1}, or add ip4:${s1} to SPF if this NAT is intentional."
+    fi
     ptr=$(dig +short +time=5 -x "$s1" 2>/dev/null | head -1)
     if [ -z "$ptr" ]; then
       warn "No PTR for ${s1}. Request it from the owner of the IP block (the ISP)."

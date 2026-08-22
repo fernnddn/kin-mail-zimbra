@@ -433,6 +433,10 @@ run_full_install() {
   if [ "$(full_install_zimbra_stage_action "$mid_handoff")" = "skip_mid_handoff" ]; then
     warn "Skipping 05-healthcheck.sh (mid-handoff; zmcontrol not reachable on mountpoint)"
   else
+    # Operator is watching the same log that printed the DKIM TXT. Wait so a
+    # paste during 06-11 plus this poll can pass. Standalone 05 keeps WAIT=0.
+    KIN_DKIM_WAIT_SEC="${KIN_DKIM_WAIT_SEC:-600}"
+    export KIN_DKIM_WAIT_SEC
     run_stage 05-healthcheck.sh || {
       rc=$?
       fail "Pipeline stopped at 05-healthcheck.sh"
