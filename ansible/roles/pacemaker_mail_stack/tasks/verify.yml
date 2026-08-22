@@ -70,6 +70,10 @@
         not in pacemaker_mail_stack_stick_verify.stdout
         and ('resource-stickiness: ' ~ pacemaker_mail_stack_clone_stickiness)
         not in pacemaker_mail_stack_stick_verify.stdout)
+    or (('promoted-resource-stickiness=' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_stick_verify.stdout
+        and ('promoted-resource-stickiness: ' ~ pacemaker_mail_stack_clone_stickiness)
+        not in pacemaker_mail_stack_stick_verify.stdout)
   check_mode: false
   run_once: true
   tags: [pacemaker, stack, verify]

@@ -921,7 +921,9 @@ async def _push_peer_deploy_tree(
         "rm -f /tmp/kin-mail-peer-install.tgz && "
         "test -x /opt/kin-mail-deploy/install/kin-mail.sh"
     )
-    return await _ssh_run(host, user, password, secrets, extract, timeout=60)
+    return await _ssh_run(
+        host, user, password, secrets, extract, timeout=60, stdin_text=password
+    )
 
 
 async def _install_staged_peer_file(

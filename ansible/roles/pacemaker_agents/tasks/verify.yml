@@ -64,3 +64,10 @@
   changed_when: false
   check_mode: false
   tags: [pacemaker, agents, verify]
+
+- name: Verify pacemaker requires the Zimbra LUKS mapper unit
+  ansible.builtin.command:
+    cmd: grep -F 'Requires={{ pacemaker_agents_luks_cryptsetup_unit }}' {{ pacemaker_agents_luks_dropin_path }}
+  changed_when: false
+  check_mode: false
+  tags: [pacemaker, agents, verify]

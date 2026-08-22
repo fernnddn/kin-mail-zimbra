@@ -1,4 +1,6 @@
 # Pacemaker starts OCF DRBD. Wait for systemd-cryptsetup so
-# /dev/mapper/kin-zimbra-crypt exists before attach.
+# /dev/mapper/kin-zimbra-crypt exists before attach. After= alone still
+# starts Pacemaker if the mapper unit failed; Requires= holds the stack.
 [Unit]
-After=cryptsetup.target
+After=cryptsetup.target {{ pacemaker_agents_luks_cryptsetup_unit }}
+Requires={{ pacemaker_agents_luks_cryptsetup_unit }}

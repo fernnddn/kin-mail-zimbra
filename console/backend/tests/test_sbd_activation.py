@@ -177,6 +177,11 @@ class RoleWiringTests(unittest.TestCase):
         self.assertIn("kin_stonith_config_has_attr", verify)
         # Do not fight RefuseManualStart.
         self.assertNotIn("state: started", (root / "tasks" / "install.yml").read_text(encoding="utf-8"))
+        ordering = (root / "templates" / "kin-ordering.conf.j2").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Requires=kin-softdog.service open-iscsi.service", ordering)
+        self.assertNotIn("Wants=open-iscsi.service", ordering)
         initialize = (root / "tasks" / "initialize.yml").read_text(encoding="utf-8")
         self.assertIn("observability_expect_fresh_sbd", initialize)
         self.assertIn("kin_sbd_fresh_lun_plan", (root / "filter_plugins" / "sbd_activation.py").read_text(encoding="utf-8"))

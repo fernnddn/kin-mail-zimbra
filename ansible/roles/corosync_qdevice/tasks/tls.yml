@@ -193,7 +193,8 @@
     - not ansible_check_mode
   tags: [qdevice, tls]
 
-# Secondary nodes never ran certutil -i; create NSS dir before dropping PKCS12.
+# certutil -i already created NSS on every host; keep this mkdir for a
+# secondary that somehow has PKCS12 import without a directory.
 - name: Ensure the qdevice NSS directory exists before PKCS12 import
   ansible.builtin.file:
     path: "{{ corosync_qdevice_nssdb_dir }}"
@@ -212,7 +213,8 @@
     dest: "{{ corosync_qdevice_p12_path }}"
     mode: "0600"
   when:
-    - not corosync_qdevice_nss.stat.exists
+    - inventory_hostname != ansible_play_hosts[0]
+    - not corosync_qdevice_tls_ready_all
     - not ansible_check_mode
   tags: [qdevice, tls]
 
@@ -221,7 +223,8 @@
     cmd: >-
       corosync-qdevice-net-certutil -m -c {{ corosync_qdevice_p12_path }}
   when:
-    - not corosync_qdevice_nss.stat.exists
+    - inventory_hostname != ansible_play_hosts[0]
+    - not corosync_qdevice_tls_ready_all
     - not ansible_check_mode
   tags: [qdevice, tls]
 

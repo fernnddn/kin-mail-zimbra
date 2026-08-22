@@ -14,3 +14,5 @@ pacemaker_agents_disable_zimbra_service: true
 pacemaker_agents_keep_meta_loop_unit: kin-drbd-meta-loop.service
 pacemaker_agents_luks_dropin_dir: /etc/systemd/system/pacemaker.service.d
 pacemaker_agents_luks_dropin_path: /etc/systemd/system/pacemaker.service.d/kin-luks-cryptsetup.conf
+# crypttab name kin-zimbra-crypt → systemd-cryptsetup@kin-zimbra-crypt.service
+pacemaker_agents_luks_cryptsetup_unit: systemd-cryptsetup@kin-zimbra-crypt.service

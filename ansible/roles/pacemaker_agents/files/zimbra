@@ -103,6 +103,10 @@ zimbra_fail2ban_jails() {
 
 zimbra_start() {
 	local out rc
+	if ! findmnt -n /opt/zimbra >/dev/null 2>&1; then
+		ocf_log err "/opt/zimbra is not mounted"
+		return $OCF_ERR_INSTALLED
+	fi
 	if zimbra_monitor; then
 		zimbra_fail2ban_jails mounted
 		return $OCF_SUCCESS

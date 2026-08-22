@@ -172,7 +172,8 @@ if [ -f "$res_j2" ] && grep -q 'drbd_resource_backing_disk' "$res_j2" \
   && [ -f "$luks_yml" ] \
   && grep -q 'zimbra-data-disk-luks.sh' "$luks_yml" \
   && [ -f "$dropin" ] \
-  && grep -q 'After=cryptsetup.target' "$dropin"; then
+  && grep -q 'After=cryptsetup.target' "$dropin" \
+  && grep -q 'Requires={{ pacemaker_agents_luks_cryptsetup_unit }}' "$dropin"; then
   pass "ansible DRBD resource uses mapper backing + pacemaker waits for cryptsetup"
 else
   bad "ansible LUKS wiring missing (res template, luks.yml, or pacemaker drop-in)"

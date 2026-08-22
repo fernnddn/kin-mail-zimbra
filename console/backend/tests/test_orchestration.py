@@ -581,6 +581,11 @@ class CheckModeSafetyTests(unittest.TestCase):
         )
         text = ocf.read_text(encoding="utf-8")
         self.assertIn("<resource-agent", text)
+        start = text.find("zimbra_start()")
+        validate = text.find("zimbra_validate()")
+        self.assertGreater(start, validate)
+        self.assertIn("findmnt -n /opt/zimbra", text[start : start + 400])
+        self.assertNotIn("findmnt", text[validate:start])
         paths = (
             Path(__file__).resolve().parents[3]
             / "ansible"
@@ -627,6 +632,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         verify = (root / "tasks" / "verify.yml").read_text(encoding="utf-8")
         self.assertIn("kin-vip[^\\n]*Started", verify)
         self.assertIn("'Promoted' not in pacemaker_mail_stack_status.stdout", verify)
+        self.assertIn("promoted-resource-stickiness=", verify)
 
         main = (root / "tasks" / "main.yml").read_text(encoding="utf-8")
         constraints_idx = main.find("import_tasks: constraints.yml")
@@ -704,6 +710,29 @@ class CheckModeSafetyTests(unittest.TestCase):
         )
         self.assertIn("choose_shared_ssh_user", orch)
         self.assertIn("_push_peer_deploy_tree", orch)
+        self.assertIn(
+            "secrets, extract, timeout=60, stdin_text=password",
+            orch,
+        )
+        tls = (
+            repo / "ansible/roles/corosync_qdevice/tasks/tls.yml"
+        ).read_text(encoding="utf-8")
+        minus_m = tls.find("corosync-qdevice-net-certutil -m")
+        self.assertGreater(minus_m, 0)
+        self.assertIn(
+            "inventory_hostname != ansible_play_hosts[0]",
+            tls[minus_m : minus_m + 280],
+        )
+        sbd_order = (
+            repo / "ansible/roles/sbd_stonith/templates/kin-ordering.conf.j2"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Requires=kin-softdog.service open-iscsi.service", sbd_order)
+        self.assertNotIn("Wants=open-iscsi.service", sbd_order)
+        luks_dropin = (
+            repo
+            / "ansible/roles/pacemaker_agents/templates/kin-luks-cryptsetup.conf.j2"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Requires={{ pacemaker_agents_luks_cryptsetup_unit }}", luks_dropin)
         driver = (repo / "install/kin-mail.sh").read_text(encoding="utf-8")
         self.assertIn("07-zpush.sh failed — mail install continues", driver)
         self.assertNotIn('fail "Pipeline stopped at 07-zpush.sh"', driver)
