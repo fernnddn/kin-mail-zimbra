@@ -113,6 +113,25 @@ def redact_text(text: str, secrets: list[str]) -> str:
     return out
 
 
+def wrap_privileged_remote(inner: str) -> str:
+    """Run inner as root on the SSH target without requiring NOPASSWD sudo.
+
+    Ansible already uses become_password. Raw SSH used ``sudo -n`` and failed on
+    a greenfield ``kin`` account that can sudo only with a password. Prefer
+    passwordless sudo, else ``sudo -S`` (password on stdin, never in argv).
+    """
+    quoted = inner.strip().replace("'", "'\"'\"'")
+    return (
+        "if [ \"$(id -u)\" -eq 0 ]; then "
+        f"bash -c '{quoted}'; "
+        "elif sudo -n true >/dev/null 2>&1; then "
+        f"sudo -n bash -c '{quoted}'; "
+        "else "
+        f"sudo -S -p '' bash -c '{quoted}'; "
+        "fi"
+    )
+
+
 def ssh_password_candidates(kin_pass: str, root_pass: str) -> tuple[tuple[str, str], ...]:
     """SSH (username, password) pairs in try order.
 
@@ -444,6 +463,7 @@ async def _stream_redacted(
     extra_env: dict[str, str],
     secrets: list[str],
     transcript: Path,
+    stdin_text: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     from .commands import _stream_subprocess
 
@@ -454,6 +474,7 @@ async def _stream_redacted(
         transcript=transcript,
         transcript_reset=False,
         secrets=secrets,
+        stdin_text=stdin_text,
     ):
         if ev.get("type") in ("stdout", "stderr") and ev.get("data"):
             ev = dict(ev)
@@ -591,6 +612,7 @@ async def _ssh_run(
     remote_cmd: str,
     *,
     timeout: int = 12,
+    stdin_text: str | None = None,
 ) -> tuple[int, str]:
     """Password SSH with a fixed remote command. Password never in argv."""
     sshpass = shutil.which("sshpass")
@@ -612,13 +634,19 @@ async def _ssh_run(
         remote_cmd,
     ]
     env = {**os.environ, "SSHPASS": password}
+    stdin = asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        stdin=stdin,
         env=env,
     )
-    out_b, err_b = await proc.communicate()
+    payload = None
+    if stdin_text is not None:
+        blob = stdin_text if stdin_text.endswith("\n") else stdin_text + "\n"
+        payload = blob.encode("utf-8")
+    out_b, err_b = await proc.communicate(input=payload)
     out = redact_text(out_b.decode("utf-8", errors="replace"), secrets)
     err = redact_text(err_b.decode("utf-8", errors="replace"), secrets)
     text = (out or err).strip()
@@ -635,11 +663,11 @@ async def _ssh_probe(
     return await _ssh_run(host, user, password, secrets, "hostname -f || hostname")
 
 
-# Inlined on the peer so this does not depend on a script already being there.
+# Deploy tree must exist. Privilege uses wrap_privileged_remote (NOPASSWD or
+# password sudo), matching Ansible become — do not require sudo -n here.
 PEER_OS_PREP_READINESS_CMD = (
     "missing=\"\"; "
     '[ -x /opt/kin-mail-deploy/install/kin-mail.sh ] || missing="${missing}deploy-tree "; '
-    'sudo -n true >/dev/null 2>&1 || missing="${missing}sudo-n "; '
     'if [ -n "$missing" ]; then echo "KIN_PEER_NOT_READY:${missing}"; exit 4; fi; '
     "echo KIN_PEER_READY"
 )
@@ -741,14 +769,17 @@ async def _install_staged_peer_file(
     dest_dir = str(Path(dest).parent)
     chmod_dir = ""
     if dest_dir.rstrip("/") == "/etc/kin-mail":
-        chmod_dir = f"sudo -n chmod 755 {dest_dir} && "
-    cmd = (
-        f"sudo -n mkdir -p {dest_dir} && "
+        chmod_dir = f"chmod 755 {dest_dir} && "
+    inner = (
+        f"mkdir -p {dest_dir} && "
         f"{chmod_dir}"
-        f"sudo -n install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "
+        f"install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "
         f"rm -f {remote_tmp}"
     )
-    return await _ssh_run(host, user, password, secrets, cmd, timeout=20)
+    cmd = wrap_privileged_remote(inner)
+    return await _ssh_run(
+        host, user, password, secrets, cmd, timeout=20, stdin_text=password
+    )
 
 
 def _write_secure_temp(body: str) -> Path:
@@ -819,7 +850,9 @@ PEER_CONSOLE_PROBE_CMD = (
     "if [ -f /etc/kin-mail/topology ]; then cat /etc/kin-mail/topology; fi; "
     "echo KIN_PEER_TOPO_END; "
     "echo KIN_PEER_CFG_BEGIN; "
-    "if [ -f /etc/kin-mail/config ]; then sudo -n cat /etc/kin-mail/config; fi; "
+    "if [ -f /etc/kin-mail/config ]; then "
+    + wrap_privileged_remote("cat /etc/kin-mail/config")
+    + "; fi; "
     "echo KIN_PEER_CFG_END"
 )
 
@@ -867,7 +900,7 @@ async def sync_peer_ha_console_state(
     """
     notes: list[str] = []
     code, blob = await _ssh_run(
-        host, user, password, secrets, PEER_CONSOLE_PROBE_CMD, timeout=20
+        host, user, password, secrets, PEER_CONSOLE_PROBE_CMD, timeout=20, stdin_text=password
     )
     if code != 0:
         notes.append(
@@ -1590,8 +1623,11 @@ async def cmd_run_ha_orchestration(
             # Stream a remote full-install if the deploy tree already exists on the peer.
             remote_cmd = (
                 "if [ -x /opt/kin-mail-deploy/install/kin-mail.sh ]; then "
-                "sudo -n env KIN_CONSOLE_CONFIRMED=1 "
-                "/opt/kin-mail-deploy/install/kin-mail.sh --full-install; "
+                + wrap_privileged_remote(
+                    "env KIN_CONSOLE_CONFIRMED=1 "
+                    "/opt/kin-mail-deploy/install/kin-mail.sh --full-install"
+                )
+                + "; "
                 "else echo KIN_REMOTE_INSTALL_MISSING; exit 3; fi"
             )
             argv = [
@@ -1613,6 +1649,7 @@ async def cmd_run_ha_orchestration(
                 extra_env={"SSHPASS": ssh_pass, **ansible_env},
                 secrets=secrets,
                 transcript=DEPLOY_LAST_LOG,
+                stdin_text=ssh_pass,
             ):
                 if ev.get("type") == "done":
                     exit_code = _event_exit_code(ev)

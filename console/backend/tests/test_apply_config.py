@@ -198,6 +198,23 @@ class PeerReadinessParseTests(unittest.TestCase):
         self.assertTrue(any("kin-mail.sh" in m for m in missing))
         self.assertTrue(any("sudo -n" in m for m in missing))
 
+    def test_current_readiness_cmd_does_not_require_nopasswd(self) -> None:
+        from kin_privhelper.orchestration import PEER_OS_PREP_READINESS_CMD
+
+        self.assertNotIn("sudo-n", PEER_OS_PREP_READINESS_CMD)
+        self.assertIn("deploy-tree", PEER_OS_PREP_READINESS_CMD)
+
+
+class PrivilegedRemoteWrapTests(unittest.TestCase):
+    def test_password_sudo_fallback_is_in_the_wrapper(self) -> None:
+        from kin_privhelper.orchestration import wrap_privileged_remote
+
+        wrapped = wrap_privileged_remote("mkdir -p /etc/kin-mail")
+        self.assertIn("sudo -n", wrapped)
+        self.assertIn("sudo -S", wrapped)
+        self.assertIn("mkdir -p /etc/kin-mail", wrapped)
+        self.assertNotIn("NOPASSWD", wrapped)
+
 
 if __name__ == "__main__":
     unittest.main()

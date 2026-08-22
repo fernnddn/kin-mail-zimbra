@@ -519,6 +519,19 @@ class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(secret, joined)
             self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
 
+    async def test_stdin_is_fed_to_child(self) -> None:
+        from kin_privhelper.commands import _stream_subprocess
+
+        events: list[dict] = []
+        async for ev in _stream_subprocess(
+            ["python3", "-c", "import sys; print(sys.stdin.read().strip())"],
+            stdin_text="hello-sudo",
+        ):
+            events.append(ev)
+        joined = "".join(str(e.get("data") or "") for e in events)
+        self.assertIn("hello-sudo", joined)
+        self.assertTrue(any(e.get("type") == "done" and e.get("exit_code") == 0 for e in events))
+
     async def test_follow_log_includes_sidecar_detail_live(self) -> None:
         """Mimic 03: parent stdout stays quiet while zmsetup writes a sidecar log."""
         import asyncio

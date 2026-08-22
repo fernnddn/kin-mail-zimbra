@@ -285,6 +285,7 @@ async def _stream_subprocess(
     follow_logs: list[Path] | None = None,
     follow_poll_s: float = 0.2,
     file_backed: bool = False,
+    stdin_text: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
@@ -325,11 +326,13 @@ async def _stream_subprocess(
             tail_from = transcript.stat().st_size
         except OSError:
             tail_from = 0
+    stdin = asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL
     if use_file:
         raw_out = os.open(str(transcript), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
+                stdin=stdin,
                 stdout=raw_out,
                 stderr=raw_out,
                 cwd=str(cwd) if cwd else None,
@@ -341,12 +344,19 @@ async def _stream_subprocess(
     else:
         proc = await asyncio.create_subprocess_exec(
             *argv,
+            stdin=stdin,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd else None,
             env=env,
         )
         assert proc.stdout is not None and proc.stderr is not None
+
+    if stdin_text is not None and proc.stdin is not None:
+        blob = stdin_text if stdin_text.endswith("\n") else stdin_text + "\n"
+        proc.stdin.write(blob.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
 
     async def _pump(stream: asyncio.StreamReader, kind: str) -> None:
         while True:
