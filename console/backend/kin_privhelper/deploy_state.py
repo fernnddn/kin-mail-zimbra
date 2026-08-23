@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,12 @@ HA_SETUP_COMPLETE_MARKER = Path(
 # The unprivileged console cannot read that config; this marker is 0644.
 TOPOLOGY_MARKER = Path(
     os.environ.get("KIN_TOPOLOGY_MARKER", "/etc/kin-mail/topology")
+)
+SERVER_ID_FILE = Path(os.environ.get("KIN_SERVER_ID_FILE", "/etc/kin-mail/server-id"))
+LICENSE_TOKEN_FILE = Path(
+    os.environ.get(
+        "KIN_LICENSE_TOKEN_FILE", "/var/lib/kin-mail-console/license.token"
+    )
 )
 
 # Topology for the login gate: marker first, then applied config, then draft.
@@ -323,6 +330,58 @@ def write_topology_marker(topology: str) -> bool:
     os.chmod(tmp, 0o644)
     tmp.replace(TOPOLOGY_MARKER)
     return True
+
+
+def read_server_id() -> str:
+    if not path_is_file(SERVER_ID_FILE):
+        return ""
+    try:
+        return _first_nonempty_line(SERVER_ID_FILE.read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+
+
+def ensure_server_id() -> str:
+    """Stable per-install ID. Generated once; never rotated."""
+    existing = read_server_id()
+    if existing:
+        return existing
+    ensure_kin_mail_dir(SERVER_ID_FILE.parent)
+    new_id = str(uuid.uuid4())
+    tmp = SERVER_ID_FILE.with_name(SERVER_ID_FILE.name + ".tmp")
+    tmp.write_text(new_id + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    tmp.replace(SERVER_ID_FILE)
+    return new_id
+
+
+def read_license_token() -> str:
+    if not LICENSE_TOKEN_FILE.is_file():
+        return ""
+    try:
+        return LICENSE_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_license_token(token: str) -> None:
+    import grp
+
+    LICENSE_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = LICENSE_TOKEN_FILE.with_suffix(".tmp")
+    tmp.write_text(token.strip() + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o640)
+    try:
+        os.chown(tmp, 0, grp.getgrnam("kin-console").gr_gid)
+    except (KeyError, PermissionError, OSError):
+        pass
+    tmp.replace(LICENSE_TOKEN_FILE)
+    try:
+        os.chmod(LICENSE_TOKEN_FILE, 0o640)
+        os.chown(LICENSE_TOKEN_FILE, 0, grp.getgrnam("kin-console").gr_gid)
+    except (KeyError, PermissionError, OSError):
+        pass
+
 
 
 def backfill_topology_marker_from_config() -> bool:

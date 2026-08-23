@@ -124,15 +124,33 @@ def validate_create_mailbox_args(args: dict[str, Any]) -> tuple[str, list[str]]:
     op = str(args.get("op") or "create").strip().lower()
     if op == "status":
         return "status", ["--status"]
+    if op == "list":
+        return "list", ["--list"]
+    if op == "delete":
+        email = str(args.get("email") or "").strip().lower()
+        if "@" not in email:
+            raise ValueError("email is required to delete a mailbox")
+        return "delete", ["--delete", email]
+    if op == "rename":
+        email = str(args.get("email") or "").strip().lower()
+        new_local = str(args.get("new_local_part") or "").strip().lower()
+        if "@" not in email:
+            raise ValueError("email is required to rename a mailbox")
+        if not new_local or "@" in new_local or not _LOCAL_PART_RE.match(new_local):
+            raise ValueError("new_local_part must be a valid local part")
+        return "rename", ["--rename", email, new_local]
     if op != "create":
-        raise ValueError("create_mailbox op must be 'create' or 'status'")
+        raise ValueError("create_mailbox op must be create, status, list, delete, or rename")
 
     local_part = str(args.get("local_part") or "").strip().lower()
     password = str(args.get("password") or "")
     display_name = str(args.get("display_name") or "").strip()
+    given_name = str(args.get("given_name") or "").strip()
+    surname = str(args.get("surname") or "").strip()
+    account_status = str(args.get("account_status") or "active").strip().lower()
 
     if not local_part or "@" in local_part:
-        raise ValueError("local_part is required (mailbox name only — domain is fixed)")
+        raise ValueError("local_part is required (mailbox name only; domain is fixed)")
     if not _LOCAL_PART_RE.match(local_part):
         raise ValueError(
             "local_part must start with alphanumeric and use only letters, digits, . _ + -"
@@ -141,16 +159,29 @@ def validate_create_mailbox_args(args: dict[str, Any]) -> tuple[str, list[str]]:
         raise ValueError("password must be at least 8 characters")
     if len(password) > 256:
         raise ValueError("password too long")
-    if len(display_name) > 128:
-        raise ValueError("display_name too long")
-    if any(ord(c) < 32 for c in display_name):
-        raise ValueError("display_name contains invalid characters")
+    for label, value in (
+        ("display_name", display_name),
+        ("given_name", given_name),
+        ("surname", surname),
+    ):
+        if len(value) > 128:
+            raise ValueError(f"{label} too long")
+        if any(ord(c) < 32 for c in value):
+            raise ValueError(f"{label} contains invalid characters")
+    if account_status not in ("active", "locked"):
+        raise ValueError("account_status must be active or locked")
 
     domain = _mail_domain_from_config()
     email = f"{local_part}@{domain}"
     argv = [email, password]
     if display_name:
         argv.append(display_name)
+    if given_name:
+        argv.extend(["--given", given_name])
+    if surname:
+        argv.extend(["--sn", surname])
+    if account_status != "active":
+        argv.extend(["--account-status", account_status])
     return "create", argv
 
 
@@ -739,6 +770,24 @@ async def cmd_get_audit_log(_args: dict[str, Any] | None = None) -> AsyncIterato
 async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     """Quota-gated mailbox create via install/08-create-mailbox.sh (same gate as CLI)."""
     args = args or {}
+    op_preview = str(args.get("op") or "create").strip().lower()
+    if op_preview in ("create",):
+        from .deploy_state import read_license_token, read_server_id, ensure_server_id
+        from kin_console.license import verify_license
+
+        token = read_license_token()
+        if token:
+            try:
+                state = verify_license(token, server_id=read_server_id() or ensure_server_id())
+            except ValueError:
+                state = {"provisioning_blocked": False}
+            if state.get("provisioning_blocked"):
+                yield proto.event_stderr(
+                    "New mailboxes are blocked while the license is in grace or expired. "
+                    "Existing mail still flows.\n"
+                )
+                yield proto.event_done(1)
+                return
     try:
         op, argv_tail = validate_create_mailbox_args(args)
     except ValueError as exc:
@@ -753,14 +802,15 @@ async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterato
     script = resolve_create_mailbox()
     if op == "status":
         yield proto.event_stdout(f"Running fixed script: {script} --status\n")
+    elif op == "list":
+        yield proto.event_stdout(f"Running fixed script: {script} --list\n")
+    elif op in ("delete", "rename"):
+        yield proto.event_stdout(f"Running fixed script: {script} {op} {argv_tail[1]}\n")
     else:
-        # Never print password. Email is argv_tail[0].
-        email = argv_tail[0]
-        dname = argv_tail[2] if len(argv_tail) > 2 else ""
+        # Never print password. Email is always the first positional.
+        email = argv_tail[0] if argv_tail else ""
         yield proto.event_stdout(
-            f"Running fixed script: {script} {email} <password-redacted>"
-            + (f" {dname!r}" if dname else "")
-            + "\n"
+            f"Running fixed script: {script} {email} <password-redacted>\n"
         )
         yield proto.event_stdout(
             "# Uses kin_quota_gate_allow_new_mailbox before zmprov ca (same as CLI).\n"
@@ -1073,6 +1123,7 @@ def _adapt(fn: Callable[..., AsyncIterator[dict[str, Any]]]) -> CommandHandler:
     return _wrapped
 
 
+from .appliance_settings import cmd_apply_appliance_settings
 from .console_users_sync import cmd_mutate_console_users
 
 HANDLERS: dict[str, CommandHandler] = {
@@ -1095,6 +1146,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_HA_ORCHESTRATION: _adapt(cmd_run_ha_orchestration),
     proto.CMD_HA_DISK_PREFLIGHT: _adapt(cmd_ha_disk_preflight),
     proto.CMD_MUTATE_CONSOLE_USERS: _adapt(cmd_mutate_console_users),
+    proto.CMD_APPLY_APPLIANCE_SETTINGS: _adapt(cmd_apply_appliance_settings),
 }
 
 

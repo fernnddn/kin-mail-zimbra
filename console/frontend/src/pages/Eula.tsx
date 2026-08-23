@@ -12,8 +12,10 @@ export default function EulaPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  if (!setupLoading && deployed) {
+    return <Navigate to="/login" replace />;
+  }
   if (!loading && !setupLoading && accepted) {
-    if (deployed) return <Navigate to="/login" replace />;
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
 

@@ -264,17 +264,16 @@ class InventoryTests(unittest.TestCase):
         expected = [(s.step_id, s.label) for s in STEPS]
         self.assertEqual(pairs, expected)
 
-    def test_frontend_hides_deploy_after_setup_complete(self) -> None:
+    def test_frontend_redeploy_requires_danger_confirm(self) -> None:
         from pathlib import Path
 
         repo = Path(__file__).resolve().parents[3]
         step = (repo / "console/frontend/src/wizard/steps/DeployStep.tsx").read_text(
             encoding="utf-8"
         )
-        self.assertIn(
-            "showSetupCards = canOps && !activeRun && !fullInstallComplete",
-            step,
-        )
+        self.assertIn("redeployDanger", step)
+        self.assertIn("countdownSeconds={10}", step)
+        self.assertIn("This can destroy live mail data", step)
         self.assertIn("Mail is already installed on this host", step)
         session = (
             repo / "console/frontend/src/wizard/DeploySession.tsx"
@@ -451,7 +450,9 @@ class OrchRbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "add_observability"))
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "add_observability"))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "add_observability"))
-        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "store_observability_secrets"))
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "apply_appliance_settings"))
+        self.assertFalse(command_allowed(ROLE_SUPPORT_OPS, "apply_appliance_settings"))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "apply_appliance_settings"))
         self.assertFalse(
             command_allowed(
                 ROLE_CUSTOMER_ADMIN,

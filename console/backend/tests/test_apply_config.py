@@ -271,5 +271,29 @@ class PrivilegedRemoteWrapTests(unittest.TestCase):
         self.assertNotRegex(wrapped, r"sudo -S[^;]*</dev/null")
 
 
+class UpdateConfigKeysTests(unittest.TestCase):
+    def test_sets_contracted_seats(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper.apply_config import parse_config, update_config_keys
+
+        tmp = Path(tempfile.mkdtemp())
+        conf = tmp / "config"
+        conf.write_text(
+            "MAIL_DOMAIN=example.test\nCONTRACTED_SEATS=PLACEHOLDER_UNSET\nKIN_ADMIN_IPS=\n",
+            encoding="utf-8",
+        )
+        os.chmod(conf, 0o600)
+        with patch("kin_privhelper.apply_config.CONF_FILE", conf), patch(
+            "kin_privhelper.apply_config.CONF_DIR", tmp
+        ):
+            code, _lines = update_config_keys({"CONTRACTED_SEATS": "32"})
+        self.assertEqual(code, 0)
+        self.assertEqual(parse_config(conf.read_text(encoding="utf-8")).get("CONTRACTED_SEATS"), "32")
+
+
 if __name__ == "__main__":
     unittest.main()

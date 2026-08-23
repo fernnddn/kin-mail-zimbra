@@ -5,6 +5,8 @@ import { Button, Hint } from "../ui";
 import { theme } from "../styles/theme";
 import {
   dkimPanelName,
+  dnsZoneRelativeName,
+  parseAcmeChallengeFromLog,
   parseMailDnsHintsFromLog,
   preparedMailDnsRecords,
   type DkimDnsRecord,
@@ -341,7 +343,7 @@ export function DkimPublishBox({
       <ContinueHeading>Publish DKIM in your DNS panel</ContinueHeading>
       <Intro style={{ marginBottom: "0.65rem" }}>
         Certificates & DKIM has generated the key. Host / Name is relative to the zone. Paste
-        Content as one TXT value (already joined — no quotes, no BIND line-breaks).
+        Content as one TXT value (already joined, no quotes, no BIND line-breaks).
       </Intro>
       <Row>
         <Meta>
@@ -351,6 +353,38 @@ export function DkimPublishBox({
         <Fields>
           <DnsField label="Host / Name" value={name} />
           <DnsField label="Content" value={dkim.value} />
+        </Fields>
+      </Row>
+    </ContinueBox>
+  );
+}
+
+export function AcmeChallengePanel({
+  log,
+  mailDomain = "",
+}: {
+  log: string;
+  mailDomain?: string;
+}) {
+  const rec = parseAcmeChallengeFromLog(log);
+  if (!rec) return null;
+  const relative = mailDomain ? dnsZoneRelativeName(rec.host, mailDomain).name : rec.host;
+  return (
+    <ContinueBox>
+      <ContinueHeading>Publish this ACME TXT record</ContinueHeading>
+      <Intro style={{ marginBottom: "0.65rem" }}>
+        Let&apos;s Encrypt is waiting for this TXT. Paste Host / Name relative to zone{" "}
+        <strong>{mailDomain || "your mail domain"}</strong>, then wait. This page watches DNS
+        until the certificate is issued.
+      </Intro>
+      <Row>
+        <Meta>
+          <TypePill>TXT</TypePill>
+          <ZoneHint>TTL Auto / 300</ZoneHint>
+        </Meta>
+        <Fields>
+          <DnsField label="Host / Name" value={relative} />
+          <DnsField label="Content" value={rec.value} />
         </Fields>
       </Row>
     </ContinueBox>

@@ -112,7 +112,7 @@ def eula_status(request: Request) -> dict[str, object]:
     accepted = request.cookies.get(EULA_COOKIE) == "1"
     return {
         "accepted": accepted,
-        "title": "KIN Mail — Terms of Service",
+        "title": "KIN Mail: Terms of Service",
         "body": (
             "PLACEHOLDER EULA\n\n"
             "This is temporary placeholder text for the KIN Mail appliance terms of service. "
@@ -266,6 +266,15 @@ async def api_create_user(
     body: CreateUserBody,
     actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
 ) -> dict[str, object]:
+    lic = _current_license_view()
+    if lic.get("provisioning_blocked"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "New console users cannot be created while the license is in grace or expired. "
+                "Existing mail still flows."
+            ),
+        )
     parsed = await _mutate_console_users(
         actor.username,
         {
@@ -406,6 +415,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "remove_host": proto.CMD_REMOVE_HOST,
     "remove_observability": proto.CMD_REMOVE_OBSERVABILITY,
     "add_observability": proto.CMD_ADD_OBSERVABILITY,
+    "appliance_settings": proto.CMD_APPLY_APPLIANCE_SETTINGS,
 }
 
 
@@ -413,6 +423,40 @@ class CreateMailboxBody(BaseModel):
     local_part: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     display_name: str = Field(default="", max_length=128)
+    given_name: str = Field(default="", max_length=128)
+    surname: str = Field(default="", max_length=128)
+    account_status: str = Field(default="active", max_length=16)
+
+
+class MailboxEmailBody(BaseModel):
+    email: str = Field(min_length=3, max_length=256)
+
+
+class MailboxRenameBody(BaseModel):
+    email: str = Field(min_length=3, max_length=256)
+    new_local_part: str = Field(min_length=1, max_length=64)
+
+
+class SeatsBody(BaseModel):
+    seats: int = Field(ge=1, le=100000)
+
+
+class AdSettingsBody(BaseModel):
+    enabled: bool = False
+    ldap_url: str = Field(default="", max_length=512)
+    search_base: str = Field(default="", max_length=512)
+    search_filter: str = Field(default="", max_length=512)
+    search_bind_dn: str = Field(default="", max_length=512)
+    bind_dn_template: str = Field(default="", max_length=512)
+    search_bind_password: str = Field(default="", max_length=256)
+
+
+class LicenseApplyBody(BaseModel):
+    token: str = Field(min_length=16, max_length=8192)
+
+
+class FirewallApplyBody(BaseModel):
+    admin_ips: str = Field(default="", max_length=2048)
 
 
 async def _collect_privhelper(
@@ -463,7 +507,27 @@ async def mailbox_status(
         user.username,
         args={"op": "status"},
     )
-    return result
+    return _mailbox_status_payload(result)
+
+
+@app.get("/api/mailbox")
+async def mailbox_list(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={"op": "list"},
+    )
+    payload = _mailbox_status_payload(result)
+    rows = _json_any_from_log(str(result.get("log") or ""), "MAILBOX_JSON:")
+    payload["mailboxes"] = rows if isinstance(rows, list) else []
+    return payload
 
 
 @app.post("/api/mailbox")
@@ -471,7 +535,7 @@ async def mailbox_create(
     body: CreateMailboxBody,
     user: ConsoleUser = Depends(auth.require_console_user),
 ) -> dict[str, object]:
-    """Self-service mailbox create — Customer Admin allowed; quota gate enforced in 08."""
+    """Self-service mailbox create. Customer Admin allowed; quota gate enforced in 08."""
     if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -481,7 +545,19 @@ async def mailbox_create(
     if "@" in local_part:
         raise HTTPException(
             status_code=400,
-            detail="Enter the local part only — domain is fixed to the configured mail domain",
+            detail="Enter the local part only. Domain is fixed to the configured mail domain",
+        )
+    status_name = body.account_status.strip().lower() or "active"
+    if status_name not in ("active", "locked"):
+        raise HTTPException(status_code=400, detail="account_status must be active or locked")
+    lic = _current_license_view()
+    if lic.get("provisioning_blocked"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "New mailboxes cannot be created while the license is in grace or expired. "
+                "Existing mail still flows."
+            ),
         )
     maint = await _collect_privhelper(
         proto.CMD_MAINTENANCE,
@@ -502,16 +578,73 @@ async def mailbox_create(
             "local_part": local_part,
             "password": body.password,
             "display_name": body.display_name.strip(),
+            "given_name": body.given_name.strip(),
+            "surname": body.surname.strip(),
+            "account_status": status_name,
         },
     )
-    # Never echo the submitted password back.
+    created = _json_from_log(str(result.get("log") or ""), "CREATE_JSON:")
+    payload = _mailbox_status_payload(result)
     return {
         "exit_code": result["exit_code"],
         "ok": result["ok"],
         "error": result["error"],
-        "log": result["log"],
         "local_part": local_part,
+        "email": created.get("email") or "",
+        "seats": payload.get("seats"),
+        "message": payload.get("message"),
     }
+
+
+@app.post("/api/mailbox/rename")
+async def mailbox_rename(
+    body: MailboxRenameBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={
+            "op": "rename",
+            "email": body.email.strip().lower(),
+            "new_local_part": body.new_local_part.strip().lower(),
+        },
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "RENAME_JSON:")
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_human_mailbox_error(str(result.get("log") or ""), str(result.get("error") or "")),
+        )
+    return {"ok": True, "email": parsed.get("email") or "", "previous": parsed.get("previous") or ""}
+
+
+@app.post("/api/mailbox/delete")
+async def mailbox_delete(
+    body: MailboxEmailBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={"op": "delete", "email": body.email.strip().lower()},
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_human_mailbox_error(str(result.get("log") or ""), str(result.get("error") or "")),
+        )
+    return {"ok": True, "email": body.email.strip().lower()}
 
 
 @app.get("/api/wizard/deploy/stream")
@@ -549,6 +682,18 @@ async def wizard_deploy_stream(
     elif cmd in (proto.CMD_REMOVE_OBSERVABILITY, proto.CMD_ADD_OBSERVABILITY):
         op = (request.query_params.get("op") or "apply").strip().lower()
         stream_args = {"op": op}
+    elif cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS:
+        section = (request.query_params.get("section") or "").strip().lower()
+        if section not in ("tls_renew", "firewall", "tls_status", "status"):
+            raise HTTPException(
+                status_code=400,
+                detail="appliance_settings stream allows tls_renew, firewall, tls_status, or status",
+            )
+        stream_args = {
+            "section": section,
+            "admin_ips": (request.query_params.get("admin_ips") or "").strip(),
+            "client_ip": _request_client_ipv4(request),
+        }
 
     if not command_allowed(actor.role, cmd, args=stream_args):
         raise HTTPException(
@@ -635,15 +780,293 @@ async def wizard_ha_disk_preflight(
 
 
 def _json_from_log(log: str, prefix: str) -> dict:
+    data = _json_any_from_log(log, prefix)
+    return data if isinstance(data, dict) else {}
+
+
+def _json_any_from_log(log: str, prefix: str):
     for line in (log or "").splitlines():
         if line.startswith(prefix):
             try:
-                data = json.loads(line[len(prefix) :])
+                return json.loads(line[len(prefix) :])
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict):
-                return data
-    return {}
+    return None
+
+
+def _request_client_ipv4(request: Request) -> str:
+    host = (request.client.host if request.client else "") or ""
+    if host.startswith("::ffff:"):
+        host = host[7:]
+    parts = host.split(".")
+    if len(parts) != 4:
+        return ""
+    try:
+        if all(0 <= int(p) <= 255 for p in parts) and host not in ("127.0.0.1", "0.0.0.0"):
+            return host
+    except ValueError:
+        return ""
+    return ""
+
+
+def _current_license_view() -> dict:
+    from kin_console.license import verify_license
+    from kin_privhelper.deploy_state import read_license_token, read_server_id
+
+    sid = read_server_id() or ""
+    token = read_license_token()
+    if not token:
+        return {
+            "present": False,
+            "status": "none",
+            "provisioning_blocked": False,
+            "server_id": sid,
+            "seats": None,
+        }
+    if not sid:
+        return {
+            "present": True,
+            "status": "invalid",
+            "error": "Email Server ID is not available on this host yet",
+            "provisioning_blocked": False,
+            "server_id": "",
+            "seats": None,
+        }
+    try:
+        return {"present": True, **verify_license(token, server_id=sid)}
+    except ValueError as exc:
+        return {
+            "present": True,
+            "status": "invalid",
+            "error": str(exc),
+            "provisioning_blocked": False,
+            "server_id": sid,
+            "seats": None,
+        }
+
+
+def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
+    if license_blocked:
+        return (
+            "New mailboxes cannot be created while the license is in grace or expired. "
+            "Existing mail still flows."
+        )
+    code = str(seats.get("code") or "")
+    used = seats.get("used")
+    limit = seats.get("limit")
+    if code == "unset":
+        return (
+            "Seat limit is not set. A Super Admin can set contracted seats on the Settings page."
+        )
+    if code == "invalid":
+        return "Seat limit is not a valid number. A Super Admin can fix it on the Settings page."
+    if code == "at_limit":
+        return f"All contracted mailboxes are in use ({used}/{limit}). Contact KIN to add seats."
+    if code == "count_failed":
+        return "Could not count existing mailboxes. Try again in a moment."
+    if code == "ok" and used is not None and limit is not None:
+        return f"{used}/{limit} seats used. Ready to create a mailbox."
+    if used is not None and limit is not None:
+        return f"{used}/{limit} seats used."
+    return "Seat status is unavailable."
+
+
+def _mailbox_status_payload(result: dict[str, object]) -> dict[str, object]:
+    seats = _json_from_log(str(result.get("log") or ""), "SEATS_JSON:")
+    lic = _current_license_view()
+    blocked = bool(lic.get("provisioning_blocked"))
+    message = _seat_user_message(seats, license_blocked=blocked)
+    can_create = bool(seats.get("ok")) and not blocked
+    return {
+        "ok": bool(result.get("ok")) and not blocked,
+        "exit_code": result.get("exit_code"),
+        "error": result.get("error"),
+        "seats": seats,
+        "message": message,
+        "can_create": can_create,
+        "license": {
+            "status": lic.get("status"),
+            "provisioning_blocked": blocked,
+        },
+    }
+
+
+def _human_mailbox_error(log: str, error: str) -> str:
+    text = f"{error}\n{log}"
+    if "already exists" in text:
+        return "That mailbox already exists."
+    if "not found" in text.lower():
+        return "Mailbox not found."
+    if "PLACEHOLDER_UNSET" in text or "seat limit not configured" in text:
+        return "Seat limit is not set. A Super Admin can set contracted seats on the Settings page."
+    if "seat limit reached" in text:
+        return "All contracted mailboxes are in use. Contact KIN to add seats."
+    if "grace or expired" in text:
+        return (
+            "New mailboxes cannot be created while the license is in grace or expired. "
+            "Existing mail still flows."
+        )
+    return error or "The mailbox change did not succeed."
+
+
+def _require_settings(user: ConsoleUser) -> None:
+    if not command_allowed(user.role, proto.CMD_APPLY_APPLIANCE_SETTINGS):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_APPLY_APPLIANCE_SETTINGS),
+        )
+
+
+def _settings_from_result(result: dict[str, object]) -> dict:
+    parsed = _json_from_log(str(result.get("log") or ""), "SETTINGS_JSON:")
+    if not result.get("ok") and not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or "Could not load settings"),
+        )
+    return parsed
+
+
+@app.get("/api/license/status")
+def license_status(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    return _current_license_view()
+
+
+@app.get("/api/settings")
+async def api_settings(
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    _require_settings(user)
+    from .ad_settings import load_ad_settings
+
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={"section": "status"},
+    )
+    parsed = _settings_from_result(result)
+    tls = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={"section": "tls_status"},
+    )
+    tls_info = _json_from_log(str(tls.get("log") or ""), "TLS_JSON:")
+    parsed["ad"] = load_ad_settings().public_summary()
+    parsed["tls"] = tls_info
+    parsed["license"] = parsed.get("license") or _current_license_view()
+    return parsed
+
+
+@app.post("/api/settings/seats")
+async def api_settings_seats(
+    body: SeatsBody,
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    _require_settings(user)
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={"section": "seats", "seats": str(body.seats)},
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or "Could not update seat count"),
+        )
+    return {"ok": True, "seats": body.seats}
+
+
+@app.post("/api/settings/ad")
+async def api_settings_ad(
+    body: AdSettingsBody,
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    _require_settings(user)
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={
+            "section": "ad",
+            "enabled": body.enabled,
+            "ldap_url": body.ldap_url,
+            "search_base": body.search_base,
+            "search_filter": body.search_filter,
+            "search_bind_dn": body.search_bind_dn,
+            "bind_dn_template": body.bind_dn_template,
+            "search_bind_password": body.search_bind_password,
+        },
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or "Could not update directory settings"),
+        )
+    from .ad_settings import load_ad_settings
+
+    return {"ok": True, "ad": load_ad_settings().public_summary()}
+
+
+@app.post("/api/settings/license")
+async def api_settings_license(
+    body: LicenseApplyBody,
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    _require_settings(user)
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={"section": "license", "token": body.token.strip()},
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "LICENSE_JSON:")
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_human_license_error(str(result.get("error") or result.get("log") or "")),
+        )
+    return {"ok": True, "license": parsed or _current_license_view()}
+
+
+def _human_license_error(text: str) -> str:
+    low = text.lower()
+    if "signature" in low:
+        return "That license is not valid. Ask KIN for a new signed license string."
+    if "different email server" in low or "server id" in low:
+        return "That license belongs to a different Email Server ID."
+    if "canonical" in low:
+        return "That license is not valid. Ask KIN for a new signed license string."
+    if "expired" in low or "trial" in low:
+        return text.strip().splitlines()[-1] if text.strip() else "License was not accepted."
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "License was not accepted.")
+    if line.startswith("SETTINGS_JSON:") or line.startswith("LICENSE_JSON:"):
+        return "License was not accepted."
+    return line[:300]
+
+
+@app.post("/api/settings/firewall")
+async def api_settings_firewall(
+    body: FirewallApplyBody,
+    request: Request,
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    """Start firewall apply (dead-man timer still runs in 10-host-firewall.sh). Prefer SSE."""
+    _require_settings(user)
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={
+            "section": "firewall",
+            "admin_ips": body.admin_ips,
+            "client_ip": _request_client_ipv4(request),
+        },
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or "Could not apply trusted admin IPs"),
+        )
+    return {"ok": True}
 
 
 @app.get("/api/cluster/status")

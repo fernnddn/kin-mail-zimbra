@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -89,7 +89,7 @@ export default function UsersPage() {
   }, [allowed]);
 
   if (!allowed) {
-    return <Navigate to="/wizard" replace />;
+    return <Navigate to="/cluster" replace />;
   }
 
   async function onCreate(e: FormEvent) {
@@ -136,34 +136,29 @@ export default function UsersPage() {
   const roleLabel = (id: string) => roles.find((r) => r.id === id)?.label || id;
 
   return (
-    <ConsoleChrome subtitle="Console users · KIN Super Admin">
+    <ConsoleChrome>
       <Page>
         <PageHeader
           icon={<UsersIcon />}
           title="Users"
-          subtitle={
-            <>
-              Per-account auth: <strong>local</strong> (bcrypt in <code>users.json</code>) or{" "}
-              <strong>AD</strong> (LDAP bind using the same <code>/etc/kin-mail/config</code> AD
-              settings as hybrid mail auth). Role is assigned here; no AD group mapping in this
-              slice.
-            </>
-          }
+          subtitle="People who can sign in to this console. Choose a local password or Active Directory, then assign a role."
         />
         {ad && (
           <Hint>
-            Appliance AD: {ad.enabled ? "enabled" : "disabled"}
-            {ad.ldap_url ? ` · ${ad.ldap_url}` : ""}
-            {ad.search_base ? ` · base ${ad.search_base}` : ""}
-            {!ad.enabled &&
-              " (AD-backed console logins will fail closed until Hybrid AD is configured)."}
+            {ad.enabled
+              ? `Active Directory sign-in is on${ad.ldap_url ? ` (${ad.ldap_url})` : ""}.`
+              : "Active Directory sign-in is not set up yet."}{" "}
+            {!ad.enabled ? (
+              <>
+                Configure it in <Link to="/settings">Settings</Link> to allow company-directory logins.
+              </>
+            ) : null}
           </Hint>
         )}
         {error && <Hint>{error}</Hint>}
         <Hint>
-          User and password changes apply on the Promoted mail node, then copy to the
-          other node. If that copy fails, the change is not kept. Login still works
-          on whichever node you can reach.
+          Changes to users and passwords are saved on this mail system. If a second server is
+          added, they stay in sync automatically. You can sign in on whichever server you can reach.
         </Hint>
         <TableWrap>
           <DataTable>

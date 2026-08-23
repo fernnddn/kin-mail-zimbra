@@ -20,6 +20,8 @@ cloudflare.ini
 *.crt
 *.p12
 *.pfx
+**/*ed25519-private*
+**/.kin-mail-license/
 
 # --- installer artefacts -----------------------------------------------------
 *.tgz

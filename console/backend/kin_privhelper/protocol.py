@@ -27,6 +27,7 @@ CMD_REMOVE_OBSERVABILITY = "remove_observability"
 CMD_ADD_OBSERVABILITY = "add_observability"
 CMD_STORE_OBSERVABILITY_SECRETS = "store_observability_secrets"
 CMD_MUTATE_CONSOLE_USERS = "mutate_console_users"
+CMD_APPLY_APPLIANCE_SETTINGS = "apply_appliance_settings"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -48,6 +49,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_ADD_OBSERVABILITY,
         CMD_STORE_OBSERVABILITY_SECRETS,
         CMD_MUTATE_CONSOLE_USERS,
+        CMD_APPLY_APPLIANCE_SETTINGS,
     }
 )
 

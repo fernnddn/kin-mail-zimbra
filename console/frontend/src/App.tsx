@@ -3,11 +3,11 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
 import { SetupProvider, useSetup, wizardHomePath } from "./setup";
-import AuditLogPage from "./pages/AuditLog";
 import ClusterPage from "./pages/Cluster";
 import CreateMailboxPage from "./pages/CreateMailbox";
 import EulaPage from "./pages/Eula";
 import LoginPage from "./pages/Login";
+import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
@@ -38,8 +38,10 @@ function LoadingShell({ text }: { text: string }) {
 
 function RequireEula({ children }: { children: ReactNode }) {
   const { accepted, loading } = useEula();
+  const { deployed, loading: setupLoading } = useSetup();
   const location = useLocation();
-  if (loading) return <LoadingShell text="Loading…" />;
+  if (loading || setupLoading) return <LoadingShell text="Loading…" />;
+  if (deployed) return <>{children}</>;
   if (!accepted) return <Navigate to="/eula" replace state={{ from: location }} />;
   return <>{children}</>;
 }
@@ -60,14 +62,22 @@ function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Bare /wizard → Deploy when install is running or already deployed, else topology. */
+/** Bare /wizard → Deploy while install runs, Cluster once deployed, else topology. */
 function WizardIndexRedirect() {
   const { deployed, installInProgress, loading } = useSetup();
   if (loading) return <LoadingShell text="Checking setup…" />;
   const dest = wizardHomePath(installInProgress, deployed);
-  // Nested route: relative path under /wizard
+  if (!dest.startsWith("/wizard/")) {
+    return <Navigate to={dest} replace />;
+  }
   const rel = dest.replace(/^\/wizard\/?/, "") || "topology";
   return <Navigate to={rel} replace />;
+}
+
+function HomeRedirect() {
+  const { deployed, installInProgress, loading } = useSetup();
+  if (loading) return <LoadingShell text="Checking setup…" />;
+  return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
 }
 
 export default function App() {
@@ -116,11 +126,11 @@ export default function App() {
               }
             />
             <Route
-              path="/audit"
+              path="/settings"
               element={
                 <RequireEula>
                   <RequireAuth>
-                    <AuditLogPage />
+                    <SettingsPage />
                   </RequireAuth>
                 </RequireEula>
               }
@@ -152,8 +162,8 @@ export default function App() {
               <Route path="deploy" element={<DeployStep />} />
               <Route path="deploy/logs" element={<DeployLogsPage />} />
             </Route>
-            <Route path="/" element={<Navigate to="/wizard" replace />} />
-            <Route path="*" element={<Navigate to="/wizard" replace />} />
+            <Route path="/" element={<HomeRedirect />} />
+            <Route path="*" element={<HomeRedirect />} />
           </Routes>
         </AuthProvider>
       </EulaProvider>

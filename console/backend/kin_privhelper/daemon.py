@@ -370,6 +370,13 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             audit_cmd = f"{cmd}:{aop}"
         elif cmd == proto.CMD_STORE_OBSERVABILITY_SECRETS:
             audit_cmd = f"{cmd}:redacted"
+        elif cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS:
+            section = str(args.get("section") or "")[:24]
+            audit_cmd = f"{cmd}:{section}"
+            if section in ("ad", "license"):
+                args = dict(args)
+                args.pop("search_bind_password", None)
+                args.pop("token", None)
         elif cmd == proto.CMD_MUTATE_CONSOLE_USERS:
             mop = str(args.get("op") or "")[:16]
             tgt = str(args.get("username") or "")[:80]
@@ -388,7 +395,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
         ) or (
             cmd == proto.CMD_CREATE_MAILBOX
-            and str(args.get("op") or "").strip().lower() == "status"
+            and str(args.get("op") or "").strip().lower() in ("status", "list")
+        ) or (
+            cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS
+            and str(args.get("section") or "").strip().lower() in ("status", "tls_status")
         ) or (
             cmd == proto.CMD_MAINTENANCE
             and str(args.get("op") or "").strip().lower() in ("status", "preflight")
@@ -501,6 +511,11 @@ async def run() -> None:
             log.info("wrote topology marker from /etc/kin-mail/config")
     except OSError:
         log.exception("failed to backfill topology marker")
+    try:
+        sid = deploy_state.ensure_server_id()
+        log.info("email server id %s", sid)
+    except OSError:
+        log.exception("failed to ensure server-id")
 
     server = await asyncio.start_unix_server(_handle, path=str(SOCKET_PATH))
     await _chmod_socket()

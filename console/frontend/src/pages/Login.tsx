@@ -5,7 +5,17 @@ import { useAuth } from "../auth";
 import { useEula } from "../eula";
 import { useSetup, wizardHomePath } from "../setup";
 import { theme } from "../styles/theme";
-import { Brand, BrandLockup, Button, Card, Err, Input, Label, PasswordInput, Shell, Title } from "../ui";
+import { BrandLockup, Button, Card, Err, Input, Label, PasswordInput, Shell, Title } from "../ui";
+
+const PageCol = styled.div`
+  width: min(360px, 100%);
+  min-height: calc(100vh - 4rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+`;
 
 const Sub = styled.p`
   margin: 0 0 1.5rem;
@@ -21,7 +31,8 @@ const CenterTitle = styled(Title)`
 `;
 
 const Foot = styled.div`
-  margin-top: 1.5rem;
+  margin-top: auto;
+  padding-top: 1.5rem;
   text-align: center;
   font-size: 0.75rem;
   color: ${theme.surface[400]};
@@ -38,7 +49,6 @@ const Foot = styled.div`
 `;
 
 const Logo = styled.div`
-  margin: 0 0 1.5rem;
   display: flex;
   justify-content: center;
 `;
@@ -47,12 +57,14 @@ export default function LoginPage() {
   const { user, loading, login } = useAuth();
   const { accepted, loading: eulaLoading } = useEula();
   const { deployed, installInProgress, loading: setupLoading } = useSetup();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!eulaLoading && !accepted) return <Navigate to="/eula" replace />;
+  if (!setupLoading && !deployed && !eulaLoading && !accepted) {
+    return <Navigate to="/eula" replace />;
+  }
   if (!setupLoading && !deployed && !user) {
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
@@ -75,13 +87,12 @@ export default function LoginPage() {
 
   return (
     <Shell>
-      <div style={{ width: "min(360px, 100%)" }}>
+      <PageCol>
         <Logo>
           <BrandLockup />
         </Logo>
         <Card style={{ width: "100%" }}>
           <form onSubmit={onSubmit}>
-            <Brand>Console</Brand>
             <CenterTitle>Welcome Back</CenterTitle>
             <Sub>Sign in to the KIN Mail admin console</Sub>
             {error ? <Err>{error}</Err> : null}
@@ -92,7 +103,7 @@ export default function LoginPage() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter your username"
+              placeholder="username"
               required
               disabled={busy}
             />
@@ -116,7 +127,7 @@ export default function LoginPage() {
           <p>KIN Mail Console</p>
           <p>&copy; {new Date().getFullYear()} Karya Informasi Nusantara</p>
         </Foot>
-      </div>
+      </PageCol>
     </Shell>
   );
 }

@@ -452,8 +452,11 @@ async def gather_status() -> dict[str, Any]:
     stale_peers = [n for n in addrs if n not in live]
     fc_ok, fc_lines = await _failcounts(nodes)
     observability = await _observability_snapshot(corosync_txt)
+    from .deploy_state import saved_wizard_topology
+
     return {
         "local_host": this_hostname(),
+        "topology": saved_wizard_topology(),
         "nodes": nodes,
         "standby": standby,
         "offline": offline,
@@ -602,8 +605,10 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"failcount_ok={st['failcount_ok']}")
         for line in st["failcount_lines"]:
             yield await _emit(line)
+        yield await _emit(f"topology={st.get('topology') or '-'}")
         public = {
             "local_host": st["local_host"],
+            "topology": st.get("topology") or "",
             "nodes": st["nodes"],
             "standby": st["standby"],
             "offline": st["offline"],

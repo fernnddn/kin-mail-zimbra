@@ -31,6 +31,11 @@ export type MailDnsHints = {
   smtpSendIp: string;
 };
 
+export type AcmeTxtRecord = {
+  host: string;
+  value: string;
+};
+
 const IPV4_RE =
   /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 
@@ -249,4 +254,20 @@ export function parseDkimFromInstallLog(log: string): DkimDnsRecord | null {
   const value = joinDkimTxtValue(contentMatch[1] || "");
   if (!value || !/v=DKIM1/i.test(value)) return null;
   return { name, value };
+}
+
+/** TXT name + value printed by 04-tls-dkim.sh poll-mode ACME hook. */
+export function parseAcmeChallengeFromLog(log: string): AcmeTxtRecord | null {
+  const text = stripAnsi(log);
+  const marker = "KIN Mail ACME DNS-01 challenge";
+  const idx = text.lastIndexOf(marker);
+  if (idx < 0) return null;
+  const block = text.slice(idx, idx + 2000);
+  const host =
+    block.match(/Host\/Name\s*:\s*(\S+)/i)?.[1]?.trim() ||
+    block.match(/_acme-challenge\.[^\s]+/i)?.[0]?.trim() ||
+    "";
+  const value = (block.match(/Value\s*:\s*(\S+)/i)?.[1] || "").trim();
+  if (!host || !value) return null;
+  return { host, value };
 }

@@ -18,6 +18,9 @@ class Settings(BaseSettings):
 
     # Override via CONSOLE_PORT in console.env — do not hard-lock in code callers.
     console_port: int = 9443
+    # Local-only HTTPS backend. The public listener on console_port is a mux
+    # that 308-redirects plain HTTP and forwards TLS here.
+    console_internal_port: int = 19443
     console_bind: str = "0.0.0.0"
     console_user: str = "admin"
 

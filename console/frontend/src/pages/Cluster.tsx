@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { isOpsRole, useAuth } from "../auth";
@@ -26,6 +27,7 @@ import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
 
 type ClusterSnap = {
   local_host?: string;
+  topology?: string;
   nodes?: string[];
   standby?: string[];
   promoted?: string | null;
@@ -364,6 +366,15 @@ function parseTaggedJson(log: string, prefix: string): Record<string, unknown> |
 }
 
 function healthLines(cluster: ClusterSnap): HealthLine[] {
+  if (cluster.topology === "1vm") {
+    const name = cluster.local_host || "this server";
+    return [
+      {
+        ok: true,
+        label: `Single server: ${name}`,
+      },
+    ];
+  }
   return [
     {
       ok: Boolean(cluster.drbd_uptodate),
@@ -400,6 +411,7 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
 
 export default function ClusterPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const ops = isOpsRole(user?.role);
   const [cluster, setCluster] = useState<ClusterSnap>({});
   const [log, setLog] = useState("");
@@ -787,8 +799,15 @@ export default function ClusterPage() {
     }
   }
 
+  const topology = cluster.topology === "2vm" ? "2vm" : cluster.topology === "1vm" ? "1vm" : "";
   const nodes = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers);
-  const mailTopo = nodes.map((name) => ({
+  const displayNodes =
+    topology === "1vm"
+      ? nodes.length
+        ? nodes.slice(0, 1)
+        : [cluster.local_host || "this server"]
+      : nodes;
+  const mailTopo = displayNodes.map((name) => ({
     name,
     healthy:
       !(cluster.offline || []).includes(name) && !(cluster.stale_peers || []).includes(name),
@@ -969,7 +988,48 @@ export default function ClusterPage() {
                   ))}
                 </Dropdown>
               </HealthWrap>
+              {topology === "1vm" ? (
+                <>
+                  <ClusterTopology
+                    topology="1vm"
+                    mailNodes={mailTopo}
+                    observability={{ status: "absent" }}
+                    ops={ops}
+                    busy={busy}
+                    onAdd={() => navigate("/wizard/topology")}
+                    onRemove={() => undefined}
+                  />
+                  <Grid>
+                    {displayNodes.map((node) => {
+                      const name = node;
+                      return (
+                        <NodeCard key={name}>
+                          <NodeHead>
+                            <NodeName title={name}>{name}</NodeName>
+                            <InlineStatus $tone="ok">
+                              <i />
+                              Healthy
+                            </InlineStatus>
+                          </NodeHead>
+                          {ops ? (
+                            <CardActions>
+                              <Button
+                                type="button"
+                                onClick={() => navigate("/wizard/topology")}
+                              >
+                                Add a second server
+                              </Button>
+                            </CardActions>
+                          ) : null}
+                        </NodeCard>
+                      );
+                    })}
+                  </Grid>
+                </>
+              ) : (
+                <>
               <ClusterTopology
+                topology="2vm"
                 mailNodes={mailTopo}
                 observability={cluster.observability || { status: "absent" }}
                 ops={ops}
@@ -980,20 +1040,22 @@ export default function ClusterPage() {
                 }}
                 onRemove={openObsRemove}
               />
-              {nodes.length === 2 ? (
+              {displayNodes.length === 2 ? (
                 <Pair>
-                  {nodeCard(nodes[0])}
+                  {nodeCard(displayNodes[0])}
                   <LinkCol>
                     <LinkLine />
                   </LinkCol>
-                  {nodeCard(nodes[1])}
+                  {nodeCard(displayNodes[1])}
                 </Pair>
               ) : (
-                <Grid>{nodes.map((node) => nodeCard(node))}</Grid>
+                <Grid>{displayNodes.map((node) => nodeCard(node))}</Grid>
               )}
-              {nodes.length === 0 ? (
-                <Hint>No Pacemaker nodes reported. Is this host in the HA pair?</Hint>
+              {topology === "2vm" && displayNodes.length === 0 ? (
+                <Hint>No mail nodes are visible in the cluster yet.</Hint>
               ) : null}
+                </>
+              )}
             </>
           )
         ) : (

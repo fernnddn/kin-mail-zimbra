@@ -8,6 +8,7 @@ import { useSetup } from "../../setup";
 import { api } from "../../api";
 import {
   Button,
+  ConfirmModal,
   Hint,
   Lede,
   NavRow,
@@ -308,9 +309,9 @@ export default function DeployStep() {
   const activeRun = pipelineBusy || installInProgress;
   const pct = complete ? 100 : current > 0 ? (current / total) * 100 : activeRun ? 4 : 0;
   const showProgress = activeRun || current > 0 || complete || failed;
-  // Hide setup cards while any install is active on this host (SSE or server-side).
-  // After setup-complete, never offer Deploy again (would re-run kin-mail.sh on live mail).
-  const showSetupCards = canOps && !activeRun && !fullInstallComplete;
+  const showSetupCards = canOps && !activeRun;
+  const redeployDanger = Boolean(deployed || fullInstallComplete);
+  const [redeployOpen, setRedeployOpen] = useState(false);
 
   const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
   const [haDiskLoading, setHaDiskLoading] = useState(false);
@@ -474,9 +475,10 @@ export default function DeployStep() {
         <StepCard>
           <StepHeading>Mail is already installed on this host</StepHeading>
           <StepBody>
-            Deploy stays hidden so a second full-install cannot start on live mail. On a 2-server
-            pair continue with Build HA pair below. After a failed HA attempt, fix then re-run
-            Build HA pair from the top; do not click Deploy.
+            Deploy can still be started from this page, but a second full install on live mail
+            can destroy data. Confirm and wait 10 seconds before it runs. The helper still
+            refuses when /etc/kin-mail/setup-complete is present. On a 2-server pair continue
+            with Build HA pair below.
           </StepBody>
         </StepCard>
       )}
@@ -512,7 +514,13 @@ export default function DeployStep() {
               <Button
                 type="button"
                 disabled={!confirmFull || inMaintenance}
-                onClick={() => void runDeploy()}
+                onClick={() => {
+                  if (redeployDanger) {
+                    setRedeployOpen(true);
+                    return;
+                  }
+                  void runDeploy();
+                }}
               >
                 Deploy
               </Button>
@@ -618,6 +626,20 @@ export default function DeployStep() {
       )}
 
       {message && <Hint>{message}</Hint>}
+
+      <ConfirmModal
+        open={redeployOpen}
+        title="This can destroy live mail data"
+        message="This host already has mail installed. Re-running Deploy can wipe or overwrite the live mailbox store. Only continue if you intend a destructive reinstall."
+        detail="After you confirm, wait 10 seconds. A misclick cannot start the installer immediately."
+        confirmLabel="Re-run Deploy"
+        countdownSeconds={10}
+        onCancel={() => setRedeployOpen(false)}
+        onConfirm={() => {
+          setRedeployOpen(false);
+          void runDeploy();
+        }}
+      />
 
       {!activeRun && (
         <NavRow>

@@ -4,6 +4,7 @@ import {
   dnsZoneRelativeName,
   dmarcRecord,
   isPublicIPv4,
+  parseAcmeChallengeFromLog,
   parseDkimFromInstallLog,
   parseMailDnsHintsFromLog,
   preparedMailDnsRecords,
@@ -111,6 +112,16 @@ ok SMTP sending address is consistent: 119.82.245.34
 `);
   eq(dkim?.name, "D027F21A._domainkey", "dkim parse name");
   eq(dkim?.value, "v=DKIM1; k=rsa; p=MIGfMA0GC", "dkim parse joined");
+
+  const acme = parseAcmeChallengeFromLog(`
+=== KIN Mail ACME DNS-01 challenge ===
+Host/Name : _acme-challenge.mail.gits-it.site
+Type      : TXT
+Value     : abcdef123
+Waiting up to 25 minutes for public DNS
+`);
+  eq(acme?.host, "_acme-challenge.mail.gits-it.site", "acme host");
+  eq(acme?.value, "abcdef123", "acme value");
 }
 
 assertMailDnsContract();

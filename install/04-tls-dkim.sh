@@ -269,9 +269,11 @@ tls_cloudflare() {
   fi
 
   say "3. Issuing certificate (DNS-01 Cloudflare)"
-  if [ -f "${LE_DIR}/cert.pem" ]; then
+  if [ -f "${LE_DIR}/cert.pem" ] && [ "${KIN_TLS_FORCE_RENEW:-0}" != "1" ]; then
     ok "Certificate already exists, issuance skipped"
   else
+    CF_FORCE=()
+    [ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && CF_FORCE+=(--force-renewal)
     certbot certonly \
       --dns-cloudflare \
       --dns-cloudflare-credentials "$CF_CREDS" \
@@ -279,7 +281,8 @@ tls_cloudflare() {
       -d "$MAIL_HOST" \
       --preferred-chain "ISRG Root X1" \
       --agree-tos --no-eff-email -m "$LE_EMAIL" \
-      --non-interactive 2>&1 | tail -8
+      --non-interactive \
+      "${CF_FORCE[@]}" 2>&1 | tail -8
     [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/"; exit 1; }
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
@@ -310,7 +313,7 @@ tls_manual() {
   ok "certbot ready"
 
   say "2. Issuing certificate (DNS-01 manual)"
-  if [ -f "${LE_DIR}/cert.pem" ]; then
+  if [ -f "${LE_DIR}/cert.pem" ] && [ "${KIN_TLS_FORCE_RENEW:-0}" != "1" ]; then
     ok "Certificate already exists, issuance skipped"
   else
     # Interactive TTY: classic certbot prompts.
@@ -324,7 +327,8 @@ tls_manual() {
         -d "$MAIL_HOST" \
         --preferred-chain "ISRG Root X1" \
         --agree-tos --no-eff-email -m "$LE_EMAIL" \
-        --manual-public-ip-logging-ok
+        --manual-public-ip-logging-ok \
+        $([ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && echo --force-renewal)
     else
       info "Poll mode: the DNS-01 TXT name and value will print in this log when certbot issues them."
       info "Create that TXT in the DNS panel for zone ${MAIL_DOMAIN}, then wait for propagation."
@@ -386,7 +390,8 @@ HOOK
           --preferred-chain "ISRG Root X1" \
           --agree-tos --no-eff-email -m "$LE_EMAIL" \
           --manual-public-ip-logging-ok \
-          --non-interactive
+          --non-interactive \
+          $([ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && echo --force-renewal)
       rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
     fi
     [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"; exit 1; }

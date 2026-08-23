@@ -122,6 +122,7 @@ function NodeGlyph({
 }
 
 export function ClusterTopology({
+  topology = "2vm",
   mailNodes,
   observability,
   ops,
@@ -129,6 +130,7 @@ export function ClusterTopology({
   onAdd,
   onRemove,
 }: {
+  topology?: "1vm" | "2vm";
   mailNodes: MailNode[];
   observability: ObservabilitySnap;
   ops: boolean;
@@ -136,6 +138,42 @@ export function ClusterTopology({
   onAdd: () => void;
   onRemove: () => void;
 }) {
+  if (topology === "1vm") {
+    const node = mailNodes[0] || { name: "This server", healthy: true };
+    return (
+      <Wrap aria-label="Cluster topology">
+        <Head>
+          <Title>Topology</Title>
+          <Caption>Single mail server. Add a second server when you are ready for HA.</Caption>
+        </Head>
+        <SvgWrap>
+          <svg viewBox="0 0 640 160" width="100%" height="auto" role="img">
+            <title>Single-server topology</title>
+            <defs>
+              <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(15,23,42,0.12)" />
+              </filter>
+            </defs>
+            <NodeGlyph
+              x={320}
+              y={80}
+              title={node.name}
+              subtitle="Mail"
+              healthy={node.healthy}
+            />
+          </svg>
+        </SvgWrap>
+        {ops ? (
+          <Actions>
+            <Button type="button" disabled={busy} onClick={onAdd}>
+              Add a second server
+            </Button>
+          </Actions>
+        ) : null}
+      </Wrap>
+    );
+  }
+
   const left = mailNodes[0] || { name: "Mail A", healthy: false };
   const right = mailNodes[1] || { name: "Mail B", healthy: false };
   const hasLeft = Boolean(mailNodes[0]);
@@ -198,7 +236,7 @@ export function ClusterTopology({
           <text x={320} y={222} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
             DRBD
           </text>
-          <text x={210} y={140} fill={SUB} fontSize={9} fontWeight={600} transform="rotate(-52 210 140)">
+          <text x={228} y={118} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
             qdevice / SBD
           </text>
           <NodeGlyph

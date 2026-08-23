@@ -43,6 +43,7 @@ MAINTENANCE_MUTATE_OPS = frozenset({"enter", "exit"})
 SUPER_ONLY_COMMANDS = frozenset(
     {
         "get_audit_log",
+        "apply_appliance_settings",
     }
 )
 

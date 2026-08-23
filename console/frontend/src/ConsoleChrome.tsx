@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import styled from "@emotion/styled";
 import { NavLink, useNavigate } from "react-router-dom";
+import { api } from "./api";
 import { useAuth } from "./auth";
 import { theme } from "./styles/theme";
 import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
@@ -15,12 +16,13 @@ const Frame = styled.div`
 `;
 
 const Top = styled.header`
-  height: 3.5rem;
+  min-height: 3.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0 1.5rem;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  padding: 0.55rem 1.5rem;
   border-bottom: 1px solid color-mix(in srgb, ${theme.line} 60%, transparent);
   background: ${theme.bgElev};
   flex-shrink: 0;
@@ -29,8 +31,10 @@ const Top = styled.header`
 const BrandBlock = styled.div`
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
   min-width: 0;
+  flex: 1 1 12rem;
 `;
 
 const LogoButton = styled.button`
@@ -66,6 +70,7 @@ const NavLinks = styled.nav`
   align-items: center;
   gap: 0.25rem;
   flex-wrap: wrap;
+  flex: 1 1 16rem;
 `;
 
 const NavItem = styled(NavLink)`
@@ -137,8 +142,21 @@ const UserMeta = styled.div`
   }
 `;
 
+const LicenseBanner = styled.div<{ $expired?: boolean }>`
+  flex-shrink: 0;
+  padding: 0.7rem 1.5rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: ${theme.ink};
+  background: ${(p) => (p.$expired ? "rgba(239, 68, 68, 0.12)" : theme.warnSoft)};
+  border-bottom: 1px solid
+    ${(p) =>
+      p.$expired
+        ? "color-mix(in srgb, " + theme.danger + " 35%, transparent)"
+        : "color-mix(in srgb, " + theme.warn + " 35%, transparent)"};
+`;
+
 export function ConsoleChrome({
-  subtitle,
   hint,
   children,
   setupMode = false,
@@ -153,6 +171,31 @@ export function ConsoleChrome({
   const navigate = useNavigate();
   const isSuper = user?.role === "kin_super_admin";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [license, setLicense] = useState<{
+    status?: string;
+    grace_until?: string | null;
+    provisioning_blocked?: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!user || setupMode) {
+      setLicense(null);
+      return;
+    }
+    let cancelled = false;
+    void api<{ status?: string; grace_until?: string | null; provisioning_blocked?: boolean }>(
+      "/api/license/status",
+    )
+      .then((st) => {
+        if (!cancelled) setLicense(st);
+      })
+      .catch(() => {
+        if (!cancelled) setLicense(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, setupMode]);
 
   return (
     <Frame>
@@ -160,7 +203,6 @@ export function ConsoleChrome({
         <BrandBlock>
           <LogoButton type="button" onClick={() => navigate(setupMode ? "/wizard" : "/cluster")}>
             <BrandLockup compact />
-            {!setupMode && subtitle ? <span>{subtitle}</span> : null}
           </LogoButton>
           {!setupMode ? (
             <>
@@ -179,8 +221,8 @@ export function ConsoleChrome({
                   </NavItem>
                 )}
                 {isSuper && (
-                  <NavItem to="/audit" end>
-                    Audit log
+                  <NavItem to="/settings" end>
+                    Settings
                   </NavItem>
                 )}
               </NavLinks>
@@ -228,6 +270,20 @@ export function ConsoleChrome({
           </Right>
         ) : null}
       </Top>
+      {license?.status === "grace" ? (
+        <LicenseBanner>
+          Trial license is in the 30-day grace period
+          {license.grace_until ? ` (until ${license.grace_until})` : ""}. New mailboxes and
+          console users cannot be created until a new license is applied. Mail already delivered
+          keeps working.
+        </LicenseBanner>
+      ) : null}
+      {license?.status === "expired" ? (
+        <LicenseBanner $expired>
+          Trial license has expired. New mailboxes and console users cannot be created. Mail
+          already delivered keeps working. Apply a current license in Settings.
+        </LicenseBanner>
+      ) : null}
       {children}
     </Frame>
   );

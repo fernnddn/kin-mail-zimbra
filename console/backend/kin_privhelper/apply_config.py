@@ -862,3 +862,78 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
         lines.append(f"  {key}={val}\n")
     lines.append("=== apply_wizard_draft done ===\n")
     return 0, lines
+
+
+CONSOLE_MUTABLE_KEYS = frozenset(
+    {
+        "CONTRACTED_SEATS",
+        "KIN_ADMIN_IPS",
+        "AD_AUTH_ENABLED",
+        "AD_LDAP_URL",
+        "AD_SEARCH_BASE",
+        "AD_SEARCH_FILTER",
+        "AD_SEARCH_BIND_DN",
+        "AD_SEARCH_BIND_PASSWORD",
+        "AD_BIND_DN_TEMPLATE",
+    }
+)
+
+
+def update_config_keys(updates: dict[str, str]) -> tuple[int, list[str]]:
+    """Merge selected keys into /etc/kin-mail/config. Empty secrets are preserved."""
+    lines: list[str] = ["=== update_config_keys ===\n"]
+    if not CONF_FILE.is_file():
+        lines.append(f"ERROR: {CONF_FILE} is missing\n")
+        return 1, lines
+    bad = [k for k in updates if k not in CONSOLE_MUTABLE_KEYS]
+    if bad:
+        lines.append("ERROR: refusing keys " + ", ".join(sorted(bad)) + "\n")
+        return 2, lines
+    try:
+        existing = parse_config(CONF_FILE.read_text(encoding="utf-8"))
+    except OSError as exc:
+        lines.append(f"ERROR: read failed: {exc}\n")
+        return 1, lines
+    merged = dict(existing)
+    secret_preserve = frozenset({"AD_SEARCH_BIND_PASSWORD"})
+    for key, val in updates.items():
+        if key in secret_preserve and not str(val):
+            continue
+        merged[key] = val
+        lines.append(f"set {key}\n")
+    stamp = int(time.time())
+    backup = CONF_FILE.with_name(f"config.bak.{stamp}")
+    try:
+        shutil.copy2(CONF_FILE, backup)
+        os.chmod(backup, 0o600)
+        st = CONF_FILE.stat()
+        os.chown(backup, st.st_uid, st.st_gid)
+    except OSError as exc:
+        lines.append(f"ERROR: backup failed: {exc}\n")
+        return 1, lines
+    body = format_config(merged)
+    from .deploy_state import ensure_kin_mail_dir
+
+    try:
+        ensure_kin_mail_dir(CONF_DIR)
+        tmp = CONF_FILE.with_suffix(".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        st = CONF_FILE.stat()
+        os.chown(tmp, st.st_uid, st.st_gid)
+        tmp.replace(CONF_FILE)
+        os.chmod(CONF_FILE, 0o600)
+    except OSError as exc:
+        lines.append(f"ERROR: write failed: {exc}\n")
+        return 1, lines
+    if any(k.startswith("AD_") for k in updates):
+        try:
+            from kin_console.ad_settings import sync_ad_env_from_kin_config
+
+            ad_env = sync_ad_env_from_kin_config(source=CONF_FILE)
+            lines.append(f"Synced console AD settings → {ad_env}\n")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"WARN: console AD env sync failed: {exc}\n")
+    lines.append("=== update_config_keys done ===\n")
+    return 0, lines
+
