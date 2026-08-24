@@ -53,6 +53,10 @@ cap.txt
 # KIN license issue ledger (local to the generator machine, not the product)
 licensing-generator/license-ledger.csv
 licensing-generator/license-ledger.jsonl
+# Belt-and-suspenders on top of *.pem / **/*ed25519-private* above: the
+# signing key must never be committed, full stop.
+licensing-generator/keys/
+licensing-generator/.venv/
 
 # --- editors and OS ----------------------------------------------------------
 .vscode/
