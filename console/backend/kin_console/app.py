@@ -196,6 +196,7 @@ async def login(body: LoginBody, response: Response) -> dict[str, str]:
         "role": user.role,
         "role_label": role_label(user.role),
         "auth_type": user.auth_type,
+        "mfa_enabled": bool(user.mfa_enabled and user.mfa_secret),
     }
 
 
@@ -249,6 +250,7 @@ async def login_mfa(body: MfaLoginBody, response: Response) -> dict[str, str]:
         "role": user.role,
         "role_label": role_label(user.role),
         "auth_type": user.auth_type,
+        "mfa_enabled": bool(user.mfa_enabled and user.mfa_secret),
     }
 
 
