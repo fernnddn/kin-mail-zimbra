@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Create KIN Mail HA/Backup Zabbix 6.0 templates and register hosts.
 
-Env: ZABBIX_URL (default http://10.10.40.12:8080/api_jsonrpc.php)
+Env: ZABBIX_URL (default from hosts config's "zabbix_url", else localhost)
      ZABBIX_USER (default Admin)
      ZABBIX_PASSWORD (required)
+     KIN_ZABBIX_HOSTS (path to the hosts config, default
+       register_hosts.local.json next to this script - gitignored, holds
+       this deployment's real hostnames/IPs; see
+       register_hosts.local.json.example for the shape)
 """
 from __future__ import annotations
 
@@ -11,37 +15,25 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
 
-URL = os.environ.get("ZABBIX_URL", "http://10.10.40.12:8080/api_jsonrpc.php")
+_DEFAULT_CONFIG = Path(__file__).with_name("register_hosts.local.json")
+_CONFIG_PATH = Path(os.environ.get("KIN_ZABBIX_HOSTS", _DEFAULT_CONFIG))
+try:
+    _config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    raise SystemExit(
+        f"Missing hosts config: {_CONFIG_PATH}\n"
+        "Copy register_hosts.local.json.example to that path and fill in "
+        "this deployment's real hostnames/IPs (that file is gitignored - "
+        "never commit it)."
+    ) from None
+
+URL = os.environ.get("ZABBIX_URL", _config.get("zabbix_url", "http://127.0.0.1:8080/api_jsonrpc.php"))
 USER = os.environ.get("ZABBIX_USER", "Admin")
 PASSWORD = os.environ["ZABBIX_PASSWORD"]
 
-HOSTS = [
-    {
-        "host": "obser",
-        "name": "Observability",
-        "ip": "10.10.40.12",
-        "templates": ["linux"],
-    },
-    {
-        "host": "mail.gits-it.site",
-        "name": "Mail A",
-        "ip": "10.10.40.15",
-        "templates": ["linux", "ha"],
-    },
-    {
-        "host": "mail2.gits-it.site",
-        "name": "Mail B",
-        "ip": "10.10.40.14",
-        "templates": ["linux", "ha"],
-    },
-    {
-        "host": "backup.gits-it.site",
-        "name": "Backup",
-        "ip": "10.10.40.13",
-        "templates": ["linux", "backup"],
-    },
-]
+HOSTS = _config["hosts"]
 
 
 def api(method: str, params, auth=None, reqid=1):

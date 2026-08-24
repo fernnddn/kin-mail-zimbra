@@ -157,32 +157,29 @@ jobs:
               echo ">>> $2"; fail=1
             fi
           }
-          # Private IPs: same includes as scan(), with carve-outs for files that
-          # must name this lab's 10.10.40.x addresses (same rationale as the
-          # HA-RUNBOOK.md exception). Token/key scan() still covers them.
-          #   HA-RUNBOOK.md - operational runbook
-          #   *.example.yml - committed example inventories (real lab
-          #                            IPs, not RFC5737 placeholders)
+          # Private IPs: same includes as scan(), with narrow carve-outs.
+          # HA-RUNBOOK.md and register_hosts.py used to be exempted here (they
+          # named this lab's real 10.10.40.x addresses directly) - both were
+          # rewritten to use placeholders/a gitignored local config instead
+          # (see docs/HA-RUNBOOK.values.md, register_hosts.local.json), so
+          # they're no longer exempt and this gate now actually protects them
+          # against a real address being reintroduced by accident.
+          #   *.example.yml - committed example inventories (illustrative
+          #                            lab-style IPs, not a live deployment's)
           #   checks.yml - this workflow; the 10.x / 192.168 /
           #                            172.16 regex lines self-match
           #   defaults/ - role defaults/main.yml ship lab IPs as
           #                            documented examples; playbooks/tasks/j2
           #                            stay fully gated
-          #   register_hosts.py - Zabbix lab host table (Observability /
-          #                            Mail A/B / Backup); same lab IPs as
-          #                            *.example.yml, not a leaked secret
           #   test_corosync_stub.py  - Corosync stub fixtures (lab 10.10.40.x
-          #                            ring addresses and peer_ip kwargs);
-          #                            same lab IPs as register_hosts.py
+          #                            ring addresses and peer_ip kwargs)
           #   test_*.py              - unit fixtures must name RFC1918 (and
           #                            CGNAT) addresses to prove classifiers;
           #                            token/key scan() still covers tests
           scan_private_ip() {
             if grep -RInE "$1" "${includes[@]}" \
-                 --exclude='HA-RUNBOOK.md' \
                  --exclude='*.example.yml' \
                  --exclude='checks.yml' \
-                 --exclude='register_hosts.py' \
                  --exclude='test_corosync_stub.py' \
                  --exclude='test_*.py' \
                  --exclude-dir=defaults \

@@ -11,6 +11,9 @@ ansible/inventory/*.local.yml
 ansible/**/*.retry
 *.retry
 
+# Real hostnames/IPs for a specific deployment (keep .example committed)
+monitoring/zabbix/register_hosts.local.json
+
 # --- never commit deployment state or credentials ---------------------------
 config
 *.conf.local

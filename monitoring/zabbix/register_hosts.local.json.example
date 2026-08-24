@@ -1,0 +1,29 @@
+{
+  "zabbix_url": "http://203.0.113.12:8080/api_jsonrpc.php",
+  "hosts": [
+    {
+      "host": "obser",
+      "name": "Observability",
+      "ip": "203.0.113.12",
+      "templates": ["linux"]
+    },
+    {
+      "host": "mail.example.test",
+      "name": "Mail A",
+      "ip": "203.0.113.15",
+      "templates": ["linux", "ha"]
+    },
+    {
+      "host": "mail2.example.test",
+      "name": "Mail B",
+      "ip": "203.0.113.14",
+      "templates": ["linux", "ha"]
+    },
+    {
+      "host": "backup.example.test",
+      "name": "Backup",
+      "ip": "203.0.113.13",
+      "templates": ["linux", "backup"]
+    }
+  ]
+}
