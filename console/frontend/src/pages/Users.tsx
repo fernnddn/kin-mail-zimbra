@@ -27,7 +27,6 @@ type PublicUser = {
   auth_type: string;
   ad_username?: string;
   disabled: boolean;
-  mfa_enabled?: boolean;
 };
 
 type RoleOpt = { id: string; label: string };
@@ -69,8 +68,6 @@ export default function UsersPage() {
   const [loaded, setLoaded] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [pendingResetMfa, setPendingResetMfa] = useState<string | null>(null);
-  const [resettingMfa, setResettingMfa] = useState(false);
   const allowed = user?.role === "kin_super_admin";
 
   async function refresh() {
@@ -136,21 +133,6 @@ export default function UsersPage() {
     }
   }
 
-  async function confirmResetMfa() {
-    if (!pendingResetMfa) return;
-    setResettingMfa(true);
-    setError("");
-    try {
-      await api(`/api/users/${encodeURIComponent(pendingResetMfa)}/mfa/reset`, { method: "POST" });
-      setPendingResetMfa(null);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "MFA reset failed");
-    } finally {
-      setResettingMfa(false);
-    }
-  }
-
   const roleLabel = (id: string) => roles.find((r) => r.id === id)?.label || id;
 
   return (
@@ -211,16 +193,6 @@ export default function UsersPage() {
                     </td>
                     <td>{roleLabel(row.role)}</td>
                     <td style={{ textAlign: "right" }}>
-                      {row.mfa_enabled ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem", marginRight: "0.35rem" }}
-                          onClick={() => setPendingResetMfa(row.username)}
-                        >
-                          Reset MFA
-                        </Button>
-                      ) : null}
                       <Button
                         type="button"
                         variant="ghost"
@@ -306,22 +278,6 @@ export default function UsersPage() {
             if (!deleting) setPendingDelete(null);
           }}
           onConfirm={() => void confirmDelete()}
-        />
-        <ConfirmModal
-          open={!!pendingResetMfa}
-          title="Reset MFA"
-          message={
-            <>
-              Clear MFA for <strong>{pendingResetMfa}</strong>?
-            </>
-          }
-          detail="Use this when the user lost their authenticator. They can enroll MFA again after the next sign-in."
-          confirmLabel="Reset MFA"
-          loading={resettingMfa}
-          onCancel={() => {
-            if (!resettingMfa) setPendingResetMfa(null);
-          }}
-          onConfirm={() => void confirmResetMfa()}
         />
       </Page>
     </ConsoleChrome>

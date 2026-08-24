@@ -31,8 +31,6 @@ class ConsoleUser:
     password_hash: str = ""
     ad_username: str = ""
     disabled: bool = False
-    mfa_enabled: bool = False
-    mfa_secret: str = ""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -41,7 +39,6 @@ class ConsoleUser:
             "auth_type": self.auth_type,
             "ad_username": self.ad_username if self.auth_type == AUTH_AD else "",
             "disabled": self.disabled,
-            "mfa_enabled": bool(self.mfa_enabled and self.mfa_secret),
         }
 
     def ldap_identity(self) -> str:
@@ -100,16 +97,12 @@ def _parse_users(data: dict[str, Any]) -> list[ConsoleUser]:
         password_hash = str(item.get("password_hash") or "").strip()
         ad_username = str(item.get("ad_username") or "").strip()
         disabled = bool(item.get("disabled", False))
-        mfa_enabled = bool(item.get("mfa_enabled", False))
-        mfa_secret = str(item.get("mfa_secret") or "").strip()
         if not username or role not in ALL_ROLES or auth_type not in ALL_AUTH_TYPES:
             continue
         if auth_type == AUTH_LOCAL and not password_hash:
             continue
         if auth_type == AUTH_AD:
             password_hash = ""  # never keep a local hash for AD accounts
-        if not mfa_secret:
-            mfa_enabled = False
         out.append(
             ConsoleUser(
                 username=username,
@@ -118,8 +111,6 @@ def _parse_users(data: dict[str, Any]) -> list[ConsoleUser]:
                 password_hash=password_hash,
                 ad_username=ad_username,
                 disabled=disabled,
-                mfa_enabled=mfa_enabled,
-                mfa_secret=mfa_secret if mfa_enabled else "",
             )
         )
     return out
@@ -147,8 +138,6 @@ def users_payload(users: list[ConsoleUser]) -> dict[str, Any]:
                 "password_hash": u.password_hash if u.auth_type == AUTH_LOCAL else "",
                 "ad_username": u.ad_username if u.auth_type == AUTH_AD else "",
                 "disabled": u.disabled,
-                "mfa_enabled": bool(u.mfa_enabled and u.mfa_secret),
-                "mfa_secret": u.mfa_secret if (u.mfa_enabled and u.mfa_secret) else "",
             }
             for u in users
         ],
@@ -359,64 +348,6 @@ def apply_set_local_password(
         password_hash=hashed,
         ad_username="",
         disabled=target.disabled,
-        mfa_enabled=target.mfa_enabled,
-        mfa_secret=target.mfa_secret,
-    )
-    out = list(users)
-    out[idx] = updated
-    return updated, out
-
-
-
-def apply_set_mfa(
-    users: list[ConsoleUser],
-    username: str,
-    *,
-    mfa_secret: str,
-) -> tuple[ConsoleUser, list[ConsoleUser]]:
-    """Enable MFA after enrollment confirm. Does not write disk."""
-    username = validate_username(username)
-    secret = (mfa_secret or "").strip()
-    if not secret:
-        raise ValueError("mfa_secret is required")
-    idx = next((i for i, u in enumerate(users) if u.username == username), None)
-    if idx is None:
-        raise KeyError(username)
-    target = users[idx]
-    updated = ConsoleUser(
-        username=target.username,
-        role=target.role,
-        auth_type=target.auth_type,
-        password_hash=target.password_hash,
-        ad_username=target.ad_username,
-        disabled=target.disabled,
-        mfa_enabled=True,
-        mfa_secret=secret,
-    )
-    out = list(users)
-    out[idx] = updated
-    return updated, out
-
-
-def apply_clear_mfa(
-    users: list[ConsoleUser],
-    username: str,
-) -> tuple[ConsoleUser, list[ConsoleUser]]:
-    """Disable MFA and drop the secret. Does not write disk."""
-    username = validate_username(username)
-    idx = next((i for i, u in enumerate(users) if u.username == username), None)
-    if idx is None:
-        raise KeyError(username)
-    target = users[idx]
-    updated = ConsoleUser(
-        username=target.username,
-        role=target.role,
-        auth_type=target.auth_type,
-        password_hash=target.password_hash,
-        ad_username=target.ad_username,
-        disabled=target.disabled,
-        mfa_enabled=False,
-        mfa_secret="",
     )
     out = list(users)
     out[idx] = updated

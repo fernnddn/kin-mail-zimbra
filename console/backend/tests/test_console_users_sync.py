@@ -12,8 +12,6 @@ from kin_console.users import (
     apply_create_user,
     apply_delete_user,
     apply_set_local_password,
-    apply_set_mfa,
-    apply_clear_mfa,
 )
 from kin_privhelper.console_users_sync import (
     SYNC_FAIL,
@@ -233,41 +231,6 @@ class HaSyncWiringTests(unittest.TestCase):
             "sudo -n env PYTHONPATH=/opt/kin-mail-console/backend",
             text,
         )
-
-
-
-class MfaSyncMutationTests(unittest.TestCase):
-    def test_mfa_secret_rides_apply_mutation_to_users(self) -> None:
-        users = [_admin()]
-        updated, users = apply_mutation_to_users(
-            users,
-            {
-                "op": "set_mfa",
-                "actor": "admin",
-                "username": "admin",
-                "mfa_secret": "JBSWY3DPEHPK3PXP",
-            },
-        )
-        self.assertIsNotNone(updated)
-        assert updated is not None
-        self.assertTrue(updated.mfa_enabled)
-        self.assertEqual(updated.mfa_secret, "JBSWY3DPEHPK3PXP")
-        # Password rotate must not drop MFA (same in-memory apply path HA uses).
-        rotated, users = apply_set_local_password(
-            users,
-            "admin",
-            password_hash="$2b$12$alice-rotated-hash-placeholderxxxx",
-        )
-        self.assertTrue(rotated.mfa_enabled)
-        self.assertEqual(rotated.mfa_secret, "JBSWY3DPEHPK3PXP")
-        cleared, users = apply_mutation_to_users(
-            users,
-            {"op": "clear_mfa", "actor": "admin", "username": "admin"},
-        )
-        self.assertIsNotNone(cleared)
-        assert cleared is not None
-        self.assertFalse(cleared.mfa_enabled)
-        self.assertEqual(cleared.mfa_secret, "")
 
 
 if __name__ == "__main__":

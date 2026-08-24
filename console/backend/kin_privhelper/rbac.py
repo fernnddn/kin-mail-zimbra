@@ -67,15 +67,11 @@ def command_allowed(
         op = str((args or {}).get("op") or "").strip().lower()
         if op in ("create", "delete"):
             return role == ROLE_SUPER_ADMIN
-        if op in ("set_password", "set_mfa", "clear_mfa"):
+        if op == "set_password":
             target = str((args or {}).get("username") or "").strip()
             actor = (username or "").strip()
             if target and actor and target == actor:
                 return True
-            # Super Admin may reset another user's MFA (lost-phone recovery) or password.
-            if op == "set_mfa":
-                # Enrollment is self-service only; Super Admin recovery uses clear_mfa.
-                return False
             return role == ROLE_SUPER_ADMIN
         return False
     if cmd in SENSITIVE_OPS_COMMANDS:
