@@ -1015,8 +1015,10 @@ def _human_license_error(text: str) -> str:
         return "That license belongs to a different Email Server ID."
     if "canonical" in low:
         return "That license is not valid. Ask KIN for a new signed license."
-    if "expired" in low or "trial" in low or "subscription" in low:
-        return text.strip().splitlines()[-1] if text.strip() else "License was not accepted."
+    if "expired" in low:
+        return "That license has expired. Ask KIN for a renewed license."
+    if "trial" in low or "subscription" in low:
+        return "That license is not valid for this install. Ask KIN for a new signed license."
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "License was not accepted.")
     if line.startswith("SETTINGS_JSON:") or line.startswith("LICENSE_JSON:"):
         return "License was not accepted."

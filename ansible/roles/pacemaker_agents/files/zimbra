@@ -134,10 +134,19 @@ zimbra_stop() {
 	if [ ! -x /opt/zimbra/bin/zmcontrol ]; then
 		return $OCF_SUCCESS
 	fi
+	if ! zimbra_monitor >/dev/null 2>&1; then
+		return $OCF_SUCCESS
+	fi
 	ocf_log info "zmcontrol stop"
 	su - ${ZIMBRA_USER} -c "zmcontrol stop" || true
-	sleep 2
-	return $OCF_SUCCESS
+	local i=0
+	while [ $i -lt 24 ]; do
+		zimbra_monitor >/dev/null 2>&1 || return $OCF_SUCCESS
+		sleep 5
+		i=$((i + 1))
+	done
+	ocf_log err "zimbra did not stop within 120s"
+	return $OCF_ERR_GENERIC
 }
 
 case $__OCF_ACTION in

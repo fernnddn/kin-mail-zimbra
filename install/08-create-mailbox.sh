@@ -45,9 +45,9 @@ _seats_code() {
   case "$msg" in
     *PLACEHOLDER_UNSET*) echo unset ;;
     *misconfigured*) echo invalid ;;
-    "*failed to count*") echo count_failed ;;
-    "*seat limit reached*") echo at_limit ;;
-    "*seat available*") echo ok ;;
+    *failed\ to\ count*) echo count_failed ;;
+    *seat\ limit\ reached*) echo at_limit ;;
+    *seat\ available*) echo ok ;;
     *) echo other ;;
   esac
 }

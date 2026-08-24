@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import ssl
 from dataclasses import dataclass
 from typing import Literal
 
@@ -94,7 +95,12 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
         log.info("ad_auth user=%s result=fail reason=misconfigured", ad_username)
         return AdAuthResult(False, "misconfigured", str(exc))
 
-    tls = Tls(validate=0)  # appliance may use private CA; transport still encrypted
+    # CERT_REQUIRED against the system trust store, not validate=0 (which accepts
+    # any certificate, including an attacker's on an on-path MITM). A private AD
+    # CA works the normal way: install it into the system trust store (e.g.
+    # `update-ca-certificates` on Debian/Ubuntu after adding the cert to
+    # /usr/local/share/ca-certificates/), same as any other internal CA.
+    tls = Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=None)
     try:
         server = Server(url, use_ssl=use_ssl, get_info=ALL, tls=tls, connect_timeout=8)
     except (LDAPException, OSError, TypeError, ValueError) as exc:

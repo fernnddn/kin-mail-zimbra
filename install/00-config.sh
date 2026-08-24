@@ -252,6 +252,13 @@ ask() {
   printf -v "$__var" '%s' "$__reply"
 }
 
+# Escape a value for placement inside single quotes in a written config file
+# (KEY='value'). Without this, a password/filter containing a literal ' breaks
+# out of the quote and corrupts every line written after it in the heredoc.
+sq_escape() {
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+
 ask_secret() {
   local __var="$1" __prompt="$2" __reply=""
   kin_require_tty "prompt ${__var}"
@@ -491,6 +498,10 @@ run_wizard() {
   fi
 
   ensure_kin_mail_conf_dir "$CONF_DIR"
+  ADMIN_PASS_ESC=$(sq_escape "$ADMIN_PASS")
+  AD_SEARCH_FILTER_ESC=$(sq_escape "$AD_SEARCH_FILTER")
+  AD_SEARCH_BIND_PASSWORD_ESC=$(sq_escape "$AD_SEARCH_BIND_PASSWORD")
+  AD_TEST_PASS_ESC=$(sq_escape "$AD_TEST_PASS")
   cat > "$CONF_FILE" <<EOF
 # KIN Mail - created $(date -Is)
 # Change with: sudo ./00-config.sh --reset
@@ -508,7 +519,7 @@ ZCS_VERSION="${ZCS_VERSION}"
 ZCS_FILE="${ZCS_FILE}"
 ZCS_BASE="${ZCS_BASE}"
 ZCS_SRC="/opt/zcs-src"
-ADMIN_PASS='${ADMIN_PASS}'
+ADMIN_PASS='${ADMIN_PASS_ESC}'
 LE_EMAIL="${LE_EMAIL}"
 TLS_METHOD="${TLS_METHOD}"
 CF_CREDS="/etc/letsencrypt/cloudflare.ini"
@@ -521,12 +532,12 @@ TEST_PASS_2="KinTest2-\$(hostname -s)"
 AD_AUTH_ENABLED="${AD_AUTH_ENABLED}"
 AD_LDAP_URL="${AD_LDAP_URL}"
 AD_SEARCH_BASE="${AD_SEARCH_BASE}"
-AD_SEARCH_FILTER='${AD_SEARCH_FILTER}'
+AD_SEARCH_FILTER='${AD_SEARCH_FILTER_ESC}'
 AD_SEARCH_BIND_DN="${AD_SEARCH_BIND_DN}"
-AD_SEARCH_BIND_PASSWORD='${AD_SEARCH_BIND_PASSWORD}'
+AD_SEARCH_BIND_PASSWORD='${AD_SEARCH_BIND_PASSWORD_ESC}'
 AD_BIND_DN_TEMPLATE="${AD_BIND_DN_TEMPLATE}"
 AD_TEST_USER="${AD_TEST_USER}"
-AD_TEST_PASS='${AD_TEST_PASS}'
+AD_TEST_PASS='${AD_TEST_PASS_ESC}'
 # PLACEHOLDER until operator confirms the real contracted seat count.
 # Quota gate blocks NEW mailbox creates only when at/over this limit (or unset).
 CONTRACTED_SEATS="${CONTRACTED_SEATS}"

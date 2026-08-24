@@ -116,8 +116,15 @@ if [ -z "$DBS" ]; then
   fail "No zimbra/mboxgroup databases visible"
   exit 1
 fi
+# Password goes in a mode-600 --defaults-extra-file, not -p"$pass" on argv
+# (a command-line password is visible to any local user via ps/proc for the
+# whole dump duration).
 # shellcheck disable=SC2086
-su - zimbra -c "source /opt/zimbra/bin/zmshutil && zmsetvars && /opt/zimbra/common/bin/mysqldump --single-transaction --routines --triggers -S \"\$mysql_socket\" -u zimbra -p\"\$zimbra_mysql_password\" --databases $DBS" > "$DUMP"
+su - zimbra -c "source /opt/zimbra/bin/zmshutil && zmsetvars && \
+  MYCNF=\$(mktemp) && chmod 600 \"\$MYCNF\" && \
+  printf '[client]\npassword=%s\n' \"\$zimbra_mysql_password\" > \"\$MYCNF\" && \
+  /opt/zimbra/common/bin/mysqldump --defaults-extra-file=\"\$MYCNF\" --single-transaction --routines --triggers -S \"\$mysql_socket\" -u zimbra --databases $DBS; \
+  rc=\$?; rm -f \"\$MYCNF\"; exit \$rc" > "$DUMP"
 chmod 600 "$DUMP"
 ok "mysqldump $(wc -c <"$DUMP" | tr -d ' ') bytes  ($DBS)"
 
