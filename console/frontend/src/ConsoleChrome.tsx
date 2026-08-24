@@ -173,6 +173,7 @@ export function ConsoleChrome({
   const [menuOpen, setMenuOpen] = useState(false);
   const [license, setLicense] = useState<{
     status?: string;
+    type?: string;
     grace_until?: string | null;
     provisioning_blocked?: boolean;
   } | null>(null);
@@ -183,7 +184,7 @@ export function ConsoleChrome({
       return;
     }
     let cancelled = false;
-    void api<{ status?: string; grace_until?: string | null; provisioning_blocked?: boolean }>(
+    void api<{ status?: string; type?: string; grace_until?: string | null; provisioning_blocked?: boolean }>(
       "/api/license/status",
     )
       .then((st) => {
@@ -281,7 +282,7 @@ export function ConsoleChrome({
       </Top>
       {license?.status === "grace" ? (
         <LicenseBanner>
-          Trial license is in the 30-day grace period
+          License is in the 30-day grace period
           {license.grace_until ? ` (until ${license.grace_until})` : ""}. New mailboxes and
           console users cannot be created until a new license is applied. Mail already delivered
           keeps working.
@@ -289,7 +290,7 @@ export function ConsoleChrome({
       ) : null}
       {license?.status === "expired" ? (
         <LicenseBanner $expired>
-          Trial license has expired. New mailboxes and console users cannot be created. Mail
+          License has expired. New mailboxes and console users cannot be created. Mail
           already delivered keeps working. Apply a current license in Settings.
         </LicenseBanner>
       ) : null}

@@ -117,6 +117,62 @@ class LicenseVerifyTests(unittest.TestCase):
         self.assertEqual(expired["status"], "expired")
         self.assertTrue(expired["provisioning_blocked"])
 
+    def test_valid_subscription(self) -> None:
+        token = self._token(
+            type="subscription",
+            expires_at=(self.now + timedelta(days=365)).isoformat(),
+        )
+        state = verify_license(
+            token, server_id=self.server_id, now=self.now, public_key=self.pub
+        )
+        self.assertEqual(state["status"], "active")
+        self.assertFalse(state["provisioning_blocked"])
+
+    def test_subscription_requires_expiry(self) -> None:
+        with self.assertRaises(ValueError):
+            sign_payload(
+                {
+                    "server_id": self.server_id,
+                    "seats": 10,
+                    "type": "subscription",
+                    "issued_at": self.now.isoformat(),
+                    "expires_at": None,
+                },
+                self.priv,
+            )
+
+    def test_subscription_grace_then_expired(self) -> None:
+        expires = self.now - timedelta(days=5)
+        token = self._token(
+            type="subscription",
+            expires_at=expires.isoformat(),
+            issued_at=(expires - timedelta(days=365)).isoformat(),
+        )
+        grace = verify_license(
+            token, server_id=self.server_id, now=self.now, public_key=self.pub
+        )
+        self.assertEqual(grace["status"], "grace")
+        self.assertTrue(grace["provisioning_blocked"])
+        later = self.now + timedelta(days=40)
+        expired = verify_license(
+            token, server_id=self.server_id, now=later, public_key=self.pub
+        )
+        self.assertEqual(expired["status"], "expired")
+        self.assertTrue(expired["provisioning_blocked"])
+
+    def test_unknown_type_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            sign_payload(
+                {
+                    "server_id": self.server_id,
+                    "seats": 10,
+                    "type": "lifetime",
+                    "issued_at": self.now.isoformat(),
+                    "expires_at": None,
+                },
+                self.priv,
+            )
+
     def test_embedded_product_key_rejects_foreign_signature(self) -> None:
         token = self._token()
         with self.assertRaises(ValueError):

@@ -42,6 +42,9 @@ import argparse
 import base64
 import csv
 import json
+import platform
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -74,7 +77,17 @@ LEDGER_FIELDS = (
 # rejects. ---------------------------------------------------------------
 
 LICENSE_PAYLOAD_KEYS = ("expires_at", "issued_at", "seats", "server_id", "type")
-LICENSE_TYPES = ("trial", "perpetual")
+LICENSE_TYPES = ("trial", "subscription", "perpetual")
+EXPIRING_LICENSE_TYPES = ("trial", "subscription")
+
+# Numbered menu shown to the operator. Order matches what a customer usually
+# progresses through: try it, subscribe, eventually go perpetual.
+TYPE_MENU: tuple[tuple[str, str, str], ...] = (
+    ("trial", "Trial", "expires, 30-day grace period after"),
+    ("subscription", "Subscription", "expires on renewal, 30-day grace period after"),
+    ("perpetual", "Perpetual", "never expires"),
+)
+DEFAULT_DAYS = {"trial": 30, "subscription": 365}
 
 
 def canonical_payload(payload: dict[str, Any]) -> bytes:
@@ -104,7 +117,7 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("license payload is incomplete")
     kind = str(payload.get("type") or "")
     if kind not in LICENSE_TYPES:
-        raise ValueError("license type must be trial or perpetual")
+        raise ValueError("license type must be trial, subscription, or perpetual")
     try:
         seats = int(payload["seats"])
     except (TypeError, ValueError) as exc:
@@ -117,8 +130,8 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     expires = _parse_ts(payload.get("expires_at"))
     if kind == "perpetual" and expires is not None:
         raise ValueError("perpetual licenses must not set expires_at")
-    if kind == "trial" and expires is None:
-        raise ValueError("trial licenses require expires_at")
+    if kind in EXPIRING_LICENSE_TYPES and expires is None:
+        raise ValueError(f"{kind} licenses require expires_at")
     server_id = str(payload.get("server_id") or "").strip()
     if not server_id:
         raise ValueError("license server_id is empty")
@@ -260,18 +273,59 @@ def _ask_int(label: str, already: object, *, default: int | None = None, minimum
         print(f"  Enter a whole number >= {minimum}.")
 
 
-def _ask_choice(label: str, choices: tuple[str, ...], already: str) -> str:
-    """Required value from a fixed set. `already` (CLI flag) short-circuits the prompt."""
+def _ask_license_type(already: str) -> str:
+    """License type, picked by number from a menu — not typed.
+
+    A flag (--type trial/subscription/perpetual) still works for scripted
+    use and skips the menu entirely.
+    """
     value = (already or "").strip().lower()
-    if value in choices:
+    if value in LICENSE_TYPES:
         return value
     if value:
-        print(f"  {already!r} isn't one of {', '.join(choices)}, let's try that again.")
-    while value not in choices:
-        value = _prompt(f"{label} ({'/'.join(choices)})").strip().lower()
-        if value not in choices:
-            print(f"  Enter one of: {', '.join(choices)}.")
-    return value
+        print(f"  {already!r} isn't a license type — pick one below instead.\n")
+    print("License type:")
+    for i, (_key, name, note) in enumerate(TYPE_MENU, start=1):
+        print(f"  {i}) {name} — {note}")
+    while True:
+        raw = _prompt("Choose a number")
+        if raw.isdigit() and 1 <= int(raw) <= len(TYPE_MENU):
+            return TYPE_MENU[int(raw) - 1][0]
+        print(f"  Enter a number from 1 to {len(TYPE_MENU)}.")
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Best-effort clipboard copy so the operator never hand-selects the
+    token from a terminal — a wrapped multi-line selection is exactly how a
+    stray newline sneaks into a pasted license and breaks its signature.
+    Returns True only if a copy command actually ran successfully.
+    """
+    system = platform.system()
+    if system == "Darwin":
+        candidates = [["pbcopy"]]
+    elif system == "Windows":
+        candidates = [["clip"]]
+    else:
+        candidates = [
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+            ["wl-copy"],
+        ]
+    for cmd in candidates:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            subprocess.run(
+                cmd,
+                input=text.encode("utf-8"),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return False
 
 
 def append_ledger(row: dict[str, str], path: Path | None = None) -> Path:
@@ -284,6 +338,17 @@ def append_ledger(row: dict[str, str], path: Path | None = None) -> Path:
             writer.writeheader()
         writer.writerow({k: row.get(k, "") for k in LEDGER_FIELDS})
     return dest
+
+
+_RULE_WIDTH = 64
+
+
+def _rule() -> None:
+    print("-" * _RULE_WIDTH)
+
+
+def _summary_row(label: str, value: str) -> None:
+    print(f"  {label:<13} {value}")
 
 
 def issue(args: argparse.Namespace) -> None:
@@ -301,17 +366,19 @@ def issue(args: argparse.Namespace) -> None:
         "Email Server ID (from the customer's console, Settings page)", args.server_id
     )
     seats = _ask_int("Number of seats", args.seats)
-    kind = _ask_choice("License type", LICENSE_TYPES, args.type)
+    kind = _ask_license_type(args.type)
     days = args.days
-    if kind == "trial":
-        days = _ask_int("Trial length in days", days, default=days or 30)
+    if kind in EXPIRING_LICENSE_TYPES:
+        label = "Trial length in days" if kind == "trial" else "Subscription length in days"
+        days = _ask_int(label, days, default=days or DEFAULT_DAYS[kind])
+    print()
     company = _ask("Company name", args.company)
     short_name = _ask("Short company name", args.short_name)
     purchase_date = _ask("Purchase date (YYYY-MM-DD)", args.purchase_date)
 
     issued = datetime.now(timezone.utc).replace(microsecond=0)
     expires: str | None = None
-    if kind == "trial":
+    if kind in EXPIRING_LICENSE_TYPES:
         expires = (issued + timedelta(days=days)).isoformat()
     payload = {
         "server_id": server_id,
@@ -335,14 +402,32 @@ def issue(args: argparse.Namespace) -> None:
             "token": token,
         }
     )
-    print(
-        f"\n# type={kind} seats={seats} server_id={server_id} "
-        f"company={company or '-'} short={short_name or '-'} "
-        f"purchase={purchase_date or '-'} ledger={ledger}",
-        file=sys.stderr,
-    )
-    print("\nPaste this whole string into the customer console's Settings page:\n")
-    print(token)
+
+    print()
+    _rule()
+    print("  License issued")
+    _rule()
+    _summary_row("Type", kind)
+    _summary_row("Seats", str(seats))
+    _summary_row("Server ID", server_id)
+    if company:
+        _summary_row("Company", company)
+    if expires:
+        _summary_row("Expires", expires)
+    _summary_row("Recorded to", ledger.name)
+    _rule()
+    print()
+
+    copied = _copy_to_clipboard(token)
+    if copied:
+        print("Copied to your clipboard.")
+        print("Paste it into the customer console's Settings page, License section, then Apply.")
+    else:
+        print("Could not copy to the clipboard automatically. Select the whole line below")
+        print("(triple-click usually selects one full line cleanly) and paste it into the")
+        print("customer console's Settings page, License section, then Apply.")
+        print()
+        print(token)
 
 
 def list_ledger(_args: argparse.Namespace) -> None:
@@ -375,12 +460,19 @@ def main() -> None:
 
     iss = sub.add_parser(
         "issue",
-        help="Sign a license string (default action — asks for anything not given as a flag)",
+        help="Issue a license (default action — asks for anything not given as a flag)",
     )
     iss.add_argument("--server-id", default="", help="Skip that prompt")
     iss.add_argument("--seats", default=None, help="Skip that prompt")
-    iss.add_argument("--type", default="", help="trial or perpetual — skip that prompt")
-    iss.add_argument("--days", type=int, default=None, help="Trial duration in days — skip that prompt")
+    iss.add_argument(
+        "--type",
+        default="",
+        choices=("", *LICENSE_TYPES),
+        help="trial, subscription, or perpetual — skip that prompt",
+    )
+    iss.add_argument(
+        "--days", type=int, default=None, help="Trial/subscription length in days — skip that prompt"
+    )
     iss.add_argument("--key", default="", help="Override the default keys/ed25519-private.pem")
     iss.add_argument("--company", default="", help="Customer company name (ledger only)")
     iss.add_argument("--short-name", default="", help="Short company name (ledger only)")

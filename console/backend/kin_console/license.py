@@ -14,7 +14,10 @@ from .license_keys import KIN_LICENSE_PUBLIC_KEY_B64
 
 LICENSE_PAYLOAD_KEYS = ("expires_at", "issued_at", "seats", "server_id", "type")
 GRACE_DAYS = 30
-LICENSE_TYPES = ("trial", "perpetual")
+LICENSE_TYPES = ("trial", "subscription", "perpetual")
+# Types that carry an expiry and enter the grace-period flow when it passes.
+# Perpetual is the only type with no expiry at all.
+EXPIRING_LICENSE_TYPES = ("trial", "subscription")
 
 
 def _b64url_decode(raw: str) -> bytes:
@@ -71,7 +74,7 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("license payload is incomplete")
     kind = str(payload.get("type") or "")
     if kind not in LICENSE_TYPES:
-        raise ValueError("license type must be trial or perpetual")
+        raise ValueError("license type must be trial, subscription, or perpetual")
     try:
         seats = int(payload["seats"])
     except (TypeError, ValueError) as exc:
@@ -84,8 +87,8 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     expires = _parse_ts(payload.get("expires_at"))
     if kind == "perpetual" and expires is not None:
         raise ValueError("perpetual licenses must not set expires_at")
-    if kind == "trial" and expires is None:
-        raise ValueError("trial licenses require expires_at")
+    if kind in EXPIRING_LICENSE_TYPES and expires is None:
+        raise ValueError(f"{kind} licenses require expires_at")
     server_id = str(payload.get("server_id") or "").strip()
     if not server_id:
         raise ValueError("license server_id is empty")
@@ -136,7 +139,7 @@ def verify_license(
     expires_at = _parse_ts(clean["expires_at"])
     status = "active"
     grace_until = None
-    if clean["type"] == "trial" and expires_at is not None:
+    if clean["type"] in EXPIRING_LICENSE_TYPES and expires_at is not None:
         if clock > expires_at:
             grace_until = expires_at + timedelta(days=GRACE_DAYS)
             if clock <= grace_until:

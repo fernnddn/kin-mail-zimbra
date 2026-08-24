@@ -340,7 +340,7 @@ export default function SettingsPage() {
             </WarnBox>
           ) : null}
           <form onSubmit={(e) => void saveLicense(e)}>
-            <Label htmlFor="lic">Paste a signed license string</Label>
+            <Label htmlFor="lic">Paste a signed license</Label>
             <Area
               id="lic"
               value={licenseToken}

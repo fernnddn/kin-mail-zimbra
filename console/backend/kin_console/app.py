@@ -1167,12 +1167,12 @@ async def api_settings_license(
 def _human_license_error(text: str) -> str:
     low = text.lower()
     if "signature" in low:
-        return "That license is not valid. Ask KIN for a new signed license string."
+        return "That license is not valid. Ask KIN for a new signed license."
     if "different email server" in low or "server id" in low:
         return "That license belongs to a different Email Server ID."
     if "canonical" in low:
-        return "That license is not valid. Ask KIN for a new signed license string."
-    if "expired" in low or "trial" in low:
+        return "That license is not valid. Ask KIN for a new signed license."
+    if "expired" in low or "trial" in low or "subscription" in low:
         return text.strip().splitlines()[-1] if text.strip() else "License was not accepted."
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "License was not accepted.")
     if line.startswith("SETTINGS_JSON:") or line.startswith("LICENSE_JSON:"):
