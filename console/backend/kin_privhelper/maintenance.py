@@ -201,7 +201,7 @@ def qdevice_voting(quorum_text: str) -> bool:
 
 
 def parse_corosync_ring_addrs(conf: str) -> dict[str, str]:
-    """Map node name → ring0_addr from corosync.conf."""
+    """Map node name to ring0_addr from corosync.conf."""
     mapping: dict[str, str] = {}
     current_addr = ""
     current_name = ""
@@ -216,6 +216,31 @@ def parse_corosync_ring_addrs(conf: str) -> dict[str, str]:
             current_addr = ""
             current_name = ""
     return mapping
+
+
+def node_ips_for_status(
+    addrs: dict[str, str],
+    *,
+    local_host: str = "",
+    local_ip: str = "",
+) -> dict[str, str]:
+    """Public hostname to IPv4 map for CLUSTER_STATUS_JSON.
+
+    Corosync ring0_addr is the source of truth when Pacemaker is configured.
+    A 1vm host often has no corosync.conf yet, so SERVER_IP fills that hole
+    for the local hostname only (never overwrites a corosync mapping).
+    """
+    out: dict[str, str] = {}
+    for name, ip in (addrs or {}).items():
+        n = str(name or "").strip()
+        a = str(ip or "").strip()
+        if n and a:
+            out[n] = a
+    host = str(local_host or "").strip()
+    addr = str(local_ip or "").strip()
+    if host and addr and host not in out:
+        out[host] = addr
+    return out
 
 
 def parse_failcount_value(text: str) -> int:
@@ -395,7 +420,7 @@ def release_maintenance_lock(fh: IO[str] | None) -> None:
         pass
 
 
-def _config_observability_ip() -> str:
+def _config_value(key: str) -> str:
     from .apply_config import parse_config
 
     path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
@@ -405,7 +430,15 @@ def _config_observability_ip() -> str:
         values = parse_config(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return ""
-    return str(values.get("OBSERVABILITY_VM_IP") or "").strip()
+    return str(values.get(key) or "").strip()
+
+
+def _config_observability_ip() -> str:
+    return _config_value("OBSERVABILITY_VM_IP")
+
+
+def _config_server_ip() -> str:
+    return _config_value("SERVER_IP")
 
 
 async def _observability_snapshot(corosync_txt: str) -> dict[str, Any]:
@@ -606,6 +639,11 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         for line in st["failcount_lines"]:
             yield await _emit(line)
         yield await _emit(f"topology={st.get('topology') or '-'}")
+        node_ips = node_ips_for_status(
+            st.get("addrs") or {},
+            local_host=str(st.get("local_host") or ""),
+            local_ip=_config_server_ip(),
+        )
         public = {
             "local_host": st["local_host"],
             "topology": st.get("topology") or "",
@@ -620,6 +658,7 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),
+            "node_ips": node_ips,
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
         yield proto.event_done(0)

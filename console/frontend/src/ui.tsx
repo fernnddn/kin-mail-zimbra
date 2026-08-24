@@ -77,21 +77,21 @@ export const Brand = styled.p`
 
 const LockupImg = styled.img<{ $compact?: boolean }>`
   display: block;
-  height: ${(p) => (p.$compact ? "2.4rem" : "3.4rem")};
+  height: ${(p) => (p.$compact ? "2.4rem" : "4.1rem")};
   width: auto;
-  max-width: ${(p) => (p.$compact ? "11rem" : "14rem")};
+  max-width: ${(p) => (p.$compact ? "11rem" : "16.5rem")};
   object-fit: contain;
   object-position: left top;
 `;
 
 const CompactLockup = styled.span`
   display: block;
-  height: 1.7rem;
+  height: 2.4rem;
   overflow: hidden;
   line-height: 0;
 `;
 
-/** Official KIN Mail lockup. Compact crops the tagline to fit the 56px top bar. */
+/** Official KIN Mail lockup. Compact height matches the image so the bar does not clip it. */
 export function BrandLockup({
   compact = false,
   alt = "KIN Mail",
@@ -1213,6 +1213,7 @@ export const TableWrap = styled.div`
   box-shadow: ${theme.shadow.sm};
   margin: 0 0 1.5rem;
 `;
+
 
 export const DataTable = styled.table`
   width: 100%;

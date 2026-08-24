@@ -39,6 +39,7 @@ type ClusterSnap = {
   offline?: string[];
   stale_peers?: string[];
   observability?: ObservabilitySnap;
+  node_ips?: Record<string, string>;
 };
 
 type StatusResp = {
@@ -67,6 +68,19 @@ function uniqueNames(...groups: Array<string[] | undefined>): string[] {
     }
   }
   return out;
+}
+
+function ipForNode(
+  name: string,
+  ips: Record<string, string> | undefined,
+  localHost?: string,
+): string {
+  const map = ips || {};
+  if (map[name]) return map[name];
+  if (localHost && map[localHost]) return map[localHost];
+  const values = Object.values(map).filter(Boolean);
+  if (values.length === 1) return values[0];
+  return "";
 }
 
 type HealthLine = { ok: boolean; label: string };
@@ -811,6 +825,7 @@ export default function ClusterPage() {
     name,
     healthy:
       !(cluster.offline || []).includes(name) && !(cluster.stale_peers || []).includes(name),
+    ip: ipForNode(name, cluster.node_ips, cluster.local_host),
   }));
   const standby = new Set(cluster.standby || []);
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
@@ -1011,16 +1026,6 @@ export default function ClusterPage() {
                               Healthy
                             </InlineStatus>
                           </NodeHead>
-                          {ops ? (
-                            <CardActions>
-                              <Button
-                                type="button"
-                                onClick={() => navigate("/wizard/topology")}
-                              >
-                                Add a second server
-                              </Button>
-                            </CardActions>
-                          ) : null}
                         </NodeCard>
                       );
                     })}

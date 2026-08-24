@@ -31,7 +31,6 @@ const CenterTitle = styled(Title)`
 `;
 
 const Foot = styled.div`
-  margin-top: auto;
   padding-top: 1.5rem;
   text-align: center;
   font-size: 0.75rem;

@@ -15,6 +15,7 @@ export type ObservabilitySnap = {
 type MailNode = {
   name: string;
   healthy: boolean;
+  ip?: string;
 };
 
 const Wrap = styled.section`
@@ -77,6 +78,7 @@ function NodeGlyph({
   y,
   title,
   subtitle,
+  ip,
   healthy,
   placeholder,
 }: {
@@ -84,18 +86,20 @@ function NodeGlyph({
   y: number;
   title: string;
   subtitle: string;
+  ip?: string;
   healthy: boolean;
   placeholder?: boolean;
 }) {
   const stroke = placeholder ? MUTED : healthy ? OK : DOWN;
   const fill = placeholder ? theme.surface[50] : "#fff";
+  const addr = (ip || "").trim();
   return (
     <g>
       <rect
         x={x - 86}
-        y={y - 38}
+        y={y - 44}
         width={172}
-        height={76}
+        height={addr ? 92 : 76}
         rx={14}
         fill={fill}
         stroke={stroke}
@@ -106,7 +110,7 @@ function NodeGlyph({
       <circle cx={x - 62} cy={y} r={7} fill={placeholder ? MUTED : stroke} />
       <text
         x={x - 46}
-        y={y - 8}
+        y={y - 12}
         fill={SUB}
         fontSize={10}
         fontWeight={600}
@@ -114,9 +118,14 @@ function NodeGlyph({
       >
         {subtitle.toUpperCase()}
       </text>
-      <text x={x - 46} y={y + 14} fill={INK} fontSize={13} fontWeight={650}>
+      <text x={x - 46} y={y + 8} fill={INK} fontSize={13} fontWeight={650}>
         {title.length > 22 ? `${title.slice(0, 20)}…` : title}
       </text>
+      {addr ? (
+        <text x={x - 46} y={y + 26} fill={SUB} fontSize={11}>
+          {addr}
+        </text>
+      ) : null}
     </g>
   );
 }
@@ -159,6 +168,7 @@ export function ClusterTopology({
               y={80}
               title={node.name}
               subtitle="Mail"
+              ip={node.ip}
               healthy={node.healthy}
             />
           </svg>
@@ -244,6 +254,7 @@ export function ClusterTopology({
             y={58}
             title={obsLabel}
             subtitle="Observability"
+            ip={observability.ip}
             healthy={obsHealthy}
             placeholder={!obsPresent}
           />
@@ -252,6 +263,7 @@ export function ClusterTopology({
             y={232}
             title={left.name}
             subtitle="Mail"
+            ip={left.ip}
             healthy={left.healthy}
             placeholder={!hasLeft}
           />
@@ -260,6 +272,7 @@ export function ClusterTopology({
             y={232}
             title={right.name}
             subtitle="Mail"
+            ip={right.ip}
             healthy={right.healthy}
             placeholder={!hasRight}
           />

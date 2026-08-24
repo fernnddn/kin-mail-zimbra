@@ -62,7 +62,7 @@ type CreateResp = {
 const FormGrid = styled.form`
   display: grid;
   gap: 0;
-  margin: 1rem 0;
+  margin: 0;
 `;
 
 const DomainSuffix = styled.span`
@@ -92,6 +92,34 @@ const Split = styled.div`
   @media (max-width: 720px) {
     grid-template-columns: 1fr;
   }
+`;
+
+const MailPage = styled(Page)`
+  max-width: 1120px;
+`;
+
+const Columns = styled.div`
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(17rem, 0.85fr);
+  gap: 1.25rem;
+  align-items: start;
+  @media (max-width: 720px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const FormCard = styled.div`
+  border: 1px solid ${theme.line};
+  background: ${theme.bgElev};
+  border-radius: ${theme.radius.md};
+  padding: 1rem 1.1rem 1.15rem;
+  box-shadow: ${theme.shadow.sm};
+`;
+
+const FormTitle = styled.h2`
+  margin: 0 0 0.65rem;
+  font-size: 0.85rem;
+  font-weight: 650;
 `;
 
 function formatUsage(row: MailboxRow): string {
@@ -225,14 +253,9 @@ export default function CreateMailboxPage() {
     }
   }
 
-  const used = seats.used;
-  const limit = seats.limit;
-  const seatLine =
-    used != null && limit != null ? `${used}/${limit} seats used` : statusMessage || "Seat status unavailable";
-
   return (
     <ConsoleChrome>
-      <Page>
+      <MailPage>
         <PageHeader
           icon={<MailIcon />}
           title="Mailboxes"
@@ -242,154 +265,158 @@ export default function CreateMailboxPage() {
         {maintHint ? <WarnBox>{maintHint}</WarnBox> : null}
 
         <Hint>
-          <strong>{seatLine}.</strong> {statusMessage && statusMessage !== seatLine ? statusMessage : null}{" "}
+          <strong>{statusMessage || "Seat status unavailable"}</strong>{" "}
           {seats.code === "unset" && isSuper ? (
             <Link to="/settings">Set contracted seats in Settings</Link>
           ) : null}
         </Hint>
 
-        <TableWrap>
-          <DataTable>
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Usage</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {!loaded ? (
+        <Columns>
+          <TableWrap style={{ marginBottom: 0 }}>
+            <DataTable>
+              <thead>
                 <tr>
-                  <td colSpan={5}>
-                    <Skeleton $h="0.85rem" $w="40%" />
-                  </td>
+                  <th>Email</th>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Usage</th>
+                  <th />
                 </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={5}>No mailboxes yet.</td>
-                </tr>
-              ) : (
-                rows.map((row) => (
-                  <tr key={row.email}>
-                    <td>
-                      {renaming === row.email ? (
-                        <LocalRow>
-                          <Input
-                            value={renameLocal}
-                            onChange={(e) => setRenameLocal(e.target.value.replace(/@.*$/, ""))}
-                            aria-label="New local part"
-                          />
-                          <DomainSuffix>@{domain || "…"}</DomainSuffix>
-                          <Button
-                            type="button"
-                            variant="primary"
-                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-                            disabled={busy || !renameLocal.trim()}
-                            onClick={() => void applyRename(row.email)}
-                          >
-                            Save
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-                            onClick={() => setRenaming(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </LocalRow>
-                      ) : (
-                        row.email
-                      )}
-                    </td>
-                    <td>{row.display_name || [row.given_name, row.surname].filter(Boolean).join(" ")}</td>
-                    <td>
-                      <StatusPill tone={row.status === "active" ? "primary" : "neutral"} size="tag">
-                        {row.status || "unknown"}
-                      </StatusPill>
-                    </td>
-                    <td>{formatUsage(row)}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-                        onClick={() => {
-                          setRenaming(row.email);
-                          setRenameLocal(row.email.split("@")[0] || "");
-                        }}
-                      >
-                        Rename
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
-                        onClick={() => setPendingDelete(row)}
-                      >
-                        Delete
-                      </Button>
+              </thead>
+              <tbody>
+                {!loaded ? (
+                  <tr>
+                    <td colSpan={5}>
+                      <Skeleton $h="0.85rem" $w="40%" />
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </DataTable>
-        </TableWrap>
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>No mailboxes yet.</td>
+                  </tr>
+                ) : (
+                  rows.map((row) => (
+                    <tr key={row.email}>
+                      <td>
+                        {renaming === row.email ? (
+                          <LocalRow>
+                            <Input
+                              value={renameLocal}
+                              onChange={(e) => setRenameLocal(e.target.value.replace(/@.*$/, ""))}
+                              aria-label="New local part"
+                            />
+                            <DomainSuffix>@{domain || "…"}</DomainSuffix>
+                            <Button
+                              type="button"
+                              variant="primary"
+                              style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                              disabled={busy || !renameLocal.trim()}
+                              onClick={() => void applyRename(row.email)}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                              onClick={() => setRenaming(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </LocalRow>
+                        ) : (
+                          row.email
+                        )}
+                      </td>
+                      <td>{row.display_name || [row.given_name, row.surname].filter(Boolean).join(" ")}</td>
+                      <td>
+                        <StatusPill tone={row.status === "active" ? "primary" : "neutral"} size="tag">
+                          {row.status || "unknown"}
+                        </StatusPill>
+                      </td>
+                      <td>{formatUsage(row)}</td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                          onClick={() => {
+                            setRenaming(row.email);
+                            setRenameLocal(row.email.split("@")[0] || "");
+                          }}
+                        >
+                          Rename
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                          onClick={() => setPendingDelete(row)}
+                        >
+                          Delete
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </DataTable>
+          </TableWrap>
 
-        <FormGrid onSubmit={(e) => void onSubmit(e)}>
-          <Label htmlFor="lp">Email (local part)</Label>
-          <LocalRow>
-            <Input
-              id="lp"
-              value={localPart}
-              onChange={(e) => setLocalPart(e.target.value.replace(/@.*$/, ""))}
-              autoComplete="off"
-              required
-              placeholder="jane.doe"
-            />
-            <DomainSuffix>@{domain || "…"}</DomainSuffix>
-          </LocalRow>
-          <Split>
-            <div>
-              <Label htmlFor="gn">First name</Label>
-              <Input id="gn" value={givenName} onChange={(e) => setGivenName(e.target.value)} autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="sn">Last name</Label>
-              <Input id="sn" value={surname} onChange={(e) => setSurname(e.target.value)} autoComplete="off" />
-            </div>
-          </Split>
-          <Label htmlFor="dn">Display name (optional)</Label>
-          <Input
-            id="dn"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            autoComplete="off"
-            placeholder="Defaults to first + last if left blank"
-          />
-          <Label htmlFor="pw">Password (min 8 characters)</Label>
-          <PasswordInput
-            id="pw"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={8}
-            required
-            autoComplete="new-password"
-          />
-          <Label htmlFor="st">Account status</Label>
-          <Select id="st" value={accountStatus} onChange={(e) => setAccountStatus(e.target.value)}>
-            <option value="active">Active</option>
-            <option value="locked">Locked</option>
-          </Select>
-          <Button type="submit" variant="primary" loading={busy} disabled={!!maintHint || !canCreate}>
-            {busy ? "Creating…" : "Create mailbox"}
-          </Button>
-        </FormGrid>
-
-        {message ? <Hint>{message}</Hint> : null}
+          <FormCard>
+            <FormTitle>Add account</FormTitle>
+            <FormGrid onSubmit={(e) => void onSubmit(e)}>
+              <Label htmlFor="lp">Email (local part)</Label>
+              <LocalRow>
+                <Input
+                  id="lp"
+                  value={localPart}
+                  onChange={(e) => setLocalPart(e.target.value.replace(/@.*$/, ""))}
+                  autoComplete="off"
+                  required
+                  placeholder="jane.doe"
+                />
+                <DomainSuffix>@{domain || "…"}</DomainSuffix>
+              </LocalRow>
+              <Split>
+                <div>
+                  <Label htmlFor="gn">First name</Label>
+                  <Input id="gn" value={givenName} onChange={(e) => setGivenName(e.target.value)} autoComplete="off" />
+                </div>
+                <div>
+                  <Label htmlFor="sn">Last name</Label>
+                  <Input id="sn" value={surname} onChange={(e) => setSurname(e.target.value)} autoComplete="off" />
+                </div>
+              </Split>
+              <Label htmlFor="dn">Display name (optional)</Label>
+              <Input
+                id="dn"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                autoComplete="off"
+                placeholder="Defaults to first + last if left blank"
+              />
+              <Label htmlFor="pw">Password (min 8 characters)</Label>
+              <PasswordInput
+                id="pw"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                required
+                autoComplete="new-password"
+              />
+              <Label htmlFor="st">Account status</Label>
+              <Select id="st" value={accountStatus} onChange={(e) => setAccountStatus(e.target.value)}>
+                <option value="active">Active</option>
+                <option value="locked">Locked</option>
+              </Select>
+              <Button type="submit" variant="primary" loading={busy} disabled={!!maintHint || !canCreate}>
+                {busy ? "Creating…" : "Create mailbox"}
+              </Button>
+            </FormGrid>
+            {message ? <Hint>{message}</Hint> : null}
+          </FormCard>
+        </Columns>
 
         <ConfirmModal
           open={!!pendingDelete}
@@ -408,7 +435,7 @@ export default function CreateMailboxPage() {
           }}
           onConfirm={() => void confirmDelete()}
         />
-      </Page>
+      </MailPage>
     </ConsoleChrome>
   );
 }

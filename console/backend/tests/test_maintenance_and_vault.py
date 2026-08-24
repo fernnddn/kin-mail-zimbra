@@ -10,6 +10,7 @@ from pathlib import Path
 from kin_console.draft import HOST_PROVISION_KEYS, WizardDraft, public_draft, valid_ipv4
 from kin_privhelper.maintenance import (
     drbd_both_uptodate,
+    node_ips_for_status,
     parse_corosync_ring_addrs,
     parse_failcount_value,
     parse_offline_nodes,
@@ -164,6 +165,22 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertEqual(addrs["mail.example.test"], "192.0.2.15")
         self.assertEqual(parse_failcount_value("scope=status  name=fail-count-kin-zimbra value=0"), 0)
         self.assertEqual(parse_failcount_value("value=3"), 3)
+
+    def test_node_ips_corosync_wins_over_server_ip(self) -> None:
+        out = node_ips_for_status(
+            {"mail.example.test": "192.0.2.15"},
+            local_host="mail.example.test",
+            local_ip="10.0.0.1",
+        )
+        self.assertEqual(out["mail.example.test"], "192.0.2.15")
+
+    def test_node_ips_server_ip_fills_empty_corosync(self) -> None:
+        out = node_ips_for_status(
+            {},
+            local_host="mail.example.test",
+            local_ip="192.0.2.80",
+        )
+        self.assertEqual(out, {"mail.example.test": "192.0.2.80"})
 
 
 class MaintenanceLockTests(unittest.TestCase):
