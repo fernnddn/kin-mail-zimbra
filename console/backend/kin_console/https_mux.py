@@ -70,27 +70,86 @@ def _recv_http_head(sock: socket.socket) -> bytes:
     return buf
 
 
+_SPLICE_BUFSIZE = 65536
+_SPLICE_MAX_BUFFERED = 4 * 1024 * 1024
+
+
 def _splice(left: socket.socket, right: socket.socket) -> None:
+    """Relay raw bytes between two non-blocking sockets until both sides are done.
+
+    Both sockets are non-blocking, so `recv`/`send` raise `BlockingIOError` (a
+    subclass of `OSError`) whenever the call would otherwise block — e.g. a
+    client that can't drain a large response as fast as the backend writes
+    it, which is routine under load. That must be retried, not treated as a
+    dead connection: a previous version of this function caught `OSError`
+    broadly, so a single transient `BlockingIOError` on `sendall()` tore the
+    relay down mid-response, truncating in-flight downloads (observed as
+    `ERR_CONTENT_LENGTH_MISMATCH` on the console's JS bundle while the host
+    was under heavy I/O load).
+    """
     sel = selectors.DefaultSelector()
     left.setblocking(False)
     right.setblocking(False)
-    sel.register(left, selectors.EVENT_READ, right)
-    sel.register(right, selectors.EVENT_READ, left)
+    peer = {left: right, right: left}
+    out_buf: dict[socket.socket, bytearray] = {left: bytearray(), right: bytearray()}
+    read_eof: set[socket.socket] = set()
+    registered: set[socket.socket] = set()
+
+    def desired_mask(sock: socket.socket) -> int:
+        mask = 0
+        if sock not in read_eof and len(out_buf[peer[sock]]) < _SPLICE_MAX_BUFFERED:
+            mask |= selectors.EVENT_READ
+        if out_buf[sock]:
+            mask |= selectors.EVENT_WRITE
+        return mask
+
+    def sync(sock: socket.socket) -> None:
+        mask = desired_mask(sock)
+        if mask:
+            if sock in registered:
+                sel.modify(sock, mask)
+            else:
+                sel.register(sock, mask)
+                registered.add(sock)
+        elif sock in registered:
+            sel.unregister(sock)
+            registered.discard(sock)
+
+    sync(left)
+    sync(right)
     try:
-        while True:
-            for key, _mask in sel.select(timeout=120):
-                src: socket.socket = key.fileobj  # type: ignore[assignment]
-                dst: socket.socket = key.data
-                try:
-                    data = src.recv(65536)
-                except OSError:
+        while registered:
+            events = sel.select(timeout=120)
+            if not events:
+                return
+            for key, mask in events:
+                sock: socket.socket = key.fileobj  # type: ignore[assignment]
+                if mask & selectors.EVENT_READ:
+                    try:
+                        data = sock.recv(_SPLICE_BUFSIZE)
+                    except BlockingIOError:
+                        pass
+                    except OSError:
+                        return
+                    else:
+                        if not data:
+                            read_eof.add(sock)
+                        else:
+                            out_buf[peer[sock]].extend(data)
+                if mask & selectors.EVENT_WRITE:
+                    buf = out_buf[sock]
+                    try:
+                        sent = sock.send(buf)
+                    except BlockingIOError:
+                        pass
+                    except OSError:
+                        return
+                    else:
+                        del buf[:sent]
+                if sock in read_eof and not out_buf[peer[sock]] and peer[sock] in read_eof and not out_buf[sock]:
                     return
-                if not data:
-                    return
-                try:
-                    dst.sendall(data)
-                except OSError:
-                    return
+            for sock in (left, right):
+                sync(sock)
     finally:
         sel.close()
 
