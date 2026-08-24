@@ -16,14 +16,19 @@ drive) outside of git entirely. If it's lost with no backup, no new license
 can ever be issued again for the KIN Mail product already shipped with the
 matching public key baked in (console/backend/kin_console/license_keys.py).
 
-Usage:
+Usage — just run it, it asks for everything one question at a time:
+
+  ./generate.sh
+
+On Windows: generate.bat, same thing.
+
+Prefer typing one long command instead? Every question can also be answered
+as a flag up front, and anything you don't pass gets asked interactively:
 
   ./generate.sh issue --server-id <Email-Server-ID> --seats 32 --type perpetual \\
     --company "PT Example" --short-name example --purchase-date 2026-08-24
 
   ./generate.sh issue --server-id <id> --seats 10 --type trial --days 90
-
-On Windows, use generate.bat with the same arguments instead of generate.sh.
 
 Every issued license is appended to license-ledger.csv next to this script —
 that ledger is KIN's own record (company name, seats, when, for whom), never
@@ -197,16 +202,76 @@ def _load_private(path: Path) -> Ed25519PrivateKey:
     return key
 
 
+def _prompt(label: str, default: str = "") -> str:
+    """Ask one question. Blank answer keeps `default` if one was given.
+
+    Raises SystemExit on EOF (stdin closed / not interactive) instead of
+    silently returning "" or looping forever re-asking — a script piping
+    input, or a shell with no terminal attached, gets a clear error instead
+    of a hang or a license issued with fields it never actually answered.
+    """
+    suffix = f" [{default}]" if default else ""
+    try:
+        raw = input(f"{label}{suffix}: ").strip()
+    except EOFError as exc:
+        raise SystemExit(
+            "\nNo input available to answer that (not running in an interactive "
+            "terminal). Pass the missing value as a flag instead — see --help."
+        ) from exc
+    return raw or default
+
+
 def _ask(label: str, already: str) -> str:
+    """Optional field: use `already` if set, else prompt for it."""
     text = (already or "").strip()
     if text:
         return text
-    if not sys.stdin.isatty():
-        return ""
-    try:
-        return input(f"{label}: ").strip()
-    except EOFError:
-        return ""
+    return _prompt(label)
+
+
+def _ask_required(label: str, already: str) -> str:
+    """Required text field: keep asking until something is typed."""
+    value = (already or "").strip()
+    while not value:
+        value = _prompt(label)
+        if not value:
+            print("  This is required — try again.")
+    return value
+
+
+def _ask_int(label: str, already: object, *, default: int | None = None, minimum: int = 1) -> int:
+    """Required whole number >= minimum. `already` (CLI flag) short-circuits the prompt."""
+    if already not in (None, ""):
+        try:
+            n = int(already)
+            if n >= minimum:
+                return n
+        except (TypeError, ValueError):
+            pass
+        print(f"  {already!r} isn't a whole number >= {minimum}, let's try that again.")
+    while True:
+        raw = _prompt(label, str(default) if default is not None else "")
+        try:
+            n = int(raw)
+            if n >= minimum:
+                return n
+        except ValueError:
+            pass
+        print(f"  Enter a whole number >= {minimum}.")
+
+
+def _ask_choice(label: str, choices: tuple[str, ...], already: str) -> str:
+    """Required value from a fixed set. `already` (CLI flag) short-circuits the prompt."""
+    value = (already or "").strip().lower()
+    if value in choices:
+        return value
+    if value:
+        print(f"  {already!r} isn't one of {', '.join(choices)}, let's try that again.")
+    while value not in choices:
+        value = _prompt(f"{label} ({'/'.join(choices)})").strip().lower()
+        if value not in choices:
+            print(f"  Enter one of: {', '.join(choices)}.")
+    return value
 
 
 def append_ledger(row: dict[str, str], path: Path | None = None) -> Path:
@@ -230,44 +295,54 @@ def issue(args: argparse.Namespace) -> None:
         or (DEFAULT_KEY_DIR / "ed25519-private.pem")
     )
     priv = _load_private(key_path)
+
+    print("Issuing a KIN Mail license. Press Enter to accept a [default] where shown.\n")
+    server_id = _ask_required(
+        "Email Server ID (from the customer's console, Settings page)", args.server_id
+    )
+    seats = _ask_int("Number of seats", args.seats)
+    kind = _ask_choice("License type", LICENSE_TYPES, args.type)
+    days = args.days
+    if kind == "trial":
+        days = _ask_int("Trial length in days", days, default=days or 30)
+    company = _ask("Company name", args.company)
+    short_name = _ask("Short company name", args.short_name)
+    purchase_date = _ask("Purchase date (YYYY-MM-DD)", args.purchase_date)
+
     issued = datetime.now(timezone.utc).replace(microsecond=0)
     expires: str | None = None
-    if args.type == "trial":
-        if args.days < 1:
-            raise SystemExit("trial licenses need --days >= 1")
-        expires = (issued + timedelta(days=args.days)).isoformat()
+    if kind == "trial":
+        expires = (issued + timedelta(days=days)).isoformat()
     payload = {
-        "server_id": args.server_id.strip(),
-        "seats": int(args.seats),
-        "type": args.type,
+        "server_id": server_id,
+        "seats": seats,
+        "type": kind,
         "issued_at": issued.isoformat(),
         "expires_at": expires,
     }
     token = sign_payload(payload, priv)
-    company = _ask("Company name", args.company)
-    short_name = _ask("Short company name", args.short_name)
-    purchase_date = _ask("Purchase date (YYYY-MM-DD)", args.purchase_date)
     ledger = append_ledger(
         {
             "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "company_name": company,
             "short_name": short_name,
             "purchase_date": purchase_date,
-            "type": args.type,
-            "server_id": args.server_id.strip(),
-            "seats": str(args.seats),
+            "type": kind,
+            "server_id": server_id,
+            "seats": str(seats),
             "issued_at": issued.isoformat(),
             "expires_at": expires or "",
             "token": token,
         }
     )
-    print(token)
     print(
-        f"# type={args.type} seats={args.seats} server_id={args.server_id} "
+        f"\n# type={kind} seats={seats} server_id={server_id} "
         f"company={company or '-'} short={short_name or '-'} "
         f"purchase={purchase_date or '-'} ledger={ledger}",
         file=sys.stderr,
     )
+    print("\nPaste this whole string into the customer console's Settings page:\n")
+    print(token)
 
 
 def list_ledger(_args: argparse.Namespace) -> None:
@@ -290,7 +365,7 @@ def list_ledger(_args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="KIN Mail license generator (portable kit)")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd")
 
     init = sub.add_parser(
         "init-keys",
@@ -298,11 +373,14 @@ def main() -> None:
     )
     init.add_argument("--out-dir", type=Path, default=DEFAULT_KEY_DIR)
 
-    iss = sub.add_parser("issue", help="Sign a license string")
-    iss.add_argument("--server-id", required=True)
-    iss.add_argument("--seats", type=int, required=True)
-    iss.add_argument("--type", choices=("trial", "perpetual"), required=True)
-    iss.add_argument("--days", type=int, default=30, help="Trial duration in days")
+    iss = sub.add_parser(
+        "issue",
+        help="Sign a license string (default action — asks for anything not given as a flag)",
+    )
+    iss.add_argument("--server-id", default="", help="Skip that prompt")
+    iss.add_argument("--seats", default=None, help="Skip that prompt")
+    iss.add_argument("--type", default="", help="trial or perpetual — skip that prompt")
+    iss.add_argument("--days", type=int, default=None, help="Trial duration in days — skip that prompt")
     iss.add_argument("--key", default="", help="Override the default keys/ed25519-private.pem")
     iss.add_argument("--company", default="", help="Customer company name (ledger only)")
     iss.add_argument("--short-name", default="", help="Short company name (ledger only)")
@@ -310,7 +388,9 @@ def main() -> None:
 
     sub.add_parser("list", help="List every license this kit has issued")
 
-    args = parser.parse_args()
+    # No arguments at all -> straight into the interactive "issue" wizard.
+    argv = sys.argv[1:]
+    args = parser.parse_args(argv if argv else ["issue"])
     if args.cmd == "init-keys":
         init_keys(args.out_dir)
         return
