@@ -14,3 +14,8 @@ iscsi_initiator_name_file: /etc/iscsi/initiatorname.iscsi
 # Inventory may still override after a login if discovery is ambiguous.
 iscsi_initiator_sbd_by_id: ""
 iscsi_initiator_selector_remote: /var/tmp/kin-select-sbd-device.py
+# CHAP for the SBD LUN - must match iscsi_target_chap_* on the Observability
+# VM. Empty on purpose: the role refuses to log in rather than falling back
+# to an unauthenticated session.
+iscsi_initiator_chap_userid: ""
+iscsi_initiator_chap_password: ""

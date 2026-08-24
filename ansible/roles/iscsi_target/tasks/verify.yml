@@ -33,3 +33,14 @@
   failed_when: iscsi_target_ls_verify.rc != 0
   check_mode: false
   tags: [iscsi, target, verify]
+
+- name: Verify CHAP authentication is required on the SBD target
+  ansible.builtin.command:
+    cmd: targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1 get attribute authentication
+  register: iscsi_target_auth_verify
+  changed_when: false
+  failed_when: >-
+    iscsi_target_auth_verify.rc != 0 or
+    'authentication=1' not in iscsi_target_auth_verify.stdout
+  check_mode: false
+  tags: [iscsi, target, verify]

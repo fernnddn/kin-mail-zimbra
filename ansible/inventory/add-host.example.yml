@@ -21,6 +21,9 @@ all:
     cluster_node_base_hacluster_password: "{{ cluster_add_host_hacluster_password }}"
     # Reuse fencing defaults; override initiator name for the new host.
     iscsi_initiator_portal: "10.10.40.12:3260"
+    # Same secret already on the Observability target and the survivor node.
+    iscsi_initiator_chap_userid: ""
+    iscsi_initiator_chap_password: ""
   children:
     monitoring:
       hosts:

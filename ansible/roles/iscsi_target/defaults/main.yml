@@ -8,3 +8,8 @@ iscsi_target_backstore_name: kin-sbd
 iscsi_target_lun_dir: /var/lib/kin-mail
 iscsi_target_lun_img: /var/lib/kin-mail/sbd-lun.img
 iscsi_target_lun_size: 64M
+# CHAP for the SBD LUN - must be set in inventory (empty on purpose: the
+# role refuses to run rather than silently leaving the LUN unauthenticated).
+# Same secret on both mail node initiators (iscsi_initiator_chap_*).
+iscsi_target_chap_userid: ""
+iscsi_target_chap_password: ""

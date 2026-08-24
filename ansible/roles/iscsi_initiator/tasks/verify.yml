@@ -35,3 +35,17 @@
   changed_when: false
   check_mode: false
   tags: [iscsi, initiator, verify]
+
+- name: Verify CHAP is configured on the SBD target's node record
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}
+      -p {{ iscsi_initiator_portal }} --op show
+  register: iscsi_initiator_chap_verify
+  changed_when: false
+  failed_when: >-
+    iscsi_initiator_chap_verify.rc != 0 or
+    'node.session.auth.authmethod = CHAP' not in iscsi_initiator_chap_verify.stdout
+  check_mode: false
+  no_log: true
+  tags: [iscsi, initiator, verify]

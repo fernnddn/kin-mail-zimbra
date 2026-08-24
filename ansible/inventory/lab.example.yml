@@ -15,6 +15,13 @@ all:
     corosync_qdevice_qnetd_ip: 10.10.40.12
     corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
     iscsi_initiator_portal: "10.10.40.12:3260"
+    # Set in lab.yml (gitignored). Both roles refuse to run without these -
+    # same secret on the target (Observability) and every initiator (mail
+    # nodes). iscsiadm requires 12-16 chars.
+    iscsi_target_chap_userid: ""
+    iscsi_target_chap_password: ""
+    iscsi_initiator_chap_userid: ""
+    iscsi_initiator_chap_password: ""
     # Set in lab.yml (gitignored) before pcs cluster setup / host auth.
     cluster_node_base_hacluster_password: ""
     # After iSCSI login the initiator role discovers scsi-* by-id for the SBD
