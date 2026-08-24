@@ -105,7 +105,7 @@ ok "Extracted to $ZDIR"
 # --- 1b. Ubuntu apt packaging key (install.sh skips keyserver when present) ---
 # Maldua FOSS install.sh (util/utilfunc.sh) for Ubuntu does NOT use
 # files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is 404 as of
-# 2026-08). It expects key 9BE6ED79 in /etc/apt/trusted.gpg.d/zimbra.gpg - 
+# 2026-08). It expects key 9BE6ED79 in /etc/apt/trusted.gpg.d/zimbra.gpg -
 # fingerprint 254F9170B966D193D6BAD300D5CEF8BF9BE6ED79 (signing subkey
 # 5234D2B73B6996C7 = Mar-2025 packaging refresh, same primary cert).
 #

@@ -17,7 +17,7 @@ pacemaker_mail_stack_fs_options: noatime
 pacemaker_mail_stack_vip_ip: ""
 pacemaker_mail_stack_vip_cidr: "24"
 # Empty: omit nic= and let IPaddr2 pick the iface for the VIP subnet on
-# whichever node is Promoted. Never default to a lab NIC name (ens33) - 
+# whichever node is Promoted. Never default to a lab NIC name (ens33) -
 # that silently creates a VIP that cannot start on ens18/eth0/enp0s3, and
 # pinning nic= to node A's NET_IFACE breaks failover if node B differs.
 pacemaker_mail_stack_vip_nic: ""

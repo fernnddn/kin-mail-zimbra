@@ -1,6 +1,6 @@
 ---
 # Read-only probes against the live CIB / assert helper.
-# check_mode: false is intentional and LIMITED to status/constraint queries - 
+# check_mode: false is intentional and LIMITED to status/constraint queries -
 # never extend that to pcs resource create / constraint add / promote.
 
 - name: Verify the Pacemaker cluster status

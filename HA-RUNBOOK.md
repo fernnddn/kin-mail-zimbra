@@ -59,7 +59,7 @@ have moved the stack a second time as soon as A was UpToDate.
    before the new side is ready.
 
 **What this HA buys you:** automatic (or controlled) recovery with **bounded,
-repeatable downtime**, fencing against split-brain, and a single consistent store - 
+repeatable downtime**, fencing against split-brain, and a single consistent store -
 **not** continuous availability. Do not plan SLAs as if failover were transparent.
 
 ---
@@ -379,7 +379,7 @@ Exit: `pcs node unstandby <target>`, then the console **waits** (up to 180s) unt
 4. `NO_DUAL_PRIMARY_OK`
 
 Only then is Exit reported done. `unstandby` plus “still mid-resync” is **incomplete**,
-not success. A non-zero Exit means the node is Online again but verification failed - 
+not success. A non-zero Exit means the node is Online again but verification failed -
 do not assume it is a healthy Secondary.
 
 CLI equivalent (when the console is down):

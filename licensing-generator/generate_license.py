@@ -30,7 +30,7 @@ as a flag up front, and anything you don't pass gets asked interactively:
 
   ./generate.sh issue --server-id <id> --seats 10 --type trial --days 90
 
-Every issued license is appended to license-ledger.csv next to this script - 
+Every issued license is appended to license-ledger.csv next to this script -
 that ledger is KIN's own record (company name, seats, when, for whom), never
 part of the signed license itself, and never verified or trusted by the
 product. Moving this whole folder to a new device keeps that history intact.
@@ -71,7 +71,7 @@ LEDGER_FIELDS = (
 )
 
 # --- Vendored from console/backend/kin_console/license.py. Keep byte-for-byte
-# identical to that file's canonical_payload/validate_payload/sign_payload - 
+# identical to that file's canonical_payload/validate_payload/sign_payload -
 # the product's verifier re-derives the exact same bytes and checks the
 # signature against them; any drift here would sign licenses the product
 # rejects. ---------------------------------------------------------------

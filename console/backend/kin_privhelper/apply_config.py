@@ -654,7 +654,7 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     out["CONTRACTED_SEATS"] = seats
     # Do not wipe existing KIN_ADMIN_IPS when draft leaves the field blank
     # (wizard allows deferred firewall sources). Explicit blanking requires
-    # sending whitespace-only only after operator clears it intentionally - 
+    # sending whitespace-only only after operator clears it intentionally -
     # still preserve existing if draft value is empty string.
     draft_ips = str(draft.get("kin_admin_ips") or "").strip()
     if draft_ips:
