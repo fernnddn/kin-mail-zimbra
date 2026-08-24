@@ -14,8 +14,8 @@ cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
 NGX_TPL="${NGX_TPL:-/opt/zimbra/conf/nginx/templates/nginx.conf.web.https.default.template}"
-MARKER_BEGIN="# KIN Mail — block admin UI on public HTTPS (use :7071 + ufw)"
-MARKER_END="# KIN Mail — end admin path lockdown"
+# The actual idempotency markers live as literals inside the Python heredoc
+# below (its 'begin'/'end' vars) — a quoted heredoc can't see these anyway.
 
 zimbra_cmd() {
   # shellcheck disable=SC2086

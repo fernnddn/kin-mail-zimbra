@@ -247,7 +247,8 @@ if [ "$DRY_RUN" -eq 0 ]; then
   # Explicit: remove addresses with label *:vip or known kin-vip leftovers.
   ip -o -4 addr show 2>/dev/null | while read -r _ dev _ cidr rest; do
     case "$rest" in
-      *vip*|*kin-vip*)
+      # "*vip*" already covers "*kin-vip*" (a substring match), no separate arm needed.
+      *vip*)
         info "+ ip addr del $cidr dev $dev"
         ip addr del "$cidr" dev "$dev" 2>/dev/null || true
         ;;

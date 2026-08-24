@@ -11,7 +11,7 @@
 #             1 = update available, 2 = could not query GitHub.
 # =============================================================================
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || { echo "    ERROR: cannot cd into script directory" >&2; exit 2; }
 
 CONF_FILE="/etc/kin-mail/config"
 ZCS_VERSION=""

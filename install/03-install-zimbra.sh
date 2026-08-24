@@ -40,7 +40,8 @@ scrub_install_log() {
 
 # --- 1. download and verify --------------------------------------------------
 say "1. Downloading ${ZCS_FILE}"
-mkdir -p "$ZCS_SRC"; cd "$ZCS_SRC"
+mkdir -p "$ZCS_SRC"
+cd "$ZCS_SRC" || { fail "Cannot cd into ${ZCS_SRC}"; exit 1; }
 
 _zcs_url="${ZCS_BASE}/${ZCS_FILE}"
 _zcs_sum_url="${_zcs_url}.sha256"
