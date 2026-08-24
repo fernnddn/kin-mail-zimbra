@@ -9,6 +9,7 @@ import EulaPage from "./pages/Eula";
 import LoginPage from "./pages/Login";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
+import SecurityPage from "./pages/Security";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
 import AddSecondServerPage from "./wizard/AddSecondServer";
@@ -136,6 +137,16 @@ export default function App() {
                 <RequireEula>
                   <RequireAuth>
                     <UsersPage />
+                  </RequireAuth>
+                </RequireEula>
+              }
+            />
+            <Route
+              path="/security"
+              element={
+                <RequireEula>
+                  <RequireAuth>
+                    <SecurityPage />
                   </RequireAuth>
                 </RequireEula>
               }

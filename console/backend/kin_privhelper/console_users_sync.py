@@ -117,17 +117,19 @@ def mutation_from_args(args: dict[str, Any]) -> dict[str, Any]:
     """Build the SSH mutation object. Hashes passwords here; never keeps plaintext."""
     from kin_console.users import (
         AUTH_LOCAL,
+        apply_clear_mfa,
         apply_create_user,
         apply_delete_user,
         apply_set_local_password,
+        apply_set_mfa,
         load_users,
     )
 
     op = str(args.get("op") or "").strip().lower()
     actor = str(args.get("actor") or "").strip()
     username = str(args.get("username") or "").strip()
-    if op not in ("create", "delete", "set_password"):
-        raise ValueError("op must be create, delete, or set_password")
+    if op not in ("create", "delete", "set_password", "set_mfa", "clear_mfa"):
+        raise ValueError("op must be create, delete, set_password, set_mfa, or clear_mfa")
     if not actor:
         raise ValueError("actor is required")
     if not username:
@@ -158,6 +160,19 @@ def mutation_from_args(args: dict[str, Any]) -> dict[str, Any]:
         apply_delete_user(current, username, actor=actor)
         return out
 
+    if op == "set_mfa":
+        secret = str(args.get("mfa_secret") or "").strip()
+        updated, _ = apply_set_mfa(current, username, mfa_secret=secret)
+        out["mfa_enabled"] = True
+        out["mfa_secret"] = updated.mfa_secret
+        return out
+
+    if op == "clear_mfa":
+        apply_clear_mfa(current, username)
+        out["mfa_enabled"] = False
+        out["mfa_secret"] = ""
+        return out
+
     updated, _ = apply_set_local_password(current, username, password=password)
     out["password_hash"] = updated.password_hash
     out["auth_type"] = AUTH_LOCAL
@@ -170,9 +185,11 @@ def apply_mutation_to_users(
 ) -> tuple[Any | None, list[Any]]:
     """Apply a hash-only mutation dict to an in-memory user list."""
     from kin_console.users import (
+        apply_clear_mfa,
         apply_create_user,
         apply_delete_user,
         apply_set_local_password,
+        apply_set_mfa,
     )
 
     op = str(mutation.get("op") or "").strip().lower()
@@ -193,6 +210,16 @@ def apply_mutation_to_users(
         return created, new_users
     if op == "delete":
         return None, apply_delete_user(users, username, actor=actor)
+    if op == "set_mfa":
+        updated, new_users = apply_set_mfa(
+            users,
+            username,
+            mfa_secret=str(mutation.get("mfa_secret") or ""),
+        )
+        return updated, new_users
+    if op == "clear_mfa":
+        updated, new_users = apply_clear_mfa(users, username)
+        return updated, new_users
     updated, new_users = apply_set_local_password(
         users,
         username,

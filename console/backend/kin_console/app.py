@@ -20,7 +20,7 @@ from kin_privhelper.rbac import (
     role_label,
 )
 
-from . import auth, draft, users
+from . import auth, draft, mfa, users
 from .privhelper_client import run_command
 from .settings import settings
 from .users import ConsoleUser
@@ -34,6 +34,20 @@ EULA_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 class LoginBody(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=256)
+
+
+class MfaLoginBody(BaseModel):
+    mfa_token: str = Field(min_length=1, max_length=4096)
+    code: str = Field(min_length=6, max_length=16)
+
+
+class MfaConfirmBody(BaseModel):
+    enroll_token: str = Field(min_length=1, max_length=4096)
+    code: str = Field(min_length=6, max_length=16)
+
+
+class MfaDisableBody(BaseModel):
+    code: str = Field(min_length=6, max_length=16)
 
 
 class CreateUserBody(BaseModel):
@@ -154,10 +168,73 @@ async def login(body: LoginBody, response: Response) -> dict[str, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Auth store unavailable",
         ) from exc
+
+    if user.mfa_enabled and user.mfa_secret:
+        # Password ok but MFA required: do not set the real session cookie yet.
+        token = mfa.mint_login_pending(user.username)
+        return {
+            "status": "mfa_required",
+            "mfa_token": token,
+            "username": user.username,
+        }
+
     auth.set_session_cookie(response, user.username)
     # First-boot plaintext lives only under /root (root:root 0600). Console cannot
     # unlink it itself — ask privhelperd after a successful *local* login. Never
     # block login if cleanup fails (helper down / busy race).
+    if user.auth_type == users.AUTH_LOCAL:
+        try:
+            await _collect_privhelper(
+                proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
+                user.username,
+            )
+        except Exception:  # noqa: BLE001 — login must succeed regardless
+            pass
+    return {
+        "status": "ok",
+        "username": user.username,
+        "role": user.role,
+        "role_label": role_label(user.role),
+        "auth_type": user.auth_type,
+    }
+
+
+@app.post("/api/login/mfa")
+async def login_mfa(body: MfaLoginBody, response: Response) -> dict[str, str]:
+    try:
+        pending = mfa.read_login_pending(body.mfa_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    tid = str(pending["tid"])
+    username = str(pending["username"])
+    if mfa.login_attempts_remaining(tid) <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Too many MFA attempts. Sign in again.",
+        )
+
+    user = users.get_user(username)
+    if user is None or user.disabled or not (user.mfa_enabled and user.mfa_secret):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA challenge is no longer valid. Sign in again.",
+        )
+
+    if not mfa.verify_totp(user.mfa_secret, body.code):
+        left = mfa.register_login_failure(tid)
+        if left <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Too many MFA attempts. Sign in again.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid MFA code. {left} attempts remaining.",
+        )
+
+    mfa.clear_login_attempts(tid)
+    auth.set_session_cookie(response, user.username)
     if user.auth_type == users.AUTH_LOCAL:
         try:
             await _collect_privhelper(
@@ -182,12 +259,13 @@ def logout(response: Response) -> dict[str, str]:
 
 
 @app.get("/api/me")
-def me(user: ConsoleUser = Depends(auth.require_console_user)) -> dict[str, str]:
+def me(user: ConsoleUser = Depends(auth.require_console_user)) -> dict[str, object]:
     return {
         "username": user.username,
         "role": user.role,
         "role_label": role_label(user.role),
         "auth_type": user.auth_type,
+        "mfa_enabled": bool(user.mfa_enabled and user.mfa_secret),
     }
 
 
@@ -329,6 +407,85 @@ async def api_set_own_password(
         {"op": "set_password", "username": actor.username, "password": body.password},
     )
     return {"status": "ok"}
+
+
+@app.post("/api/me/mfa/begin")
+def api_mfa_begin(
+    actor: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, str]:
+    """Start MFA enrollment: return a fresh secret + otpauth URI (not persisted yet)."""
+    if actor.mfa_enabled and actor.mfa_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is already enabled for this account.",
+        )
+    secret = mfa.new_totp_secret()
+    token = mfa.mint_enroll_pending(actor.username, secret)
+    return {
+        "status": "ok",
+        "enroll_token": token,
+        "secret": secret,
+        "otpauth_uri": mfa.provisioning_uri(secret, actor.username),
+    }
+
+
+@app.post("/api/me/mfa/confirm")
+async def api_mfa_confirm(
+    body: MfaConfirmBody,
+    actor: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Persist MFA only after the operator proves one valid TOTP code."""
+    try:
+        secret = mfa.read_enroll_pending(body.enroll_token, expect_username=actor.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not mfa.verify_totp(secret, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid MFA code. Check the authenticator and try again.",
+        )
+    await _mutate_console_users(
+        actor.username,
+        {"op": "set_mfa", "username": actor.username, "mfa_secret": secret},
+    )
+    return {"status": "ok", "mfa_enabled": True}
+
+
+@app.post("/api/me/mfa/disable")
+async def api_mfa_disable(
+    body: MfaDisableBody,
+    actor: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Disable MFA on one's own account after proving a current code."""
+    if not (actor.mfa_enabled and actor.mfa_secret):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled for this account.",
+        )
+    if not mfa.verify_totp(actor.mfa_secret, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid MFA code.",
+        )
+    await _mutate_console_users(
+        actor.username,
+        {"op": "clear_mfa", "username": actor.username},
+    )
+    return {"status": "ok", "mfa_enabled": False}
+
+
+@app.post("/api/users/{username}/mfa/reset")
+async def api_reset_user_mfa(
+    username: str,
+    actor: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, str]:
+    """Super Admin recovery: clear another user's MFA (lost phone)."""
+    await _mutate_console_users(
+        actor.username,
+        {"op": "clear_mfa", "username": username},
+    )
+    return {"status": "ok"}
+
 
 
 # --- Wizard draft (auth required after deploy; anonymous setup before) ------

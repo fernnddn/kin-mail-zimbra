@@ -249,6 +249,15 @@ export function ConsoleChrome({
                 <Dropdown open={menuOpen} onClose={() => setMenuOpen(false)} align="right">
                   <MenuItem
                     type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      navigate("/security");
+                    }}
+                  >
+                    Security
+                  </MenuItem>
+                  <MenuItem
+                    type="button"
                     data-danger="true"
                     onClick={() => {
                       setMenuOpen(false);

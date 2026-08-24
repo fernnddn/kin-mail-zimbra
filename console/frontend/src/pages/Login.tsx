@@ -53,11 +53,14 @@ const Logo = styled.div`
 `;
 
 export default function LoginPage() {
-  const { user, loading, login } = useAuth();
+  const { user, loading, login, completeMfa } = useAuth();
   const { accepted, loading: eulaLoading } = useEula();
   const { deployed, installInProgress, loading: setupLoading } = useSetup();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaUser, setMfaUser] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -71,17 +74,43 @@ export default function LoginPage() {
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
 
-  async function onSubmit(e: FormEvent) {
+  async function onPasswordSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
     setBusy(true);
     try {
-      await login(username, password);
+      const result = await login(username, password);
+      if (result.status === "mfa_required") {
+        setMfaToken(result.mfa_token);
+        setMfaUser(result.username);
+        setCode("");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onMfaSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!mfaToken) return;
+    setError("");
+    setBusy(true);
+    try {
+      await completeMfa(mfaToken, code);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "MFA verification failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function backToPassword() {
+    setMfaToken(null);
+    setMfaUser("");
+    setCode("");
+    setError("");
   }
 
   return (
@@ -91,36 +120,82 @@ export default function LoginPage() {
           <BrandLockup />
         </Logo>
         <Card style={{ width: "100%" }}>
-          <form onSubmit={onSubmit}>
-            <CenterTitle>Welcome Back</CenterTitle>
-            <Sub>Sign in to the KIN Mail admin console</Sub>
-            {error ? <Err>{error}</Err> : null}
-            <Label htmlFor="username">Username</Label>
-            <Input
-              id="username"
-              name="username"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="username"
-              required
-              disabled={busy}
-            />
-            <Label htmlFor="password">Password</Label>
-            <PasswordInput
-              id="password"
-              name="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
-              required
-              disabled={busy}
-            />
-            <Button type="submit" loading={busy} style={{ width: "100%" }}>
-              {busy ? "Signing in…" : "Sign In"}
-            </Button>
-          </form>
+          {mfaToken ? (
+            <form onSubmit={(e) => void onMfaSubmit(e)}>
+              <CenterTitle>Authenticator code</CenterTitle>
+              <Sub>
+                Enter the 6-digit code for <strong>{mfaUser || username}</strong>
+              </Sub>
+              {error ? <Err>{error}</Err> : null}
+              <Label htmlFor="mfa_code">Authentication code</Label>
+              <Input
+                id="mfa_code"
+                name="mfa_code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="123456"
+                required
+                disabled={busy}
+                autoFocus
+              />
+              <Button type="submit" loading={busy} style={{ width: "100%" }}>
+                {busy ? "Verifying…" : "Verify"}
+              </Button>
+              <button
+                type="button"
+                onClick={backToPassword}
+                disabled={busy}
+                style={{
+                  display: "block",
+                  margin: "0.85rem auto 0",
+                  padding: 0,
+                  border: 0,
+                  background: "none",
+                  color: "inherit",
+                  font: "inherit",
+                  fontSize: "0.8rem",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                Back to password
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={(e) => void onPasswordSubmit(e)}>
+              <CenterTitle>Welcome Back</CenterTitle>
+              <Sub>Sign in to the KIN Mail admin console</Sub>
+              {error ? <Err>{error}</Err> : null}
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                name="username"
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="username"
+                required
+                disabled={busy}
+              />
+              <Label htmlFor="password">Password</Label>
+              <PasswordInput
+                id="password"
+                name="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                required
+                disabled={busy}
+              />
+              <Button type="submit" loading={busy} style={{ width: "100%" }}>
+                {busy ? "Signing in…" : "Sign In"}
+              </Button>
+            </form>
+          )}
         </Card>
         <Foot>
           <p>KIN Mail Console</p>
