@@ -172,7 +172,7 @@ export default function WizardLayout() {
   const navLocked = installInProgress || pipelineBusy;
 
   // Do not render Topology (or any step) until we know whether an install is
-  // already running — installInProgress defaults to false before the first
+  // already running - installInProgress defaults to false before the first
   // /api/setup/status response.
   if (setupLoading) {
     return <LoadingPage text="Checking setup…" />;

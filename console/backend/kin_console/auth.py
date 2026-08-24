@@ -1,4 +1,4 @@
-"""Session cookie auth — bcrypt password hash on disk, no plaintext storage."""
+"""Session cookie auth - bcrypt password hash on disk, no plaintext storage."""
 
 from __future__ import annotations
 
@@ -147,7 +147,7 @@ def require_console_user(request: Request, response: Response):
 
 @dataclass(frozen=True)
 class WizardActor:
-    """Caller for wizard endpoints — real user, or anonymous setup pre-deploy."""
+    """Caller for wizard endpoints - real user, or anonymous setup pre-deploy."""
 
     username: str
     role: str

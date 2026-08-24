@@ -61,14 +61,14 @@
         return text[:line_start] + replacement + text[end:], True
 
     as_repl = (
-        "    # For Microsoft ActiveSync — KIN Mail Z-Push\n"
+        "    # For Microsoft ActiveSync - KIN Mail Z-Push\n"
         "    location ^~ /Microsoft-Server-ActiveSync\n"
         "    {\n"
         f"        include {zroot}/nginx-zpush.conf;\n"
         "    }\n"
     )
     ad_repl = (
-        "    # Autodiscover — KIN Mail Z-Push\n"
+        "    # Autodiscover - KIN Mail Z-Push\n"
         "    location ^~ /autodiscover\n"
         "    {\n"
         f"        include {zroot}/nginx-zpush-autodiscover.conf;\n"

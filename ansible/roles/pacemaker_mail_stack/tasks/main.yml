@@ -1,7 +1,7 @@
 ---
 # LDAP/memcached need /opt/zimbra mounted. mail-drbd.yml unmounts the plain
 # LUKS volume before Pacemaker starts kin-fs, so those tasks must run AFTER
-# the service group is Started — not at the top of the play (log-26 skipped
+# the service group is Started - not at the top of the play (log-26 skipped
 # both on a "successful" HA apply).
 
 - name: Include the Corosync ring0_addr IP steps

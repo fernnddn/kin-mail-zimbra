@@ -4,7 +4,7 @@
 #
 # Installs Z-Push on the local mail node (PHP-FPM + Zimbra nginx includes).
 # Intended for the current Primary / Host A. Host B / Pacemaker HA placement
-# is an open design question — do not treat this as a cluster resource yet.
+# is an open design question - do not treat this as a cluster resource yet.
 #
 #   sudo ./07-zpush.sh
 #
@@ -53,7 +53,7 @@ echo
 say "Z-Push ${ZPUSH_VERSION} (Zimbra backend Release 75)"
 
 # -----------------------------------------------------------------------------
-# Ubuntu 24.04 ships php8.3 in universe; 22.04 (jammy) does not — only 8.1.
+# Ubuntu 24.04 ships php8.3 in universe; 22.04 (jammy) does not - only 8.1.
 # When the package is missing, pin ppa:ondrej/php by writing the deb line and
 # GPG key ourselves. Do NOT call add-apt-repository: modern launchpadlib talks
 # to Launchpad OAuth/API endpoints that time out even when curl to
@@ -97,7 +97,7 @@ fetch_ondrej_php_key_asc() {
     && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$ONDREJ_PHP_KEY_LOCAL"; then
     cp -f "$ONDREJ_PHP_KEY_LOCAL" "$dest"
     ONDREJ_PHP_KEY_SOURCE="bundled fallback (${ONDREJ_PHP_KEY_LOCAL})"
-    warn "Using bundled key copy — refresh install/lib/ondrej-php.asc if Ondřej rotates keys"
+    warn "Using bundled key copy - refresh install/lib/ondrej-php.asc if Ondřej rotates keys"
     return 0
   fi
 
@@ -178,7 +178,7 @@ write_ondrej_php_list() {
   local codename="$1" list
   list="/etc/apt/sources.list.d/ondrej-ubuntu-php-${codename}.list"
   cat > "$list" <<EOF
-# KIN Mail — ppa:ondrej/php (written by 07-zpush.sh; not add-apt-repository).
+# KIN Mail - ppa:ondrej/php (written by 07-zpush.sh; not add-apt-repository).
 # Signing key ${ONDREJ_PHP_APT_FPR} (Launchpad PPA for Ondřej Surý).
 deb [signed-by=${ONDREJ_PHP_KEYRING}] https://ppa.launchpadcontent.net/ondrej/php/ubuntu ${codename} main
 EOF
@@ -193,12 +193,12 @@ ensure_php83_apt_source() {
     return 0
   fi
 
-  info "php8.3-fpm not in current apt sources (expected on Ubuntu 22.04) — adding ppa:ondrej/php"
+  info "php8.3-fpm not in current apt sources (expected on Ubuntu 22.04) - adding ppa:ondrej/php"
   # shellcheck disable=SC1091
   . /etc/os-release
   codename="${VERSION_CODENAME:-}"
   if [ -z "$codename" ]; then
-    fail "Ubuntu VERSION_CODENAME is empty — cannot add ppa:ondrej/php"
+    fail "Ubuntu VERSION_CODENAME is empty - cannot add ppa:ondrej/php"
     exit 1
   fi
 
@@ -271,12 +271,12 @@ zpush_installed_ok() {
 install_zpush_tree() {
   say "3. Z-Push tree + Zimbra backend"
   if zpush_installed_ok && [ "${KIN_ZPUSH_FORCE_REINSTALL:-0}" != "1" ]; then
-    ok "Already at ${ZPUSH_VERSION} with Zimbra backend — configure-only (no wipe)"
+    ok "Already at ${ZPUSH_VERSION} with Zimbra backend - configure-only (no wipe)"
     return 0
   fi
 
   if [ -d "$ZPUSH_ROOT" ] && [ "${KIN_ZPUSH_FORCE_REINSTALL:-0}" = "1" ]; then
-    warn "KIN_ZPUSH_FORCE_REINSTALL=1 — wiping ${ZPUSH_ROOT}"
+    warn "KIN_ZPUSH_FORCE_REINSTALL=1 - wiping ${ZPUSH_ROOT}"
   elif [ -d "$ZPUSH_ROOT" ] && ! zpush_installed_ok; then
     warn "Incomplete/unexpected install at ${ZPUSH_ROOT}; replacing"
   fi
@@ -321,7 +321,7 @@ set_php_define() {
     val="'${value}'"
   fi
   desired="define('${key}', ${val});"
-  # Already correct — do not rewrite (keeps re-runs hash-stable).
+  # Already correct - do not rewrite (keeps re-runs hash-stable).
   if grep -Fq "$desired" "$file"; then
     return 0
   fi
@@ -371,7 +371,7 @@ configure_zpush() {
 # -----------------------------------------------------------------------------
 # Zimbra's nginx does NOT ship /etc/nginx (distro package often absent). Including
 # /etc/nginx/fastcgi_params made every zmproxy restart [emerg] and silently leave
-# the old master running — ActiveSync kept returning 404 while the stage reported OK.
+# the old master running - ActiveSync kept returning 404 while the stage reported OK.
 write_zpush_fastcgi_params() {
   local dest="${ZPUSH_ROOT}/fastcgi_params"
   local tmp
@@ -473,7 +473,7 @@ EOF
   fi
   if ! sudo -u zimbra test -r "${ZPUSH_ROOT}/nginx-zpush.conf" \
     || ! sudo -u zimbra test -r "${ZPUSH_ROOT}/fastcgi_params"; then
-    fail "zimbra still cannot read Z-Push nginx snippets — ActiveSync would 404"
+    fail "zimbra still cannot read Z-Push nginx snippets - ActiveSync would 404"
     exit 1
   fi
   rm -f "$as_tmp" "$ad_tmp"
@@ -541,14 +541,14 @@ def replace_location(text, needles, replacement):
     return text[:line_start] + replacement + text[end:], True
 
 as_repl = (
-    "    # For Microsoft ActiveSync — KIN Mail Z-Push\n"
+    "    # For Microsoft ActiveSync - KIN Mail Z-Push\n"
     "    location ^~ /Microsoft-Server-ActiveSync\n"
     "    {\n"
     f"        include {zroot}/nginx-zpush.conf;\n"
     "    }\n"
 )
 ad_repl = (
-    "    # Autodiscover — KIN Mail Z-Push\n"
+    "    # Autodiscover - KIN Mail Z-Push\n"
     "    location ^~ /autodiscover\n"
     "    {\n"
     f"        include {zroot}/nginx-zpush-autodiscover.conf;\n"
@@ -601,20 +601,20 @@ PY
 reload_proxy_if_needed() {
   say "7. Proxy reload (only if needed)"
   if [ "${SNIPPET_CHANGED:-0}" -eq 0 ] && [ "${TEMPLATE_CHANGED:-0}" -eq 0 ]; then
-    ok "No nginx changes — leaving zmproxy running (live-safe)"
+    ok "No nginx changes - leaving zmproxy running (live-safe)"
     return 0
   fi
   if [ "${KIN_ZPUSH_SKIP_PROXY_RESTART:-0}" = "1" ]; then
-    warn "Snippets/template changed but KIN_ZPUSH_SKIP_PROXY_RESTART=1 — NOT restarting"
+    warn "Snippets/template changed but KIN_ZPUSH_SKIP_PROXY_RESTART=1 - NOT restarting"
     info "Run: su - zimbra -c 'zmproxyconfgen && zmproxyctl restart' in a window"
     return 0
   fi
 
-  warn "Nginx wiring changed — regenerating config and restarting zmproxy"
+  warn "Nginx wiring changed - regenerating config and restarting zmproxy"
   kin_zimbra_unmanage
   trap kin_zimbra_remanage EXIT
   if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-zpush-confgen.out 2>&1; then
-    fail "zmproxyconfgen failed — see /tmp/kin-zpush-confgen.out"
+    fail "zmproxyconfgen failed - see /tmp/kin-zpush-confgen.out"
     kin_zimbra_remanage
     trap - EXIT
     exit 1
@@ -623,7 +623,7 @@ reload_proxy_if_needed() {
   # running while zmproxyctl can still look "OK".
   if ! sudo -u zimbra /opt/zimbra/common/sbin/nginx \
     -c /opt/zimbra/conf/nginx.conf -t >/tmp/kin-zpush-nginx-t.out 2>&1; then
-    fail "nginx -t failed after confgen — ActiveSync include broken (see /tmp/kin-zpush-nginx-t.out)"
+    fail "nginx -t failed after confgen - ActiveSync include broken (see /tmp/kin-zpush-nginx-t.out)"
     sed -n '1,40p' /tmp/kin-zpush-nginx-t.out | sed 's/^/    /'
     kin_zimbra_remanage
     trap - EXIT
@@ -632,7 +632,7 @@ reload_proxy_if_needed() {
   local master_before
   master_before=$(pgrep -o -f '/opt/zimbra/common/sbin/nginx -c' || true)
   if ! zimbra_cmd zmproxyctl restart >/tmp/kin-zpush-proxy.out 2>&1; then
-    fail "zmproxyctl restart failed — see /tmp/kin-zpush-proxy.out"
+    fail "zmproxyctl restart failed - see /tmp/kin-zpush-proxy.out"
     kin_zimbra_remanage
     trap - EXIT
     exit 1
@@ -644,7 +644,7 @@ reload_proxy_if_needed() {
   if [ -n "$emerg_hit" ]; then
     # Only fail if emerg is newer than this restart attempt (same second window is enough).
     if [ -n "$master_before" ] && [ "$master_before" = "$master_after" ]; then
-      fail "zmproxy restart did not replace nginx master (still pid ${master_after}) — likely [emerg] on new config"
+      fail "zmproxy restart did not replace nginx master (still pid ${master_after}) - likely [emerg] on new config"
       printf '%s\n' "$emerg_hit" | sed 's/^/    /'
       kin_zimbra_remanage
       trap - EXIT
@@ -688,13 +688,13 @@ ensure_throttle_safe_ip() {
 verify_activesync() {
   say "9. Verify ActiveSync endpoint"
   local hdrs code
-  # Use the real server_name — default_server is often commented out on Zimbra.
+  # Use the real server_name - default_server is often commented out on Zimbra.
   hdrs=$(curl -sk -D- -o /dev/null -X OPTIONS \
     --resolve "${MAIL_HOST}:443:127.0.0.1" \
     "https://${MAIL_HOST}/Microsoft-Server-ActiveSync" 2>/dev/null || true)
   code=$(printf '%s' "$hdrs" | awk 'toupper($0) ~ /^HTTP\//{print $2; exit}')
   if [ "$code" = "404" ]; then
-    fail "ActiveSync OPTIONS → 404 (nginx location/include not loaded — check nginx -t / nginx.log [emerg])"
+    fail "ActiveSync OPTIONS → 404 (nginx location/include not loaded - check nginx -t / nginx.log [emerg])"
     printf '%s\n' "$hdrs" | sed -n '1,20p' | sed 's/^/    /'
     exit 1
   fi
@@ -703,11 +703,11 @@ verify_activesync() {
   elif printf '%s' "$hdrs" | grep -qi 'x-z-push-version'; then
     ok "OPTIONS hits Z-Push (x-z-push-version present)"
   elif printf '%s' "$hdrs" | grep -qi 'realm="ZPush"'; then
-    ok "OPTIONS hits Z-Push (401 Basic realm=ZPush — auth required, expected)"
+    ok "OPTIONS hits Z-Push (401 Basic realm=ZPush - auth required, expected)"
   else
     # 401 without AS headers can still mean nginx→php path works
     if printf '%s' "$hdrs" | grep -qE 'HTTP/[0-9.]+ (200|401|403)'; then
-      warn "ActiveSync responded but without AS headers — check auth/backend logs"
+      warn "ActiveSync responded but without AS headers - check auth/backend logs"
       printf '%s\n' "$hdrs" | sed -n '1,15p' | sed 's/^/    /'
     else
       fail "ActiveSync OPTIONS failed (HTTP ${code:-?})"
@@ -742,6 +742,6 @@ echo
 say "Z-Push stage complete"
 ok "Tree: ${ZPUSH_ROOT} (VERSION $(tr -d '[:space:]' <"${ZPUSH_ROOT}/VERSION"))"
 ok "State/log: ${ZPUSH_STATE} / ${ZPUSH_LOGDIR}"
-info "Autodiscover DNS (CNAME/SRV) is operator-approved separately — not published by this script."
+info "Autodiscover DNS (CNAME/SRV) is operator-approved separately - not published by this script."
 info "Pacemaker HA for Z-Push remains an open question (not in kin-mail-svc)."
 exit 0

@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING DRBD — LIVE JOIN (full sync to UpToDate Primary)
+# MUTATING DRBD - LIVE JOIN (full sync to UpToDate Primary)
 # =============================================================================
 # Scenario differs from tasks 2.4/2.5:
 #   * Survivor already Primary/UpToDate and serving production mail.
@@ -40,7 +40,7 @@
 - name: Bring up the DRBD resource on the new node as Secondary
   ansible.builtin.command:
     cmd: drbdadm up {{ cluster_add_host_drbd_resource }}
-  # SAFETY: never check_mode: false — connects toward live Primary.
+  # SAFETY: never check_mode: false - connects toward live Primary.
   when:
     - not ansible_check_mode
     - drbd_live_join_status_pre.rc != 0
@@ -68,7 +68,7 @@
   ansible.builtin.debug:
     msg: >-
       --check mode: create-md / up / connect are NOT executed. This logic
-      has NEVER been tested against any host — full sync to a live Primary is
+      has NEVER been tested against any host - full sync to a live Primary is
       still a hypothesis based on official documentation, not KIN Mail lab proof.
   when: ansible_check_mode
   tags: [drbd, livejoin, connect]

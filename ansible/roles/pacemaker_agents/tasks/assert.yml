@@ -14,7 +14,7 @@
     msg: >-
       {% if pacemaker_agents_assert_copy is changed %}
       The assert helper DIFFERS or does not exist at {{ pacemaker_agents_assert_path }}
-      (Host B may not have a copy yet — the role will deploy it).
+      (Host B may not have a copy yet - the role will deploy it).
       {% else %}
       The live assert helper matches ({{ pacemaker_agents_assert_path }}).
       {% endif %}

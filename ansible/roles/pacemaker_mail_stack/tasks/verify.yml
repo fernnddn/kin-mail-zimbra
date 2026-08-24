@@ -1,6 +1,6 @@
 ---
 # Read-only probes against the live CIB / assert helper.
-# check_mode: false is intentional and LIMITED to status/constraint queries —
+# check_mode: false is intentional and LIMITED to status/constraint queries - 
 # never extend that to pcs resource create / constraint add / promote.
 
 - name: Verify the Pacemaker cluster status
@@ -115,7 +115,7 @@
   ansible.builtin.debug:
     msg: >-
       {{ pacemaker_agents_assert_path | default('/usr/local/sbin/kin-assert-no-dual-primary.sh') }}
-      does not exist on {{ inventory_hostname }} yet — role pacemaker_agents will
+      does not exist on {{ inventory_hostname }} yet - role pacemaker_agents will
       deploy it on apply; the dry-run only reports the gap (visible on lab Host B today).
   when: not pacemaker_mail_stack_assert_stat.stat.exists
   tags: [pacemaker, stack, verify]

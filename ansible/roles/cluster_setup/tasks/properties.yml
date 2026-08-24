@@ -1,6 +1,6 @@
 ---
 # Fresh cluster only. If fence_sbd already exists, leave STONITH properties
-# alone — a resume against a live fenced pair must not disable fencing.
+# alone - a resume against a live fenced pair must not disable fencing.
 - name: Check whether a fence_sbd STONITH resource already exists
   ansible.builtin.command:
     cmd: pcs stonith status

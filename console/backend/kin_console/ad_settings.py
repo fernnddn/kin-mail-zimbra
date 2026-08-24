@@ -22,7 +22,7 @@ AD_KEYS = (
     "AD_SEARCH_BIND_PASSWORD",
     "AD_BIND_DN_TEMPLATE",
     "AD_TEST_USER",
-    # AD_TEST_PASS intentionally omitted from the console mirror — login never
+    # AD_TEST_PASS intentionally omitted from the console mirror - login never
     # needs it; test credentials stay in the root-only appliance config.
 )
 
@@ -103,7 +103,7 @@ def sync_ad_env_from_kin_config(
 
     lines = [
         "# Synced from /etc/kin-mail/config for KIN Mail console AD login.",
-        "# Do not edit by hand — re-run console/bootstrap.sh or apply_wizard_draft.",
+        "# Do not edit by hand - re-run console/bootstrap.sh or apply_wizard_draft.",
     ]
     for key in AD_KEYS:
         val = values.get(key, "")

@@ -3,7 +3,7 @@
 # Shares cluster_add_host_* with cluster_survivor_replace.
 
 cluster_add_host_survivor_name: mail.gits-it.site
-# Must be overridden in inventory — previous default 10.10.40.13 is now Backup.
+# Must be overridden in inventory - previous default 10.10.40.13 is now Backup.
 cluster_add_host_survivor_address: ""
 cluster_add_host_new_name: mail3.gits-it.site
 cluster_add_host_new_address: ""
@@ -20,7 +20,7 @@ cluster_add_host_drbd_protocol: C
 cluster_add_host_drbd_sync_rate: 100M
 cluster_add_host_drbd_meta_loop_script: /usr/local/sbin/kin-drbd-meta-loop.sh
 cluster_add_host_drbd_meta_loop_unit: kin-drbd-meta-loop.service
-# Wait polls for initial sync progress (logic only — untested).
+# Wait polls for initial sync progress (logic only - untested).
 cluster_add_host_drbd_sync_retries: 3
 cluster_add_host_drbd_sync_delay: 30
 

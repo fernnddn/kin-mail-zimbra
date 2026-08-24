@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING pcs COMMANDS — LIVE CLUSTER kin-mail (PRODUCTION MX)
+# MUTATING pcs COMMANDS - LIVE CLUSTER kin-mail (PRODUCTION MX)
 # =============================================================================
 # Host A/B currently run the full production stack. Under ansible-playbook
 # --check these tasks must remain PURE dry-run:
@@ -37,7 +37,7 @@
       clone-max=2 clone-node-max=1 notify=true
       meta resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
       promoted-resource-stickiness={{ pacemaker_mail_stack_clone_stickiness }}
-  # SAFETY: never check_mode: false — create must not run during --check.
+  # SAFETY: never check_mode: false - create must not run during --check.
   run_once: true
   when:
     - pacemaker_mail_stack_drbd_cfg.rc != 0
@@ -77,7 +77,7 @@
     cmd: >-
       pcs constraint location {{ pacemaker_mail_stack_drbd_clone }}
       prefers {{ pacemaker_mail_stack_prefer_node }}={{ pacemaker_mail_stack_prefer_score }}
-  # SAFETY: never check_mode: false — constraint add must not run during --check.
+  # SAFETY: never check_mode: false - constraint add must not run during --check.
   run_once: true
   when:
     - not ansible_check_mode

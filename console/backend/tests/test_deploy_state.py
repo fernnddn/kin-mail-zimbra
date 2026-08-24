@@ -300,7 +300,7 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertFalse(self.ha_marker.exists())
 
     def test_failed_run_does_not_call_record(self) -> None:
-        """ORCH_FAILED returns before record_ha_orchestration_success — marker stays absent."""
+        """ORCH_FAILED returns before record_ha_orchestration_success - marker stays absent."""
         self._write_topology("2vm")
         self.marker.write_text("complete\n", encoding="utf-8")
         self.assertFalse(self.ha_marker.exists())

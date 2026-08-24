@@ -5,8 +5,8 @@ contains secrets (passwords travel in env vars for ansible_password). Ansible
 stdout/stderr is redacted before it is yielded to the console or written to
 the deploy transcript.
 
-join_mode=apply  — greenfield / idempotent resume of the full sequence.
-join_mode=check  — per-node package/hardening/TLS install against the wizard
+join_mode=apply - greenfield / idempotent resume of the full sequence.
+join_mode=check - per-node package/hardening/TLS install against the wizard
                    peer only; cluster-join playbooks (--check) against the
                    live Pacemaker nodelist. Never adds a non-member peer to
                    the live CIB/DRBD resource.
@@ -219,7 +219,7 @@ def render_inventory(
     data_disk: str = "",
     meta_disk: str = "",
 ) -> str:
-    """YAML inventory with env-lookup passwords — no secret values in the file."""
+    """YAML inventory with env-lookup passwords - no secret values in the file."""
     disk = (data_disk or "").strip() or "/dev/sdb1"
     meta = (meta_disk or "").strip() or "/dev/sdb2"
     if not re.fullmatch(r"/dev/[A-Za-z0-9/._+-]+", disk):
@@ -332,7 +332,7 @@ class Step:
     skip_tags: tuple[str, ...] = ()
     peer_only_on_join_check: bool = False
     # Cluster-join playbooks. join_mode=check never applies these to a
-    # non-member peer — live_join_check dry-runs them against the live pair.
+    # non-member peer - live_join_check dry-runs them against the live pair.
     cluster_join: bool = False
 
 
@@ -512,7 +512,7 @@ def resolve_cluster_vip(
     peer: OrchHost,
     monitoring: OrchHost,
 ) -> str:
-    """Floating mail VIP — must not collide with any node NIC."""
+    """Floating mail VIP - must not collide with any node NIC."""
     vip = str(draft.get("cluster_vip_ip") or config.get("CLUSTER_VIP_IP") or "").strip()
     if not valid_ipv4(vip):
         raise ValueError("Cluster VIP is missing or not IPv4 (wizard topology)")
@@ -523,7 +523,7 @@ def resolve_cluster_vip(
     }
     if vip in collisions:
         raise ValueError(
-            f"Cluster VIP {vip} is the same as {collisions[vip]} — "
+            f"Cluster VIP {vip} is the same as {collisions[vip]} - "
             "the VIP must be a dedicated unused address"
         )
     return vip
@@ -575,7 +575,7 @@ async def _stream_redacted(
 
 
 def _event_exit_code(ev: dict[str, Any]) -> int:
-    """0 is success — do not treat it as missing via `or 1`."""
+    """0 is success - do not treat it as missing via `or 1`."""
     if "exit_code" not in ev or ev.get("exit_code") is None:
         return 1
     return int(ev["exit_code"])
@@ -591,7 +591,7 @@ def _ansible_bin() -> str:
         if found and Path(found).is_file() and os.access(found, os.X_OK):
             return found
     raise FileNotFoundError(
-        "ansible-playbook not found — install ansible-core on this console host"
+        "ansible-playbook not found - install ansible-core on this console host"
     )
 
 
@@ -760,7 +760,7 @@ async def _ssh_probe(
 
 
 # Deploy tree must exist. Privilege uses wrap_privileged_remote (NOPASSWD or
-# password sudo), matching Ansible become — do not require sudo -n here.
+# password sudo), matching Ansible become - do not require sudo -n here.
 PEER_OS_PREP_READINESS_CMD = (
     "missing=\"\"; "
     '[ -x /opt/kin-mail-deploy/install/kin-mail.sh ] || missing="${missing}deploy-tree "; '
@@ -1614,7 +1614,7 @@ async def cmd_run_ha_orchestration(
         )
     else:
         yield emit_line(
-            "DRBD data partition missing — unique blank spare disk identified; "
+            "DRBD data partition missing - unique blank spare disk identified; "
             "will auto-partition, then re-check before DRBD."
         )
 
@@ -1681,7 +1681,7 @@ async def cmd_run_ha_orchestration(
             argv.append("--check")
         argv.append(str(play))
         yield emit_line(
-            "Auto-partition: unique blank spare disk — "
+            "Auto-partition: unique blank spare disk - "
             + ("dry-run only (--check), no writes" if join_mode == "check" else "writing GPT")
         )
         yield emit_line(f"RUN {' '.join(argv)}")
@@ -1736,13 +1736,13 @@ async def cmd_run_ha_orchestration(
         if step.kind == "live_check" and join_mode != "check":
             yield emit_line(
                 f"[{index}/{total}] SKIP {step.step_id} proof=skip "
-                "(join_mode=apply — live dry-run is check-mode only)"
+                "(join_mode=apply - live dry-run is check-mode only)"
             )
             continue
         if step.kind == "remote_install" and skip_remote:
             yield emit_line(
                 f"[{index}/{total}] SKIP {step.step_id} proof=skip "
-                "(skip_remote_install=1) — OS prep + Zimbra on the new node "
+                "(skip_remote_install=1) - OS prep + Zimbra on the new node "
                 "is not run in this invocation."
             )
             continue
@@ -1774,7 +1774,7 @@ async def cmd_run_ha_orchestration(
 
         yield emit_line(
             f"[{index}/{total}] START {step.step_id}: {step.label} "
-            f"proof={proof} — {proof_why}"
+            f"proof={proof} - {proof_why}"
         )
 
         if step.kind == "remote_install":
@@ -1952,7 +1952,7 @@ async def cmd_run_ha_orchestration(
             if exit_code != 0:
                 failed_step = step.step_id
                 yield emit_line(
-                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code} — stopping. "
+                    f"[{index}/{total}] FAIL {step.step_id} exit={exit_code} - stopping. "
                     "No auto-retry, no auto-rollback.",
                     err=True,
                 )
@@ -1963,7 +1963,7 @@ async def cmd_run_ha_orchestration(
         if step.kind == "live_check":
             if not live_inv or not live_hosts:
                 yield emit_line(
-                    f"[{index}/{total}] SKIP {step.step_id} — no live Pacemaker nodelist "
+                    f"[{index}/{total}] SKIP {step.step_id} - no live Pacemaker nodelist "
                     "to dry-run against."
                 )
                 continue
@@ -1971,7 +1971,7 @@ async def cmd_run_ha_orchestration(
             os.chmod(WORK_DIR / "inventory-live.yml", 0o600)
             yield emit_line(
                 f"live dry-run inventory mail_nodes={[h.name for h in live_hosts]} "
-                f"(peer {peer.name} is NOT in this inventory — will not join it)"
+                f"(peer {peer.name} is NOT in this inventory - will not join it)"
             )
             meta = _live_drbd_meta_disk()
             if meta:
@@ -2004,7 +2004,7 @@ async def cmd_run_ha_orchestration(
                 if exit_code != 0:
                     failed_step = f"{step.step_id}:{play.name}"
                     yield emit_line(
-                        f"[{index}/{total}] FAIL {failed_step} exit={exit_code} — stopping. "
+                        f"[{index}/{total}] FAIL {failed_step} exit={exit_code} - stopping. "
                         "No auto-retry, no auto-rollback.",
                         err=True,
                     )
@@ -2054,7 +2054,7 @@ async def cmd_run_ha_orchestration(
             failed_step = step.step_id
             yield emit_line(
                 f"[{index}/{total}] FAIL {step.step_id} playbook={play.name} "
-                f"exit={exit_code} — stopping. No auto-retry, no auto-rollback.",
+                f"exit={exit_code} - stopping. No auto-retry, no auto-rollback.",
                 err=True,
             )
             break

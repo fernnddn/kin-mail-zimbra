@@ -1,4 +1,4 @@
-"""Fixed whitelist command implementations — no client-supplied argv/shell."""
+"""Fixed whitelist command implementations - no client-supplied argv/shell."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from .deploy_state import (
 # Deploy tree on appliance (kin-mail.sh default). Override via env for lab clones.
 DEPLOY_DIR = Path(os.environ.get("KIN_MAIL_DEPLOY_DIR", "/opt/kin-mail-deploy"))
 
-# Basename only — resolved under DEPLOY_DIR; never take a path from the client.
+# Basename only - resolved under DEPLOY_DIR; never take a path from the client.
 HARDENING_CANDIDATES = (
     "install/09-hardening.sh",
     "09-hardening.sh",
@@ -210,7 +210,7 @@ async def _watch_log_file(
 
     Starts at EOF so a leftover log from a prior run is not dumped. In-place
     truncate (03's `: > $LOG`) resets to offset 0. If truncate and the first
-    new writes happen between polls, the file head no longer matches — restart
+    new writes happen between polls, the file head no longer matches - restart
     from offset 0 rather than seeking into the middle of zmsetup output. A
     replaced inode (perl -i scrub) is treated as already-seen (new EOF) so the
     wizard does not replay the whole apply phase.
@@ -548,7 +548,7 @@ async def cmd_get_status() -> AsyncIterator[dict[str, Any]]:
             overall_ok = False
             yield proto.event_stdout(f"(exit {code})\n")
 
-    # Local HTTPS probes only — no lab IPs hardcoded; VIP may or may not be on this host.
+    # Local HTTPS probes only - no lab IPs hardcoded; VIP may or may not be on this host.
     yield proto.event_stdout("\n--- https probe ---\n")
     console_port = os.environ.get("CONSOLE_PORT", "9443")
     for label, argv in (
@@ -586,10 +586,10 @@ async def cmd_get_status() -> AsyncIterator[dict[str, Any]]:
 
 
 async def cmd_run_hardening_status() -> AsyncIterator[dict[str, Any]]:
-    """Stream `09-hardening.sh --status` (STATUS_ONLY=1 — read-only show_status + exit)."""
+    """Stream `09-hardening.sh --status` (STATUS_ONLY=1 - read-only show_status + exit)."""
     script = resolve_hardening()
     yield proto.event_stdout(f"Running fixed script: {script} --status\n")
-    # Fixed argv only — --status is not client-supplied. stdbuf -oL for true line streaming
+    # Fixed argv only - --status is not client-supplied. stdbuf -oL for true line streaming
     # through the pipe (bash would otherwise block-buffer when stdout is not a TTY).
     argv = [str(script), "--status"]
     if shutil.which("stdbuf"):
@@ -599,7 +599,7 @@ async def cmd_run_hardening_status() -> AsyncIterator[dict[str, Any]]:
 
 
 async def cmd_run_hardening() -> AsyncIterator[dict[str, Any]]:
-    """Stream full `09-hardening.sh` (idempotent Part A — no client argv)."""
+    """Stream full `09-hardening.sh` (idempotent Part A - no client argv)."""
     script = resolve_hardening()
     yield proto.event_stdout(f"Running fixed script: {script} (full Part A)\n")
     argv = [str(script)]
@@ -702,7 +702,7 @@ async def cmd_get_deploy_log(_args: dict[str, Any] | None = None) -> AsyncIterat
     yield proto.event_stdout(f"=== last deploy log: {DEPLOY_LAST_LOG} ===\n")
     if not DEPLOY_LAST_LOG.is_file():
         yield proto.event_stdout(
-            "(no deploy log yet — start Deploy from the wizard, then reopen View logs)\n"
+            "(no deploy log yet - start Deploy from the wizard, then reopen View logs)\n"
         )
         yield proto.event_done(0)
         return

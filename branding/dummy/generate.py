@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate clearly-fake KIN dummy brand PNGs and a favicon (stdlib only).
 
-These assets are a Timeline 6.2 placeholder — not a customer identity.
+These assets are a Timeline 6.2 placeholder - not a customer identity.
 Regenerate with:  python3 branding/dummy/generate.py
 """
 from __future__ import annotations

@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING pcs CONSTRAINTS — LIVE CLUSTER
+# MUTATING pcs CONSTRAINTS - LIVE CLUSTER
 # Colocation/order bind the app group to Promoted DRBD. Never check_mode: false.
 # =============================================================================
 
@@ -42,7 +42,7 @@
 # Group members are created --disabled (meta target-role=Stopped on each
 # primitive) so they do not start on a Secondary before colocation exists.
 # pcs resource enable <group> only clears the group wrapper; the three
-# primitives stay Stopped (disabled) — that is the log-26 / live lab state.
+# primitives stay Stopped (disabled) - that is the log-26 / live lab state.
 # Enable the primitives themselves after constraints are in place.
 - name: Enable the kin-mail-svc primitives after constraints
   ansible.builtin.command:

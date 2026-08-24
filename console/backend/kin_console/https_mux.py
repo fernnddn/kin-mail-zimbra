@@ -77,15 +77,9 @@ _SPLICE_MAX_BUFFERED = 4 * 1024 * 1024
 def _splice(left: socket.socket, right: socket.socket) -> None:
     """Relay raw bytes between two non-blocking sockets until both sides are done.
 
-    Both sockets are non-blocking, so `recv`/`send` raise `BlockingIOError` (a
-    subclass of `OSError`) whenever the call would otherwise block — e.g. a
-    client that can't drain a large response as fast as the backend writes
-    it, which is routine under load. That must be retried, not treated as a
-    dead connection: a previous version of this function caught `OSError`
-    broadly, so a single transient `BlockingIOError` on `sendall()` tore the
-    relay down mid-response, truncating in-flight downloads (observed as
-    `ERR_CONTENT_LENGTH_MISMATCH` on the console's JS bundle while the host
-    was under heavy I/O load).
+    Buffers per direction and retries on BlockingIOError instead of treating
+    it as a dead connection, so a slow reader under load can't truncate an
+    in-flight response.
     """
     sel = selectors.DefaultSelector()
     left.setblocking(False)

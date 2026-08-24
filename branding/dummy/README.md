@@ -2,7 +2,7 @@
 
 These files prove the KIN Mail white-label **mechanism** (Timeline 6.1–6.2). They are
 intentionally fake: terracotta accent `#C45C26`, the words **KIN DUMMY BRAND**, and
-**PLACEHOLDER — NOT A CUSTOMER**.
+**PLACEHOLDER - NOT A CUSTOMER**.
 
 Do not ship this directory as a real customer identity.
 

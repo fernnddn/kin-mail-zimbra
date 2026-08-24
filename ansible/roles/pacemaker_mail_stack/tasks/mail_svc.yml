@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING pcs COMMANDS — kin-mail-svc group (PRODUCTION)
+# MUTATING pcs COMMANDS - kin-mail-svc group (PRODUCTION)
 # Same rules as drbd_clone.yml: never check_mode: false on create/group add.
 # =============================================================================
 
@@ -13,7 +13,7 @@
     fail_msg: >-
       pacemaker_mail_stack_vip_ip={{ pacemaker_mail_stack_vip_ip | default('(empty)') }}
       is unset or collides with a mail-node ansible_host. Set the VIP explicitly
-      in inventory — never reuse a node NIC address as the floating IP.
+      in inventory - never reuse a node NIC address as the floating IP.
   run_once: true
   tags: [pacemaker, stack, group]
 
@@ -64,7 +64,7 @@
       op monitor interval=30s timeout=60s
       --group {{ pacemaker_mail_stack_group }}
       --disabled
-  # SAFETY: never check_mode: false — creating this can start Zimbra on a node.
+  # SAFETY: never check_mode: false - creating this can start Zimbra on a node.
   run_once: true
   when:
     - pacemaker_mail_stack_zimbra_cfg.rc != 0
@@ -90,7 +90,7 @@
       {{ ('nic=' ~ pacemaker_mail_stack_vip_nic) if (pacemaker_mail_stack_vip_nic | length > 0) else '' }}
       --group {{ pacemaker_mail_stack_group }}
       --disabled
-  # SAFETY: never check_mode: false — would announce VIP on the network.
+  # SAFETY: never check_mode: false - would announce VIP on the network.
   run_once: true
   when:
     - pacemaker_mail_stack_vip_cfg.rc != 0

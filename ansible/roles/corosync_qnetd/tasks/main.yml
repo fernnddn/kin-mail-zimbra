@@ -1,5 +1,5 @@
 ---
-# Entry point — one include per progress-friendly step.
+# Entry point - one include per progress-friendly step.
 # Mapped from Phase 2 task 2.1 §2 (qnetd on Monitoring only).
 
 - name: Include the qnetd package installation steps

@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# Remove-host — clear a retired/unreachable mail peer from the SURVIVOR only.
+# Remove-host - clear a retired/unreachable mail peer from the SURVIVOR only.
 #
 # Uses role cluster_remove_host (extracted from cluster_survivor_replace).
 # Tolerates a completely unreachable target. Must not disturb kin-zimbra/VIP/

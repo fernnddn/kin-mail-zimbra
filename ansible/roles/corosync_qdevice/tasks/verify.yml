@@ -1,5 +1,5 @@
 ---
-# Read-only probes — check_mode: false so --check still reports live quorum.
+# Read-only probes - check_mode: false so --check still reports live quorum.
 
 - name: Verify the qdevice service is active
   ansible.builtin.command:

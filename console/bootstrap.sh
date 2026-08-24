@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail Admin Console — bootstrap
+# KIN Mail Admin Console - bootstrap
 #
 # Installs the admin console (unprivileged) and kin-mail-privhelperd (root,
-# local Unix socket only — Option B). Does not touch Zimbra/DRBD/Pacemaker
+# local Unix socket only - Option B). Does not touch Zimbra/DRBD/Pacemaker
 # config and does not run install stages.
 #
 #   sudo ./console/bootstrap.sh
@@ -58,11 +58,11 @@ restart_privhelperd_unless_installing() {
     printf '%s' "  ${YLW}[WARN]${RST}   Type CONFIRM to override: "
     IFS= read -r reply < /dev/tty || true
   else
-    warn "No TTY — refusing to restart privhelperd while a full-install or HA job is running."
+    warn "No TTY - refusing to restart privhelperd while a full-install or HA job is running."
   fi
 
   if [ "${reply}" = "CONFIRM" ]; then
-    warn "Override accepted — restarting privhelperd (the running full-install will be killed)."
+    warn "Override accepted - restarting privhelperd (the running full-install will be killed)."
     systemctl restart kin-mail-privhelperd.service
   else
     warn "Skipping privhelperd restart so the running full-install can continue."
@@ -82,7 +82,7 @@ UNIT_DST="/etc/systemd/system/kin-mail-console.service"
 PRIV_UNIT_SRC="${SCRIPT_DIR}/deploy/kin-mail-privhelperd.service"
 PRIV_UNIT_DST="/etc/systemd/system/kin-mail-privhelperd.service"
 # Keep in sync with kin_privhelper.initial_password.INITIAL_PASSWORD_FILE
-# (not /root — privhelperd ProtectHome=true cannot unlink there)
+# (not /root - privhelperd ProtectHome=true cannot unlink there)
 INITIAL_PASS_FILE="${ETC_ROOT}/initial-admin-password"
 
 need_root
@@ -129,7 +129,7 @@ install -d -o root -g root -m 755 "$ETC_ROOT"
 install -d -o "$SVC_USER" -g "$SVC_USER" -m 750 "$DATA_ROOT"
 install -d -o "$SVC_USER" -g "$SVC_USER" -m 750 "${DATA_ROOT}/tls"
 install -d -o root -g root -m 755 "$LOG_ROOT"
-# Root-owned audit log — kin-console must not be able to modify it.
+# Root-owned audit log - kin-console must not be able to modify it.
 touch "${LOG_ROOT}/privhelper.log"
 chown root:root "${LOG_ROOT}/privhelper.log"
 chmod 640 "${LOG_ROOT}/privhelper.log"
@@ -148,7 +148,7 @@ if [ -d "${SCRIPT_DIR}/frontend/dist" ]; then
   rsync -a --delete "${SCRIPT_DIR}/frontend/dist/" "${OPT_ROOT}/frontend/dist/"
   ok "Installed prebuilt frontend dist"
 else
-  fail "frontend/dist missing — build with: (cd console/frontend && npm ci && npm run build)"
+  fail "frontend/dist missing - build with: (cd console/frontend && npm ci && npm run build)"
   exit 1
 fi
 chown -R root:root "$OPT_ROOT"
@@ -156,7 +156,7 @@ chmod -R a+rX "$OPT_ROOT"
 ok "Synced to ${OPT_ROOT}"
 
 say "4b. Install pipeline tree (/opt/kin-mail-deploy)"
-# privhelperd runs with ProtectHome=true — NEVER symlink this into /home.
+# privhelperd runs with ProtectHome=true - NEVER symlink this into /home.
 DEPLOY_ROOT="${KIN_MAIL_DEPLOY_DIR:-/opt/kin-mail-deploy}"
 REPO_INSTALL="$(cd "${SCRIPT_DIR}/.." && pwd)/install"
 if [ -d "$REPO_INSTALL" ]; then
@@ -175,7 +175,7 @@ if [ -d "$REPO_INSTALL" ]; then
     exit 1
   fi
 else
-  warn "No sibling install/ next to console/ — privileged Deploy needs ${DEPLOY_ROOT}/install"
+  warn "No sibling install/ next to console/ - privileged Deploy needs ${DEPLOY_ROOT}/install"
   info "Clone the full repo (console/ + install/) or set KIN_MAIL_DEPLOY_DIR to a real tree under /opt"
 fi
 
@@ -191,7 +191,7 @@ if [ -d "$REPO_ANSIBLE/playbooks" ]; then
     "${REPO_ANSIBLE}/" "${ANSIBLE_DST}/"
   ok "Synced ansible → ${ANSIBLE_DST}"
 else
-  warn "No sibling ansible/ next to console/ — HA orchestration needs ${ANSIBLE_DST}"
+  warn "No sibling ansible/ next to console/ - HA orchestration needs ${ANSIBLE_DST}"
 fi
 need_orch_pkgs=()
 for p in ansible-core sshpass; do
@@ -270,7 +270,7 @@ SECRET_FILE="${DATA_ROOT}/session.secret"
 BOOT_PASS=""
 CONSOLE_USER="${KIN_CONSOLE_USER:-admin}"
 if [ -f "$USERS_FILE" ]; then
-  ok "users.json already present — password NOT re-printed"
+  ok "users.json already present - password NOT re-printed"
 elif [ -f "$HASH_FILE" ]; then
   KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" KIN_CONSOLE_USER="$CONSOLE_USER" \
     "${OPT_ROOT}/venv/bin/python" - <<'PY'
@@ -379,7 +379,7 @@ else
 fi
 chown -R "${SVC_USER}:${SVC_USER}" "$DATA_ROOT"
 
-say "9. systemd — privhelperd (root, Unix socket only)"
+say "9. systemd - privhelperd (root, Unix socket only)"
 install -m 644 "$PRIV_UNIT_SRC" "$PRIV_UNIT_DST"
 systemctl daemon-reload
 systemctl enable kin-mail-privhelperd.service >/dev/null
@@ -391,7 +391,7 @@ sleep 1
 if systemctl is-active --quiet kin-mail-privhelperd.service; then
   ok "kin-mail-privhelperd.service active"
 else
-  fail "privhelperd failed — journalctl -u kin-mail-privhelperd -n 80"
+  fail "privhelperd failed - journalctl -u kin-mail-privhelperd -n 80"
   journalctl -u kin-mail-privhelperd -n 40 --no-pager | sed 's/^/    /' || true
   exit 1
 fi
@@ -404,12 +404,12 @@ else
 fi
 # Confirm audit log not writable by kin-console
 if su -s /bin/bash -c "test -w ${LOG_ROOT}/privhelper.log" "$SVC_USER" 2>/dev/null; then
-  fail "privhelper.log is writable by ${SVC_USER} — abort"
+  fail "privhelper.log is writable by ${SVC_USER} - abort"
   exit 1
 fi
 ok "privhelper.log not writable by ${SVC_USER}"
 
-say "10. systemd — console (unprivileged)"
+say "10. systemd - console (unprivileged)"
 install -m 644 "$UNIT_SRC" "$UNIT_DST"
 systemctl daemon-reload
 systemctl enable kin-mail-console.service >/dev/null
@@ -418,7 +418,7 @@ sleep 2
 if systemctl is-active --quiet kin-mail-console.service; then
   ok "kin-mail-console.service active"
 else
-  fail "Service failed to start — journalctl -u kin-mail-console -n 80"
+  fail "Service failed to start - journalctl -u kin-mail-console -n 80"
   journalctl -u kin-mail-console -n 40 --no-pager | sed 's/^/    /' || true
   exit 1
 fi
@@ -427,7 +427,7 @@ main_pid=$(systemctl show -p MainPID --value kin-mail-console.service)
 if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
   proc_user=$(ps -o user= -p "$main_pid" | tr -d ' ')
   if [ "$proc_user" = "root" ]; then
-    fail "Console process runs as root — abort"
+    fail "Console process runs as root - abort"
     exit 1
   fi
   ok "Console process user: ${proc_user} (pid ${main_pid})"
@@ -453,7 +453,7 @@ info "URL : https://<this-host>:${CONSOLE_PORT}/"
 info "User: admin"
 if [ -n "$BOOT_PASS" ]; then
   echo
-  printf '%s\n' "${YLW}${BLD}ONE-TIME ADMIN PASSWORD (save now — also stored root-only until first login):${RST}"
+  printf '%s\n' "${YLW}${BLD}ONE-TIME ADMIN PASSWORD (save now - also stored root-only until first login):${RST}"
   printf '%s\n' "${BLD}${BOOT_PASS}${RST}"
   echo
   info "Retrieve later (root SSH): cat ${INITIAL_PASS_FILE}"

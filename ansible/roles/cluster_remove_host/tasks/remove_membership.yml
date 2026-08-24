@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING pcs — membership only (survivor). Tolerate unreachable peer.
+# MUTATING pcs - membership only (survivor). Tolerate unreachable peer.
 # =============================================================================
 # Official: pcs cluster node remove <node> [--force]
 # Treat "already not a member" as success. Never pcs cluster stop --all.
@@ -24,7 +24,7 @@
   register: cluster_remove_host_pcs_rm
   changed_when: cluster_remove_host_pcs_rm.rc == 0
   failed_when: false
-  # SAFETY: never check_mode: false — rewrites live corosync.conf.
+  # SAFETY: never check_mode: false - rewrites live corosync.conf.
   when:
     - not ansible_check_mode
     - cluster_remove_host_retired_name in cluster_remove_host_nodes.stdout

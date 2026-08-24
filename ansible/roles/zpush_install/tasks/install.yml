@@ -41,7 +41,7 @@
   ansible.builtin.debug:
     msg: >-
       Z-Push {{ zpush_version }} + Zimbra backend already present at
-      {{ zpush_root }} — configure-only (no wipe).
+      {{ zpush_root }} - configure-only (no wipe).
   when: not (zpush_needs_extract | bool)
   tags: [zpush, install]
 

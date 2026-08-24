@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pick a safe spare disk for DRBD data+meta GPT partitions.
 
-Stdlib only — runs on mail VMs via the drbd_disk_prep role (no kin_privhelper).
+Stdlib only - runs on mail VMs via the drbd_disk_prep role (no kin_privhelper).
 Never recommends a disk that is the OS disk, has a partition table, has a
 filesystem signature, is mounted, or is below the 20 GiB data floor.
 
@@ -247,7 +247,7 @@ def layout_ready(
         "size_human": fmt_bytes(_size(nodes.get(parent) or {})),
         "message": (
             f"DRBD layout already present: {data_disk} (data) + {meta_disk} (meta) "
-            "on {parent} — not re-partitioning."
+            "on {parent} - not re-partitioning."
         ).replace("{parent}", parent),
         "errors": [],
         "candidates": [],
@@ -332,7 +332,7 @@ def plan_auto_partition(
     if len(candidates) > 1:
         return fail(
             [
-                "more than one spare unpartitioned disk found — refusing to guess: "
+                "more than one spare unpartitioned disk found - refusing to guess: "
                 + listed
                 + f". Set KIN_DRBD_DATA_DISK to the intended data partition "
                 f"(expected parent {expected_parent})."
@@ -343,7 +343,7 @@ def plan_auto_partition(
     chosen = candidates[0]
     p1, p2 = partition_paths(str(chosen["path"]))
     msg = (
-        f"Selected {chosen['path']} ({chosen['size_human']}) — not the OS disk, "
+        f"Selected {chosen['path']} ({chosen['size_human']}) - not the OS disk, "
         f"no partition table, no filesystem signature, not mounted, "
         f"≥{fmt_bytes(MIN_DISK_BYTES)}. Will GPT-partition "
         f"{p1} (data, remaining minus {META_MIB} MiB meta) and "

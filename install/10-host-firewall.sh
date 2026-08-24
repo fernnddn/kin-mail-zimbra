@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail - 10 HOST FIREWALL (ufw) — high risk; dead-man's switch required
+# KIN Mail - 10 HOST FIREWALL (ufw) - high risk; dead-man's switch required
 #
 # Applies ONLY after SSH key-only lockdown (09 / 7.2 Stage 1).
 #
@@ -32,7 +32,7 @@ case "${SERVER_IP:-}" in
 ${SERVER_IP}
 EOF
     CLUSTER_NET="${_a}.${_b}.${_c}.0/24"
-    # Conventional KIN Mail lab layout relative to this host's /24 — override via env if different.
+    # Conventional KIN Mail lab layout relative to this host's /24 - override via env if different.
     PEER_A="${KIN_PEER_A_IP:-${_a}.${_b}.${_c}.13}"
     PEER_B="${KIN_PEER_B_IP:-${_a}.${_b}.${_c}.12}"
     MON_IP="${KIN_MON_IP:-${_a}.${_b}.${_c}.14}"
@@ -71,7 +71,7 @@ cancel_deadman() {
       sleep 1
     fi
     if kill -0 "$pid" 2>/dev/null; then
-      fail "Dead-man PID ${pid} still alive after SIGKILL — NOT safe to assume ufw stays on"
+      fail "Dead-man PID ${pid} still alive after SIGKILL - NOT safe to assume ufw stays on"
       exit 1
     fi
     ok "Cancelled dead-man PID ${pid} (process confirmed dead)"
@@ -122,7 +122,7 @@ apply_rules() {
     exit 2
   fi
   if [ -z "$CLUSTER_NET" ]; then
-    fail "SERVER_IP unset — cannot derive cluster LAN"
+    fail "SERVER_IP unset - cannot derive cluster LAN"
     exit 2
   fi
 
@@ -139,7 +139,7 @@ apply_rules() {
 
   # Established
   ufw allow in on lo
-  # SSH — admin IPs + cluster LAN (break-glass from peers)
+  # SSH - admin IPs + cluster LAN (break-glass from peers)
   local ip
   for ip in $ADMIN_IPS; do
     ufw allow from "$ip" to any port 22 proto tcp comment 'SSH admin'
@@ -151,7 +151,7 @@ apply_rules() {
     ufw allow "$p"/tcp comment "mail public ${p}"
   done
 
-  # Admin console — NOT any (Zimbra :7071 + KIN console :CONSOLE_PORT)
+  # Admin console - NOT any (Zimbra :7071 + KIN console :CONSOLE_PORT)
   CONSOLE_PORT="${CONSOLE_PORT:-${KIN_CONSOLE_PORT:-9443}}"
   for ip in $ADMIN_IPS; do
     ufw allow from "$ip" to any port 7071 proto tcp comment 'Zimbra admin admin-IP'
@@ -162,12 +162,12 @@ apply_rules() {
   done
   ufw allow from "$CLUSTER_NET" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN'
 
-  # Cluster / HA — peers + mon only (never any)
+  # Cluster / HA - peers + mon only (never any)
   # Corosync kronosnet
   ufw allow from "$PEER_A" to any port 5404:5405 proto udp comment 'corosync knet'
   ufw allow from "$PEER_B" to any port 5404:5405 proto udp comment 'corosync knet'
   ufw allow from "$MON_IP" to any port 5404:5405 proto udp comment 'corosync/mon'
-  # Also allow whole LAN for corosync in case VIP/host moves — still not internet
+  # Also allow whole LAN for corosync in case VIP/host moves - still not internet
   ufw allow from "$CLUSTER_NET" to any port 5404:5405 proto udp comment 'corosync LAN'
 
   # DRBD replication (live config uses 7788)

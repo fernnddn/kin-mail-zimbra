@@ -1,3 +1,3 @@
 ---
-# No handlers — this role enables stock corosync-qdevice without custom units.
+# No handlers - this role enables stock corosync-qdevice without custom units.
 []

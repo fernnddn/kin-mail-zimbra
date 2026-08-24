@@ -2,7 +2,7 @@
 # Greenfield 2-node Corosync/Pacemaker bootstrap.
 #
 # Sits AFTER mon-qnetd.yml (witness packages only) and BEFORE mail-qdevice.yml
-# / mail-fencing.yml — both of those need an already-formed cluster.
+# / mail-fencing.yml - both of those need an already-formed cluster.
 #
 # Idempotent: if pcs status already shows the expected two mail nodes, setup
 # is skipped. Never `pcs cluster destroy`. Never disable STONITH when fence_sbd

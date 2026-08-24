@@ -1,5 +1,5 @@
 ---
-# LDAP localhost fix from task 2.7 Stage C — values live on the shared DRBD
+# LDAP localhost fix from task 2.7 Stage C - values live on the shared DRBD
 # filesystem. Mutating zmlocalconfig is gated; read-only verify may run when
 # /opt/zimbra is mounted (Promoted node only).
 #
@@ -32,7 +32,7 @@
   ansible.builtin.debug:
     msg: >-
       {{ pacemaker_mail_stack_fs_directory }} is not mounted on
-      {{ inventory_hostname }} — skipping the LDAP assert (the values live in the
+      {{ inventory_hostname }} - skipping the LDAP assert (the values live in the
       shared store; verified on the Primary).
   when: pacemaker_mail_stack_zimbra_mnt.rc != 0
   tags: [pacemaker, stack, ldap]
@@ -46,7 +46,7 @@
       ldap_master_url={{ pacemaker_mail_stack_ldap_url }}
       zimbra_require_interprocess_security={{
       pacemaker_mail_stack_zimbra_require_interprocess_security }}"
-  # SAFETY: never check_mode: false — writes shared Zimbra config on DRBD.
+  # SAFETY: never check_mode: false - writes shared Zimbra config on DRBD.
   when:
     - not ansible_check_mode
     - pacemaker_mail_stack_zimbra_mnt.rc == 0

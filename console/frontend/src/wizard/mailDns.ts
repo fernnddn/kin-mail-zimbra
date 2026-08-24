@@ -11,7 +11,7 @@ export type MailDnsRow = {
   /** True when the value is a placeholder, not paste-ready. */
   pending: boolean;
   note?: string;
-  /** Absolute name this record lives at (hint only — do not paste as Name). */
+  /** Absolute name this record lives at (hint only - do not paste as Name). */
   fqdnHint?: string;
   mxPriority?: string;
   mxTarget?: string;
@@ -116,7 +116,7 @@ export function aRecordValue(
 
 /**
  * MX / SPF / DMARC (and A when a public IP is known) as soon as domain + mail
- * host are set. DKIM is not included — it only exists after 04-tls-dkim.sh.
+ * host are set. DKIM is not included - it only exists after 04-tls-dkim.sh.
  */
 export function preparedMailDnsRecords(opts: {
   mailDomain: string;
@@ -171,7 +171,7 @@ export function preparedMailDnsRecords(opts: {
       nameOutsideZone: !aName.inZone,
       note: aName.inZone
         ? aNote
-        : `Hostname is outside zone ${domain} — create this A in the zone that owns ${host}.`,
+        : `Hostname is outside zone ${domain} - create this A in the zone that owns ${host}.`,
     },
     {
       id: "mx",

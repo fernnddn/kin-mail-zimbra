@@ -2,7 +2,7 @@
 # Ensure quorum.device points at Monitoring (task 2.2 corosync.conf snippet).
 #
 # pcs quorum device add contacts qnetd via pcsd (:2224). Our Monitoring VM runs
-# corosync-qnetd only (no pcsd) — same as Phase 2 — so greenfield uses the
+# corosync-qnetd only (no pcsd) - same as Phase 2 - so greenfield uses the
 # Phase 2 path: TLS via certutil (tls.yml) + write quorum.device + reload.
 
 - name: Require the qnetd address before editing corosync.conf

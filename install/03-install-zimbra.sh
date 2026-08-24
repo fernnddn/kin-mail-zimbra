@@ -68,7 +68,7 @@ if [ ! -f "${ZCS_FILE}.sha256" ]; then
   }
 fi
 if [ ! -s "${ZCS_FILE}.sha256" ] || ! grep -qE '^[0-9a-fA-F]{64}[[:space:]]' "${ZCS_FILE}.sha256"; then
-  fail "Checksum file invalid (HTTP 404 body or corrupt) — ${_zcs_sum_url}"
+  fail "Checksum file invalid (HTTP 404 body or corrupt) - ${_zcs_sum_url}"
   rm -f "${ZCS_FILE}.sha256"
   exit 1
 fi
@@ -83,7 +83,7 @@ if [ ! -s "$ZCS_FILE" ]; then
 fi
 _sz=$(wc -c <"$ZCS_FILE" | tr -d ' ')
 if [ "${_sz:-0}" -lt 1000000 ]; then
-  fail "Downloaded tarball too small (${_sz} bytes) — likely a failed URL: ${_zcs_url}"
+  fail "Downloaded tarball too small (${_sz} bytes) - likely a failed URL: ${_zcs_url}"
   rm -f "$ZCS_FILE"
   exit 1
 fi
@@ -105,7 +105,7 @@ ok "Extracted to $ZDIR"
 # --- 1b. Ubuntu apt packaging key (install.sh skips keyserver when present) ---
 # Maldua FOSS install.sh (util/utilfunc.sh) for Ubuntu does NOT use
 # files.zimbra.com/downloads/ZCSKeys/zimbra-key.asc (that path is 404 as of
-# 2026-08). It expects key 9BE6ED79 in /etc/apt/trusted.gpg.d/zimbra.gpg —
+# 2026-08). It expects key 9BE6ED79 in /etc/apt/trusted.gpg.d/zimbra.gpg - 
 # fingerprint 254F9170B966D193D6BAD300D5CEF8BF9BE6ED79 (signing subkey
 # 5234D2B73B6996C7 = Mar-2025 packaging refresh, same primary cert).
 #
@@ -115,13 +115,13 @@ ok "Extracted to $ZDIR"
 # key with a writable GNUPGHOME under /tmp.
 #
 # Source order (same idea as resolving ZCS artefacts remotely first):
-#   1) Official remote — Ubuntu keyserver HTTPS (what install.sh + Zimbra's
+#   1) Official remote - Ubuntu keyserver HTTPS (what install.sh + Zimbra's
 #      Mar-2025 packaging blog use). Prefer fresh key when the network works.
-#   2) Bundled fallback — install/lib/zimbra-key.asc (committed copy of (1),
+#   2) Bundled fallback - install/lib/zimbra-key.asc (committed copy of (1),
 #      verified fingerprint on 2026-08-12). Used when remote 404/timeout/etc.
 #   3) Both fail → hard stop with a clear error (never silent sleep).
 #
-# Do NOT use files.zimbra.com/downloads/security/public.key here — that file
+# Do NOT use files.zimbra.com/downloads/security/public.key here - that file
 # is the RPM packaging key (fingerprint B8D6…0F30C305), not the Ubuntu apt key.
 #
 # Refreshing install/lib/zimbra-key.asc when Zimbra rotates packaging keys:
@@ -162,7 +162,7 @@ fetch_zimbra_apt_key_asc() {
     && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$ZIMBRA_APT_KEY_LOCAL"; then
     cp -f "$ZIMBRA_APT_KEY_LOCAL" "$dest"
     ZIMBRA_APT_KEY_SOURCE="bundled fallback (${ZIMBRA_APT_KEY_LOCAL})"
-    warn "Using bundled key copy — refresh install/lib/zimbra-key.asc when Zimbra rotates keys"
+    warn "Using bundled key copy - refresh install/lib/zimbra-key.asc when Zimbra rotates keys"
     return 0
   fi
 
@@ -388,7 +388,7 @@ tmux new-session -d -s "$SESS" -x 200 -y 50
 # Run install.sh on a real TTY (the tmux pane). Piping stdout breaks the driver:
 # bash fully-buffers when stdout is a pipe, so prompts never reach capture-pane
 # and the installer blocks forever on read. Log via pipe-pane instead (redact then tee).
-# See docs/progress/1.6-hosta-03-pipepane-fix.md — do not revert to piping install.sh.
+# See docs/progress/1.6-hosta-03-pipepane-fix.md - do not revert to piping install.sh.
 #
 # pipe-pane writes to $LOG only; this script's stdout is just driver messages
 # ("apply", prompt answers). Console SSE follows $LOG separately so the wizard
@@ -396,7 +396,7 @@ tmux new-session -d -s "$SESS" -x 200 -y 50
 #
 # Security trade-off: before this change, both the live tmux pane and $LOG went
 # through the redactor, so ADMIN_PASS never appeared in either place. With
-# pipe-pane, only $LOG is redacted — the live pane (tmux capture-pane / attach)
+# pipe-pane, only $LOG is redacted - the live pane (tmux capture-pane / attach)
 # shows the admin password in cleartext for the whole typed-password prompt
 # window (not just a flash). Accepted because the session is root-only on the
 # mail host, attach requires root, and the durable artifact operators copy off
@@ -418,7 +418,7 @@ INSTALL_STARTED=1
 installer_pane() { tmux capture-pane -p -S -80 -t "$SESS" 2>/dev/null || true; }
 installer_hist() { tmux capture-pane -p -S - -t "$SESS" 2>/dev/null || true; }
 
-# Visible pane only — do not grep 400 lines of timezone dump for menu numbers.
+# Visible pane only - do not grep 400 lines of timezone dump for menu numbers.
 # zmsetup marks unconfigured items with a "** " prefix (Admin Password is always
 # UNSET on a fresh install). TimeZone / zimbra-store are usually already set.
 menu_item_number() {
@@ -439,7 +439,7 @@ dump_installer_and_exit() {
 
 abort_invalid_selection() {
   fail "Zimbra installer rejected a menu input (Invalid selection)."
-  info "The driver sent a key the current menu does not accept — often a stale timezone index."
+  info "The driver sent a key the current menu does not accept - often a stale timezone index."
   dump_installer_and_exit
 }
 
@@ -471,7 +471,7 @@ tz_list_index() {
 }
 
 installer_failed_hard() {
-  # install.sh exited with a fatal message — do not keep sleeping on prompts.
+  # install.sh exited with a fatal message - do not keep sleeping on prompts.
   local pane
   pane="$(installer_pane)"
   printf '%s' "$pane" | grep -q "Unable to retrive Zimbra GPG key" && return 0
@@ -482,7 +482,7 @@ installer_failed_hard() {
 }
 
 installer_still_running() {
-  # install.sh is started as `./install.sh ...` from $ZDIR — argv usually does
+  # install.sh is started as `./install.sh ...` from $ZDIR - argv usually does
   # NOT contain the absolute $ZDIR path, so only match the flags we pass.
   pgrep -f "install\\.sh --platform-override --skip-activation-check" >/dev/null 2>&1
 }
@@ -510,7 +510,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ "$INSTALL_STARTED" -eq 1 ] && ! installer_still_running; then
     case "$L" in
       *"press return to exit"*|*"Configuration complete"*|*"Address unconfigured"*|*"press 'a' to apply"*|*"agree with the terms"*|*"Use Zimbra's package repository"*|*"Install zimbra-"*|*"system will be modified"*|*"Change hostname"*|*"Change domain name"*|*"Create domain:"*|*"Notify Zimbra"*)
-        # Prompt still on screen — process check can race; keep looping.
+        # Prompt still on screen - process check can race; keep looping.
         ;;
       *)
         if [ "$STAGE" = "packages" ]; then
@@ -573,7 +573,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           # Prefer the OS/wizard timezone if zmsetup lists it. Asia/Jakarta is a
           # real TZID but is not X-ZIMBRA-TZ-PRIMARY, so the menu usually omits
           # it; Asia/Bangkok is the UTC+7 fallback (same offset, no DST). Never
-          # hardcode the index — primary slots shift when timezones.ics changes.
+          # hardcode the index - primary slots shift when timezones.ics changes.
           TZIDX=""
           TZCHOSEN=""
           for cand in "$TIMEZONE" "$ZIMBRA_TZ_NAME" "Asia/Jakarta" "Asia/Bangkok"; do
@@ -621,7 +621,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
           info "Store -> Admin Password is item ${APWMENU}"
           send "$APWMENU" 3
           tmux send-keys -t "$SESS" "$ADMIN_PASS" Enter; sleep 5
-          # Visible pane only — do not match an old error still in capture-pane history.
+          # Visible pane only - do not match an old error still in capture-pane history.
           PANE="$(tmux capture-pane -p -t "$SESS" 2>/dev/null || true)"
           if printf '%s\n' "$PANE" | grep -qE 'Invalid metacharater used|Invalid metacharacter used|Minimum length of'; then
             fail 'Admin password rejected by Zimbra installer -- avoid characters like ! * & $, use letters/digits and simple symbols only'

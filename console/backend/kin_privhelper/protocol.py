@@ -7,7 +7,7 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 
-# Exact whitelist — nothing else is accepted (no free-form shell).
+# Exact whitelist - nothing else is accepted (no free-form shell).
 CMD_GET_STATUS = "get_status"
 CMD_RUN_HARDENING_STATUS = "run_script:09-hardening.sh --status"
 CMD_APPLY_WIZARD_DRAFT = "apply_wizard_draft"

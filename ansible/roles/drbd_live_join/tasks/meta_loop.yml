@@ -1,6 +1,6 @@
 ---
 # Meta-loop setup mirrors drbd_resource (external meta required for empty new
-# data disk as well — same layout as production). Mutating steps gated.
+# data disk as well - same layout as production). Mutating steps gated.
 
 - name: Prepare the DRBD meta image directory on the new node
   ansible.builtin.file:

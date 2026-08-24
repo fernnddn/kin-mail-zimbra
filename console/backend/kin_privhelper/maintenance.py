@@ -318,7 +318,7 @@ def zimbra_started_on(crm: str, node: str) -> bool:
 
 
 async def _zmcontrol_on(node: str, addr: str, crm: str) -> tuple[bool, str]:
-    """Local zmcontrol, or crm_mon for the peer — no inter-node SSH.
+    """Local zmcontrol, or crm_mon for the peer - no inter-node SSH.
 
     Pacemaker's kin-zimbra OCF monitor already runs ``zmcontrol status``.
     Preflight also has an independent ``peer_https`` check. A dedicated SSH

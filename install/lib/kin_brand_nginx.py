@@ -13,8 +13,8 @@ import datetime
 import sys
 from pathlib import Path
 
-MARKER_BEGIN = "# KIN Mail — customer brand static assets"
-MARKER_END = "# KIN Mail — end customer brand"
+MARKER_BEGIN = "# KIN Mail - customer brand static assets"
+MARKER_END = "# KIN Mail - end customer brand"
 
 
 def location_block(snippet_path: str) -> str:

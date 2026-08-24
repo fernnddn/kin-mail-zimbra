@@ -56,6 +56,6 @@
   ansible.builtin.debug:
     msg: >-
       remove-host verify skipped under --check/syntax-only. Live proof requires
-      a blank/replace scenario — do not run against healthy production A/B.
+      a blank/replace scenario - do not run against healthy production A/B.
   when: ansible_check_mode
   tags: [cluster, remove_host, verify]

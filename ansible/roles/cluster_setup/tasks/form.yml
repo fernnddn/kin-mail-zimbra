@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING — pcs cluster setup / start / enable
+# MUTATING - pcs cluster setup / start / enable
 # Never check_mode: false. Never pcs cluster destroy / --overwrite.
 # =============================================================================
 
@@ -10,7 +10,7 @@
       pcs cluster setup {{ cluster_setup_name }}
       {{ groups['mail_nodes'][0] }} addr={{ hostvars[groups['mail_nodes'][0]].ansible_host }}
       {{ groups['mail_nodes'][1] }} addr={{ hostvars[groups['mail_nodes'][1]].ansible_host }}
-  # SAFETY: never check_mode: false — this writes corosync.conf + authkey.
+  # SAFETY: never check_mode: false - this writes corosync.conf + authkey.
   # Never --overwrite / --force / pcs cluster destroy.
   run_once: true
   when:

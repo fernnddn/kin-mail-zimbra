@@ -11,7 +11,7 @@
       - zpush_zimbra_root.stat.exists
       - zpush_zimbra_root.stat.isdir
     fail_msg: >-
-      Zimbra is not installed at /opt/zimbra — run the install stages first,
+      Zimbra is not installed at /opt/zimbra - run the install stages first,
       or limit this play to the Primary with /opt/zimbra mounted.
   tags: [zpush, assert]
 
@@ -26,5 +26,5 @@
     that:
       - zpush_nginx_tpl.stat.exists
     fail_msg: >-
-      Missing {{ zpush_nginx_template }} — is /opt/zimbra mounted on this node?
+      Missing {{ zpush_nginx_template }} - is /opt/zimbra mounted on this node?
   tags: [zpush, assert]

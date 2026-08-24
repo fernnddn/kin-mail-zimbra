@@ -1,4 +1,4 @@
-"""AD/LDAP bind for console login — same search/bind pattern as 06-hybrid-auth.sh.
+"""AD/LDAP bind for console login - same search/bind pattern as 06-hybrid-auth.sh.
 
 Fail closed: unreachable AD or missing config never grants access.
 Passwords are never included in exceptions or log messages.
@@ -125,7 +125,7 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
                     return AdAuthResult(
                         False,
                         "unreachable",
-                        "AD StartTLS failed — refusing cleartext LDAP bind",
+                        "AD StartTLS failed - refusing cleartext LDAP bind",
                     )
             if not conn.bind():
                 log.info("ad_auth user=%s result=fail reason=invalid_credentials", ad_username)
@@ -164,14 +164,14 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
                 return AdAuthResult(
                     False,
                     "unreachable",
-                    "AD StartTLS failed — refusing cleartext LDAP bind",
+                    "AD StartTLS failed - refusing cleartext LDAP bind",
                 )
         if not search_conn.bind():
             log.info("ad_auth user=%s result=fail reason=misconfigured search_bind", ad_username)
             return AdAuthResult(
                 False,
                 "misconfigured",
-                "AD search bind failed — check AD_SEARCH_BIND_DN in appliance config",
+                "AD search bind failed - check AD_SEARCH_BIND_DN in appliance config",
             )
 
         filt = cfg.search_filter.replace("%u", escape_filter_chars(ad_username))
@@ -205,7 +205,7 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
                 return AdAuthResult(
                     False,
                     "unreachable",
-                    "AD StartTLS failed — refusing cleartext LDAP bind",
+                    "AD StartTLS failed - refusing cleartext LDAP bind",
                 )
         if not user_conn.bind():
             log.info("ad_auth user=%s result=fail reason=invalid_credentials", ad_username)

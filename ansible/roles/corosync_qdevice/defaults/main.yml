@@ -1,5 +1,5 @@
 ---
-# Defaults — qdevice client on mail nodes (task 2.2 §1).
+# Defaults - qdevice client on mail nodes (task 2.2 §1).
 # Pair with role corosync_qnetd on the Monitoring VM.
 
 corosync_qdevice_package: corosync-qdevice

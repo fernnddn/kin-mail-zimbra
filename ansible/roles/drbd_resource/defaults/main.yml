@@ -1,5 +1,5 @@
 ---
-# Production kin-zimbra (task 2.5): EXTERNAL meta on loop — never internal meta
+# Production kin-zimbra (task 2.5): EXTERNAL meta on loop - never internal meta
 # on a populated /dev/sdb1 (internal would overwrite end of existing filesystem).
 drbd_resource_name: kin-zimbra
 drbd_resource_device: /dev/drbd0
@@ -24,7 +24,7 @@ drbd_resource_res_path: /etc/drbd.d/kin-zimbra.res
 # Names are the conventional lab FQDNs. Addresses MUST come from inventory
 # ansible_host (see tasks/resource_file.yml). Empty on purpose: the previous
 # hardcoded .13/.12 values were the old-lab mail IPs and now belong to
-# Backup / Observability — applying them would aim replication at the wrong VMs.
+# Backup / Observability - applying them would aim replication at the wrong VMs.
 drbd_resource_node_a_name: mail.gits-it.site
 drbd_resource_node_a_address: ""
 drbd_resource_node_b_name: mail2.gits-it.site

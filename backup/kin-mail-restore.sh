@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — restore a backup set onto a SCRATCH Zimbra (never a cluster node)
+# KIN Mail - restore a backup set onto a SCRATCH Zimbra (never a cluster node)
 #
 # Refuses to run if Pacemaker is active or /opt/zimbra is on DRBD. That is the
 # guard against restoring onto live Host A / Host B.
@@ -54,14 +54,14 @@ zimbra_sh() {
 
 assert_scratch() {
   if command -v pcs >/dev/null 2>&1 && systemctl is-active --quiet pacemaker 2>/dev/null; then
-    fail "Pacemaker is active — refusing restore (this looks like a cluster node)"
+    fail "Pacemaker is active - refusing restore (this looks like a cluster node)"
     exit 99
   fi
   if findmnt -n /opt/zimbra >/dev/null 2>&1; then
     src=$(findmnt -n -o SOURCE /opt/zimbra)
     case "$src" in
       *drbd*)
-        fail "/opt/zimbra is on DRBD ($src) — refusing restore onto live replica"
+        fail "/opt/zimbra is on DRBD ($src) - refusing restore onto live replica"
         exit 99
         ;;
     esac
@@ -134,9 +134,9 @@ restore_store() {
 
 apply_ldap_secrets_from_backup() {
   # Restored LDAP uses the source cluster's bind passwords. Scratch mysqld and
-  # keystore stay this VM's — only LDAP-related localconfig keys are overlaid.
+  # keystore stay this VM's - only LDAP-related localconfig keys are overlaid.
   local tar="$SET/conf/zimbra-conf.tar.gz"
-  [ -f "$tar" ] || { warn "no conf tarball — LDAP bind may fail"; return 0; }
+  [ -f "$tar" ] || { warn "no conf tarball - LDAP bind may fail"; return 0; }
   mkdir -p /tmp/kin-restore-conf
   tar -C /tmp/kin-restore-conf -xzf "$tar" conf/localconfig.xml
   python3 - <<'PY'
@@ -210,9 +210,9 @@ verify_functional() {
     echo "$marker_hit" | grep -q "$MARKER" || { fail "marker mail not found in test1: $MARKER"; return 1; }
     ok "marker mail present in test1"
   else
-    # Count inbox messages — a restored empty lab inbox is still a valid
+    # Count inbox messages - a restored empty lab inbox is still a valid
     # mailbox; operator should set KIN_MAIL_RESTORE_MARKER for a stronger bar.
-    warn "KIN_MAIL_RESTORE_MARKER unset — skipped message-body check"
+    warn "KIN_MAIL_RESTORE_MARKER unset - skipped message-body check"
   fi
   return 0
 }

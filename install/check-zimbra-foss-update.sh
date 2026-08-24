@@ -36,14 +36,14 @@ latest_url() {
     | sed -E 's/.*: *"//; s/"$//' | sort -V | tail -1
 }
 
-echo "==> KIN Mail — Zimbra FOSS patch check (${PLAT})"
+echo "==> KIN Mail - Zimbra FOSS patch check (${PLAT})"
 
 if [ -n "$ZCS_VERSION" ]; then
   echo "    configured build:  ${ZCS_VERSION}"
 elif [ -d /opt/zimbra ]; then
   echo "    installed hint:    $(su - zimbra -c 'zmcontrol -v' 2>/dev/null | head -1 || echo unknown)"
 else
-  echo "    configured build:  (none — /etc/kin-mail/config does not exist yet)"
+  echo "    configured build:  (none - /etc/kin-mail/config does not exist yet)"
 fi
 
 URL=$(latest_url)

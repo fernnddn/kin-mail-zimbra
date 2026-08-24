@@ -221,7 +221,7 @@ function DnsField({
 function DnsRow({ row, lookingUpIp }: { row: MailDnsRow; lookingUpIp?: boolean }) {
   const aPendingText = lookingUpIp
     ? "Looking up this server's public IPv4…"
-    : "Not known here yet — paste the public IPv4 from the network team (not 10.x / 192.168.x).";
+    : "Not known here yet - paste the public IPv4 from the network team (not 10.x / 192.168.x).";
   return (
     <Row>
       <Meta>
@@ -300,7 +300,7 @@ export function DnsRecordsPanel({
       <Heading>DNS records to prepare</Heading>
       <Intro>
         Paste these into zone <strong>{zone}</strong>. Host / Name is relative to that zone
-        (<code>@</code>, <code>mail</code>, <code>_dmarc</code>) — do not paste the full hostname
+        (<code>@</code>, <code>mail</code>, <code>_dmarc</code>) - do not paste the full hostname
         or the panel will create a doubled name. TTL Auto or 300. TXT content has no quotes.
       </Intro>
       <Rows>
@@ -315,7 +315,7 @@ export function DnsRecordsPanel({
       {dkimPendingNote ? (
         <Hint style={{ margin: "0.75rem 0 0" }}>
           The DKIM TXT appears here after install reaches Certificates & DKIM. Publish it as
-          soon as it shows — you do not have to wait for the last health-check step.
+          soon as it shows - you do not have to wait for the last health-check step.
         </Hint>
       ) : null}
       {aPending && !lookingUpIp ? (

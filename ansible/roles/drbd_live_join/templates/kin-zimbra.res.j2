@@ -1,5 +1,5 @@
-# KIN Mail — production Zimbra DRBD resource (task 2.5)
-# Data: {{ drbd_resource_disk }} (existing filesystem — preserve on first Primary)
+# KIN Mail - production Zimbra DRBD resource (task 2.5)
+# Data: {{ drbd_resource_disk }} (existing filesystem - preserve on first Primary)
 # Meta: EXTERNAL on {{ drbd_resource_meta_disk }} -> {{ drbd_resource_meta_img }}
 # NEVER use meta-disk internal on a populated data device.
 resource {{ drbd_resource_name }} {

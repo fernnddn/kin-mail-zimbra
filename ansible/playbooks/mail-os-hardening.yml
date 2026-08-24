@@ -2,7 +2,7 @@
 # OS-level Part A on every mail node (fail2ban + unattended-upgrades).
 #
 # Same behaviour as install/09-hardening.sh --os-only. Does NOT apply COS
-# lockout, IMAP/POP cleartext, TLS ciphers, or SMTP rates — those live in
+# lockout, IMAP/POP cleartext, TLS ciphers, or SMTP rates - those live in
 # shared LDAP/DRBD and follow the volume when a node is promoted.
 #
 # Safe on Host A (live Zimbra): no zmprov / zmproxyctl / postfix reload.

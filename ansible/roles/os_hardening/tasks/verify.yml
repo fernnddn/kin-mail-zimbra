@@ -1,5 +1,5 @@
 ---
-# Read-only probes — check_mode: false so --check still reports live state.
+# Read-only probes - check_mode: false so --check still reports live state.
 
 - name: Verify fail2ban is active
   ansible.builtin.command:

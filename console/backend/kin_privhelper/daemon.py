@@ -1,4 +1,4 @@
-"""kin-mail-privhelperd — root Unix-socket helper (Option B)."""
+"""kin-mail-privhelperd - root Unix-socket helper (Option B)."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def _audit_line(username: str, cmd: str, result: str, exit_code: int | None = No
 
 
 def _safe_exec_error(exc: BaseException) -> str:
-    """Operator-facing error text — type + message, redacted, no traceback dump."""
+    """Operator-facing error text - type + message, redacted, no traceback dump."""
     import re
 
     name = type(exc).__name__
@@ -106,7 +106,7 @@ def _prepare_socket_dir() -> None:
     try:
         gid = grp.getgrnam(SOCKET_GROUP).gr_gid
     except KeyError as exc:
-        raise SystemExit(f"Missing group {SOCKET_GROUP} — create kin-console user first") from exc
+        raise SystemExit(f"Missing group {SOCKET_GROUP} - create kin-console user first") from exc
     os.chown(SOCKET_PATH.parent, 0, gid)
     os.chmod(SOCKET_PATH.parent, 0o750)
 
@@ -201,7 +201,7 @@ def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> t
             return None, "denied_setup_after_deploy"
         if cmd not in deploy_state.SETUP_ALLOWED_COMMANDS:
             return None, "denied_setup_cmd"
-        # Pre-deploy setup identity — ops-equivalent for wizard whitelist only.
+        # Pre-deploy setup identity - ops-equivalent for wizard whitelist only.
         return rbac.ROLE_SUPER_ADMIN, None
 
     role = _role_for_username(username)
@@ -323,7 +323,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         if role is None:
             if deny_tag == "denied_setup_after_deploy":
                 msg = (
-                    "setup identity not allowed after mail is deployed — sign in"
+                    "setup identity not allowed after mail is deployed - sign in"
                 )
             elif deny_tag == "denied_setup_cmd":
                 msg = f"setup identity cannot run {cmd!r}"
@@ -332,7 +332,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                 known = _role_for_username(username) or "unknown"
                 msg = rbac.deny_message(known, cmd)
             else:
-                msg = f"unknown or disabled user {username!r} — cannot authorize {cmd}"
+                msg = f"unknown or disabled user {username!r} - cannot authorize {cmd}"
             await _send(writer, proto.event_error("denied", msg))
             _audit_line(username, cmd, deny_tag or "denied")
             return
@@ -343,7 +343,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             _audit_line(username, cmd, "denied")
             return
 
-        # Audit hint for mailbox create — never include password.
+        # Audit hint for mailbox create - never include password.
         audit_cmd = cmd
         if cmd == proto.CMD_CREATE_MAILBOX:
             op = str(args.get("op") or "create")
@@ -441,7 +441,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
                     "ok_detached" if client_gone else "ok",
                     exit_code,
                 )
-            except Exception as exc:  # noqa: BLE001 — keep daemon alive
+            except Exception as exc:  # noqa: BLE001 - keep daemon alive
                 # Disconnect during send is handled inside _drive_handler.
                 # Reaching here means the privileged job itself failed.
                 log.exception("privileged command failed cmd=%s user=%s", audit_cmd, username)

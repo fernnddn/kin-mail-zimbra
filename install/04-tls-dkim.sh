@@ -3,9 +3,9 @@
 # KIN Mail - 04 TLS + DKIM
 #
 # Issues or installs a TLS certificate according to TLS_METHOD from config:
-#   cloudflare — Let's Encrypt DNS-01 via Cloudflare API (auto-renewable)
-#   manual     — Let's Encrypt DNS-01 interactive (operator creates TXT)
-#   customer   — skip certbot; document zmcertmgr install of customer files
+#   cloudflare - Let's Encrypt DNS-01 via Cloudflare API (auto-renewable)
+#   manual - Let's Encrypt DNS-01 interactive (operator creates TXT)
+#   customer - skip certbot; document zmcertmgr install of customer files
 #
 # Then generates the DKIM key and prints the record to publish.
 #
@@ -165,7 +165,7 @@ chown zimbra:zimbra /opt/zimbra/ssl/zimbra/commercial/commercial.key
 chmod 640 /opt/zimbra/ssl/zimbra/commercial/commercial.key
 
 if pcs_has_kin_zimbra; then
-  logger -t kin-mail "kin-zimbra is Pacemaker-managed — unmanage --monitor before cert deploy/restart"
+  logger -t kin-mail "kin-zimbra is Pacemaker-managed - unmanage --monitor before cert deploy/restart"
   # Without --monitor, the 30s OCF probe still fires during zmcontrol restart,
   # marks FAILED, and Pacemaker stops later group members (kin-vip). Proxy-only
   # restarts in 09/11 are short enough to often dodge that window; full restart is not.
@@ -301,7 +301,7 @@ tls_cloudflare() {
 
 # --- Manual DNS-01 (any provider) --------------------------------------------
 tls_manual() {
-  warn "TLS_METHOD=manual — renewal is NOT automatic."
+  warn "TLS_METHOD=manual - renewal is NOT automatic."
   warn "certbot --manual requires a human at the terminal for each issue/renew,"
   warn "unless a provider-specific --manual-auth-hook is added later."
   info "Do not rely on cron 'certbot renew' for this mode."
@@ -346,7 +346,7 @@ printf '%s\n' "Value     : ${CERTBOT_VALIDATION}" | tee -a /tmp/kin-mail-acme-ch
 printf '%s\n' "Waiting up to 25 minutes for public DNS (1.1.1.1 + 8.8.8.8)…" | tee -a /tmp/kin-mail-acme-challenge.txt
 # Slow DNS panels (e.g. legacy Rumahweb) can leave resolvers split for several
 # minutes. Let's Encrypt multi-perspective validation fails if any vantage still
-# sees a previous TXT — so require both public resolvers, then hold before exit.
+# sees a previous TXT - so require both public resolvers, then hold before exit.
 _seen_cf=0
 for _i in $(seq 1 150); do
   if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @1.1.1.1 2>/dev/null \
@@ -354,7 +354,7 @@ for _i in $(seq 1 150); do
     _seen_cf=1
     if dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @8.8.8.8 2>/dev/null \
          | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
-      echo "TXT visible on 1.1.1.1 and 8.8.8.8 — holding 2 minutes for LE vantage points…" \
+      echo "TXT visible on 1.1.1.1 and 8.8.8.8 - holding 2 minutes for LE vantage points…" \
         | tee -a /tmp/kin-mail-acme-challenge.txt
       sleep 120
       # Re-check after hold (catch mid-propagation flip back to a stale token).
@@ -362,12 +362,12 @@ for _i in $(seq 1 150); do
            | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null \
          && dig +short TXT "_acme-challenge.${CERTBOT_DOMAIN}" @8.8.8.8 2>/dev/null \
            | grep -F "\"${CERTBOT_VALIDATION}\"" >/dev/null; then
-        echo "TXT still correct after hold — proceeding" | tee -a /tmp/kin-mail-acme-challenge.txt
+        echo "TXT still correct after hold - proceeding" | tee -a /tmp/kin-mail-acme-challenge.txt
         exit 0
       fi
-      echo "TXT changed during hold — keep waiting…" | tee -a /tmp/kin-mail-acme-challenge.txt
+      echo "TXT changed during hold - keep waiting…" | tee -a /tmp/kin-mail-acme-challenge.txt
     elif [ "$_seen_cf" -eq 1 ]; then
-      echo "TXT on 1.1.1.1 but not yet on 8.8.8.8 — keep waiting…" \
+      echo "TXT on 1.1.1.1 but not yet on 8.8.8.8 - keep waiting…" \
         | tee -a /tmp/kin-mail-acme-challenge.txt
     fi
   fi
@@ -411,7 +411,7 @@ HOOK
 
 # --- Customer-provided certificate -------------------------------------------
 tls_customer() {
-  say "1. Customer certificate — certbot skipped"
+  say "1. Customer certificate - certbot skipped"
   warn "No automated issuance. Operator installs files from the customer."
   echo
   printf '%s\n' "${BLD}  MANUAL STEPS (zmcertmgr)${RST}"
@@ -434,10 +434,10 @@ tls_customer() {
 
   if [ -f /opt/zimbra/ssl/zimbra/commercial/commercial.crt ] || \
      [ -f /opt/zimbra/ssl/zimbra/server/server.crt ]; then
-    ok "Certificate found in Zimbra tree — continuing with port verification (if already deployed)"
+    ok "Certificate found in Zimbra tree - continuing with port verification (if already deployed)"
     verify_tls_ports || true
   else
-    warn "No deployed commercial cert detected — complete the steps above before production."
+    warn "No deployed commercial cert detected - complete the steps above before production."
   fi
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KIN Mail license generator — standalone, portable copy.
+"""KIN Mail license generator - standalone, portable copy.
 
 This copy has NO dependency on the KIN Mail product repo. It carries its own
 copy of the exact signing logic used by the product's verifier
@@ -8,7 +8,7 @@ between machines (macOS, Linux, Windows) and keep working, without needing a
 git checkout of the product alongside it.
 
 keys/ed25519-private.pem in this folder is the one secret that makes every
-KIN Mail license real. It must never be committed — .gitignore in this repo
+KIN Mail license real. It must never be committed - .gitignore in this repo
 blocks *.pem and licensing-generator/keys/ specifically, but treat that as a
 backstop, not the actual protection. Back this keys/ directory up somewhere
 private and durable (a password manager's file attachment, an encrypted
@@ -16,7 +16,7 @@ drive) outside of git entirely. If it's lost with no backup, no new license
 can ever be issued again for the KIN Mail product already shipped with the
 matching public key baked in (console/backend/kin_console/license_keys.py).
 
-Usage — just run it, it asks for everything one question at a time:
+Usage - just run it, it asks for everything one question at a time:
 
   ./generate.sh
 
@@ -30,7 +30,7 @@ as a flag up front, and anything you don't pass gets asked interactively:
 
   ./generate.sh issue --server-id <id> --seats 10 --type trial --days 90
 
-Every issued license is appended to license-ledger.csv next to this script —
+Every issued license is appended to license-ledger.csv next to this script - 
 that ledger is KIN's own record (company name, seats, when, for whom), never
 part of the signed license itself, and never verified or trusted by the
 product. Moving this whole folder to a new device keeps that history intact.
@@ -71,7 +71,7 @@ LEDGER_FIELDS = (
 )
 
 # --- Vendored from console/backend/kin_console/license.py. Keep byte-for-byte
-# identical to that file's canonical_payload/validate_payload/sign_payload —
+# identical to that file's canonical_payload/validate_payload/sign_payload - 
 # the product's verifier re-derives the exact same bytes and checks the
 # signature against them; any drift here would sign licenses the product
 # rejects. ---------------------------------------------------------------
@@ -198,7 +198,7 @@ def init_keys(out_dir: Path) -> None:
     print(
         "This must exactly match console/backend/kin_console/license_keys.py "
         "in the product repo. Only run this if you are deliberately rotating "
-        "the signing key (a real, rare, product-wide event) — not for normal use."
+        "the signing key (a real, rare, product-wide event) - not for normal use."
     )
 
 
@@ -219,7 +219,7 @@ def _prompt(label: str, default: str = "") -> str:
     """Ask one question. Blank answer keeps `default` if one was given.
 
     Raises SystemExit on EOF (stdin closed / not interactive) instead of
-    silently returning "" or looping forever re-asking — a script piping
+    silently returning "" or looping forever re-asking - a script piping
     input, or a shell with no terminal attached, gets a clear error instead
     of a hang or a license issued with fields it never actually answered.
     """
@@ -229,7 +229,7 @@ def _prompt(label: str, default: str = "") -> str:
     except EOFError as exc:
         raise SystemExit(
             "\nNo input available to answer that (not running in an interactive "
-            "terminal). Pass the missing value as a flag instead — see --help."
+            "terminal). Pass the missing value as a flag instead - see --help."
         ) from exc
     return raw or default
 
@@ -248,7 +248,7 @@ def _ask_required(label: str, already: str) -> str:
     while not value:
         value = _prompt(label)
         if not value:
-            print("  This is required — try again.")
+            print("  This is required - try again.")
     return value
 
 
@@ -274,7 +274,7 @@ def _ask_int(label: str, already: object, *, default: int | None = None, minimum
 
 
 def _ask_license_type(already: str) -> str:
-    """License type, picked by number from a menu — not typed.
+    """License type, picked by number from a menu - not typed.
 
     A flag (--type trial/subscription/perpetual) still works for scripted
     use and skips the menu entirely.
@@ -283,10 +283,10 @@ def _ask_license_type(already: str) -> str:
     if value in LICENSE_TYPES:
         return value
     if value:
-        print(f"  {already!r} isn't a license type — pick one below instead.\n")
+        print(f"  {already!r} isn't a license type - pick one below instead.\n")
     print("License type:")
     for i, (_key, name, note) in enumerate(TYPE_MENU, start=1):
-        print(f"  {i}) {name} — {note}")
+        print(f"  {i}) {name} - {note}")
     while True:
         raw = _prompt("Choose a number")
         if raw.isdigit() and 1 <= int(raw) <= len(TYPE_MENU):
@@ -296,7 +296,7 @@ def _ask_license_type(already: str) -> str:
 
 def _copy_to_clipboard(text: str) -> bool:
     """Best-effort clipboard copy so the operator never hand-selects the
-    token from a terminal — a wrapped multi-line selection is exactly how a
+    token from a terminal - a wrapped multi-line selection is exactly how a
     stray newline sneaks into a pasted license and breaks its signature.
     Returns True only if a copy command actually ran successfully.
     """
@@ -454,13 +454,13 @@ def main() -> None:
 
     init = sub.add_parser(
         "init-keys",
-        help="Rotate the signing key. Rare, deliberate, product-wide — not for normal use.",
+        help="Rotate the signing key. Rare, deliberate, product-wide - not for normal use.",
     )
     init.add_argument("--out-dir", type=Path, default=DEFAULT_KEY_DIR)
 
     iss = sub.add_parser(
         "issue",
-        help="Issue a license (default action — asks for anything not given as a flag)",
+        help="Issue a license (default action - asks for anything not given as a flag)",
     )
     iss.add_argument("--server-id", default="", help="Skip that prompt")
     iss.add_argument("--seats", default=None, help="Skip that prompt")
@@ -468,10 +468,10 @@ def main() -> None:
         "--type",
         default="",
         choices=("", *LICENSE_TYPES),
-        help="trial, subscription, or perpetual — skip that prompt",
+        help="trial, subscription, or perpetual - skip that prompt",
     )
     iss.add_argument(
-        "--days", type=int, default=None, help="Trial/subscription length in days — skip that prompt"
+        "--days", type=int, default=None, help="Trial/subscription length in days - skip that prompt"
     )
     iss.add_argument("--key", default="", help="Override the default keys/ed25519-private.pem")
     iss.add_argument("--company", default="", help="Customer company name (ledger only)")

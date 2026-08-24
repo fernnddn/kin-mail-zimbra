@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — host uninstaller (kin-mail-uninstall.sh)
+# KIN Mail - host uninstaller (kin-mail-uninstall.sh)
 #
 # Wipes KIN Mail stack from the host it runs on. Follows
 # docs/uninstaller_and_remove_host_design_brief.md (operator-approved):
 #
 #   --decommission   DEFAULT. Full wipe including cluster-bound network
 #                    (VIP leftovers / kin netplan snippets). SSH may drop
-#                    at the final network step — intentional when the VM
+#                    at the final network step - intentional when the VM
 #                    is about to be destroyed.
 #   --detach         Same wipe EXCEPT base management IP/SSH stay up.
 #   --dry-run        Print the plan only; mutate nothing.
@@ -42,7 +42,7 @@ usage() {
   cat <<EOF
 Usage: sudo $0 [--decommission|--detach] [--dry-run] [--help]
 
-  --decommission  Full wipe including network (DEFAULT — VM usually destroyed after)
+  --decommission  Full wipe including network (DEFAULT - VM usually destroyed after)
   --detach        Wipe stack but keep base management IP / SSH reachable
   --dry-run       Print planned actions only; do not change the system
 EOF
@@ -88,7 +88,7 @@ NET_IFACE=""
 if [ -f "$CONF" ]; then
   # shellcheck disable=SC1090
   set +u
-  # Prefer sourcing over eval — config is KEY="value" shell form.
+  # Prefer sourcing over eval - config is KEY="value" shell form.
   # shellcheck disable=SC1090
   . "$CONF" 2>/dev/null || true
   set -u
@@ -105,12 +105,12 @@ if [ "$MODE" = "decommission" ]; then
   warn "Use --detach if this host must stay reachable after wipe."
 fi
 if [ "$DRY_RUN" -eq 1 ]; then
-  warn "DRY-RUN — no mutations will be performed."
+  warn "DRY-RUN - no mutations will be performed."
 fi
 
 # -----------------------------------------------------------------------------
 stage "1/8 Stop Pacemaker/Corosync on THIS node (before config delete)"
-# Local stop only — never pcs cluster stop --all (would hit survivors).
+# Local stop only - never pcs cluster stop --all (would hit survivors).
 if systemctl is-active --quiet pacemaker 2>/dev/null || systemctl is-active --quiet corosync 2>/dev/null; then
   run_soft pcs cluster stop
   run_soft systemctl stop pacemaker
@@ -118,7 +118,7 @@ if systemctl is-active --quiet pacemaker 2>/dev/null || systemctl is-active --qu
   run_soft systemctl stop pcsd
   ok "Cluster stack stop attempted on local node"
 else
-  info "Pacemaker/Corosync not active — skip"
+  info "Pacemaker/Corosync not active - skip"
 fi
 run_soft systemctl disable pacemaker corosync pcsd 2>/dev/null
 
@@ -132,7 +132,7 @@ if [ -x /opt/zimbra/bin/zmcontrol ]; then
   fi
   ok "zmcontrol stop attempted"
 else
-  info "Zimbra not installed — skip"
+  info "Zimbra not installed - skip"
 fi
 
 # -----------------------------------------------------------------------------
@@ -168,11 +168,11 @@ if command -v ufw >/dev/null 2>&1; then
   run_soft ufw --force reset
   ok "ufw disabled/reset"
 else
-  info "ufw not present — skip"
+  info "ufw not present - skip"
 fi
 
 # fail2ban itself also guards plain SSH (install/09-hardening.sh), so don't
-# stop/disable the service — just drop the KIN-specific jail (Zimbra/Z-Push
+# stop/disable the service - just drop the KIN-specific jail (Zimbra/Z-Push
 # rules pointing at log files that no longer exist) and reload.
 FAIL2BAN_JAIL="${KIN_FAIL2BAN_JAIL_PATH:-/etc/fail2ban/jail.d/kin-mail.conf}"
 if [ -f "$FAIL2BAN_JAIL" ]; then
@@ -182,7 +182,7 @@ if [ -f "$FAIL2BAN_JAIL" ]; then
   fi
   ok "KIN fail2ban jail removed (fail2ban service left running for SSH)"
 else
-  info "No KIN fail2ban jail file — skip"
+  info "No KIN fail2ban jail file - skip"
 fi
 
 # -----------------------------------------------------------------------------
@@ -209,7 +209,7 @@ run_soft rm -rf /var/lib/pacemaker /var/lib/corosync
 run_soft rm -rf /etc/corosync/qdevice
 # SBD
 run_soft rm -f /etc/default/sbd /etc/sysconfig/sbd
-# Let's Encrypt state — includes the Cloudflare API token (CF_CREDS) and the
+# Let's Encrypt state - includes the Cloudflare API token (CF_CREDS) and the
 # zimbra-deploy renewal hook, not just certs. Remove before the cert can be
 # picked up by a stray renewal run.
 run_soft rm -rf /etc/letsencrypt
@@ -218,7 +218,7 @@ run_soft rm -rf /etc/letsencrypt
 if id zimbra >/dev/null 2>&1; then
   run_soft userdel zimbra
 fi
-# Optional package purge — best-effort; leave OS base packages if purge fails.
+# Optional package purge - best-effort; leave OS base packages if purge fails.
 if [ "$DRY_RUN" -eq 0 ]; then
   if command -v apt-get >/dev/null 2>&1; then
     info "+ apt-get purge -y zimbra-* pacemaker corosync pcs drbd-utils sbd  (best-effort)"
@@ -258,10 +258,10 @@ fi
 ok "VIP leftovers cleared (best-effort)"
 
 # -----------------------------------------------------------------------------
-stage "8/8 Network wipe (decommission only) — LAST; SSH may drop after this"
+stage "8/8 Network wipe (decommission only) - LAST; SSH may drop after this"
 if [ "$MODE" = "detach" ]; then
   info "--detach: leaving base management IP / netplan unchanged"
-  ok "Detach complete — host should remain SSH-reachable"
+  ok "Detach complete - host should remain SSH-reachable"
 elif [ "$MODE" = "decommission" ]; then
   warn "About to remove KIN-specific netplan snippets and flush non-primary extras."
   warn "If this drops your SSH session, that is expected for --decommission."
@@ -279,7 +279,7 @@ elif [ "$MODE" = "decommission" ]; then
   else
     info "+ would remove /etc/netplan/*kin* *drbd* *corosync* *vip* and netplan apply"
   fi
-  ok "Decommission network stage finished (or session dropped — check local console)"
+  ok "Decommission network stage finished (or session dropped - check local console)"
 fi
 
 echo

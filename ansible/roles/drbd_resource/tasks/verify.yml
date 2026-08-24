@@ -1,6 +1,6 @@
 ---
 # Read-only probes against the live resource. check_mode: false is intentional
-# and LIMITED to status/role queries — never extend that to create-md/up/primary.
+# and LIMITED to status/role queries - never extend that to create-md/up/primary.
 
 - name: Verify the kin-zimbra DRBD resource is attached
   ansible.builtin.command:

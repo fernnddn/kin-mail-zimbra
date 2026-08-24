@@ -5,7 +5,7 @@
 #   cp inventory/add-host.example.yml inventory/add-host.yml
 #
 # IMPORTANT: placeholder new-node addresses below are NOT a live lab VM.
-# syntax-check only — do not expect --check against these names to work until
+# syntax-check only - do not expect --check against these names to work until
 # a real blank VM exists.
 
 all:
@@ -14,7 +14,7 @@ all:
     cluster_add_host_survivor_address: 10.10.40.15
     cluster_add_host_retired_name: mail2.gits-it.site
     cluster_add_host_retired_address: 10.10.40.14
-    # NEW identity — must differ from retired Host B and from the live VIP .16.
+    # NEW identity - must differ from retired Host B and from the live VIP .16.
     cluster_add_host_new_name: mail3.gits-it.site
     cluster_add_host_new_address: 10.10.40.17
     cluster_add_host_hacluster_password: ""

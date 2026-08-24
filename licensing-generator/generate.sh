@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# KIN Mail license generator wrapper — macOS and Linux.
+# KIN Mail license generator wrapper - macOS and Linux.
 #
 # First run creates a self-contained Python virtual environment right inside
 # this folder (.venv/) so nothing is installed system-wide and this kit stays
-# fully portable — copy the whole folder to another Mac or Linux machine and
+# fully portable - copy the whole folder to another Mac or Linux machine and
 # it works the same way there.
 set -euo pipefail
 

@@ -1,7 +1,7 @@
 ---
 # Disabling systemd drbd.service is a host-local change. Under --check the
 # systemd module reports would-be changes without applying. Do not add
-# check_mode: false here — that would flip unit state on the live MX pair.
+# check_mode: false here - that would flip unit state on the live MX pair.
 
 - name: Disable the systemd drbd service so Pacemaker owns it
   ansible.builtin.systemd:
@@ -30,7 +30,7 @@
 
 # Rebuild uses external meta on a real partition (/dev/sdb2). The old lab used
 # kin-drbd-meta-loop.service (/dev/loop21). Only assert the unit when configured
-# and present — empty/absent is a documented topology difference, not a failure.
+# and present - empty/absent is a documented topology difference, not a failure.
 - name: Check whether the DRBD meta-loop unit exists on this host
   ansible.builtin.command:
     cmd: systemctl cat {{ pacemaker_agents_keep_meta_loop_unit }}

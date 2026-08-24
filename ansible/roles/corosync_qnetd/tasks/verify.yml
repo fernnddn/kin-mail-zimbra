@@ -1,7 +1,7 @@
 ---
 # Read-only probes. check_mode: false so --check still reports live status on
 # an already-configured host without mutating it. On a blank VM these asserts
-# would fail until a real (non-check) apply has been run — that is expected.
+# would fail until a real (non-check) apply has been run - that is expected.
 
 - name: Verify the qnetd service is active
   ansible.builtin.command:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — backup collector (runs on the Promoted mail node)
+# KIN Mail - backup collector (runs on the Promoted mail node)
 #
 # Invoked by kin-mail-backup.sh via SSH. Do not cron this on both mail nodes.
 # Staging is always on the root filesystem (/var/tmp), never on DRBD /opt/zimbra.
@@ -98,7 +98,7 @@ MARKER_FILE="$STAGING/MANIFEST.txt"
   echo "zimbra_version=$(zimbra_sh 'zmcontrol -v' | head -1)"
 } > "$MARKER_FILE"
 
-say "1. LDAP (zmslapcat — live-safe export, not a raw DB copy)"
+say "1. LDAP (zmslapcat - live-safe export, not a raw DB copy)"
 zimbra_sh "/opt/zimbra/libexec/zmslapcat '$STAGING/ldap'"
 zimbra_sh "/opt/zimbra/libexec/zmslapcat -c '$STAGING/ldap'"
 # Keep stable names; zmslapcat also writes timestamped copies.

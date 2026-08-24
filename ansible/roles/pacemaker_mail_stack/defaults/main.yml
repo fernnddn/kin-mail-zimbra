@@ -12,12 +12,12 @@ pacemaker_mail_stack_fs_directory: /opt/zimbra
 pacemaker_mail_stack_fs_fstype: ext4
 pacemaker_mail_stack_fs_options: noatime
 # Must be set in inventory. Empty on purpose: the previous default (10.10.40.15)
-# is Host A's node address on the rebuild lab — announcing that as a VIP would
+# is Host A's node address on the rebuild lab - announcing that as a VIP would
 # collide with the real NIC. Live lab uses 10.10.40.16.
 pacemaker_mail_stack_vip_ip: ""
 pacemaker_mail_stack_vip_cidr: "24"
 # Empty: omit nic= and let IPaddr2 pick the iface for the VIP subnet on
-# whichever node is Promoted. Never default to a lab NIC name (ens33) —
+# whichever node is Promoted. Never default to a lab NIC name (ens33) - 
 # that silently creates a VIP that cannot start on ens18/eth0/enp0s3, and
 # pinning nic= to node A's NET_IFACE breaks failover if node B differs.
 pacemaker_mail_stack_vip_nic: ""
@@ -35,7 +35,7 @@ pacemaker_mail_stack_zimbra_service_hostname: mail.gits-it.site
 pacemaker_mail_stack_zimbra_service_shortname: mail
 pacemaker_mail_stack_memcached_client_server: 127.0.0.1:11211
 pacemaker_mail_stack_dnsmasq_conf: /etc/dnsmasq.d/kin-mail.conf
-# Lab HA LDAP bind (task 2.7 Stage C blocker fix) — shared store on DRBD.
+# Lab HA LDAP bind (task 2.7 Stage C blocker fix) - shared store on DRBD.
 pacemaker_mail_stack_ldap_url: ldap://127.0.0.1:389
 pacemaker_mail_stack_ldap_keys:
   - ldap_bind_url

@@ -47,7 +47,7 @@
   ansible.builtin.debug:
     msg: >-
       {% if pacemaker_agents_ocf_copy is defined and pacemaker_agents_ocf_copy is changed %}
-      The live OCF DIFFERS or does not exist yet — the role will write
+      The live OCF DIFFERS or does not exist yet - the role will write
       {{ pacemaker_agents_ocf_path }} (run with --diff for details).
       {% else %}
       The live OCF matches the role file or the install was skipped

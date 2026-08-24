@@ -20,7 +20,7 @@
 - name: Reload Corosync after ring0_addr changes
   ansible.builtin.command:
     cmd: pcs cluster reload corosync
-  # SAFETY: never check_mode: false — live membership reload.
+  # SAFETY: never check_mode: false - live membership reload.
   when:
     - not ansible_check_mode
     - pacemaker_mail_stack_corosync_replace is changed

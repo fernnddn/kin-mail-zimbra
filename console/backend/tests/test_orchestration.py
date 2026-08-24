@@ -807,7 +807,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Requires={{ pacemaker_agents_luks_cryptsetup_unit }}", luks_dropin)
         driver = (repo / "install/kin-mail.sh").read_text(encoding="utf-8")
-        self.assertIn("07-zpush.sh failed — mail install continues", driver)
+        self.assertIn("07-zpush.sh failed - mail install continues", driver)
         self.assertNotIn('fail "Pipeline stopped at 07-zpush.sh"', driver)
         self.assertIn("11-admin-path-lockdown.sh failed - mail install continues", driver)
         self.assertNotIn('fail "Pipeline stopped at 11-admin-path-lockdown.sh"', driver)

@@ -6,7 +6,7 @@
 - name: Skip qnetd cleanup when no monitoring inventory host is defined
   ansible.builtin.debug:
     msg: >-
-      cluster_remove_host_qnetd_inventory_host unset — skipping qnetd NSS
+      cluster_remove_host_qnetd_inventory_host unset - skipping qnetd NSS
       cleanup (membership/DRBD/constraints still applied on survivor).
   when: cluster_remove_host_qnetd_inventory_host | length == 0
   tags: [cluster, remove_host, qnetd]
@@ -76,6 +76,6 @@
       qnetd NSS nicknames targeted for {{ cluster_remove_host_retired_name }}:
       {{ cluster_remove_host_nss_delete | default([]) }}.
       Empty list means no node-specific nickname existed (common with a shared
-      cluster cert) — treated as success / already clean.
+      cluster cert) - treated as success / already clean.
   when: cluster_remove_host_qnetd_inventory_host | length > 0
   tags: [cluster, remove_host, qnetd]

@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Keep in sync with console/bootstrap.sh (INITIAL_PASS_FILE).
 # Not under /root: kin-mail-privhelperd uses ProtectHome=true, which makes /root
-# read-only/empty in its mount namespace — unlink after first login would fail.
+# read-only/empty in its mount namespace - unlink after first login would fail.
 # /etc/kin-mail-console is root-owned (console has it ReadOnlyPaths); mode 0600
 # still blocks kin-console from reading the plaintext.
 INITIAL_PASSWORD_FILE = Path("/etc/kin-mail-console/initial-admin-password")

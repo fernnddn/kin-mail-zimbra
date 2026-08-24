@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail - 09 HARDENING (Part A — low risk / reversible)
+# KIN Mail - 09 HARDENING (Part A - low risk / reversible)
 #
 # Applies ONLY Part A from the Phase 7 hardening brief:
 #   1) fail2ban (SSH + Zimbra auth + Z-Push ActiveSync 401s)
@@ -115,7 +115,7 @@ show_status() {
     su - zimbra -c "zmprov gacf" 2>/dev/null | grep -E 'zimbraReverseProxySSLProtocols|zimbraReverseProxySSLCiphers' \
       | sed 's/^/    /' | head -20 || true
   else
-    info "/opt/zimbra not mounted — skip Zimbra attrs (expected on Secondary)"
+    info "/opt/zimbra not mounted - skip Zimbra attrs (expected on Secondary)"
   fi
   grep -E 'Automatic-Reboot|Allowed-Origins|Unattended-Upgrade "' /etc/apt/apt.conf.d/50unattended-upgrades /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null \
     | sed 's/^/    /' | head -20 || true
@@ -136,7 +136,7 @@ configure_fail2ban() {
   mkdir -p /etc/fail2ban/filter.d /etc/fail2ban/jail.d
 
   cat > /etc/fail2ban/filter.d/zimbra-auth.conf <<'EOF'
-# KIN Mail — Zimbra web/SOAP auth failures (mailbox.log carries oip=<client>)
+# KIN Mail - Zimbra web/SOAP auth failures (mailbox.log carries oip=<client>)
 [Definition]
 failregex = ^.*oip=<HOST>;.*authentication failed
             ^.*oip=<HOST>;.*invalid password
@@ -145,7 +145,7 @@ ignoreregex =
 EOF
 
   cat > /etc/fail2ban/filter.d/zpush-auth.conf <<'EOF'
-# KIN Mail — ActiveSync / Autodiscover HTTP 401 via Zimbra nginx access log
+# KIN Mail - ActiveSync / Autodiscover HTTP 401 via Zimbra nginx access log
 [Definition]
 failregex = ^<HOST>:\d+ .* "(?:OPTIONS|POST|GET) https?://[^"]*/(?:Microsoft-Server-ActiveSync|Autodiscover[^"]*)[^"]*" 401
 ignoreregex =
@@ -182,7 +182,7 @@ EOF
 
   # Drop-in that always wins over commented defaults in 50unattended-upgrades.
   cat > /etc/apt/apt.conf.d/52kin-mail-unattended <<'EOF'
-// KIN Mail — security origins only; never auto-reboot (HA / VIP safety).
+// KIN Mail - security origins only; never auto-reboot (HA / VIP safety).
 Unattended-Upgrade::Allowed-Origins {
         "${distro_id}:${distro_codename}-security";
         "${distro_id}ESMApps:${distro_codename}-apps-security";
@@ -202,7 +202,7 @@ EOF
 configure_lockout() {
   say "3. COS password lockout (default COS)"
   if [ ! -d /opt/zimbra ]; then
-    warn "Skipping COS lockout — /opt/zimbra not present"
+    warn "Skipping COS lockout - /opt/zimbra not present"
     return 0
   fi
   zimbra_cmd zmprov mc default \
@@ -216,7 +216,7 @@ configure_lockout() {
 configure_cleartext() {
   say "4. Disable IMAP/POP cleartext login (server attrs)"
   if [ ! -d /opt/zimbra ]; then
-    warn "Skipping cleartext attrs — /opt/zimbra not present"
+    warn "Skipping cleartext attrs - /opt/zimbra not present"
     return 0
   fi
   # Proxy already uses starttls=only (LOGINDISABLED). Align mailbox server attrs.
@@ -236,7 +236,7 @@ configure_cleartext() {
 configure_tls() {
   say "5. TLS protocols + proxy ciphers"
   if [ ! -d /opt/zimbra ]; then
-    warn "Skipping TLS — /opt/zimbra not present"
+    warn "Skipping TLS - /opt/zimbra not present"
     return 0
   fi
 
@@ -270,27 +270,27 @@ configure_tls() {
   mbproto=$(zimbra_cmd zmprov gs "$(zimbra_cmd zmhostname)" zimbraMailboxdSSLProtocols 2>/dev/null | awk '/zimbraMailboxdSSLProtocols:/{print $2}' | tr '\n' ' ')
   if ! printf '%s' "$mbproto" | grep -q 'TLSv1.3'; then
     zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" +zimbraMailboxdSSLProtocols TLSv1.3 || true
-    info "Added TLSv1.3 to zimbraMailboxdSSLProtocols (takes full effect on next mailboxd restart — not forced here)"
+    info "Added TLSv1.3 to zimbraMailboxdSSLProtocols (takes full effect on next mailboxd restart - not forced here)"
   else
     ok "mailboxd SSL protocols include TLSv1.3"
   fi
 
   if [ "$need_proxy_reload" -eq 1 ]; then
     if [ "${KIN_HARDENING_SKIP_PROXY_RESTART:-0}" = "1" ]; then
-      warn "TLS LDAP changed but KIN_HARDENING_SKIP_PROXY_RESTART=1 — not restarting zmproxy"
+      warn "TLS LDAP changed but KIN_HARDENING_SKIP_PROXY_RESTART=1 - not restarting zmproxy"
       return 0
     fi
     warn "Regenerating nginx + restarting zmproxy (kin-zimbra temporarily unmanaged)"
     kin_zimbra_unmanage
     trap kin_zimbra_remanage EXIT
     if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-hardening-confgen.out 2>&1; then
-      fail "zmproxyconfgen failed — see /tmp/kin-hardening-confgen.out"
+      fail "zmproxyconfgen failed - see /tmp/kin-hardening-confgen.out"
       kin_zimbra_remanage
       trap - EXIT
       exit 1
     fi
     if ! zimbra_cmd zmproxyctl restart >/tmp/kin-hardening-proxy.out 2>&1; then
-      fail "zmproxyctl restart failed — see /tmp/kin-hardening-proxy.out"
+      fail "zmproxyctl restart failed - see /tmp/kin-hardening-proxy.out"
       kin_zimbra_remanage
       trap - EXIT
       exit 1
@@ -319,7 +319,7 @@ configure_tls() {
 configure_smtp_rates() {
   say "6. SMTP client rate limits (Postfix / Zimbra MTA)"
   # Auth limit is a first-class LDAP attr (zmconfigd → main.cf). Connection/message
-  # rates are not mapped in stock zmconfigd.cf — set via postconf after rewrite and
+  # rates are not mapped in stock zmconfigd.cf - set via postconf after rewrite and
   # re-assert on each run so upgrades that rewrite main.cf get corrected.
   local auth="${KIN_SMTP_AUTH_RATE_LIMIT:-30}"
   local conn="${KIN_SMTP_CONN_RATE_LIMIT:-30}"
@@ -352,30 +352,30 @@ configure_smtp_rates() {
   zimbra_cmd zmlocalconfig -e "postfix_smtpd_client_message_rate_limit=${msg}"
 
   if [ "${KIN_HARDENING_SKIP_MTA_RELOAD:-0}" = "1" ]; then
-    warn "Rates updated in LDAP/localconfig but KIN_HARDENING_SKIP_MTA_RELOAD=1 — not rewriting MTA"
+    warn "Rates updated in LDAP/localconfig but KIN_HARDENING_SKIP_MTA_RELOAD=1 - not rewriting MTA"
     return 0
   fi
 
-  # Prefer configrewrite + postfix reload. Avoid zmmtactl reload — it can stop MTA
+  # Prefer configrewrite + postfix reload. Avoid zmmtactl reload - it can stop MTA
   # mid-flight on some FOSS builds without a clean restart.
   if [ "$need_rewrite" -eq 1 ] || [ "$cur_auth" != "$auth" ]; then
     if ! zimbra_cmd /opt/zimbra/libexec/configrewrite mta >/tmp/kin-hardening-mta-rewrite.out 2>&1; then
-      fail "configrewrite mta failed — see /tmp/kin-hardening-mta-rewrite.out"
+      fail "configrewrite mta failed - see /tmp/kin-hardening-mta-rewrite.out"
       exit 1
     fi
     ok "Rewrote MTA config (auth rate via zmconfigd)"
   fi
 
-  # Connection/message: not in stock zmconfigd mapping — apply directly.
+  # Connection/message: not in stock zmconfigd mapping - apply directly.
   if ! zimbra_cmd postconf -e \
     "smtpd_client_connection_rate_limit=${conn}" \
     "smtpd_client_message_rate_limit=${msg}" >/tmp/kin-hardening-postconf.out 2>&1; then
-    fail "postconf -e failed — see /tmp/kin-hardening-postconf.out"
+    fail "postconf -e failed - see /tmp/kin-hardening-postconf.out"
     exit 1
   fi
 
   if ! zimbra_cmd postfix reload >/tmp/kin-hardening-postfix-reload.out 2>&1; then
-    fail "postfix reload failed — see /tmp/kin-hardening-postfix-reload.out"
+    fail "postfix reload failed - see /tmp/kin-hardening-postfix-reload.out"
     exit 1
   fi
 
@@ -394,7 +394,7 @@ test_fail2ban_ban_unban() {
   say "7. fail2ban ban/unban smoke test (TEST-NET IP only)"
   local test_ip="203.0.113.77" admin_tok ignore_cfg
   if ! fail2ban-client status zpush-auth >/dev/null 2>&1; then
-    warn "zpush-auth jail not running — skip ban smoke test"
+    warn "zpush-auth jail not running - skip ban smoke test"
     return 0
   fi
   ignore_cfg=$(grep -E '^ignoreip[[:space:]]*=' /etc/fail2ban/jail.d/kin-mail.conf 2>/dev/null || true)
@@ -409,7 +409,7 @@ test_fail2ban_ban_unban() {
     esac
   done
   # Note: fail2ban-client banip bypasses ignoreip (operator override). Protection is
-  # log-driven Ban actions — verified live with injected auth fails in progress logs.
+  # log-driven Ban actions - verified live with injected auth fails in progress logs.
   fail2ban-client set zpush-auth banip "$test_ip" >/dev/null
   if fail2ban-client status zpush-auth 2>/dev/null | grep -q "$test_ip"; then
     ok "Banned test IP ${test_ip} in zpush-auth (non-admin still protected)"
@@ -421,7 +421,7 @@ test_fail2ban_ban_unban() {
     warn "Unban of ${test_ip} not visible yet (jail still listed it)"
     return 0
   fi
-  ok "Unbanned ${test_ip} — recovery path verified"
+  ok "Unbanned ${test_ip} - recovery path verified"
   info "Operator unban: fail2ban-client set zpush-auth unbanip <ip>"
 }
 
@@ -445,7 +445,7 @@ if [ "$OS_ONLY" -eq 1 ]; then
 fi
 
 if [ ! -d /opt/zimbra ]; then
-  fail "Zimbra tree missing — use --os-only on Secondary, or run on Primary with /opt/zimbra mounted"
+  fail "Zimbra tree missing - use --os-only on Secondary, or run on Primary with /opt/zimbra mounted"
   exit 1
 fi
 
@@ -460,5 +460,5 @@ say "Part A complete"
 if command -v pcs >/dev/null 2>&1; then
   pcs status 2>/dev/null | grep -E 'kin-zimbra|kin-vip|FAILED|Promoted' | sed 's/^/    /' || true
 fi
-if cluster_ok; then ok "Cluster web health https=200"; else warn "https check failed — investigate"; fi
+if cluster_ok; then ok "Cluster web health https=200"; else warn "https check failed - investigate"; fi
 exit 0

@@ -5,7 +5,7 @@
 #
 # Idempotency marker: kin-mail-tls-ready (touched after -M on the primary
 # and after -m on secondaries). cert9.db exists as soon as -i runs, so it
-# must not mean "fully wired" — an interrupt before -m would skip import.
+# must not mean "fully wired" - an interrupt before -m would skip import.
 # PKCS#12 may exist only on the node that ran -M until copy/-m finish.
 # Mutating steps require not ansible_check_mode (no apply on live lab).
 

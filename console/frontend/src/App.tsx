@@ -59,7 +59,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
  * Wizard only: skip login before setup is complete (incl. mid full-install).
  *
  * The moment `deployed` flips true, the backend stops accepting the
- * anonymous pre-deploy identity — but the operator is usually still looking
+ * anonymous pre-deploy identity - but the operator is usually still looking
  * at the just-finished Deploy step. Wait a grace period after that flip
  * before sending them to /login, so a real HCI/on-site install doesn't feel
  * like it yanks the screen away the instant the pipeline finishes.

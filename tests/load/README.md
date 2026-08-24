@@ -2,7 +2,7 @@
 
 Python 3 stdlib only (`imaplib` / `smtplib` / `urllib`). No extra packages.
 
-This is a **handful of concurrent sessions** against a live VIP — IMAPS login,
+This is a **handful of concurrent sessions** against a live VIP - IMAPS login,
 SMTP submission AUTH (no message send), HTTPS GET `/`, and Zimbra SOAP
 `AuthRequest`. It is not a soak or a stress-to-failure test.
 

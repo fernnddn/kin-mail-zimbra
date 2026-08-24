@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — bootstrap installer
+# KIN Mail - bootstrap installer
 #
 # Single entry point for deploying KIN Mail. Lives under install/ with the
 # stage scripts. Ensures stages are present (clone if needed), then offers a
@@ -10,9 +10,9 @@
 #
 # Override defaults when needed:
 #   KIN_MAIL_REPO_URL=…  KIN_MAIL_DEPLOY_DIR=…  sudo -E ./install/kin-mail.sh
-#   KIN_MAIL_DRY_RUN=1   — print the planned pipeline without executing stages
+#   KIN_MAIL_DRY_RUN=1 - print the planned pipeline without executing stages
 #
-# Console (non-interactive) full install — ONLY with explicit operator confirm:
+# Console (non-interactive) full install - ONLY with explicit operator confirm:
 #   sudo KIN_CONSOLE_CONFIRMED=1 ./install/kin-mail.sh --full-install
 # Skips /dev/tty y/n prompts; does NOT skip the ufw dead-man's switch.
 # Dead-man cancel is a separate operator step (CLI or console action).
@@ -35,7 +35,7 @@ need_root() {
 REPO_URL="${KIN_MAIL_REPO_URL:-https://github.com/fernnddn/kin-mail-zimbra.git}"
 DEPLOY_DIR="${KIN_MAIL_DEPLOY_DIR:-/opt/kin-mail-deploy}"
 DRY_RUN="${KIN_MAIL_DRY_RUN:-0}"
-# Set only by admin console after an explicit UI confirm — never invent a default-yes.
+# Set only by admin console after an explicit UI confirm - never invent a default-yes.
 CONSOLE_CONFIRMED="${KIN_CONSOLE_CONFIRMED:-0}"
 
 REQUIRED_SCRIPTS=(
@@ -73,7 +73,7 @@ banner() {
   printf '  %s%s┌──────────────────────────────────────────────────────────┐%s\n' "$BLD" "$BLU" "$RST"
   printf '  %s%s│%-58s│%s\n' "$BLD" "$BLU" "" "$RST"
   printf '  %s%s│  %-54s  │%s\n' "$BLD" "$BLU" "KIN Mail" "$RST"
-  printf '  %s%s│  %-54s  │%s\n' "$DIM" "$BLU" "Managed email — PT Karya Informasi Nusantara" "$RST"
+  printf '  %s%s│  %-54s  │%s\n' "$DIM" "$BLU" "Managed email - PT Karya Informasi Nusantara" "$RST"
   printf '  %s%s│%-58s│%s\n' "$BLD" "$BLU" "" "$RST"
   printf '  %s%s└──────────────────────────────────────────────────────────┘%s\n' "$BLD" "$BLU" "$RST"
   printf '\n'
@@ -169,7 +169,7 @@ run_stage() {
   hr
   echo
   if [ "$DRY_RUN" = "1" ]; then
-    info "DRY_RUN=1 — would execute: ./${script} $*"
+    info "DRY_RUN=1 - would execute: ./${script} $*"
     ok "${script} skipped (dry-run)"
     return 0
   fi
@@ -197,11 +197,11 @@ ensure_admin_ips_for_firewall() {
     return 0
   fi
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
-    fail "KIN_ADMIN_IPS is empty — cannot apply firewall from console"
+    fail "KIN_ADMIN_IPS is empty - cannot apply firewall from console"
     info "Set KIN_ADMIN_IPS via wizard (apply_wizard_draft) before run_full_install."
     return 1
   fi
-  say "KIN_ADMIN_IPS is empty — required for host firewall"
+  say "KIN_ADMIN_IPS is empty - required for host firewall"
   info "Set once in the wizard, or enter sources now (also written to ${CONF_FILE})."
   ask KIN_ADMIN_IPS "Admin source IPs/CIDRs (space-separated)" ""
   KIN_ADMIN_IPS=$(printf '%s' "$KIN_ADMIN_IPS" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
@@ -233,7 +233,7 @@ ensure_admin_ips_for_firewall() {
 run_firewall_stage_interactive() {
   echo
   hr
-  say "Host firewall (stage 10) — HIGH RISK"
+  say "Host firewall (stage 10) - HIGH RISK"
   hr
   info "Applies ufw on THIS host only (dead-man's switch always armed)."
   info "For HA: finish + verify this host before running full install / stage 10 on the peer."
@@ -248,7 +248,7 @@ run_firewall_stage_interactive() {
   fi
 
   if [ "$DRY_RUN" = "1" ]; then
-    info "DRY_RUN=1 — would prompt: apply firewall now? (default ${default_ans})"
+    info "DRY_RUN=1 - would prompt: apply firewall now? (default ${default_ans})"
     ok "10-host-firewall.sh skipped (dry-run)"
     return 0
   fi
@@ -258,21 +258,21 @@ run_firewall_stage_interactive() {
     # then continue to 11 and 05. Do not fail the whole pipeline.
     admin_ips=$(printf '%s' "${KIN_ADMIN_IPS:-}" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
     if [ -z "$admin_ips" ]; then
-      warn "Host firewall (ufw) not applied — no admin IPs configured via wizard."
+      warn "Host firewall (ufw) not applied - no admin IPs configured via wizard."
       warn "Perimeter firewall (FortiGate) remains your only protection at host level until you set Admin access IPs and re-run this stage."
       info "Console: run_script 10-host-firewall.sh apply"
       info "CLI:     sudo ./10-host-firewall.sh apply"
       return 0
     fi
-    # Console UI button is the operator confirm — never invent a silent default-yes
+    # Console UI button is the operator confirm - never invent a silent default-yes
     # for bare non-TTY runs without this flag.
-    say "KIN_CONSOLE_CONFIRMED=1 — applying firewall (console operator confirmed)"
+    say "KIN_CONSOLE_CONFIRMED=1 - applying firewall (console operator confirmed)"
     warn "Dead-man will be armed. Console will NOT auto-cancel it."
     info "After verifying SSH + cluster + mail, cancel via console or:"
     info "  sudo ./10-host-firewall.sh cancel-deadman"
   else
     if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
-      warn "Skipped 10-host-firewall.sh — host perimeter unchanged"
+      warn "Skipped 10-host-firewall.sh - host perimeter unchanged"
       info "Run later: sudo ./10-host-firewall.sh apply"
       return 0
     fi
@@ -283,12 +283,12 @@ run_firewall_stage_interactive() {
   run_stage 10-host-firewall.sh apply || return $?
 
   echo
-  say "Dead-man is armed — verify SSH + cluster, then cancel"
+  say "Dead-man is armed - verify SSH + cluster, then cancel"
   info "sudo ./10-host-firewall.sh cancel-deadman"
 
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
     # Dead-man stays armed in the background. Do not stall or fail Deploy
-    # waiting for cancel — the operator cancels from the console after SSH
+    # waiting for cancel - the operator cancels from the console after SSH
     # still works. If they never cancel, ufw reverts when the timer ends.
     warn "Dead-man stays armed. Verify SSH, then cancel from the console (or sudo ./10-host-firewall.sh cancel-deadman)."
     info "Continuing the install; ufw will auto-disable if you do not cancel in time."
@@ -297,11 +297,11 @@ run_firewall_stage_interactive() {
 
   if ask_yn "Cancel dead-man now (keep ufw enabled after your checks)?" y; then
     ./10-host-firewall.sh cancel-deadman || {
-      fail "cancel-deadman failed — ufw may auto-disable when the timer ends"
+      fail "cancel-deadman failed - ufw may auto-disable when the timer ends"
       return 1
     }
   else
-    warn "Dead-man still armed — cancel manually before the timer fires"
+    warn "Dead-man still armed - cancel manually before the timer fires"
   fi
   return 0
 }
@@ -312,9 +312,9 @@ run_full_install() {
 
   say "Full install"
   info "Stops automatically if any stage exits non-zero."
-  info "This host only — for HA, install/verify one node before the peer."
+  info "This host only - for HA, install/verify one node before the peer."
   if [ "$DRY_RUN" = "1" ]; then
-    warn "KIN_MAIL_DRY_RUN=1 — no stage will modify the system"
+    warn "KIN_MAIL_DRY_RUN=1 - no stage will modify the system"
   fi
   echo
 
@@ -366,7 +366,7 @@ run_full_install() {
     warn "/opt/zimbra missing - skipping 07-zpush.sh (expected on Secondary without mount)"
   else
     run_stage 07-zpush.sh || {
-      warn "07-zpush.sh failed — mail install continues. Re-run later: sudo ./07-zpush.sh"
+      warn "07-zpush.sh failed - mail install continues. Re-run later: sudo ./07-zpush.sh"
     }
   fi
 

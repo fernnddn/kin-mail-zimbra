@@ -15,7 +15,7 @@ need_root
 
 NGX_TPL="${NGX_TPL:-/opt/zimbra/conf/nginx/templates/nginx.conf.web.https.default.template}"
 # The actual idempotency markers live as literals inside the Python heredoc
-# below (its 'begin'/'end' vars) — a quoted heredoc can't see these anyway.
+# below (its 'begin'/'end' vars) - a quoted heredoc can't see these anyway.
 
 zimbra_cmd() {
   # shellcheck disable=SC2086
@@ -42,8 +42,8 @@ import sys
 
 tpl = Path(sys.argv[1])
 text = tpl.read_text()
-begin = "# KIN Mail — block admin UI on public HTTPS (use :7071 + ufw)"
-end = "# KIN Mail — end admin path lockdown"
+begin = "# KIN Mail - block admin UI on public HTTPS (use :7071 + ufw)"
+end = "# KIN Mail - end admin path lockdown"
 block = (
     f"    {begin}\n"
     "    location ^~ /zimbraAdmin {\n"
@@ -107,13 +107,13 @@ if [ "$NEED_RELOAD" -eq 1 ]; then
   kin_zimbra_unmanage
   trap kin_zimbra_remanage EXIT
   if ! zimbra_cmd /opt/zimbra/libexec/zmproxyconfgen >/tmp/kin-admin-lock-confgen.out 2>&1; then
-    fail "zmproxyconfgen failed — see /tmp/kin-admin-lock-confgen.out"
+    fail "zmproxyconfgen failed - see /tmp/kin-admin-lock-confgen.out"
     kin_zimbra_remanage
     trap - EXIT
     exit 1
   fi
   if ! zimbra_cmd zmproxyctl restart >/tmp/kin-admin-lock-proxy.out 2>&1; then
-    fail "zmproxyctl restart failed — see /tmp/kin-admin-lock-proxy.out"
+    fail "zmproxyctl restart failed - see /tmp/kin-admin-lock-proxy.out"
     kin_zimbra_remanage
     trap - EXIT
     exit 1
@@ -134,7 +134,7 @@ code_root=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://
 code7071=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1:7071/zimbraAdmin/ || true)
 info "443 /zimbraAdmin/ → ${code443} (expect 404)"
 info "443 / → ${code_root} (expect 200)"
-info "7071 /zimbraAdmin/ → ${code7071} (expect 200/302 — local)"
+info "7071 /zimbraAdmin/ → ${code7071} (expect 200/302 - local)"
 
 if [ "$code443" != "404" ]; then
   fail "Admin path on :443 still reachable (got ${code443})"

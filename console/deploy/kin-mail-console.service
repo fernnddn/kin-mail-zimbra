@@ -18,7 +18,7 @@ ExecStart=/opt/kin-mail-console/venv/bin/python -m kin_console
 Restart=on-failure
 RestartSec=3
 
-# Hardening — unprivileged; no extra caps
+# Hardening - unprivileged; no extra caps
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

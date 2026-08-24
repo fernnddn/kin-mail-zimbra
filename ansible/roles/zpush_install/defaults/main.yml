@@ -11,7 +11,7 @@ zpush_workdir: /var/tmp/kin-zpush
 zpush_zip_url: "https://github.com/Z-Hub/Z-Push/archive/refs/tags/{{ zpush_version }}.zip"
 zpush_backend_tgz_url: "https://downloads.sourceforge.net/project/zimbrabackend/Release75/zimbra75.tgz"
 
-# Mailbox HTTPS directly — avoid looping ActiveSync via nginx:443.
+# Mailbox HTTPS directly - avoid looping ActiveSync via nginx:443.
 zpush_zimbra_url: "https://127.0.0.1:8443"
 
 zpush_php_packages:

@@ -1,4 +1,4 @@
-"""Wizard draft store — console data dir only; never touches /etc/kin-mail/config."""
+"""Wizard draft store - console data dir only; never touches /etc/kin-mail/config."""
 
 from __future__ import annotations
 

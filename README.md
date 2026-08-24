@@ -56,7 +56,7 @@ sudo ./06-hybrid-auth.sh      # optional AD LDAP + local fallback
 sudo ./07-zpush.sh            # ActiveSync (Z-Push + Zimbra backend); optional
 sudo ./08-create-mailbox.sh   # create mailbox (shared quota gate); optional
 sudo ./09-hardening.sh        # Part A + SMTP rate limits (fail2ban / lockout / TLS / …)
-sudo ./10-host-firewall.sh apply   # ufw — needs KIN_ADMIN_IPS; dead-man armed
+sudo ./10-host-firewall.sh apply   # ufw - needs KIN_ADMIN_IPS; dead-man armed
 sudo ./11-admin-path-lockdown.sh   # block /zimbraAdmin on public :443
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
@@ -84,7 +84,7 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | Script | Purpose | Idempotent |
 |---|---|---|
 | `install/kin-mail.sh` | Bootstrap menu: ensure scripts present, full install or one stage | yes |
-| `install/00-config.sh` | Shared library and first-run wizard (not a normal entry point) | — |
+| `install/00-config.sh` | Shared library and first-run wizard (not a normal entry point) | - |
 | `install/01-preflight.sh` | Sizing, OS, conflicting services, outbound access, **SMTP egress**, DNS, PTR. Read-only. | yes |
 | `install/02-prepare-os.sh` | Hostname, `/etc/hosts`, dnsmasq split-horizon, dependencies | yes |
 | `install/03-install-zimbra.sh` | Fetch FOSS build, SHA-256, drive installer in tmux. Skips if healthy; refuses to re-drive a partial install | yes |
@@ -95,7 +95,7 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/09-hardening.sh` | Part A hardening (fail2ban, COS lockout, cleartext off, unattended-upgrades, TLS, SMTP client rate limits) | yes |
 | `install/10-host-firewall.sh` | ufw allowlist + mandatory dead-man's switch (`apply` / `cancel-deadman`) | yes* |
 | `install/11-admin-path-lockdown.sh` | Block `/zimbraAdmin` + `/service/admin` on public :443 (admin stays on :7071) | yes |
-| `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08 + future console) | — |
+| `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08 + future console) | - |
 | `install/05-healthcheck.sh` | Services, listeners, cert, DNS, DKIM, SMTP egress, **both auth paths**, mail flow, open-relay | yes |
 | `install/check-zimbra-foss-update.sh` | Compare configured FOSS build vs newest GitHub release | yes |
 
@@ -125,7 +125,7 @@ Asked once on first run:
 | TLS method | `1` Cloudflare / `2` manual DNS-01 / `3` customer-provided |
 | External test mailbox | empty |
 | Contracted mailbox seats | `PLACEHOLDER_UNSET` until operator confirms |
-| Admin source IPs/CIDRs (`KIN_ADMIN_IPS`) | empty until set — required for stage 10 |
+| Admin source IPs/CIDRs (`KIN_ADMIN_IPS`) | empty until set - required for stage 10 |
 | Install Z-Push in full install (`ZPUSH_ENABLED`) | `yes` |
 
 Cloudflare API token is requested by `04` only when `TLS_METHOD=cloudflare`, and is
@@ -153,10 +153,10 @@ so it hung until timeout and reported a working port as blocked.
 
 The mail host often sits behind NAT with no inbound path, so HTTP-01 fails.
 
-- **Cloudflare DNS-01** — API token automates the TXT record and renewal.
-- **Manual DNS-01** — certbot prints TXT name/value; the operator creates it in
+- **Cloudflare DNS-01** - API token automates the TXT record and renewal.
+- **Manual DNS-01** - certbot prints TXT name/value; the operator creates it in
   the zone panel. Renewal is not automatic in this mode.
-- **Customer cert** — skips certbot; documents install with `zmcertmgr`.
+- **Customer cert** - skips certbot; documents install with `zmcertmgr`.
 
 ### The renewal hook is executed, not merely installed
 
@@ -203,7 +203,7 @@ restarts them before asserting DNS.
   it is set explicitly instead.
 - **Zimbra's timezone list does not mark `Asia/Jakarta` as primary.** `Asia/Bangkok` is the
   UTC+7 fallback (same offset, no DST). The numbered slot moves when `timezones.ics`
-  gains or loses primary zones — do not hardcode it. The installer driver reads the live
+  gains or loses primary zones - do not hardcode it. The installer driver reads the live
   zmsetup list after the timezone prompt and fails immediately on `Invalid selection`
   instead of waiting 1h.
 - **`zmsetup.pl` reads resolver configuration once at startup.** Fixing DNS
@@ -226,7 +226,7 @@ install; mismatch aborts.
 fixes by up to two months (embargo). No warranty; not official Zimbra binaries.
 See **Patch monitoring** before offering the platform to a paying customer.
 
-**Checklist — repository visibility.** This deploy repo is intentionally still
+**Checklist - repository visibility.** This deploy repo is intentionally still
 **public** (operator decision as of 2026-08-10). Before the first customer
 handoff it must be reviewed again: consider making it private and having
 `kin-mail.sh` clone via token or deploy key.

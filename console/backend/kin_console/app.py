@@ -80,7 +80,7 @@ def wizard_public_ip(
 def wizard_deploy_last_log(
     _actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
-    """Read-only last deploy transcript (no privhelper — safe during busy install)."""
+    """Read-only last deploy transcript (no privhelper - safe during busy install)."""
     from kin_privhelper.deploy_state import DEPLOY_LAST_LOG, pipeline_in_progress
 
     text = ""
@@ -157,7 +157,7 @@ async def login(body: LoginBody, response: Response) -> dict[str, object]:
 
     auth.set_session_cookie(response, user.username)
     # First-boot plaintext lives only under /root (root:root 0600). Console cannot
-    # unlink it itself — ask privhelperd after a successful *local* login. Never
+    # unlink it itself - ask privhelperd after a successful *local* login. Never
     # block login if cleanup fails (helper down / busy race).
     if user.auth_type == users.AUTH_LOCAL:
         try:
@@ -165,7 +165,7 @@ async def login(body: LoginBody, response: Response) -> dict[str, object]:
                 proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD,
                 user.username,
             )
-        except Exception:  # noqa: BLE001 — login must succeed regardless
+        except Exception:  # noqa: BLE001 - login must succeed regardless
             pass
     return {
         "status": "ok",
@@ -652,7 +652,7 @@ async def wizard_deploy_stream(
 ) -> StreamingResponse:
     """Stream a whitelisted privhelper command into the log viewer.
 
-    Query `action` is an enum of safe aliases — never a free-form shell/command string.
+    Query `action` is an enum of safe aliases - never a free-form shell/command string.
     RBAC is enforced here and again inside privhelperd (server-side role from users.json,
     or the synthetic pre-deploy setup identity).
     """

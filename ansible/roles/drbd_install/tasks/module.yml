@@ -1,5 +1,5 @@
 ---
-# apt supports check mode. modprobe is a mutation — keep Ansible default check
+# apt supports check mode. modprobe is a mutation - keep Ansible default check
 # behaviour (do not set check_mode: false). Under --check this task is skipped
 # via `when: not ansible_check_mode` so a dry-run never loads modules on the host.
 

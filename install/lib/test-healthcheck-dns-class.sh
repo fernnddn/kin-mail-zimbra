@@ -205,7 +205,7 @@ else
   bad "05-healthcheck.sh still fail-closes T1 warmup"
 fi
 
-if grep -q '07-zpush.sh failed — mail install continues' ../kin-mail.sh \
+if grep -q '07-zpush.sh failed - mail install continues' ../kin-mail.sh \
   && grep -q '11-admin-path-lockdown.sh failed - mail install continues' ../kin-mail.sh \
   && grep -q '09-hardening.sh failed - mail install continues' ../kin-mail.sh \
   && ! grep -q 'Pipeline stopped at 11-admin-path-lockdown.sh' ../kin-mail.sh \

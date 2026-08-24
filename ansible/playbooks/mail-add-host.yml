@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# Add-host orchestration — replace a permanently lost mail peer with a NEW
+# Add-host orchestration - replace a permanently lost mail peer with a NEW
 # identity (hostname/IP), not impersonating the retired node.
 #
 # SCOPE (slice 3.7): build logic + ansible-playbook --syntax-check ONLY.
@@ -11,7 +11,7 @@
 #   * pcs cluster node remove / pcs host auth / pcs cluster node add
 #     (RHEL HA "Managing cluster nodes")
 #   * DRBD live full resync: empty Secondary create-md/up → connect to
-#     UpToDate Primary (drbdsetup(8) / LINBIT resync model) — NOT
+#     UpToDate Primary (drbdsetup(8) / LINBIT resync model) - NOT
 #     clear-bitmap skip-sync, NOT cold dual primary --force from 2.4/2.5.
 #
 # When a blank VM exists:
@@ -50,7 +50,7 @@
       tags: [addhost, validate]
 
 # -----------------------------------------------------------------------------
-# 1) NEW NODE — package / fencing / agents readiness (before pcs node add)
+# 1) NEW NODE - package / fencing / agents readiness (before pcs node add)
 # -----------------------------------------------------------------------------
 - name: Prepare packages and agents on the new mail node
   hosts: mail_new_node
@@ -71,7 +71,7 @@
       tags: [addhost, new, agents]
 
 # -----------------------------------------------------------------------------
-# 2) SURVIVOR — remove retired, rewrite DRBD peer, pcs cluster node add
+# 2) SURVIVOR - remove retired, rewrite DRBD peer, pcs cluster node add
 # -----------------------------------------------------------------------------
 - name: Prepare the survivor and add the new node to the cluster
   hosts: mail_survivor
@@ -82,7 +82,7 @@
       tags: [addhost, survivor]
 
 # -----------------------------------------------------------------------------
-# 3) qdevice TLS — survivor first so PKCS12 can distribute to the new node
+# 3) qdevice TLS - survivor first so PKCS12 can distribute to the new node
 # -----------------------------------------------------------------------------
 - name: Deploy qdevice TLS for the survivor and new node pair
   hosts: mail_survivor,mail_new_node
@@ -93,7 +93,7 @@
       tags: [addhost, qdevice]
 
 # -----------------------------------------------------------------------------
-# 4) NEW NODE — DRBD live join (full sync while survivor stays Primary)
+# 4) NEW NODE - DRBD live join (full sync while survivor stays Primary)
 # -----------------------------------------------------------------------------
 - name: Connect the new node DRBD to the live Primary for full sync
   hosts: mail_new_node

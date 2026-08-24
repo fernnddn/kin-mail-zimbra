@@ -33,7 +33,7 @@
     targetcli /iscsi create {{ iscsi_target_iqn }} || true
     targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1/luns create /backstores/fileio/{{ iscsi_target_backstore_name }} || true
     targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1 set attribute generate_node_acls=1 demo_mode_write_protect=0 authentication=0
-    # Ubuntu targetcli often auto-adds 0.0.0.0:3260 on /iscsi create — ignore duplicate.
+    # Ubuntu targetcli often auto-adds 0.0.0.0:3260 on /iscsi create - ignore duplicate.
     targetcli /iscsi/{{ iscsi_target_iqn }}/tpg1/portals create 0.0.0.0 {{ iscsi_target_portal_port }} || true
     targetcli saveconfig
   args:

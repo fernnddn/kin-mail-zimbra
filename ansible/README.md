@@ -1,4 +1,4 @@
-# Ansible — KIN Mail Phase 2 port (incremental)
+# Ansible - KIN Mail Phase 2 port (incremental)
 
 This tree ports proven Phase 2 lab work into Ansible **one small slice at a time**.
 
@@ -23,7 +23,7 @@ survivor membership + DRBD peer rewrite; new-node live full sync to Primary.
 **Remove-host scope:** clear retired/unreachable peer from survivor only (force
 membership remove, DRBD peer drop, location constraints, precise qnetd NSS
 nickname delete). Must not disturb kin-zimbra/VIP/DRBD Primary.  
-**Never tested against any host as a live apply** — see progress notes.
+**Never tested against any host as a live apply** - see progress notes.
 
 **OS hardening scope:** `os_hardening` is fail2ban + unattended-upgrades only
 (per-machine). It does not write COS/cleartext/TLS/SMTP LDAP attrs.
@@ -32,7 +32,7 @@ nickname delete). Must not disturb kin-zimbra/VIP/DRBD Primary.
 service hostname to `127.0.0.1` in `/etc/hosts` (and dnsmasq) so nginx /
 memcached / zmlookup talk to the co-located instance on whichever node is
 Promoted. Corosync `ring0_addr` is forced to inventory `ansible_host` IPs
-first — the hostname cannot stay as the cluster transport address. Do not
+first - the hostname cannot stay as the cluster transport address. Do not
 set LDAP `zimbraServiceHostname` to `127.0.0.1` (that is also nginx
 `server_name`). After a first remap, regenerate proxy on the Promoted node
 (`zmproxyctl restart`) so baked-in lookup/memcached IPs update.

@@ -9,7 +9,7 @@
 #   ./06-hybrid-auth.sh
 #
 # If AD_AUTH_ENABLED is not "yes", this script exits 0 after stating that
-# local-only auth remains in effect — it must not fail a single-node install.
+# local-only auth remains in effect - it must not fail a single-node install.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
@@ -34,12 +34,12 @@ if [ "${AD_AUTH_ENABLED}" != "yes" ]; then
   info "AD_AUTH_ENABLED=${AD_AUTH_ENABLED:-no} - skipped."
   info "Domain uses local Zimbra auth. Re-run 00-config.sh --reset"
   info "then this script when the customer AD is ready."
-  # Still prove local auth works (same probe as 05 — not zmprov auth).
+  # Still prove local auth works (same probe as 05 - not zmprov auth).
   if ensure_kin_test_mailbox "${TEST_USER_1}" "${TEST_PASS_1}" 2>/dev/null \
      && zimbra_user_auth_ok "${TEST_USER_1}" "${TEST_PASS_1}"; then
     ok "Local auth verified: ${TEST_USER_1}"
   else
-    fail "Local auth FAILED: ${TEST_USER_1} — run 05-healthcheck.sh for details"
+    fail "Local auth FAILED: ${TEST_USER_1} - run 05-healthcheck.sh for details"
     exit 1
   fi
   ok "Local auth remains active (no domain changes)"
@@ -96,7 +96,7 @@ fi
 su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech zimbraAuthLdapURL zimbraAuthLdapSearchBase zimbraAuthLdapSearchFilter zimbraAuthLdapSearchBindDn zimbraAuthFallbackToLocal zimbraAuthLdapBindDn" 2>/dev/null \
   | sed 's/^/    /'
 
-say "2. Test accounts — pure local + AD-backed"
+say "2. Test accounts - pure local + AD-backed"
 
 # Local-only mailbox: not expected to exist in AD, so external bind fails and
 # zimbraAuthFallbackToLocal accepts the Zimbra password.

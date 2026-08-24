@@ -52,7 +52,7 @@ def _load_selector() -> Any:
         spec.loader.exec_module(mod)
         return mod
     raise RuntimeError(
-        "select_drbd_disk.py missing — re-run console/bootstrap.sh so ansible/ is installed"
+        "select_drbd_disk.py missing - re-run console/bootstrap.sh so ansible/ is installed"
     )
 
 
@@ -347,14 +347,14 @@ def evaluate_node(
                 errors.append(f"{label}: {err}")
         elif parent_node is not None and str(parent_node.get("type") or "") == "disk":
             errors.append(
-                f"{label}: second disk not partitioned — found {data_parent} but not {data_disk}. "
+                f"{label}: second disk not partitioned - found {data_parent} but not {data_disk}. "
                 f"Create GPT partitions {data_disk} (Zimbra/DRBD data, ≥{_fmt_bytes(MIN_DATA_BYTES)}) "
                 f"and {meta_disk} (~256 MiB DRBD meta). Do not mkfs the meta partition."
             )
         else:
             extra = f" Seen: {'; '.join(seen)}." if seen else " No extra disk was visible to lsblk."
             errors.append(
-                f"{label}: second disk not found — expected DRBD data partition {data_disk}. "
+                f"{label}: second disk not found - expected DRBD data partition {data_disk}. "
                 f"Attach a second disk and partition it before Build HA pair.{extra}"
             )
     else:
@@ -373,7 +373,7 @@ def evaluate_node(
             root_n.removeprefix("/dev/")
         ):
             errors.append(
-                f"{label}: {data_disk} is on the OS disk — refusing to use it for DRBD."
+                f"{label}: {data_disk} is on the OS disk - refusing to use it for DRBD."
             )
 
     meta_node = nodes.get(meta_disk)
@@ -400,7 +400,7 @@ def evaluate_node(
         mp = str(meta_node.get("mountpoint") or "").strip()
         if mp:
             errors.append(
-                f"{label}: {meta_disk} is mounted on {mp} — meta must stay unformatted/unmounted."
+                f"{label}: {meta_disk} is mounted on {mp} - meta must stay unformatted/unmounted."
             )
 
     zimbra_src = _norm_dev(zimbra_source)
@@ -524,7 +524,7 @@ def combine_results(*nodes: dict[str, Any]) -> dict[str, Any]:
             "Build HA pair will GPT-partition the unique blank spare disk on each "
             "server that still needs it (not the OS disk; no existing table). "
             "It then re-checks before DRBD. If /opt/zimbra is still on the root "
-            "volume after that, it stops — migrate onto the data partition first "
+            "volume after that, it stops - migrate onto the data partition first "
             "(HA-RUNBOOK §13 / install/lib/migrate-zimbra-to-drbd-disk.sh)."
         )
     else:

@@ -1,5 +1,5 @@
 ---
-# Entry — granular includes; labels are progress-UI ready.
+# Entry - granular includes; labels are progress-UI ready.
 # Source: Phase 2 task 2.2 §1 (qdevice client wiring only).
 
 - name: Include the qdevice package installation steps

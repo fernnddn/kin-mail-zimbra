@@ -225,7 +225,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
 
   // parseInstallProgress rescans the whole accumulated transcript (regex +
   // substring search), so calling it on every single SSE chunk makes each
-  // update cost grow with total log size — visibly laggy on a chatty stage
+  // update cost grow with total log size - visibly laggy on a chatty stage
   // like the Zimbra install, worse the longer the run goes. Chunks still
   // land in logBufRef immediately; only the state update (and the parse it
   // triggers) is coalesced to a few times a second.
@@ -288,7 +288,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         if (parsed.type === "error") {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
-          flushLog(); // stream is ending — do not leave the final state debounced
+          flushLog(); // stream is ending - do not leave the final state debounced
           if (parsed.code === "busy") {
             onFinished(undefined, "busy");
             es.close();
@@ -301,7 +301,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         }
         if (parsed.type === "done") {
           append(`[done] exit=${parsed.exit_code ?? "?"}\n`);
-          flushLog(); // stream is ending — do not leave the final state debounced
+          flushLog(); // stream is ending - do not leave the final state debounced
           onFinished(parsed.exit_code, "done");
           es.close();
           if (action === "cancel_firewall_deadman" && parsed.exit_code === 0) {

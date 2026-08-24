@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# KIN Mail — OCF Resource Agent for Zimbra (zmcontrol wrapper)
+# KIN Mail - OCF Resource Agent for Zimbra (zmcontrol wrapper)
 #
 meta_data() {
 	cat <<'META'
@@ -22,7 +22,7 @@ zmcontrol start.
 After a successful start (and on stop, before zmcontrol stop) this
 agent refreshes fail2ban jails via /usr/local/sbin/kin-fail2ban-jails
 so zimbra-auth/zpush-auth track the mounted mailbox logs. A fail2ban
-hiccup is logged and ignored — it must never fail the OCF action.
+hiccup is logged and ignored - it must never fail the OCF action.
 </longdesc>
 <shortdesc lang="en">Zimbra zmcontrol wrapper</shortdesc>
 <parameters/>

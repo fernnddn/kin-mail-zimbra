@@ -81,7 +81,7 @@ fi
 # --- flush caches before DNS assertions --------------------------------------
 # Long-lived processes cache negative DNS answers. A record added after they
 # started looks missing until they are restarted.
-# amavis/opendkim appear in zmcontrol status — on HA Primary that trips the
+# amavis/opendkim appear in zmcontrol status - on HA Primary that trips the
 # Pacemaker kin-zimbra monitor unless we unmanage --monitor first (1.7b/1.7c).
 echo; say "Flushing DNS cache"
 kin_zimbra_unmanage
@@ -279,7 +279,7 @@ info "zimbraAuthMech=${MECH:-zimbra(default)}  fallback=${FALLBACK:-unset}"
 # Local path always expected once test mailboxes exist (fallback or pure local).
 # Root cause of Phase 1 "test1 auth FAIL": `zmprov auth` is not a real command on
 # Zimbra 10 FOSS (prints usage). Also passwords with `#` (old default KinTest#1-…)
-# become shell comments unless single-quoted — see ensure_kin_test_mailbox.
+# become shell comments unless single-quoted - see ensure_kin_test_mailbox.
 ERR1=$(mktemp) ERR2=$(mktemp)
 if ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" 2>"$ERR1"; then
   p "Local Zimbra auth: ${TEST_USER_1}"

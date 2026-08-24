@@ -1,6 +1,6 @@
 ---
 # mailboxd memcached client list (LDAP, shared on DRBD). nginx memcached
-# servers are NOT this attribute — those come from zmproxyconfgen resolving
+# servers are NOT this attribute - those come from zmproxyconfgen resolving
 # zimbraServiceHostname (see hosts.yml). Set the client list anyway so
 # mailboxd does not depend on that hostname resolving to a peer LAN IP.
 
@@ -30,7 +30,7 @@
     cmd: >-
       su - zimbra -c "zmprov ms {{ pacemaker_mail_stack_zimbra_service_hostname }}
       zimbraMemcachedClientServerList {{ pacemaker_mail_stack_memcached_client_server }}"
-  # SAFETY: never check_mode: false — writes shared LDAP on DRBD.
+  # SAFETY: never check_mode: false - writes shared LDAP on DRBD.
   when:
     - not ansible_check_mode
     - pacemaker_mail_stack_memcached_mnt.rc == 0

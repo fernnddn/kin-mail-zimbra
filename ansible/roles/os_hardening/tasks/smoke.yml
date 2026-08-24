@@ -1,5 +1,5 @@
 ---
-# Optional TEST-NET ban/unban. Not desired state — default off.
+# Optional TEST-NET ban/unban. Not desired state - default off.
 # fail2ban-client banip bypasses ignoreip (operator override), same as
 # install/09-hardening.sh test_fail2ban_ban_unban.
 

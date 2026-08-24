@@ -2,8 +2,8 @@
 
 Isolated from Zimbra/DRBD/Pacemaker. Bootstrap installs:
 
-1. `kin-mail-console` — unprivileged FastAPI + React UI (HTTPS, default `:9443`)
-2. `kin-mail-privhelperd` — root helper on **local Unix socket only**
+1. `kin-mail-console` - unprivileged FastAPI + React UI (HTTPS, default `:9443`)
+2. `kin-mail-privhelperd` - root helper on **local Unix socket only**
    (`/run/kin-mail/privhelper.sock`, mode 660, group `kin-console`)
 
 ```bash
@@ -17,7 +17,7 @@ Bootstrap also copies sibling `install/` into **`/opt/kin-mail-deploy/install/`*
 The wizard stays login-free until setup is genuinely complete: **1-server** after a
 successful full install (`/etc/kin-mail/setup-complete`); **2-server** only after that
 **and** a successful HA apply (`/etc/kin-mail/ha-setup-complete`, written on `ORCH_DONE`
-`join_mode=apply` — never on `--check` or a failed run). A leftover `/opt/zimbra` from a
+`join_mode=apply` - never on `--check` or a failed run). A leftover `/opt/zimbra` from a
 failed Deploy does not require login and does not show Cluster/Users. Declining Build HA
 pair on 2-server topology leaves the wizard anonymous (login-optional) until HA actually
 completes.
@@ -37,9 +37,9 @@ Store: `/var/lib/kin-mail-console/users.json` (mode 600). Each account is either
 | `local` | bcrypt hash in `users.json` |
 | `ad` | no local password; LDAP bind via the same AD settings as `06-hybrid-auth.sh` (`/etc/kin-mail/config` → synced to `/etc/kin-mail-console/ad.env`) |
 
-AD login is fail-closed (unreachable / disabled AD never grants access). Roles stay manually assigned — no AD group mapping in this slice.
+AD login is fail-closed (unreachable / disabled AD never grants access). Roles stay manually assigned - no AD group mapping in this slice.
 
-Sensitive commands are denied in **both** the FastAPI stream endpoint and privhelperd (role resolved from `users.json` by username — client cannot claim a role).
+Sensitive commands are denied in **both** the FastAPI stream endpoint and privhelperd (role resolved from `users.json` by username - client cannot claim a role).
 
 ## Privileged helper (Option B)
 

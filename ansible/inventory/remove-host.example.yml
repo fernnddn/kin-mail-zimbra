@@ -1,6 +1,6 @@
 ---
 # Example inventory for standalone remove-host (unreachable peer cleanup).
-# Copy and edit — do NOT point this at a healthy live peer as a drill.
+# Copy and edit - do NOT point this at a healthy live peer as a drill.
 #
 #   cp inventory/remove-host.example.yml inventory/remove-host.yml
 #

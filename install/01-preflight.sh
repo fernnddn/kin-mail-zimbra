@@ -84,7 +84,7 @@ if [ "${TLS_METHOD:-}" != "customer" ]; then
     fail "$(printf '%-46s' "$u") unreachable"; FATAL=1
   fi
 else
-  info "TLS_METHOD=customer — skipping Let's Encrypt API reachability"
+  info "TLS_METHOD=customer - skipping Let's Encrypt API reachability"
 fi
 
 # --- 5. outbound SMTP - the decisive test ------------------------------------

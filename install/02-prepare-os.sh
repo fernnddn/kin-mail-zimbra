@@ -91,7 +91,7 @@ fi
 # it has to go. After HA is wired, pacemaker_mail_stack remaps the *shared*
 # Zimbra service hostname to 127.0.0.1 on every mail node (nginx/memcached
 # co-located with mailboxd). That remap requires Corosync ring0_addr to be
-# LAN IPs first — do not point the FQDN at loopback before cluster setup.
+# LAN IPs first - do not point the FQDN at loopback before cluster setup.
 say "2. /etc/hosts"
 [ -f /etc/hosts.kin-backup ] || cp /etc/hosts /etc/hosts.kin-backup
 cat > /etc/hosts <<EOF
@@ -160,7 +160,7 @@ fi
 
 # Ubuntu's dnsmasq unit reads every file in /etc/dnsmasq.d except dpkg suffixes.
 # A leftover *.bak (illegal repeated keyword) fails the unit while resolv.conf
-# still points at 127.0.0.1 — outbound DNS dies silently.
+# still points at 127.0.0.1 - outbound DNS dies silently.
 mkdir -p /var/backups/kin-mail/dnsmasq
 shopt -s nullglob
 for f in /etc/dnsmasq.d/*; do
@@ -211,6 +211,6 @@ fi
 echo
 say "DONE"
 ok "Host ready. Continue to 03-install-zimbra.sh"
-info "Host firewall intentionally not enabled — perimeter control is on FortiGate."
+info "Host firewall intentionally not enabled - perimeter control is on FortiGate."
 info "If ufw is desired, allow port 22 first so you do not get locked out."
 echo

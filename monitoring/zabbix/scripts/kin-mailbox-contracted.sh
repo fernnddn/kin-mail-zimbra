@@ -1,6 +1,6 @@
 #!/bin/bash
 # CONTRACTED_SEATS from /etc/kin-mail/config (0 if unset / PLACEHOLDER_UNSET).
-# Read-only parse — does not source the file (it contains secrets and $(...)).
+# Read-only parse - does not source the file (it contains secrets and $(...)).
 set -euo pipefail
 
 conf="/etc/kin-mail/config"

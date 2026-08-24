@@ -14,7 +14,7 @@
       - cluster_setup_pcs_status_after.rc == 0
     fail_msg: >-
       pcs status failed after cluster setup. Pacemaker is not running on this
-      node — stop and inspect before retrying. This role never destroys an
+      node - stop and inspect before retrying. This role never destroys an
       existing cluster.
   when: not ansible_check_mode
   tags: [cluster, setup, verify]

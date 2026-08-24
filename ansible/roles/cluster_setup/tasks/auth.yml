@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING — hacluster password + pcs host auth
+# MUTATING - hacluster password + pcs host auth
 # Never check_mode: false. Skip entirely when the expected cluster is running.
 # =============================================================================
 

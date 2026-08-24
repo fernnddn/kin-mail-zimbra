@@ -22,7 +22,7 @@ from typing import Any
 
 log = logging.getLogger("kin_privhelper.deploy_state")
 
-# Override only for tests / unusual layouts — production uses /opt/zimbra.
+# Override only for tests / unusual layouts - production uses /opt/zimbra.
 ZIMBRA_ROOT = Path(os.environ.get("KIN_ZIMBRA_ROOT", "/opt/zimbra"))
 
 # Written only after kin-mail.sh full-install succeeds (all selected stages exited 0).
@@ -87,7 +87,7 @@ UNEXPECTED_STOP_LINE = (
 )
 
 # Redacted tmux pipe-pane capture from 03-install-zimbra.sh. Not the same as
-# kin-mail.sh stdout — zmsetup.pl detail lands only here. Console SSE follows it.
+# kin-mail.sh stdout - zmsetup.pl detail lands only here. Console SSE follows it.
 ZIMBRA_INSTALL_LOG = Path(
     os.environ.get("KIN_ZIMBRA_INSTALL_LOG", "/var/log/kin-mail-install.log")
 )
@@ -181,7 +181,7 @@ def pipeline_in_progress() -> bool:
 
 
 def mailboxd_running() -> bool:
-    """True when mailboxd looks alive — not merely that /opt/zimbra exists."""
+    """True when mailboxd looks alive - not merely that /opt/zimbra exists."""
     pid_candidates = [
         Path(os.environ.get("KIN_MAILBOXD_PID", str(ZIMBRA_ROOT / "log" / "zmmailboxd_pid"))),
         ZIMBRA_ROOT / "log" / "zmmailboxd.pid",
@@ -515,7 +515,7 @@ def is_mail_deployed() -> bool:
 
     topology = saved_wizard_topology()
     if topology == "2vm":
-        # Do not use mailboxd as a proxy — it is already running after the
+        # Do not use mailboxd as a proxy - it is already running after the
         # single-node install, which is exactly when HA has not started yet.
         return path_is_file(SETUP_COMPLETE_MARKER) and path_is_file(
             HA_SETUP_COMPLETE_MARKER

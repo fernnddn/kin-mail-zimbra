@@ -1,4 +1,4 @@
-"""KIN Mail admin console — settings (env / file, no hardcoded lab IPs)."""
+"""KIN Mail admin console - settings (env / file, no hardcoded lab IPs)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Override via CONSOLE_PORT in console.env — do not hard-lock in code callers.
+    # Override via CONSOLE_PORT in console.env - do not hard-lock in code callers.
     console_port: int = 9443
     # Local-only HTTPS backend. The public listener on console_port is a mux
     # that 308-redirects plain HTTP and forwards TLS here.

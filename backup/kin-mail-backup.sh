@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — backup orchestrator (runs on the backup repository VM)
+# KIN Mail - backup orchestrator (runs on the backup repository VM)
 #
 # Pull model: this host SSHs to every configured mail node, finds the one
 # with /opt/zimbra mounted (Promoted), runs the collector there, and rsyncs
@@ -39,7 +39,7 @@ need_root() {
 
 load_conf() {
   if [ ! -f "$CONF" ]; then
-    fail "Missing $CONF — copy kin-mail-backup.conf.example and set MAIL_NODES"
+    fail "Missing $CONF - copy kin-mail-backup.conf.example and set MAIL_NODES"
     exit 2
   fi
   # shellcheck disable=SC1090
@@ -82,7 +82,7 @@ find_promoted() {
     exit 3
   fi
   if [ "$n" -gt 1 ]; then
-    fail "Split-brain? $n nodes report Promoted — refusing to backup"
+    fail "Split-brain? $n nodes report Promoted - refusing to backup"
     exit 3
   fi
   printf 'SELECTED=%s\n' "$found"
@@ -114,7 +114,7 @@ need_root
 load_conf
 
 if [ ! -f "$SSH_IDENTITY" ]; then
-  fail "SSH identity $SSH_IDENTITY missing — generate a key and trust it on mail nodes"
+  fail "SSH identity $SSH_IDENTITY missing - generate a key and trust it on mail nodes"
   exit 2
 fi
 if [ ! -f "$REMOTE_SCRIPT_SRC" ]; then

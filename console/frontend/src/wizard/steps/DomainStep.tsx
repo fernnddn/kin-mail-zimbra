@@ -20,7 +20,7 @@ const ZIMBRA_ADMIN_PASS_BAD = /[\s!$&*|<>\/;`'"\\]/;
 
 function zimbraAdminPassIssue(pass: string): string {
   if (ZIMBRA_ADMIN_PASS_BAD.test(pass)) {
-    return "Admin password rejected by Zimbra — avoid characters like ! * & $, use letters/digits and simple symbols only.";
+    return "Admin password rejected by Zimbra - avoid characters like ! * & $, use letters/digits and simple symbols only.";
   }
   if (pass.length < 8) {
     return "Admin password must be at least 8 characters.";
@@ -142,8 +142,8 @@ export default function DomainStep() {
         ) : null}
         <Hint style={passLiveErr ? { marginTop: 0 } : undefined}>
           {draft.admin_pass_set
-            ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace. Avoid ! * & $ and similar punctuation — Zimbra rejects them."
-            : "At least 8 characters. Used for the mail system administrator account. Avoid ! * & $ and similar punctuation — Zimbra rejects them."}
+            ? "Already stored. Leave blank to keep it, or enter a new value (min 8 characters) to replace. Avoid ! * & $ and similar punctuation - Zimbra rejects them."
+            : "At least 8 characters. Used for the mail system administrator account. Avoid ! * & $ and similar punctuation - Zimbra rejects them."}
         </Hint>
       </FieldRow>
       <FieldRow>

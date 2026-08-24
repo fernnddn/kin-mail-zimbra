@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING — LIVE SURVIVOR DRBD peer rewrite
+# MUTATING - LIVE SURVIVOR DRBD peer rewrite
 # =============================================================================
 # Replaces the retired peer hostname/IP inside kin-zimbra.res while the
 # survivor remains Primary/UpToDate serving mail. This is NOT the cold
@@ -9,7 +9,7 @@
 # Official behaviour (DRBD 8.x): after both sides share a matching .res and the
 # new peer comes up Inconsistent, connecting to an UpToDate Primary triggers a
 # full resync (SyncSource→SyncTarget). Do NOT use new-current-uuid --clear-bitmap
-# here — that skips/shortens sync and assumes shipped identical data.
+# here - that skips/shortens sync and assumes shipped identical data.
 #
 #   * Do NOT set check_mode: false on template apply / drbdadm adjust.
 #   * Gate with `when: not ansible_check_mode`.
@@ -37,7 +37,7 @@
 - name: Adjust the survivor DRBD resource after the peer change
   ansible.builtin.command:
     cmd: drbdadm adjust {{ cluster_add_host_drbd_resource }}
-  # SAFETY: never check_mode: false — touches live replication sockets.
+  # SAFETY: never check_mode: false - touches live replication sockets.
   when: not ansible_check_mode
   tags: [cluster, survivor, drbd]
 

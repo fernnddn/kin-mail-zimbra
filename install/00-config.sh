@@ -72,7 +72,7 @@ shell_single_quote() {
 }
 
 # Run a command as the zimbra user with each argument safely single-quoted
-# (passwords may contain #, spaces, etc. — unquoted values become shell comments).
+# (passwords may contain #, spaces, etc. - unquoted values become shell comments).
 zimbra_cmd() {
   local args=() a q
   for a in "$@"; do
@@ -101,7 +101,7 @@ PCS_KIN_ZIMBRA_UNMANAGED="${PCS_KIN_ZIMBRA_UNMANAGED:-0}"
 kin_zimbra_unmanage() {
   PCS_KIN_ZIMBRA_UNMANAGED=0
   if pcs_has_kin_zimbra; then
-    warn "kin-zimbra is Pacemaker-managed — unmanage --monitor before service restart"
+    warn "kin-zimbra is Pacemaker-managed - unmanage --monitor before service restart"
     pcs resource unmanage kin-zimbra --monitor
     PCS_KIN_ZIMBRA_UNMANAGED=1
   fi
@@ -137,7 +137,7 @@ kin_zimbra_wait_healthy() {
 }
 
 # Verify an account password the way clients do. `zmprov auth` is NOT a command
-# on Zimbra 10 FOSS (it prints usage and can exit 0) — use zmmailbox instead.
+# on Zimbra 10 FOSS (it prints usage and can exit 0) - use zmmailbox instead.
 zimbra_user_auth_ok() {
   local user="$1" pass="$2"
   zimbra_cmd zmmailbox -m "$user" -p "$pass" gaf >/dev/null 2>&1
@@ -167,7 +167,7 @@ ensure_kin_test_mailbox() {
   return 1
 }
 
-# Brand label for an NS hostname — used to detect split delegation.
+# Brand label for an NS hostname - used to detect split delegation.
 # Providers like Rumahweb intentionally publish ns*.brand.com/.net/.org/.biz;
 # comparing the full parent would false-FAIL. For common two-part public
 # suffixes (co.id, co.uk, …) the brand is the label before that suffix so two
@@ -331,7 +331,7 @@ run_wizard() {
   ask TIMEZONE    "System timezone"             "${DEF_TZ}"
 
   # Zimbra's installer timezone list historically omitted Asia/Jakarta; Asia/Bangkok
-  # is the same UTC+7 with no DST. Current timezones.ics may list Jakarta — 03
+  # is the same UTC+7 with no DST. Current timezones.ics may list Jakarta - 03
   # prefers the live zmsetup number for TIMEZONE, then this fallback.
   case "$TIMEZONE" in
     Asia/Jakarta|Asia/Pontianak) ZIMBRA_TZ_NAME="Asia/Bangkok" ;;
@@ -390,9 +390,9 @@ run_wizard() {
   ask LE_EMAIL "Email for Let's Encrypt notifications" "admin@${MAIL_DOMAIN}"
 
   echo; say "TLS issuance method"
-  info "1) Cloudflare DNS-01  — automatic (requires Cloudflare API token)"
-  info "2) Manual DNS-01      — any provider; operator creates TXT once in DNS panel"
-  info "3) Customer-provided  — skip certbot; install customer cert/key via zmcertmgr"
+  info "1) Cloudflare DNS-01 - automatic (requires Cloudflare API token)"
+  info "2) Manual DNS-01 - any provider; operator creates TXT once in DNS panel"
+  info "3) Customer-provided - skip certbot; install customer cert/key via zmcertmgr"
   TLS_METHOD=""
   _tls_tries=0
   while [ -z "$TLS_METHOD" ]; do
@@ -423,7 +423,7 @@ run_wizard() {
   fi
 
   # Hybrid auth is optional. Without AD values the domain stays on local
-  # Zimbra auth only — single-node install must not hard-fail.
+  # Zimbra auth only - single-node install must not hard-fail.
   echo; say "Hybrid authentication (Active Directory)"
   info "Domain can bind to customer AD, with fallback to local Zimbra password"
   info "(zimbraAuthFallbackToLocal). Skip if AD is not ready yet."
@@ -468,12 +468,12 @@ run_wizard() {
       CONTRACTED_SEATS=PLACEHOLDER_UNSET
       ;;
     *[!0-9]*)
-      warn "Not a non-negative integer — storing PLACEHOLDER_UNSET"
+      warn "Not a non-negative integer - storing PLACEHOLDER_UNSET"
       CONTRACTED_SEATS=PLACEHOLDER_UNSET
       ;;
   esac
 
-  echo; say "Host firewall — admin sources"
+  echo; say "Host firewall - admin sources"
   info "Space-separated IPs/CIDRs allowed for SSH:22 and Zimbra Admin:7071"
   info "(cluster LAN /24 from SERVER_IP is always added by 10-host-firewall.sh)."
   info "Example: 203.0.113.10 198.51.100.0/24"
@@ -539,7 +539,7 @@ EOF
 
   echo
   ok "Saved to ${CONF_FILE} (mode 600)"
-  info "Contains admin password — do not share."
+  info "Contains admin password - do not share."
   echo
 }
 

@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# MUTATING pcs — add NEW identity to live cluster
+# MUTATING pcs - add NEW identity to live cluster
 # =============================================================================
 # Official pattern (RHEL "Managing cluster nodes"):
 #   pcs host auth <newnode>
@@ -42,7 +42,7 @@
     cmd: >-
       pcs cluster node add {{ cluster_add_host_new_name }}
       addr={{ cluster_add_host_new_address }}
-  # SAFETY: never check_mode: false — rewrites live corosync.conf / authkeys.
+  # SAFETY: never check_mode: false - rewrites live corosync.conf / authkeys.
   when:
     - not ansible_check_mode
     - cluster_add_host_new_name not in cluster_survivor_replace_nodes_add.stdout

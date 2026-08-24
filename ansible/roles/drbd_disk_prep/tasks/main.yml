@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# DRBD second-disk GPT prep — fail closed unless the candidate is unambiguous.
+# DRBD second-disk GPT prep - fail closed unless the candidate is unambiguous.
 #
 # --check must NEVER write a partition table (no check_mode: false on parted).
 # The selector is read-only and may use check_mode: false so dry-run still
@@ -33,7 +33,7 @@
     that:
       - drbd_disk_prep_lsblk.rc == 0
       - drbd_disk_prep_lsblk.stdout | length > 0
-    fail_msg: Could not read lsblk JSON — refusing to partition anything.
+    fail_msg: Could not read lsblk JSON - refusing to partition anything.
   tags: [drbd, disk_prep]
 
 # ansible.builtin.command runs on the target. role_path is the controller
@@ -126,7 +126,7 @@
   ansible.builtin.debug:
     msg: >-
       CHECK MODE: would run {{ drbd_disk_prep_plan.parted_argv | default([]) | join(' ') }}
-      — not writing a partition table.
+      - not writing a partition table.
   changed_when: true
   when:
     - ansible_check_mode | bool

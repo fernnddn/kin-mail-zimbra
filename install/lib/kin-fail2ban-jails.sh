@@ -1,5 +1,5 @@
 #!/bin/sh
-# KIN Mail — write /etc/fail2ban/jail.d/kin-mail.conf and reload fail2ban.
+# KIN Mail - write /etc/fail2ban/jail.d/kin-mail.conf and reload fail2ban.
 #
 # Fast path shared by:
 #   install/09-hardening.sh
@@ -11,12 +11,12 @@
 # unmounted mode omits them even while the volume is still mounted).
 #
 # Usage: kin-fail2ban-jails [auto|mounted|unmounted]
-#   auto|mounted|start|promote  — include zimbra/zpush jails iff log files exist
-#   unmounted|stop|demote       — sshd only (call before DRBD unmount)
+#   auto|mounted|start|promote - include zimbra/zpush jails iff log files exist
+#   unmounted|stop|demote - sshd only (call before DRBD unmount)
 #
 # Environment:
-#   FAIL2BAN_IGNORE_IP              — use this ignoreip (Ansible / 09-hardening)
-#   KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 — never exit non-zero (OCF start/stop)
+#   FAIL2BAN_IGNORE_IP - use this ignoreip (Ansible / 09-hardening)
+#   KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 - never exit non-zero (OCF start/stop)
 #
 # Does not recompute admin IPs. If FAIL2BAN_IGNORE_IP is unset, reuse ignoreip
 # from the existing jail file, else loopback only.
@@ -103,7 +103,7 @@ tmp=$(mktemp "${tmpdir}/kin-mail.conf.XXXXXX") || {
 }
 
 cat > "$tmp" <<EOF
-# KIN Mail Part A — managed by install/lib/kin-fail2ban-jails.sh
+# KIN Mail Part A - managed by install/lib/kin-fail2ban-jails.sh
 [DEFAULT]
 ignoreip = ${ignoreip}
 bantime  = 1h

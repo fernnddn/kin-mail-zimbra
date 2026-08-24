@@ -1,6 +1,6 @@
 """Apply wizard draft → /etc/kin-mail/config (merge + timestamped backup).
 
-File write only — does not run install stages or restart services.
+File write only - does not run install stages or restart services.
 
 On a fresh appliance (no /etc/kin-mail/config yet), creates a base config first
 using auto-detected SERVER_IP / NET_IFACE (same idea as install/00-config.sh
@@ -359,7 +359,7 @@ def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
             "https://api.github.com/repos/maldua/zimbra-foss/releases?per_page=60",
             headers={"Accept": "application/vnd.github+json", "User-Agent": "kin-mail-console"},
         )
-        with urllib.request.urlopen(req, timeout=25) as resp:  # noqa: S310 — fixed HTTPS URL
+        with urllib.request.urlopen(req, timeout=25) as resp:  # noqa: S310 - fixed HTTPS URL
             payload = json.loads(resp.read().decode("utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return None
@@ -402,7 +402,7 @@ def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
 
 
 def default_zcs_artefacts() -> dict[str, str]:
-    """ZCS download defaults — prefer live GitHub resolve, else last-known good."""
+    """ZCS download defaults - prefer live GitHub resolve, else last-known good."""
     resolved = resolve_latest_zcs_artefacts()
     if resolved:
         return resolved
@@ -429,7 +429,7 @@ def build_base_config() -> dict[str, str]:
     server_ip, net_iface = detect_host_network()
     if not server_ip or not net_iface:
         raise RuntimeError(
-            "cannot auto-detect SERVER_IP/NET_IFACE — check network is up "
+            "cannot auto-detect SERVER_IP/NET_IFACE - check network is up "
             "(ip -4 addr show scope global)"
         )
     base: dict[str, str] = {
@@ -585,7 +585,7 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     # (populated by build_base_config() on first create).
     for key in ("SERVER_IP", "NET_IFACE"):
         if not existing.get(key):
-            errs.append(f"existing config missing {key} — cannot safely merge draft")
+            errs.append(f"existing config missing {key} - cannot safely merge draft")
 
     return errs
 
@@ -654,7 +654,7 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     out["CONTRACTED_SEATS"] = seats
     # Do not wipe existing KIN_ADMIN_IPS when draft leaves the field blank
     # (wizard allows deferred firewall sources). Explicit blanking requires
-    # sending whitespace-only only after operator clears it intentionally —
+    # sending whitespace-only only after operator clears it intentionally - 
     # still preserve existing if draft value is empty string.
     draft_ips = str(draft.get("kin_admin_ips") or "").strip()
     if draft_ips:
@@ -757,7 +757,7 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
             lines.append(f"ERROR: {exc}\n")
             return 1, lines
         lines.append(
-            f"No {CONF_FILE} yet — building base config "
+            f"No {CONF_FILE} yet - building base config "
             f"(SERVER_IP={existing.get('SERVER_IP')} NET_IFACE={existing.get('NET_IFACE')})\n"
         )
 
@@ -852,7 +852,7 @@ def apply_wizard_draft() -> tuple[int, list[str]]:
 
         ad_env = sync_ad_env_from_kin_config(source=CONF_FILE)
         lines.append(f"Synced console AD settings → {ad_env} (mode 640, no secrets in this log)\n")
-    except Exception as exc:  # noqa: BLE001 — apply still succeeded; console may need bootstrap sync
+    except Exception as exc:  # noqa: BLE001 - apply still succeeded; console may need bootstrap sync
         lines.append(f"WARN: console AD env sync failed: {exc}\n")
     lines.append(
         "NOTE: No services were restarted. Live Zimbra/Pacemaker still use prior "

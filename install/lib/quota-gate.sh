@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — shared quota / seat gate (NEW MAILBOX CREATION ONLY)
+# KIN Mail - shared quota / seat gate (NEW MAILBOX CREATION ONLY)
 #
 # Source this after 00-config.sh (needs zimbra_cmd / MAIL_DOMAIN / CONTRACTED_SEATS):
 #
 #   . ./00-config.sh
 #   . ./lib/quota-gate.sh
 #
-# SCOPE (explicit design decision — do not widen without a new decision):
+# SCOPE (explicit design decision - do not widen without a new decision):
 #   • YES:  creating a new mailbox (before `zmprov ca`)
 #   • NO:   password reset, per-mailbox quota change, rename, alias, COS,
 #           status change, or any other modify path
 #
 # Callers (today and later):
 #   • install/08-create-mailbox.sh  (manual CLI provisioning)
-#   • future admin-console self-service form (must call these functions — not reimplement)
-#   • future directory sync (same — create path only)
+#   • future admin-console self-service form (must call these functions - not reimplement)
+#   • future directory sync (same - create path only)
 #
 # Active mailbox definition (counted against CONTRACTED_SEATS):
 #   • Account is on the target mail domain (zmprov -l gaa <domain>)
@@ -104,12 +104,12 @@ kin_quota_gate_allow_new_mailbox() {
     return 2
   fi
 
-  # Placeholder / unset — never invent a production seat count.
+  # Placeholder / unset - never invent a production seat count.
   if [ -z "$seats_raw" ] || [ "$seats_raw" = "PLACEHOLDER_UNSET" ]; then
     KIN_QUOTA_USED=""
     KIN_QUOTA_LIMIT=""
     KIN_QUOTA_REMAINING=""
-    KIN_QUOTA_MESSAGE="seat limit not configured (CONTRACTED_SEATS is PLACEHOLDER_UNSET) — set a positive integer in /etc/kin-mail/config before creating mailboxes"
+    KIN_QUOTA_MESSAGE="seat limit not configured (CONTRACTED_SEATS is PLACEHOLDER_UNSET) - set a positive integer in /etc/kin-mail/config before creating mailboxes"
     return 1
   fi
 
@@ -132,16 +132,16 @@ kin_quota_gate_allow_new_mailbox() {
   KIN_QUOTA_REMAINING=$remaining
 
   if [ "$used" -ge "$limit" ]; then
-    KIN_QUOTA_MESSAGE="seat limit reached: ${used}/${limit} — contact KIN to add seats"
+    KIN_QUOTA_MESSAGE="seat limit reached: ${used}/${limit} - contact KIN to add seats"
     return 1
   fi
 
-  KIN_QUOTA_MESSAGE="seat available: ${used}/${limit} (${remaining} remaining) — new mailbox create allowed"
+  KIN_QUOTA_MESSAGE="seat available: ${used}/${limit} (${remaining} remaining) - new mailbox create allowed"
   return 0
 }
 
 # -----------------------------------------------------------------------------
-# Read-only status helper (safe to call anytime — does not create anything).
+# Read-only status helper (safe to call anytime - does not create anything).
 # Prints a one-line summary; exit mirrors kin_quota_gate_allow_new_mailbox.
 # -----------------------------------------------------------------------------
 kin_quota_status() {

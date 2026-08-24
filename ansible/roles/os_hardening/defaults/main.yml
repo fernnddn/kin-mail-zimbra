@@ -1,5 +1,5 @@
 ---
-# Per-machine OS hardening — same behaviour as install/09-hardening.sh --os-only.
+# Per-machine OS hardening - same behaviour as install/09-hardening.sh --os-only.
 # COS lockout, IMAP/POP cleartext, TLS ciphers, and SMTP rates live in shared
 # LDAP/DRBD and must NOT be applied here.
 

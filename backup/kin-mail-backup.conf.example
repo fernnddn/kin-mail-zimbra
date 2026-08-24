@@ -1,5 +1,5 @@
 # Copy to /etc/kin-mail-backup/config on the backup repository VM (mode 0600).
-# Real cluster addresses belong only in that file — never in git.
+# Real cluster addresses belong only in that file - never in git.
 
 # Space-separated mail-node IPs or hostnames. The backup finds whichever
 # node currently has /opt/zimbra mounted (the Promoted replica). Do not

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# KIN Mail — move a live /opt/zimbra tree from the OS volume onto the DRBD
+# KIN Mail - move a live /opt/zimbra tree from the OS volume onto the DRBD
 # data partition (usually /dev/sdb1) BEFORE Build HA pair.
 #
 # Why: console ha_disk.py refuses HA while Zimbra still lives on the root
 # volume (replicating an empty DRBD disk would drop mail). plan_auto_partition()
-# GPT-partitions only — it does NOT mkfs the data slice (meta stays unformatted).
+# GPT-partitions only - it does NOT mkfs the data slice (meta stays unformatted).
 #
 # This script is MANUAL and per-host. It is NOT called from orchestration.
 # Do not run it on a node that already has Pacemaker/DRBD owning /opt/zimbra.
@@ -55,7 +55,7 @@ Usage: sudo $0 [--dry-run] [--i-understand-this-moves-live-mail]
 
 Environment:
   KIN_DRBD_DATA_DISK     data partition (default /dev/sdb1)
-  KIN_DRBD_META_DISK     meta partition — never formatted (default /dev/sdb2)
+  KIN_DRBD_META_DISK     meta partition - never formatted (default /dev/sdb2)
   KIN_MIGRATE_CHECKSUM=1 extra rsync --checksum verify (slow; optional)
   KIN_MIGRATE_STOP_WAIT_SEC   max seconds to wait after zmcontrol stop (default 300)
   KIN_MIGRATE_START_WAIT_SEC  max seconds to wait after zmcontrol start (default 900)
@@ -388,11 +388,11 @@ STAGE=preflight
 say "Preflight"
 
 if [ ! -d "$ZIMBRA_DIR" ]; then
-  fail "${ZIMBRA_DIR} is missing — nothing to migrate"
+  fail "${ZIMBRA_DIR} is missing - nothing to migrate"
   exit 1
 fi
 if [ ! -x "$ZIMBRA_DIR/bin/zmcontrol" ] && [ ! -x /opt/zimbra/bin/zmcontrol ]; then
-  fail "zmcontrol not found under ${ZIMBRA_DIR} — refusing"
+  fail "zmcontrol not found under ${ZIMBRA_DIR} - refusing"
   exit 1
 fi
 
@@ -427,7 +427,7 @@ ROOT_PARENT=$(parent_name "$ROOT_SRC")
 DATA_PARENT=$(parent_name "$DATA_DISK")
 [ -n "$DATA_PARENT" ] || { fail "Could not read PKNAME for ${DATA_DISK}"; exit 1; }
 if [ "$DATA_PARENT" = "$ROOT_PARENT" ]; then
-  fail "${DATA_DISK} is on the OS disk (${ROOT_PARENT}) — refusing to put Zimbra there"
+  fail "${DATA_DISK} is on the OS disk (${ROOT_PARENT}) - refusing to put Zimbra there"
   exit 1
 fi
 
@@ -439,7 +439,7 @@ if [ -n "$Z_UUID" ] && [ -n "$DATA_UUID" ] && [ "$Z_UUID" = "$DATA_UUID" ]; then
   exit 0
 fi
 if printf '%s' "$Z_MNTSRC" | grep -q '^/dev/drbd'; then
-  ok "${ZIMBRA_DIR} is already on DRBD (${Z_MNTSRC}) — no migrate"
+  ok "${ZIMBRA_DIR} is already on DRBD (${Z_MNTSRC}) - no migrate"
   exit 0
 fi
 if [ -n "$Z_MNTSRC" ] && [ "$Z_MNTSRC" = "$DATA_DISK" ]; then
@@ -449,20 +449,20 @@ fi
 
 if command -v pcs >/dev/null 2>&1 && pcs status >/dev/null 2>&1; then
   if pcs status 2>/dev/null | grep -qE 'kin-drbd|kin-fs|kin-mail-svc'; then
-    fail "Pacemaker already owns KIN Mail resources — do not use this script on a formed cluster"
+    fail "Pacemaker already owns KIN Mail resources - do not use this script on a formed cluster"
     exit 1
   fi
 fi
 if command -v drbdadm >/dev/null 2>&1; then
   if drbdadm status kin-zimbra >/dev/null 2>&1; then
-    fail "DRBD resource kin-zimbra is already configured — refusing to mkfs/mount the backing disk"
+    fail "DRBD resource kin-zimbra is already configured - refusing to mkfs/mount the backing disk"
     exit 1
   fi
 fi
 
 EXTRA_MOUNTS=$(findmnt -nr -o TARGET | awk '$0 ~ /^\/opt\/zimbra\// {print}' || true)
 if [ -n "$EXTRA_MOUNTS" ]; then
-  fail "Extra mounts under ${ZIMBRA_DIR} — refusing a blind rsync:"
+  fail "Extra mounts under ${ZIMBRA_DIR} - refusing a blind rsync:"
   printf '%s\n' "$EXTRA_MOUNTS" | sed 's/^/    /'
   exit 1
 fi
@@ -481,7 +481,7 @@ NEED_MKFS=0
 FSTYPE=$(blkid -s TYPE -o value "$DATA_DISK" 2>/dev/null || true)
 DATA_MP=$(lsblk -no MOUNTPOINT "$DATA_DISK" 2>/dev/null | head -1 | tr -d ' ')
 if [ -n "$DATA_MP" ]; then
-  fail "${DATA_DISK} is already mounted on ${DATA_MP} — unmount it and re-run"
+  fail "${DATA_DISK} is already mounted on ${DATA_MP} - unmount it and re-run"
   exit 1
 fi
 
@@ -489,13 +489,13 @@ case "$FSTYPE" in
   "")
     NEED_MKFS=1
     command -v mkfs.ext4 >/dev/null 2>&1 || { fail "mkfs.ext4 not found (install e2fsprogs)"; exit 1; }
-    info "${DATA_DISK} has no filesystem — will mkfs.ext4 -L zimbra-data (plan_auto_partition does not mkfs data)"
+    info "${DATA_DISK} has no filesystem - will mkfs.ext4 -L zimbra-data (plan_auto_partition does not mkfs data)"
     ;;
   ext4)
     ok "${DATA_DISK} is already ext4 (will not mkfs again)"
     ;;
   *)
-    fail "${DATA_DISK} has TYPE=${FSTYPE} — refusing to reuse/reformat an unexpected filesystem"
+    fail "${DATA_DISK} has TYPE=${FSTYPE} - refusing to reuse/reformat an unexpected filesystem"
     exit 1
     ;;
 esac
@@ -520,7 +520,7 @@ if [ "$NEED_MKFS" -eq 0 ]; then
       DATA_LABEL=$(blkid -s LABEL -o value "$DATA_DISK" 2>/dev/null || true)
       if [ "$DATA_LABEL" = "zimbra-data" ] && [ -z "$Z_MNTSRC" ]; then
         RESUME_RSYNC=1
-        warn "${DATA_DISK} already has files (e.g. ${leftover}) — treating as a resumed copy (label zimbra-data, source still on the root volume)"
+        warn "${DATA_DISK} already has files (e.g. ${leftover}) - treating as a resumed copy (label zimbra-data, source still on the root volume)"
       else
         fail "${DATA_DISK} already has files (e.g. ${leftover}) and is not a resumable zimbra-data slice. Inspect it before migrating."
         exit 1
@@ -535,10 +535,10 @@ if [ "$NEED_MKFS" -eq 0 ]; then
 fi
 
 info "Target : ${DATA_DISK} (parent /dev/${DATA_PARENT})"
-info "Meta   : ${META_DISK} (must stay unformatted — this script never mkfs meta)"
+info "Meta   : ${META_DISK} (must stay unformatted - this script never mkfs meta)"
 info "Source : ${ZIMBRA_DIR} currently on ${Z_MNTSRC:-root volume (${ROOT_SRC})}"
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "DRY-RUN complete — no changes"
+  say "DRY-RUN complete - no changes"
   if [ "$NEED_MKFS" -eq 1 ]; then
     info "Real run would: mkfs.ext4, zmcontrol stop, rsync -aHAX, fstab UUID, mount ${ZIMBRA_DIR}, zmcontrol start"
   else
@@ -583,12 +583,12 @@ if [ "$RESUME_RSYNC" -eq 1 ]; then
   warn "Resume: rsync --delete so ${DATA_DISK} matches ${ZIMBRA_DIR} (original tree still untouched)"
 fi
 rsync "${RSYNC_FLAGS[@]}" "$ZIMBRA_DIR"/ "$TMP_MNT"/ \
-  || die "rsync failed (exit $?) — original tree is untouched at ${ZIMBRA_DIR}"
+  || die "rsync failed (exit $?) - original tree is untouched at ${ZIMBRA_DIR}"
 # Second pass must not want to copy or delete anything (timestamp-only lines are ok).
 VERIFY_FLAGS=("${RSYNC_FLAGS[@]}")
 if [ "${KIN_MIGRATE_CHECKSUM:-0}" = "1" ]; then
   VERIFY_FLAGS+=(--checksum)
-  info "KIN_MIGRATE_CHECKSUM=1 — verify pass uses --checksum (slow on large stores)"
+  info "KIN_MIGRATE_CHECKSUM=1 - verify pass uses --checksum (slow on large stores)"
 fi
 pending_lines=$(rsync_verify_pending_lines "$ZIMBRA_DIR"/ "$TMP_MNT"/ "${VERIFY_FLAGS[@]}")
 pending=$(printf '%s\n' "$pending_lines" | count_nonempty_lines)
@@ -599,7 +599,7 @@ fi
 src_n=$(tree_entry_count "$ZIMBRA_DIR")
 dst_n=$(tree_entry_count "$TMP_MNT")
 if [ "$src_n" != "$dst_n" ]; then
-  die "entry count mismatch after rsync (source=${src_n} dest=${dst_n}) — refusing cutover"
+  die "entry count mismatch after rsync (source=${src_n} dest=${dst_n}) - refusing cutover"
 fi
 sync
 ok "rsync complete (exit 0, verify dry-run empty, ${src_n} entries)"
@@ -615,7 +615,7 @@ FSTAB_BAK="${FSTAB}.kin-pre-zimbra-migrate-${TS}"
 cp -a "$FSTAB" "$FSTAB_BAK" || die "Could not backup ${FSTAB}"
 
 if grep -q "KIN Mail zimbra data partition" "$FSTAB" 2>/dev/null; then
-  die "${FSTAB} already has a KIN Mail zimbra data entry — inspect by hand"
+  die "${FSTAB} already has a KIN Mail zimbra data entry - inspect by hand"
 fi
 cat >> "$FSTAB" <<EOF
 
@@ -624,12 +624,12 @@ cat >> "$FSTAB" <<EOF
 UUID=${UUID} ${ZIMBRA_DIR} ext4 defaults 0 2
 EOF
 grep -Fq "UUID=${UUID} ${ZIMBRA_DIR} ext4 defaults 0 2" "$FSTAB" \
-  || die "fstab write did not stick — refusing cutover"
+  || die "fstab write did not stick - refusing cutover"
 
 mv "$ZIMBRA_DIR" "$BACKUP_DIR" || die "mv ${ZIMBRA_DIR} → ${BACKUP_DIR} failed"
 mkdir -p "$ZIMBRA_DIR"
 if ! mount "$ZIMBRA_DIR"; then
-  die "mount ${ZIMBRA_DIR} from fstab failed — restoring the original directory"
+  die "mount ${ZIMBRA_DIR} from fstab failed - restoring the original directory"
 fi
 OPT_MOUNTED_NEW=1
 
@@ -653,12 +653,12 @@ ok "All services running"
 
 STAGE='done'
 echo
-say "DONE — ${ZIMBRA_DIR} is on ${DATA_DISK} (UUID=${UUID})"
+say "DONE - ${ZIMBRA_DIR} is on ${DATA_DISK} (UUID=${UUID})"
 warn "Old tree kept at ${BACKUP_DIR} (same root filesystem, rename only)."
 warn "Do NOT delete it until mail has been healthy AND you are ready for Build HA pair."
 info "fstab backup: ${FSTAB_BAK}"
 info "When Pacemaker mounts /dev/drbd0, comment/remove the UUID=${UUID} line in ${FSTAB}"
 info "  (otherwise boot and kin-fs will fight over ${ZIMBRA_DIR})."
-info "Build HA pair create-md may ask about the existing ext4 signature — that is expected"
+info "Build HA pair create-md may ask about the existing ext4 signature - that is expected"
 info "  with external meta on ${META_DISK}; unmount ${ZIMBRA_DIR} first if DRBD refuses a busy disk."
 exit 0
