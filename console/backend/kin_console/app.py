@@ -158,7 +158,7 @@ def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, obj
 
 
 @app.post("/api/login")
-async def login(body: LoginBody, response: Response) -> dict[str, str]:
+async def login(body: LoginBody, response: Response) -> dict[str, object]:
     try:
         user = users.authenticate(body.username, body.password)
     except users.AuthError as exc:
@@ -201,7 +201,7 @@ async def login(body: LoginBody, response: Response) -> dict[str, str]:
 
 
 @app.post("/api/login/mfa")
-async def login_mfa(body: MfaLoginBody, response: Response) -> dict[str, str]:
+async def login_mfa(body: MfaLoginBody, response: Response) -> dict[str, object]:
     try:
         pending = mfa.read_login_pending(body.mfa_token)
     except ValueError as exc:
