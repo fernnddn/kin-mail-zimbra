@@ -108,6 +108,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   const lastSseAtRef = useRef(0);
   /** Sync lock so a second click cannot start another stream before React re-renders. */
   const pipelineStartRef = useRef(false);
+  /** Pending debounced flush of logBufRef into log/installProgress state. */
+  const flushTimerRef = useRef<number | null>(null);
 
   const pipelineBusy = localBusy || installInProgress;
 
@@ -117,6 +119,10 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       pipelineEsRef.current = null;
       cancelEsRef.current?.close();
       cancelEsRef.current = null;
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -217,15 +223,36 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     }
   }, [installInProgress, hydrateFromServer]);
 
-  const append = useCallback((chunk: string) => {
-    lastSseAtRef.current = Date.now();
-    logBufRef.current += chunk;
+  // parseInstallProgress rescans the whole accumulated transcript (regex +
+  // substring search), so calling it on every single SSE chunk makes each
+  // update cost grow with total log size — visibly laggy on a chatty stage
+  // like the Zimbra install, worse the longer the run goes. Chunks still
+  // land in logBufRef immediately; only the state update (and the parse it
+  // triggers) is coalesced to a few times a second.
+  const LOG_FLUSH_INTERVAL_MS = 200;
+
+  const flushLog = useCallback(() => {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
     setLog(logBufRef.current);
     setInstallProgress(parseInstallProgress(logBufRef.current));
-    if (looksLikeDeadmanArmed(chunk)) {
-      setDeadmanHint(true);
-    }
   }, []);
+
+  const append = useCallback(
+    (chunk: string) => {
+      lastSseAtRef.current = Date.now();
+      logBufRef.current += chunk;
+      if (looksLikeDeadmanArmed(chunk)) {
+        setDeadmanHint(true);
+      }
+      if (flushTimerRef.current === null) {
+        flushTimerRef.current = window.setTimeout(flushLog, LOG_FLUSH_INTERVAL_MS);
+      }
+    },
+    [flushLog],
+  );
 
   const attachStream = useCallback(
     (
@@ -261,6 +288,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         if (parsed.type === "error") {
           const msg = parsed.message || parsed.code || "error";
           append(`[error] ${parsed.code || "error"}: ${msg}\n`);
+          flushLog(); // stream is ending — do not leave the final state debounced
           if (parsed.code === "busy") {
             onFinished(undefined, "busy");
             es.close();
@@ -273,6 +301,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         }
         if (parsed.type === "done") {
           append(`[done] exit=${parsed.exit_code ?? "?"}\n`);
+          flushLog(); // stream is ending — do not leave the final state debounced
           onFinished(parsed.exit_code, "done");
           es.close();
           if (action === "cancel_firewall_deadman" && parsed.exit_code === 0) {
@@ -287,6 +316,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         // EventSource drops on background tabs / brief network blips. Do NOT treat as finished
         // until the server confirms the install is no longer running.
         append(`[stream] disconnected, checking server status…\n`);
+        flushLog();
         es.close();
         onFinished(undefined, "disconnect");
         void (async () => {
@@ -305,7 +335,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         })();
       };
     },
-    [append, hydrateFromServer, refreshSetup],
+    [append, flushLog, hydrateFromServer, refreshSetup],
   );
 
   const openStream = useCallback(
@@ -377,6 +407,12 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetLogBuffer = useCallback(() => {
+    // Cancel a pending debounced flush from the previous run so it cannot
+    // land after this reset and resurrect stale text.
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
     // Drop the previous run's transcript so parseInstallProgress cannot keep
     // matching "Pipeline stopped at" / ORCH_FAILED from a failed attempt.
     logBufRef.current = LOG_BASELINE;
