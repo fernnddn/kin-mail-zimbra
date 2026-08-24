@@ -171,6 +171,20 @@ else
   info "ufw not present — skip"
 fi
 
+# fail2ban itself also guards plain SSH (install/09-hardening.sh), so don't
+# stop/disable the service — just drop the KIN-specific jail (Zimbra/Z-Push
+# rules pointing at log files that no longer exist) and reload.
+FAIL2BAN_JAIL="${KIN_FAIL2BAN_JAIL_PATH:-/etc/fail2ban/jail.d/kin-mail.conf}"
+if [ -f "$FAIL2BAN_JAIL" ]; then
+  run_soft rm -f "$FAIL2BAN_JAIL"
+  if command -v fail2ban-client >/dev/null 2>&1 && systemctl is-active --quiet fail2ban 2>/dev/null; then
+    run_soft systemctl reload fail2ban
+  fi
+  ok "KIN fail2ban jail removed (fail2ban service left running for SSH)"
+else
+  info "No KIN fail2ban jail file — skip"
+fi
+
 # -----------------------------------------------------------------------------
 stage "6/8 Remove KIN Mail config, packages, and data paths"
 # Config AFTER services stopped (design: never rm while services run).
@@ -195,6 +209,15 @@ run_soft rm -rf /var/lib/pacemaker /var/lib/corosync
 run_soft rm -rf /etc/corosync/qdevice
 # SBD
 run_soft rm -f /etc/default/sbd /etc/sysconfig/sbd
+# Let's Encrypt state — includes the Cloudflare API token (CF_CREDS) and the
+# zimbra-deploy renewal hook, not just certs. Remove before the cert can be
+# picked up by a stray renewal run.
+run_soft rm -rf /etc/letsencrypt
+# OS user created by the Zimbra installer; its home (/opt/zimbra) is handled
+# separately below via the mounted volume, so don't pass -r here.
+if id zimbra >/dev/null 2>&1; then
+  run_soft userdel zimbra
+fi
 # Optional package purge — best-effort; leave OS base packages if purge fails.
 if [ "$DRY_RUN" -eq 0 ]; then
   if command -v apt-get >/dev/null 2>&1; then
