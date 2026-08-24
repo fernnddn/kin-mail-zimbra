@@ -52,8 +52,6 @@ type TlsState = {
 
 type SettingsResp = {
   server_id?: string;
-  contracted_seats?: string;
-  seats_source?: string;
   admin_ips?: string;
   license?: LicenseState;
   ad?: AdState;
@@ -137,8 +135,6 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [serverId, setServerId] = useState("");
-  const [seats, setSeats] = useState("");
-  const [seatsSource, setSeatsSource] = useState("manual");
   const [license, setLicense] = useState<LicenseState>({});
   const [licenseToken, setLicenseToken] = useState("");
   const [adminIps, setAdminIps] = useState("");
@@ -161,8 +157,6 @@ export default function SettingsPage() {
   async function refresh() {
     const st = await api<SettingsResp>("/api/settings");
     setServerId(st.server_id || st.license?.server_id || "");
-    setSeats(String(st.contracted_seats || ""));
-    setSeatsSource(st.seats_source || "manual");
     setLicense(st.license || {});
     setAdminIps(st.admin_ips || "");
     const ad = st.ad;
@@ -194,23 +188,6 @@ export default function SettingsPage() {
 
   if (!allowed) {
     return <Navigate to="/cluster" replace />;
-  }
-
-  async function saveSeats(e: FormEvent) {
-    e.preventDefault();
-    setBusy("seats");
-    setError("");
-    try {
-      await api("/api/settings/seats", {
-        method: "POST",
-        body: JSON.stringify({ seats: Number(seats) }),
-      });
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save seats");
-    } finally {
-      setBusy("");
-    }
   }
 
   async function saveAd(e: FormEvent) {
@@ -324,7 +301,6 @@ export default function SettingsPage() {
     }
   }
 
-  const licenseLockedSeats = seatsSource === "license";
   const days = tls.days_left;
   const tlsLabel =
     tls.not_after && days != null
@@ -339,7 +315,7 @@ export default function SettingsPage() {
         <PageHeader
           icon={<SettingsIcon />}
           title="Settings"
-          subtitle="Directory sign-in, contracted seats, trusted console IPs, TLS, and the signed license for this Email Server."
+          subtitle="Directory sign-in, trusted console IPs, TLS, and the signed license for this Email Server."
         />
         {error ? <WarnBox>{error}</WarnBox> : null}
         {!loaded ? <Hint>Loading settings…</Hint> : null}
@@ -375,40 +351,6 @@ export default function SettingsPage() {
             />
             <Button type="submit" variant="primary" loading={busy === "license"} disabled={!licenseToken.trim()}>
               Apply license
-            </Button>
-          </form>
-        </Section>
-
-        <Section>
-          <SectionTitle>Contracted seats</SectionTitle>
-          {licenseLockedSeats ? (
-            <Hint>
-              Seat count comes from the signed license ({license.seats}). The manual field is
-              locked while that license is present.
-            </Hint>
-          ) : (
-            <Hint>
-              How many mailboxes this installation may create. This is a seat count, not a
-              per-mailbox storage cap.
-            </Hint>
-          )}
-          <form onSubmit={(e) => void saveSeats(e)}>
-            <Label htmlFor="seats">Seat limit</Label>
-            <Input
-              id="seats"
-              inputMode="numeric"
-              value={seats === "PLACEHOLDER_UNSET" ? "" : seats}
-              onChange={(e) => setSeats(e.target.value.replace(/[^\d]/g, ""))}
-              disabled={licenseLockedSeats}
-              placeholder="32"
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              loading={busy === "seats"}
-              disabled={licenseLockedSeats || !seats}
-            >
-              Save seats
             </Button>
           </form>
         </Section>

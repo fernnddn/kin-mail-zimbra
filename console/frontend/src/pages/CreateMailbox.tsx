@@ -267,7 +267,7 @@ export default function CreateMailboxPage() {
         <Hint>
           <strong>{statusMessage || "Seat status unavailable"}</strong>{" "}
           {seats.code === "unset" && isSuper ? (
-            <Link to="/settings">Set contracted seats in Settings</Link>
+            <Link to="/settings">Paste a signed license in Settings</Link>
           ) : null}
         </Hint>
 

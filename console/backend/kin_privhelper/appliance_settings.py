@@ -1,4 +1,9 @@
-"""Console-driven appliance settings (seats, AD, admin IPs, license, TLS)."""
+"""Console-driven appliance settings (AD, admin IPs, license, TLS).
+
+section=seats still exists on the privhelper for internal/bootstrap writes.
+The customer Settings page no longer exposes a manual seat field; seat count
+comes from applying a signed license (which writes CONTRACTED_SEATS).
+"""
 
 from __future__ import annotations
 

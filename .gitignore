@@ -50,6 +50,10 @@ cap.txt
 *.docx
 *.pdf
 
+# KIN license issue ledger (local to the generator machine, not the product)
+licensing-generator/license-ledger.csv
+licensing-generator/license-ledger.jsonl
+
 # --- editors and OS ----------------------------------------------------------
 .vscode/
 .idea/

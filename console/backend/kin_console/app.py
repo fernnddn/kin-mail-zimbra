@@ -437,10 +437,6 @@ class MailboxRenameBody(BaseModel):
     new_local_part: str = Field(min_length=1, max_length=64)
 
 
-class SeatsBody(BaseModel):
-    seats: int = Field(ge=1, le=100000)
-
-
 class AdSettingsBody(BaseModel):
     enabled: bool = False
     ldap_url: str = Field(default="", max_length=512)
@@ -856,10 +852,10 @@ def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
     limit = seats.get("limit")
     if code == "unset":
         return (
-            "Seat limit is not set. A Super Admin can set contracted seats on the Settings page."
+            "Seat limit is not set. A Super Admin can paste a signed license on the Settings page."
         )
     if code == "invalid":
-        return "Seat limit is not a valid number. A Super Admin can fix it on the Settings page."
+        return "Seat limit is not a valid number. A Super Admin can paste a signed license on the Settings page."
     if code == "at_limit":
         return f"All contracted mailboxes are in use ({used}/{limit}). Contact KIN to add seats."
     if code == "count_failed":
@@ -898,7 +894,7 @@ def _human_mailbox_error(log: str, error: str) -> str:
     if "not found" in text.lower():
         return "Mailbox not found."
     if "PLACEHOLDER_UNSET" in text or "seat limit not configured" in text:
-        return "Seat limit is not set. A Super Admin can set contracted seats on the Settings page."
+        return "Seat limit is not set. A Super Admin can paste a signed license on the Settings page."
     if "seat limit reached" in text:
         return "All contracted mailboxes are in use. Contact KIN to add seats."
     if "grace or expired" in text:
@@ -957,25 +953,6 @@ async def api_settings(
     parsed["tls"] = tls_info
     parsed["license"] = parsed.get("license") or _current_license_view()
     return parsed
-
-
-@app.post("/api/settings/seats")
-async def api_settings_seats(
-    body: SeatsBody,
-    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
-) -> dict[str, object]:
-    _require_settings(user)
-    result = await _collect_privhelper(
-        proto.CMD_APPLY_APPLIANCE_SETTINGS,
-        user.username,
-        args={"section": "seats", "seats": str(body.seats)},
-    )
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(result.get("error") or "Could not update seat count"),
-        )
-    return {"ok": True, "seats": body.seats}
 
 
 @app.post("/api/settings/ad")

@@ -12,10 +12,17 @@ Issue a license:
   python3 generate_license.py issue \\
     --server-id <Email-Server-ID from the console Settings page> \\
     --seats 32 \\
-    --type perpetual
+    --type perpetual \\
+    --company "PT Example" \\
+    --short-name example \\
+    --purchase-date 2026-08-24
 
   python3 generate_license.py issue \\
     --server-id <id> --seats 10 --type trial --days 90
+
+Company name, short name, and purchase date are KIN's own record. They are
+written to a local ledger next to this script and are not part of the signed
+payload the console verifies.
 
 The private key path defaults to ~/.kin-mail-license/ed25519-private.pem
 or KIN_LICENSE_PRIVATE_KEY. Keep that file offline and backed up.
@@ -24,6 +31,7 @@ or KIN_LICENSE_PRIVATE_KEY. Keep that file offline and backed up.
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +47,20 @@ if str(_BACKEND) not in sys.path:
 
 from kin_console.license import sign_payload  # noqa: E402
 from kin_console.license_keys import KIN_LICENSE_PUBLIC_KEY_B64  # noqa: E402
+
+LEDGER_FIELDS = (
+    "recorded_at",
+    "company_name",
+    "short_name",
+    "purchase_date",
+    "type",
+    "server_id",
+    "seats",
+    "issued_at",
+    "expires_at",
+    "token",
+)
+LEDGER_CSV = Path(__file__).resolve().parent / "license-ledger.csv"
 
 
 def _default_key_dir() -> Path:
@@ -79,6 +101,30 @@ def _load_private(path: Path) -> Ed25519PrivateKey:
     return key
 
 
+def _ask(label: str, already: str) -> str:
+    text = (already or "").strip()
+    if text:
+        return text
+    if not sys.stdin.isatty():
+        return ""
+    try:
+        return input(f"{label}: ").strip()
+    except EOFError:
+        return ""
+
+
+def append_ledger(row: dict[str, str], path: Path | None = None) -> Path:
+    dest = path or LEDGER_CSV
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not dest.is_file()
+    with dest.open("a", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=LEDGER_FIELDS, extrasaction="ignore")
+        if new_file:
+            writer.writeheader()
+        writer.writerow({k: row.get(k, "") for k in LEDGER_FIELDS})
+    return dest
+
+
 def issue(args: argparse.Namespace) -> None:
     import os
 
@@ -104,9 +150,28 @@ def issue(args: argparse.Namespace) -> None:
         "expires_at": expires,
     }
     token = sign_payload(payload, priv)
+    company = _ask("Company name", args.company)
+    short_name = _ask("Short company name", args.short_name)
+    purchase_date = _ask("Purchase date (YYYY-MM-DD)", args.purchase_date)
+    ledger = append_ledger(
+        {
+            "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "company_name": company,
+            "short_name": short_name,
+            "purchase_date": purchase_date,
+            "type": args.type,
+            "server_id": args.server_id.strip(),
+            "seats": str(args.seats),
+            "issued_at": issued.isoformat(),
+            "expires_at": expires or "",
+            "token": token,
+        }
+    )
     print(token)
     print(
         f"# type={args.type} seats={args.seats} server_id={args.server_id} "
+        f"company={company or '-'} short={short_name or '-'} "
+        f"purchase={purchase_date or '-'} ledger={ledger} "
         f"product_pub={KIN_LICENSE_PUBLIC_KEY_B64}",
         file=sys.stderr,
     )
@@ -123,6 +188,9 @@ def main() -> None:
     iss.add_argument("--type", choices=("trial", "perpetual"), required=True)
     iss.add_argument("--days", type=int, default=30, help="Trial duration in days")
     iss.add_argument("--key", default="")
+    iss.add_argument("--company", default="", help="Customer company name (ledger only)")
+    iss.add_argument("--short-name", default="", help="Short company name (ledger only)")
+    iss.add_argument("--purchase-date", default="", help="Purchase date YYYY-MM-DD (ledger only)")
     args = parser.parse_args()
     if args.cmd == "init-keys":
         init_keys(args.out_dir)
