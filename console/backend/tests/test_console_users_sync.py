@@ -233,5 +233,39 @@ class HaSyncWiringTests(unittest.TestCase):
         )
 
 
+class ApplyFileSymlinkGuardTests(unittest.IsolatedAsyncioTestCase):
+    """apply-file runs as root on a path an unprivileged SSH user just scp'd -
+    a symlink planted there between the scp and this step must never be
+    followed, or root ends up reading an attacker-chosen file."""
+
+    async def test_refuses_symlink_mutation_path(self) -> None:
+        import json
+        import os
+        import tempfile
+
+        from kin_privhelper.console_users_sync import MUTATION_REMOTE_TMP, _apply_file
+
+        # _apply_file only accepts the exact fixed path the real scp flow
+        # uses (_MUTATION_FILE_RE), so the attack has to be simulated there.
+        mut_path = Path(MUTATION_REMOTE_TMP)
+        if mut_path.exists() or mut_path.is_symlink():
+            mut_path.unlink()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            victim = Path(tmpdir) / "victim.json"
+            victim.write_text(
+                json.dumps({"op": "create", "username": "attacker", "role": ROLE_SUPER_ADMIN})
+            )
+            os.symlink(victim, mut_path)
+            try:
+                rc = await _apply_file(str(mut_path))
+
+                self.assertEqual(rc, 2)
+                self.assertFalse(mut_path.exists())  # symlink itself is cleaned up
+                self.assertTrue(victim.exists())  # target file untouched
+            finally:
+                if mut_path.exists() or mut_path.is_symlink():
+                    mut_path.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()

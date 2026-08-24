@@ -964,7 +964,16 @@ async def _install_staged_peer_file(
             "install -d -o kin-console -g kin-console -m 750 "
             "/var/lib/kin-mail-console; "
         )
+    # remote_tmp was scp'd by the unprivileged SSH user before this runs as
+    # root - refuse if it's a symlink (planted by another local user between
+    # the scp and this step) instead of letting `install` read through it
+    # into a root-owned destination.
+    symlink_guard = (
+        f"[ ! -L {remote_tmp} ] "
+        f"|| {{ echo 'refusing: {remote_tmp} is a symlink' >&2; exit 1; }} && "
+    )
     inner = (
+        f"{symlink_guard}"
         f"{ensure_owner}"
         f"mkdir -p {dest_dir} && "
         f"{chmod_dir}"

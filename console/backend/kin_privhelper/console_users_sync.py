@@ -513,6 +513,16 @@ async def _apply_file(path: str) -> int:
         print("USERS_RESULT:" + json.dumps({"ok": False, "code": "invalid", "error": "refusing mutation path"}))
         return 2
     mut_path = Path(path)
+    # Staged by the unprivileged SSH user before this runs as root - refuse
+    # if it's a symlink (planted by another local user between the scp and
+    # this step) rather than reading through it.
+    if mut_path.is_symlink():
+        print("USERS_RESULT:" + json.dumps({"ok": False, "code": "invalid", "error": "refusing symlink mutation path"}))
+        try:
+            mut_path.unlink()
+        except OSError:
+            pass
+        return 2
     try:
         raw = mut_path.read_text(encoding="utf-8")
         mutation = json.loads(raw)
