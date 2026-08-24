@@ -160,11 +160,33 @@ rsync -aH --delete -e "ssh -i $SSH_IDENTITY -o IdentitiesOnly=yes -o BatchMode=y
 chmod -R go-rwx "$DEST"
 
 say "Verifying checksums"
-( cd "$DEST" && sha256sum -c SHA256SUMS ) >/dev/null
-ok "SHA256SUMS match"
+checksum_rc=0
+( cd "$DEST" && sha256sum -c SHA256SUMS ) >/dev/null 2>&1 || checksum_rc=$?
 
+# Clean the remote staging either way - a corrupt local pull is not a reason
+# to also leave this run's copy sitting on the production node's /var/tmp;
+# repeated failures would otherwise fill that disk over time.
 say "Removing remote staging"
-backup_ssh "$PROMOTED" "rm -rf '$REMOTE_STAGING'"
+backup_ssh "$PROMOTED" "rm -rf '$REMOTE_STAGING'" || warn "remote staging cleanup failed, check $PROMOTED:$REMOTE_STAGING by hand"
+
+if [ "$checksum_rc" -ne 0 ]; then
+  fail "SHA256SUMS did not match - this set is not a valid backup"
+  # Move out of daily/ (not delete - kept for forensics) so it can never be
+  # mistaken for a good backup by retention or by the freshness monitor,
+  # both of which only look at daily/.
+  FAILED_DIR="$BACKUP_ROOT/failed"
+  mkdir -p "$FAILED_DIR"
+  mv "$DEST" "$FAILED_DIR/$STAMP"
+  # Bound how many failed sets accumulate; each one is a full store+index
+  # copy, so unbounded repeats would eventually fill this disk too.
+  find "$FAILED_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr | awk -v k=5 'NR>k {print $2}' \
+    | while IFS= read -r d; do [ -n "$d" ] && rm -rf "$d"; done
+  fail "Corrupt set kept at $FAILED_DIR/$STAMP for inspection"
+  exit 1
+fi
+ok "SHA256SUMS match"
+touch "$DEST/.backup-ok"
 
 say "Retention (daily keep=$DAILY_KEEP weekly keep=$WEEKLY_KEEP)"
 apply_retention "$DEST"

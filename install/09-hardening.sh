@@ -51,18 +51,13 @@ kin_fail2ban_append_ignore() {
   printf '%s' "$out"
 }
 
-# Default ignore list: loopback + cluster LAN /24 from SERVER_IP + KIN_ADMIN_IPS
-# (same trust as ufw SSH/7071/9443). No hardcoded lab CIDR in git.
+# Default ignore list: loopback + KIN_ADMIN_IPS only. No blanket LAN /24 -
+# brute-force protection should apply to every host on the segment except
+# the ones explicitly trusted, not the whole subnet by default. A banned IP
+# still self-clears via bantime (see kin-mail.jail.j2), so this doesn't need
+# its own separate expiry scheme.
 kin_fail2ban_default_ignoreip() {
-  local out="127.0.0.1/8 ::1" ip="${SERVER_IP:-}" a b c
-  case "$ip" in
-    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
-      IFS=. read -r a b c _ <<EOF
-${ip}
-EOF
-      out="${out} ${a}.${b}.${c}.0/24"
-      ;;
-  esac
+  local out="127.0.0.1/8 ::1"
   # shellcheck disable=SC2086
   kin_fail2ban_append_ignore "$out" ${KIN_ADMIN_IPS:-}
 }

@@ -2,10 +2,45 @@
 # =============================================================================
 # KIN Mail - 02 PREPARE OS
 # Base preparation of a clean Ubuntu 22.04 / 24.04 host. Idempotent: safe to re-run.
+#
+#   sudo ./02-prepare-os.sh                    full OS prep (default)
+#   sudo ./02-prepare-os.sh --revert-ssh-password
+#       Turn password/root SSH back off once HA ansible no longer needs it
+#       (see stage 1b below). Refuses if no SSH key is on file for kin/root,
+#       so it can never lock the operator out.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
+
+if [ "${1:-}" = "--revert-ssh-password" ]; then
+  OS_USER="${KIN_OS_USER:-kin}"
+  key_found=0
+  for home in "/home/${OS_USER}" "/root"; do
+    f="${home}/.ssh/authorized_keys"
+    if [ -s "$f" ]; then
+      key_found=1
+      info "Found authorized_keys: ${f}"
+    fi
+  done
+  if [ "$key_found" -ne 1 ]; then
+    fail "No authorized_keys found for ${OS_USER} or root - refusing to disable password SSH (would lock this host out)."
+    exit 1
+  fi
+  cat > /etc/ssh/sshd_config.d/00-kin-mail.conf <<'EOF'
+# KIN Mail - reverted to key-only once HA ansible no longer needs sshpass.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+  chmod 644 /etc/ssh/sshd_config.d/00-kin-mail.conf
+  if systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1; then
+    ok "sshd reverted to key-only (SSH key confirmed present first)"
+  else
+    warn "Could not reload sshd - key-only drop-in is in place; reboot or reload sshd"
+  fi
+  exit 0
+fi
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 

@@ -425,6 +425,16 @@ run_full_install() {
     }
   fi
 
+  # Single-node installs never need password SSH again (no peer to ansible
+  # into) - HA installs/mid-handoff still might (Add second server can run
+  # later), so leave those as-is. Refuses on its own if no SSH key is on
+  # file yet, so this can never lock the operator out.
+  if [ "$mid_handoff" -eq 0 ] && [ "${TOPOLOGY:-1vm}" = "1vm" ]; then
+    run_stage 02-prepare-os.sh --revert-ssh-password || {
+      warn "Could not revert password SSH automatically. Re-run later: sudo ./02-prepare-os.sh --revert-ssh-password"
+    }
+  fi
+
   echo
   if [ "$mid_handoff" -eq 1 ]; then
     say "Full install complete (mid-handoff path)"

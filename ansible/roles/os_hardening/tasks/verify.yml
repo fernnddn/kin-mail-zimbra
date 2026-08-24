@@ -49,13 +49,12 @@
   check_mode: false
   tags: [hardening, os, verify]
 
-- name: Assert ignoreip includes loopback and cluster LAN
+- name: Assert ignoreip includes loopback
   ansible.builtin.assert:
     that:
       - "'127.0.0.1/8' in os_hardening_ignoreip_line.stdout"
       - "'::1' in os_hardening_ignoreip_line.stdout"
-      - os_hardening_lan_cidr is not defined or (os_hardening_lan_cidr in os_hardening_ignoreip_line.stdout)
-    fail_msg: "fail2ban ignoreip missing loopback or LAN: {{ os_hardening_ignoreip_line.stdout }}"
+    fail_msg: "fail2ban ignoreip missing loopback: {{ os_hardening_ignoreip_line.stdout }}"
   tags: [hardening, os, verify]
 
 - name: Verify unattended-upgrades service is active
