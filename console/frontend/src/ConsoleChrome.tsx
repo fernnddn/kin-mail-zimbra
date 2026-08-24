@@ -3,6 +3,7 @@ import styled from "@emotion/styled";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api } from "./api";
 import { useAuth } from "./auth";
+import { useSetup } from "./setup";
 import { theme } from "./styles/theme";
 import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
 
@@ -168,6 +169,7 @@ export function ConsoleChrome({
   setupMode?: boolean;
 }) {
   const { user, logout } = useAuth();
+  const { deployed } = useSetup();
   const navigate = useNavigate();
   const isSuper = user?.role === "kin_super_admin";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -212,7 +214,7 @@ export function ConsoleChrome({
                 <NavItem to="/cluster" end>
                   Cluster
                 </NavItem>
-                <NavItem to="/wizard">Wizard</NavItem>
+                {!deployed && <NavItem to="/wizard">Wizard</NavItem>}
                 <NavItem to="/mailboxes" end>
                   Mailboxes
                 </NavItem>

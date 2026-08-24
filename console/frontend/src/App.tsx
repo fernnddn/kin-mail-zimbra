@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { EulaProvider, useEula } from "./eula";
@@ -55,12 +55,43 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Wizard only: skip login before setup is complete (incl. mid full-install). */
+/**
+ * Wizard only: skip login before setup is complete (incl. mid full-install).
+ *
+ * The moment `deployed` flips true, the backend stops accepting the
+ * anonymous pre-deploy identity — but the operator is usually still looking
+ * at the just-finished Deploy step. Wait a grace period after that flip
+ * before sending them to /login, so a real HCI/on-site install doesn't feel
+ * like it yanks the screen away the instant the pipeline finishes.
+ */
+const POST_DEPLOY_LOGIN_GRACE_MS = 30_000;
+
 function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
   const { deployed, loading: setupLoading } = useSetup();
   const { user, loading: authLoading } = useAuth();
+  const [graceElapsed, setGraceElapsed] = useState(false);
+  const deployedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!deployed) {
+      deployedAtRef.current = null;
+      setGraceElapsed(false);
+      return;
+    }
+    if (deployedAtRef.current === null) {
+      deployedAtRef.current = Date.now();
+    }
+    const remaining = POST_DEPLOY_LOGIN_GRACE_MS - (Date.now() - deployedAtRef.current);
+    if (remaining <= 0) {
+      setGraceElapsed(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setGraceElapsed(true), remaining);
+    return () => window.clearTimeout(timer);
+  }, [deployed]);
+
   if (setupLoading || authLoading) return <LoadingShell text="Checking setup…" />;
-  if (deployed && !user) return <Navigate to="/login" replace />;
+  if (deployed && !user && graceElapsed) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
