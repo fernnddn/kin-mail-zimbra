@@ -11,6 +11,7 @@ import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
+import AddSecondServerPage from "./wizard/AddSecondServer";
 import CredentialsStep from "./wizard/steps/CredentialsStep";
 import DeployStep from "./wizard/steps/DeployStep";
 import DeployLogsPage from "./wizard/steps/DeployLogsPage";
@@ -101,6 +102,20 @@ export default function App() {
                 <RequireEula>
                   <RequireAuth>
                     <ClusterPage />
+                  </RequireAuth>
+                </RequireEula>
+              }
+            />
+            <Route
+              path="/cluster/add-second-server"
+              element={
+                <RequireEula>
+                  <RequireAuth>
+                    <WizardProvider>
+                      <DeploySessionProvider>
+                        <AddSecondServerPage />
+                      </DeploySessionProvider>
+                    </WizardProvider>
                   </RequireAuth>
                 </RequireEula>
               }

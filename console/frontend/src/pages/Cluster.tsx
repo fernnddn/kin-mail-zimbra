@@ -1011,7 +1011,7 @@ export default function ClusterPage() {
                     observability={{ status: "absent" }}
                     ops={ops}
                     busy={busy}
-                    onAdd={() => navigate("/wizard/topology")}
+                    onAdd={() => navigate("/cluster/add-second-server")}
                     onRemove={() => undefined}
                   />
                   <Grid>
