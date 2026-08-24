@@ -796,6 +796,16 @@ def _request_client_ipv4(request: Request) -> str:
     host = (request.client.host if request.client else "") or ""
     if host.startswith("::ffff:"):
         host = host[7:]
+    if host == "127.0.0.1" and request.client is not None:
+        # The public listener is a raw TLS relay (https_mux.py) - every
+        # request otherwise looks like it came from 127.0.0.1. Recover the
+        # real peer via the in-process table keyed by the relay's own local
+        # port, which uvicorn sees as request.client.port.
+        from .https_mux import real_client_ip_for_backend_port
+
+        real = real_client_ip_for_backend_port(request.client.port)
+        if real:
+            host = real
     parts = host.split(".")
     if len(parts) != 4:
         return ""

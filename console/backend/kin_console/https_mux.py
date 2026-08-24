@@ -148,13 +148,31 @@ def _splice(left: socket.socket, right: socket.socket) -> None:
         sel.close()
 
 
+# The mux relays raw TLS bytes over a *new* outbound connection to the
+# backend, so uvicorn only ever sees 127.0.0.1 as request.client - the real
+# peer address the mux saw at accept() is otherwise lost. Both this thread
+# and the ASGI app run in the same process (see __main__.py), so a small
+# in-memory table keyed by the backend connection's own local (ephemeral)
+# port - which *is* what uvicorn sees as request.client.port - lets the app
+# recover the real client IP without changing the wire protocol at all.
+_client_ip_lock = threading.Lock()
+_client_ip_by_backend_port: dict[int, str] = {}
+
+
+def real_client_ip_for_backend_port(port: int) -> str | None:
+    with _client_ip_lock:
+        return _client_ip_by_backend_port.get(port)
+
+
 def handle_client(
     client: socket.socket,
     *,
     listen_port: int,
     backend_host: str,
     backend_port: int,
+    client_ip: str = "",
 ) -> None:
+    tracked_port: int | None = None
     try:
         first = client.recv(1, socket.MSG_PEEK)
         kind = classify_first_byte(first)
@@ -174,6 +192,13 @@ def handle_client(
                 time.sleep(0.1)
         if backend is None:
             raise last_exc or OSError("backend not ready")
+        if client_ip:
+            try:
+                tracked_port = backend.getsockname()[1]
+                with _client_ip_lock:
+                    _client_ip_by_backend_port[tracked_port] = client_ip
+            except OSError:
+                tracked_port = None
         try:
             _splice(client, backend)
         finally:
@@ -181,6 +206,9 @@ def handle_client(
     except OSError:
         return
     finally:
+        if tracked_port is not None:
+            with _client_ip_lock:
+                _client_ip_by_backend_port.pop(tracked_port, None)
         try:
             client.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -214,7 +242,7 @@ class HttpsMux:
         try:
             while not self._stop.is_set():
                 try:
-                    client, _addr = sock.accept()
+                    client, addr = sock.accept()
                 except TimeoutError:
                     continue
                 except OSError:
@@ -228,6 +256,7 @@ class HttpsMux:
                         "listen_port": self.port,
                         "backend_host": self.backend_host,
                         "backend_port": self.backend_port,
+                        "client_ip": addr[0] if addr else "",
                     },
                     daemon=True,
                 ).start()
