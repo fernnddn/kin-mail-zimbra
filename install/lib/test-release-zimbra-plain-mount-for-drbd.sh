@@ -158,6 +158,52 @@ else
   bad "LUKS mapper mount handoff failed"
 fi
 
+# A log-tailer/udev probe can briefly reopen the just-freed device right
+# after umount - fuser -m must be retried before treating that as a real
+# stuck holder (live 2vm practice run, 25 Aug 2026: drbdadm up then also hit
+# "Can not open backing device" on the exact same device, same race).
+FUSER_COUNTER="$ROOT/fuser_calls"
+: >"$FUSER_COUNTER"
+cat >"$STUB/fuser" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" = "-vm" ] && exit 1
+n=\$(wc -l <"$FUSER_COUNTER")
+echo call >>"$FUSER_COUNTER"
+[ "\$n" -lt 2 ] && exit 0
+exit 1
+EOF
+chmod +x "$STUB/fuser"
+write_fstab
+printf '%s\n' "$DATA" >"$ROOT/mnt_state"
+KIN_RELEASE_FUSER_RETRIES=5 KIN_RELEASE_FUSER_DELAY=0 "$SCRIPT" >/dev/null 2>&1
+transient_rc=$?
+if [ "$transient_rc" -eq 0 ]; then
+  pass "transient fuser busy (holder already gone by the time we check) retries then succeeds"
+else
+  bad "transient fuser busy should recover within retries"
+fi
+
+cat >"$STUB/fuser" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB/fuser"
+write_fstab
+printf '%s\n' "$DATA" >"$ROOT/mnt_state"
+KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 "$SCRIPT" >/dev/null 2>&1
+persistent_rc=$?
+if [ "$persistent_rc" -ne 0 ]; then
+  pass "persistently busy device still fails closed after exhausting retries"
+else
+  bad "persistently busy device must fail closed, not silently proceed"
+fi
+
+cat >"$STUB/fuser" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$STUB/fuser"
+
 printf 'UUID=aaaa-bbbb /boot ext4 defaults 0 2\n' >"$FSTAB"
 printf '%s\n' "/dev/sda1" >"$ROOT/mnt_state"
 if "$SCRIPT" >/dev/null 2>&1; then

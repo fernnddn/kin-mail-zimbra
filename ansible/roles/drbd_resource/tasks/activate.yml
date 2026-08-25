@@ -128,9 +128,29 @@
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
+- name: Settle udev before attaching the just-freed backing device
+  ansible.builtin.command:
+    cmd: udevadm settle --timeout=10
+  changed_when: false
+  failed_when: false
+  # The plain-mount release a few tasks back just unmounted this same device;
+  # the kernel/udev change event it fires can leave the block device
+  # momentarily busy (a log-tailer or udev probe briefly re-opening it),
+  # which made `drbdadm up` fail with "Can not open backing device" on a
+  # perfectly good device (live 2vm practice run, 25 Aug 2026).
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
 - name: Bring up the DRBD resource (drbdadm up)
   ansible.builtin.command:
     cmd: drbdadm up {{ drbd_resource_name }}
+  register: drbd_resource_up_result
+  until: drbd_resource_up_result.rc == 0
+  retries: 5
+  delay: 3
   # SAFETY: never check_mode: false - up must not run during --check.
   when:
     - drbd_resource_needs_activate | bool

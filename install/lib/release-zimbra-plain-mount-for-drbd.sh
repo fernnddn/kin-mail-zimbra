@@ -137,9 +137,26 @@ if command -v fuser >/dev/null 2>&1; then
     # cryptsetup holds the raw LUKS partition; only the mapper is the FS.
     fuser_dev=$(luks_mapper_path)
   fi
-  if fuser -m "$fuser_dev" >/dev/null 2>&1; then
+  # A log-tailer (fail2ban, journald) or a udev probe can briefly reopen the
+  # just-freed device right after umount and let go a moment later - retry
+  # before treating this as a real stuck holder. Live 2vm practice run
+  # (25 Aug 2026) hit exactly this: fuser -m reported busy, but the follow-up
+  # verbose fuser -vm found nothing, meaning the holder was already gone.
+  fuser_busy=1
+  fuser_attempt=0
+  fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-5}"
+  fuser_delay="${KIN_RELEASE_FUSER_DELAY:-1}"
+  while [ "$fuser_attempt" -lt "$fuser_retries" ]; do
+    if ! fuser -m "$fuser_dev" >/dev/null 2>&1; then
+      fuser_busy=0
+      break
+    fi
+    fuser_attempt=$((fuser_attempt + 1))
+    sleep "$fuser_delay"
+  done
+  if [ "$fuser_busy" -eq 1 ]; then
     fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
-    die_release "${fuser_dev} still has open holders after umount"
+    die_release "${fuser_dev} still has open holders after umount (checked ${fuser_attempt} times)"
   fi
 fi
 
