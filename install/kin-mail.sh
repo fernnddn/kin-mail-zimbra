@@ -308,6 +308,12 @@ run_firewall_stage_interactive() {
 
 run_full_install() {
   local s rc mid_handoff=0 zimbra_dir_exists=0 hardening_mode stage_action
+  # Stages that warn-and-continue on failure (07/09/11/revert-ssh) instead of
+  # stopping the pipeline. Tracked so the final banner cannot claim a clean
+  # "All selected pipeline stages exited 0" when hardening/lockdown actually
+  # failed - the console UI treats that exact line as proof of a fully
+  # successful install (re-audit, 25 Aug 2026).
+  local -a soft_failed_stages=()
   load_install_config
 
   say "Full install"
@@ -367,6 +373,7 @@ run_full_install() {
   else
     run_stage 07-zpush.sh || {
       warn "07-zpush.sh failed - mail install continues. Re-run later: sudo ./07-zpush.sh"
+      soft_failed_stages+=("07-zpush.sh")
     }
   fi
 
@@ -376,6 +383,7 @@ run_full_install() {
   if [ "$hardening_mode" = "full" ]; then
     run_stage 09-hardening.sh || {
       warn "09-hardening.sh failed - mail install continues. Re-run later: sudo ./09-hardening.sh"
+      soft_failed_stages+=("09-hardening.sh")
     }
   else
     if [ "$mid_handoff" -eq 1 ]; then
@@ -385,6 +393,7 @@ run_full_install() {
     fi
     run_stage 09-hardening.sh --os-only || {
       warn "09-hardening.sh --os-only failed - mail install continues. Re-run later: sudo ./09-hardening.sh --os-only"
+      soft_failed_stages+=("09-hardening.sh --os-only")
     }
   fi
 
@@ -401,6 +410,7 @@ run_full_install() {
   elif [ -d /opt/zimbra ]; then
     run_stage 11-admin-path-lockdown.sh || {
       warn "11-admin-path-lockdown.sh failed - mail install continues. Re-run later: sudo ./11-admin-path-lockdown.sh"
+      soft_failed_stages+=("11-admin-path-lockdown.sh")
     }
   else
     warn "/opt/zimbra missing - skipping 11-admin-path-lockdown.sh"
@@ -439,6 +449,17 @@ run_full_install() {
   if [ "$mid_handoff" -eq 1 ]; then
     say "Full install complete (mid-handoff path)"
     ok "OS stages finished; Zimbra-touching stages deferred to DRBD attach + Pacemaker"
+  elif [ "${#soft_failed_stages[@]}" -gt 0 ]; then
+    # Mail itself is up (01-06/10 all stopped the pipeline on failure), so
+    # this is still "complete" - but claiming every stage exited 0 here was
+    # false, and the console UI takes that exact string as proof nothing
+    # needs attention (re-audit, 25 Aug 2026).
+    say "Full install complete, with warnings"
+    warn "${#soft_failed_stages[@]} stage(s) failed and were skipped, mail is live but not fully hardened:"
+    for s in "${soft_failed_stages[@]}"; do
+      warn "  - ${s}"
+    done
+    info "Re-run each one above once the underlying issue is fixed."
   else
     say "Full install complete"
     ok "All selected pipeline stages exited 0"

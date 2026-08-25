@@ -159,7 +159,21 @@ def commit_users_store(
         ok, err = push_replica()
         if not ok:
             return False, err or SYNC_FAIL
-        write_local()
+        try:
+            write_local()
+        except OSError as exc:
+            # The replica already has the new state at this point - a bare
+            # "internal error" here would hide that the two nodes now
+            # disagree until the next successful write from Promoted
+            # (re-audit, 25 Aug 2026: "password works on one node and not
+            # the other"). No automatic rollback of the replica push: that
+            # would itself need its own failure handling, trading one
+            # inconsistency window for another.
+            return False, (
+                f"Pushed to the other mail node, but could not save locally ({exc}). "
+                "The two nodes now disagree - retry this change, or fix the local "
+                "disk issue and retry."
+            )
         return True, "synced"
     if action == "forward_to_promoted":
         return False, "forward is not a local commit"
@@ -551,7 +565,20 @@ async def run_mutate(
             if not ok:
                 payload = {"ok": False, "code": "sync_failed", "error": err}
                 return 1, payload, err
-            write_local()
+            try:
+                write_local()
+            except OSError as exc:
+                # The replica already has the new state - do not report a
+                # bare "internal error" that hides the two nodes now
+                # disagreeing until the next successful Promoted write
+                # (re-audit, 25 Aug 2026).
+                msg = (
+                    f"Pushed to the other mail node, but could not save locally "
+                    f"({exc}). The two nodes now disagree - retry this change, or "
+                    "fix the local disk issue and retry."
+                )
+                payload = {"ok": False, "code": "sync_failed", "error": msg}
+                return 1, payload, msg
             public = target_user.public() if target_user is not None else None
             payload = {"ok": True, "code": "ok", "user": public}
             return 0, payload, "Pushed console users to the other mail node, then applied locally"
@@ -671,7 +698,19 @@ async def _apply_file(path: str) -> int:
             if not ok:
                 print("USERS_RESULT:" + json.dumps({"ok": False, "code": "sync_failed", "error": err}))
                 return 1
-            _write_local_users(new_users, mutation)
+            try:
+                _write_local_users(new_users, mutation)
+            except OSError as exc:
+                # The replica already has the new state - a bare traceback
+                # here would drop the USERS_RESULT marker entirely and hide
+                # that the two nodes now disagree (re-audit, 25 Aug 2026).
+                msg = (
+                    f"Pushed to the other mail node, but could not save locally "
+                    f"({exc}). The two nodes now disagree - retry this change, or "
+                    "fix the local disk issue and retry."
+                )
+                print("USERS_RESULT:" + json.dumps({"ok": False, "code": "sync_failed", "error": msg}))
+                return 1
             public = target_user.public() if target_user is not None else None
             print("USERS_RESULT:" + json.dumps({"ok": True, "code": "ok", "user": public}, separators=(",", ":")))
             return 0

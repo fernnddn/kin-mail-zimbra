@@ -785,7 +785,7 @@ _PEER_READY_LABELS = {
 
 _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
-    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/users\.json)$"
+    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology|server-id)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/(users\.json|license\.token))$"
 )
 
 
@@ -1235,6 +1235,55 @@ async def sync_peer_ha_console_state(
                 return False, notes
             notes.append("Wrote setup-complete on the peer (was missing)")
 
+    # server-id is meant to be one stable identity for the whole cluster, and
+    # license.token is verified against it - each node used to mint its own
+    # random UUID independently, so a license applied on this node verified
+    # fine here and failed with a wrong-server_id error on the peer, and
+    # Settings/license disagreed between nodes after a VIP failover
+    # (re-audit, 25 Aug 2026). Push this node's values as the source of truth.
+    from .deploy_state import ensure_server_id, read_license_token
+
+    local_server_id = ensure_server_id()
+    code, text = await _push_peer_text_file(
+        host,
+        user,
+        password,
+        secrets,
+        body=local_server_id + "\n",
+        remote_tmp="/tmp/kin-mail-peer-server-id",
+        dest="/etc/kin-mail/server-id",
+        mode="644",
+    )
+    if code != 0:
+        notes.append(
+            f"Failed to write server-id on the peer (exit {code}). "
+            "License checks may disagree between nodes until this is retried. "
+            "No auto-retry, no auto-rollback."
+        )
+        return False, notes
+    notes.append("Synced server-id to the peer")
+
+    local_license_token = read_license_token()
+    if local_license_token:
+        code, text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=local_license_token + "\n",
+            remote_tmp="/tmp/kin-mail-peer-license-token",
+            dest="/var/lib/kin-mail-console/license.token",
+            mode="644",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write license.token on the peer (exit {code}). "
+                "License/seat status may disagree between nodes until this is "
+                "retried. No auto-retry, no auto-rollback."
+            )
+            return False, notes
+        notes.append("Synced license.token to the peer")
+
     return True, notes
 
 
@@ -1423,16 +1472,49 @@ async def cmd_run_ha_orchestration(
     # otherwise refuse the very connection this orchestration needs to reach
     # itself. Idempotent and fast (just an sshd config toggle) if password
     # SSH is already on.
+    #
+    # Must not re-yield _stream_subprocess's own `done` event: this is one
+    # small step of a much longer orchestration, but `done` is the protocol's
+    # "the whole command is over" signal - DeploySession.tsx closes its
+    # EventSource on the first one it sees. Forwarding it here made the UI
+    # think HA orchestration had finished after well under a second, while
+    # Ansible kept running server-side with nobody watching (re-audit,
+    # 25 Aug 2026). Capture the exit code instead, like every ansible-playbook
+    # stage below already does, and hard-abort on failure - continuing into
+    # Ansible with password SSH not actually enabled just trades a clear
+    # error here for a confusing connection failure several steps later.
     try:
         from .commands import _stream_subprocess, resolve_prepare_os
 
         prep_script = resolve_prepare_os()
+        ensure_ssh_exit = 0
         async for ev in _stream_subprocess(
             [str(prep_script), "--ensure-ssh-password"], cwd=prep_script.parent
         ):
-            yield ev
+            if ev.get("type") == "done":
+                ensure_ssh_exit = _event_exit_code(ev)
+            else:
+                yield ev
+        if ensure_ssh_exit != 0:
+            yield emit_line(
+                f"ORCH_FAILED step=ensure_ssh_password join_mode={join_mode}",
+                err=True,
+            )
+            yield emit_line(
+                f"Refusing: could not ensure local password SSH (exit {ensure_ssh_exit}). "
+                "Ansible needs it to reach this host. No auto-retry.",
+                err=True,
+            )
+            yield proto.event_done(ensure_ssh_exit)
+            return
     except (FileNotFoundError, RuntimeError) as exc:
-        yield emit_line(f"WARN: could not ensure local password SSH: {exc}", err=True)
+        yield emit_line(
+            f"ORCH_FAILED step=ensure_ssh_password join_mode={join_mode}",
+            err=True,
+        )
+        yield emit_line(f"Refusing: could not ensure local password SSH: {exc}", err=True)
+        yield proto.event_done(1)
+        return
 
     secrets_map = load_secrets()
     root_pass = secrets_map.get("host_root_pass") or ""

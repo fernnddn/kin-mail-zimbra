@@ -235,12 +235,21 @@ async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         yield _emit(str(exc), err=True)
         yield proto.event_done(2)
         return
-    write_license_token(token)
+    # Write CONTRACTED_SEATS first, license.token second. A verified token on
+    # disk with a stale seat count would read as "licensed" while the quota
+    # gate (which only reads CONTRACTED_SEATS) still enforces the old limit -
+    # writing the token last means a failure here leaves that combination
+    # impossible instead of leaving a valid token paired with stale seats
+    # (re-audit, 25 Aug 2026).
     code, lines = update_config_keys({"CONTRACTED_SEATS": str(verified["seats"])})
     for line in lines:
         yield _emit(line, err=code != 0)
+    if code != 0:
+        yield proto.event_done(code)
+        return
+    write_license_token(token)
     yield _emit("LICENSE_JSON:" + json.dumps(verified))
-    yield proto.event_done(code)
+    yield proto.event_done(0)
 
 
 def _cert_paths() -> list[Path]:

@@ -13,6 +13,7 @@ from kin_privhelper.orchestration import OrchHost
 from kin_privhelper.remove_host import (
     RemovePlan,
     _demote_survivor_topology_to_1vm,
+    _unstandby_best_effort,
     names_match,
     plan_remove_host,
     render_remove_host_inventory,
@@ -200,13 +201,14 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
             errors=(),
             notes=(),
         )
-        notes = await _demote_survivor_topology_to_1vm(
+        ok, notes = await _demote_survivor_topology_to_1vm(
             plan=plan,
             survivor_host=OrchHost(LOCAL, "192.0.2.15", "mail"),
             ssh_user="kin",
             ssh_pass="unused",
             secrets=[],
         )
+        self.assertTrue(ok)
         self.assertTrue(any("Demoted local" in n for n in notes))
         body = ac.CONF_FILE.read_text(encoding="utf-8")
         self.assertIn('TOPOLOGY="1vm"', body)
@@ -225,15 +227,121 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
             errors=(),
             notes=(),
         )
-        notes = await _demote_survivor_topology_to_1vm(
+        ok, notes = await _demote_survivor_topology_to_1vm(
             plan=plan,
             survivor_host=OrchHost(LOCAL, "192.0.2.15", "mail"),
             ssh_user="kin",
             ssh_pass="unused",
             secrets=[],
         )
+        self.assertTrue(ok)
         self.assertTrue(any("Demoted local" in n for n in notes))
         self.assertEqual(ds.TOPOLOGY_MARKER.read_text(encoding="utf-8").strip(), "1vm")
+
+    async def test_local_survivor_read_failure_reports_not_ok(self) -> None:
+        # A real unreadable file (0o000) - read must fail cleanly and the
+        # caller must be told False, not just handed an empty notes list.
+        ac.write_config_file({"TOPOLOGY": "2vm", "PEER_HOST_IP": "192.0.2.14"})
+        ac.CONF_FILE.chmod(0o000)
+        self.addCleanup(ac.CONF_FILE.chmod, 0o600)
+        plan = RemovePlan(
+            mode="graceful",
+            target=PEER,
+            survivor=LOCAL,
+            local_is_survivor=True,
+            local_is_target=False,
+            errors=(),
+            notes=(),
+        )
+        ok, notes = await _demote_survivor_topology_to_1vm(
+            plan=plan,
+            survivor_host=OrchHost(LOCAL, "192.0.2.15", "mail"),
+            ssh_user="kin",
+            ssh_pass="unused",
+            secrets=[],
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("could not read local config" in n for n in notes))
+
+
+class UnstandbyBestEffortTests(unittest.IsolatedAsyncioTestCase):
+    """A failed remove-host after `pcs node standby` used to leave the target
+    stuck in Standby forever - no rollback existed (re-audit, 25 Aug 2026).
+    """
+
+    async def test_success_reports_rolled_back(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "kin_privhelper.maintenance._capture",
+            new=AsyncMock(return_value=(0, "", "")),
+        ) as capture:
+            note = await _unstandby_best_effort(PEER)
+        self.assertIn("Rolled back", note)
+        capture.assert_awaited_once()
+        self.assertEqual(capture.await_args.args[0], ["pcs", "node", "unstandby", PEER])
+
+    async def test_failure_warns_instead_of_raising(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "kin_privhelper.maintenance._capture",
+            new=AsyncMock(return_value=(1, "", "node busy")),
+        ):
+            note = await _unstandby_best_effort(PEER)
+        self.assertIn("WARNING", note)
+        self.assertIn("node busy", note)
+
+
+class RemoveHostSourceInvariantTests(unittest.TestCase):
+    """Structural checks on cmd_remove_host for the fixes that are hard to
+    exercise behaviorally without a live Pacemaker/SSH environment - same
+    style as the rest of this test suite (no live SSH).
+    """
+
+    def setUp(self) -> None:
+        self.text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "remove_host.py"
+        ).read_text(encoding="utf-8")
+
+    def test_demote_failure_short_circuits_before_success_json(self) -> None:
+        demote_call_idx = self.text.find("demote_ok, demote_notes = await _demote_survivor_topology_to_1vm")
+        not_ok_branch_idx = self.text.find("if not demote_ok:")
+        early_done_idx = self.text.find('"demote_ok": False')
+        success_json_idx = self.text.find('"demote_ok": True')
+        self.assertGreater(demote_call_idx, 0)
+        self.assertGreater(not_ok_branch_idx, demote_call_idx)
+        self.assertGreater(early_done_idx, not_ok_branch_idx)
+        self.assertGreater(success_json_idx, early_done_idx)
+
+    def test_departing_node_uninstall_uses_password_sudo_wrapper(self) -> None:
+        self.assertIn("wrap_privileged_remote(f\"{script} --decommission\")", self.text)
+        self.assertIn("stdin_text=ssh_pass", self.text)
+        # The remote (non-local_is_target) branch must not fall back to a
+        # bare `sudo -n` that silently no-ops without NOPASSWD sudo.
+        remote_branch_idx = self.text.find("wrap_privileged_remote")
+        bare_sudo_n_idx = self.text.find('remote_cmd = f"sudo -n')
+        self.assertGreater(remote_branch_idx, 0)
+        self.assertEqual(bare_sudo_n_idx, self.text.rfind('remote_cmd = f"sudo -n'))
+        # The only remaining bare-sudo-n use is the local_is_target branch,
+        # which runs as root inside privhelperd already (no sudo needed in
+        # practice, kept for symmetry with the operator-facing log line).
+        self.assertLess(bare_sudo_n_idx, remote_branch_idx)
+
+    def test_standby_rollback_wired_into_both_failure_points(self) -> None:
+        stood_by_set_idx = self.text.find("stood_by_target = True")
+        secret_failure_idx = self.text.find("internal error: inventory would contain a secret")
+        ansible_failure_idx = self.text.find("survivor-side remove-host playbook failed")
+        self.assertGreater(stood_by_set_idx, 0)
+        rollback_calls = [
+            m for m in range(len(self.text))
+            if self.text.startswith("await _unstandby_best_effort(plan.target)", m)
+        ]
+        self.assertEqual(len(rollback_calls), 2, "one rollback call per failure point")
+        self.assertGreater(rollback_calls[0], secret_failure_idx)
+        self.assertGreater(rollback_calls[1], ansible_failure_idx)
 
 
 if __name__ == "__main__":

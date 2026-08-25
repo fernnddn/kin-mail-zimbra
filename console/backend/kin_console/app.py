@@ -590,8 +590,25 @@ async def mailbox_create(
         "local_part": local_part,
         "email": created.get("email") or "",
         "seats": payload.get("seats"),
-        "message": payload.get("message"),
+        "message": _mailbox_create_message(payload.get("message"), created),
     }
+
+
+def _mailbox_create_message(payload_message: object, created: dict[str, object]) -> object:
+    """Override the generic seat/quota message when zmprov ca succeeded but
+    the post-create auth probe did not (08-create-mailbox.sh).
+
+    exit_code is non-zero in that case, so the frontend's !ok branch would
+    otherwise show "Mailbox was not created." - false, since the account
+    exists and a seat is already used (re-audit, 25 Aug 2026).
+    """
+    if not created.get("auth_probe_failed"):
+        return payload_message
+    return (
+        f"{created.get('email') or 'The account'} was created (a seat was used) "
+        "but the console could not verify it can log in yet. Do not create it "
+        "again. Check back shortly, or contact support if this persists."
+    )
 
 
 @app.post("/api/mailbox/rename")

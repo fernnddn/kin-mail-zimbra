@@ -230,6 +230,24 @@ def _host_for(name: str, ip: str) -> OrchHost:
     return OrchHost(name, ip, _iqn_suffix(name))
 
 
+async def _unstandby_best_effort(target: str) -> str:
+    """Roll a graceful drain back if remove-host fails before Ansible removes
+    the target from the cluster - otherwise a failed attempt leaves a node
+    that is still supposed to be in service stuck in Standby indefinitely
+    (re-audit, 25 Aug 2026). Best-effort: reports the outcome, never raises.
+    """
+    from .maintenance import _capture
+
+    c, out, err = await _capture(["pcs", "node", "unstandby", target], timeout=60)
+    if c == 0:
+        return f"Rolled back: pcs node unstandby {target} (remove-host did not finish)"
+    detail = (err or out or f"exit {c}").strip()
+    return (
+        f"WARNING: pcs node unstandby {target} failed ({detail}) after remove-host "
+        f"did not finish - {target} may be stuck in Standby. Run it manually."
+    )
+
+
 async def _demote_survivor_topology_to_1vm(
     *,
     plan: RemovePlan,
@@ -237,7 +255,7 @@ async def _demote_survivor_topology_to_1vm(
     ssh_user: str,
     ssh_pass: str,
     secrets: list[str],
-) -> list[str]:
+) -> tuple[bool, list[str]]:
     """Set TOPOLOGY=1vm and clear PEER_HOST_*/OBSERVABILITY_VM_IP/CLUSTER_VIP_IP
     on the surviving node's console config, after a successful remove-host.
 
@@ -245,6 +263,10 @@ async def _demote_survivor_topology_to_1vm(
     rewrites /etc/kin-mail/config. Left at TOPOLOGY=2vm, the survivor keeps
     console_users_sync doing replica-first pushes toward the now-retired peer
     (503s) and the wizard keeps offering 2vm-only actions.
+
+    Returns (ok, notes) - the caller must surface a False here, not just log
+    the notes and report the overall job as ok:true (re-audit, 25 Aug 2026:
+    a failure here used to be silently swallowed).
     """
     from .apply_config import (
         CONF_FILE,
@@ -260,7 +282,7 @@ async def _demote_survivor_topology_to_1vm(
             text = CONF_FILE.read_text(encoding="utf-8") if CONF_FILE.is_file() else ""
         except OSError as exc:
             notes.append(f"could not read local config to demote topology: {exc}")
-            return notes
+            return False, notes
         values = parse_config(text)
         new_values, changed = ensure_topology_1vm(values)
         if changed:
@@ -268,12 +290,12 @@ async def _demote_survivor_topology_to_1vm(
                 write_config_file(new_values)
             except OSError as exc:
                 notes.append(f"could not write demoted local config: {exc}")
-                return notes
+                return False, notes
         from .deploy_state import write_topology_marker
 
         write_topology_marker("1vm")
         notes.append("Demoted local /etc/kin-mail/config to TOPOLOGY=1vm, cleared peer fields")
-        return notes
+        return True, notes
 
     # Survivor is remote (this console is on the departing node): read/write
     # its config over the same password-SSH path used for peer HA console sync.
@@ -289,7 +311,7 @@ async def _demote_survivor_topology_to_1vm(
     )
     if code != 0:
         notes.append(f"could not read survivor config over SSH (exit {code}); topology not demoted")
-        return notes
+        return False, notes
     values = parse_config(blob)
     new_values, changed = ensure_topology_1vm(values)
     if changed:
@@ -305,7 +327,7 @@ async def _demote_survivor_topology_to_1vm(
         )
         if code != 0:
             notes.append(f"failed to push demoted config to survivor (exit {code})")
-            return notes
+            return False, notes
     code, _text = await _push_peer_text_file(
         survivor_host,
         ssh_user,
@@ -318,9 +340,9 @@ async def _demote_survivor_topology_to_1vm(
     )
     if code != 0:
         notes.append(f"failed to push /etc/kin-mail/topology=1vm to survivor (exit {code})")
-        return notes
+        return False, notes
     notes.append("Demoted survivor /etc/kin-mail/config and topology marker to TOPOLOGY=1vm over SSH")
-    return notes
+    return True, notes
 
 
 async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
@@ -477,6 +499,7 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
 
     uninstall_warned = False
     ansible_ok = False
+    stood_by_target = False
     try:
         if plan.mode == "graceful" and plan.target not in list(st.get("standby") or []):
             yield await _emit(f"drain: reuse maintenance enter for {plan.target}")
@@ -512,6 +535,12 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                 )
                 yield proto.event_done(1)
                 return
+            # Rolled back on any failure below - this run put it here, so
+            # this run is responsible for taking it back out if remove-host
+            # does not finish. A target already in maintenance before this
+            # run started (the elif branch below) is left alone: that state
+            # was not this run's doing.
+            stood_by_target = True
         elif plan.mode == "graceful":
             yield await _emit(f"{plan.target} already in maintenance; skipping drain")
         else:
@@ -527,6 +556,8 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
         secrets = [p for p in (secrets_map.get("host_root_pass"), secrets_map.get("kin_user_pass")) if p]
         if any(s and s in inv for s in secrets):
             yield await _emit("internal error: inventory would contain a secret", err=True)
+            if stood_by_target:
+                yield await _emit(await _unstandby_best_effort(plan.target))
             yield proto.event_done(1)
             return
         work = _write_work_files(inv)
@@ -572,12 +603,14 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                 f"survivor-side remove-host playbook failed (exit {exit_code})",
                 err=True,
             )
+            if stood_by_target:
+                yield await _emit(await _unstandby_best_effort(plan.target))
             yield proto.event_done(exit_code)
             return
         ansible_ok = True
         yield await _emit("survivor-side remove-host playbook finished")
 
-        demote_notes = await _demote_survivor_topology_to_1vm(
+        demote_ok, demote_notes = await _demote_survivor_topology_to_1vm(
             plan=plan,
             survivor_host=survivor_host,
             ssh_user=ssh_user,
@@ -585,13 +618,38 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
             secrets=secrets,
         )
         for line in demote_notes:
-            yield await _emit(line)
+            yield await _emit(line, err=not demote_ok)
+        if not demote_ok:
+            # Unlike the departing-node uninstall below, this is not
+            # best-effort cleanup: it is the survivor's own state. Reporting
+            # ok:true here would recreate the exact bug remove-host exists to
+            # prevent (survivor stuck at TOPOLOGY=2vm, pointing at a retired
+            # peer) while telling the operator everything worked.
+            yield await _emit(
+                "Refusing to report success: survivor topology was not demoted to 1vm. "
+                "The cluster-membership steps (Corosync/DRBD/constraints) already "
+                "succeeded and are safe to repeat - retry Remove Host to finish the "
+                "topology demote, or fix /etc/kin-mail/config by hand "
+                "(TOPOLOGY=1vm, clear PEER_HOST_IP/NAME).",
+                err=True,
+            )
+            result = {
+                "ok": False,
+                "mode": plan.mode,
+                "target": plan.target,
+                "survivor": plan.survivor,
+                "ansible_ok": ansible_ok,
+                "demote_ok": False,
+            }
+            yield await _emit("REMOVE_HOST_JSON:" + json.dumps(result, separators=(",", ":")))
+            yield proto.event_done(1)
+            return
 
         script = uninstall_script()
-        remote_cmd = f"sudo -n {script} --decommission"
         if plan.mode == "graceful":
-            yield await _emit(f"uninstall on departing node: {remote_cmd}")
             if plan.local_is_target:
+                remote_cmd = f"sudo -n {script} --decommission"
+                yield await _emit(f"uninstall on departing node: {remote_cmd}")
                 c, out, err = await _capture(
                     ["bash", str(script), "--decommission"],
                     timeout=900,
@@ -608,8 +666,16 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                         err=True,
                     )
             else:
-                from .orchestration import _ssh_run
+                from .orchestration import _ssh_run, wrap_privileged_remote
 
+                # sudo -n needs passwordless sudo on the departing node's kin
+                # account, which is not guaranteed outside Ansible's own
+                # become_password path. wrap_privileged_remote falls back to
+                # sudo -S (password on stdin, never argv) - without it this
+                # uninstall silently no-ops on a plain greenfield kin account
+                # and the departing host is left fully installed.
+                remote_cmd = wrap_privileged_remote(f"{script} --decommission")
+                yield await _emit(f"uninstall on departing node: {script} --decommission")
                 code, text = await _ssh_run(
                     target_host,
                     ssh_user,
@@ -617,6 +683,7 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                     secrets,
                     remote_cmd,
                     timeout=900,
+                    stdin_text=ssh_pass,
                 )
                 if text:
                     yield await _emit(text)
@@ -636,6 +703,7 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
             "target": plan.target,
             "survivor": plan.survivor,
             "ansible_ok": ansible_ok,
+            "demote_ok": True,
             "uninstall_warned": uninstall_warned,
         }
         yield await _emit("REMOVE_HOST_JSON:" + json.dumps(result, separators=(",", ":")))

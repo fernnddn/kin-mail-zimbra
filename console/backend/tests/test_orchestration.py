@@ -335,6 +335,17 @@ class InventoryTests(unittest.TestCase):
         self.assertFalse(_INSTALL_DEST_RE.match("/tmp/topology"))
         self.assertFalse(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/users.json.bak"))
 
+    def test_install_dest_allows_server_id_and_license_token_only(self) -> None:
+        # Added so HA-finish can sync one cluster identity + license state to
+        # the peer (re-audit, 25 Aug 2026) - exact paths only, not siblings.
+        self.assertTrue(_INSTALL_DEST_RE.match("/etc/kin-mail/server-id"))
+        self.assertTrue(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/license.token"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/etc/kin-mail/server-id.bak"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/license.token.bak"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/etc/kin-mail/server-id-old"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/etc/passwd"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/root/.ssh/authorized_keys"))
+
     def test_orch_done_is_after_peer_console_sync(self) -> None:
         from pathlib import Path
 
@@ -1244,12 +1255,196 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 "kin_privhelper.orchestration._push_peer_text_file",
                 new=AsyncMock(return_value=(0, "")),
             ) as push_file,
+            patch("kin_privhelper.deploy_state.ensure_server_id", return_value="fixed-server-id"),
+            patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
         ):
             ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
 
         self.assertTrue(ok)
         self.assertTrue(any("users pushed" in n for n in notes))
         push_file.assert_awaited()
+
+    async def test_server_id_and_license_token_synced_to_peer(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        # Peer already fully caught up on config/markers (noop) - isolates
+        # the new server-id/license.token push from the marker-write block.
+        noop_blob = (
+            "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
+            "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
+            "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
+            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+        )
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, noop_blob)),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(True, "users pushed")),
+            ),
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(return_value=(0, "")),
+            ) as push_file,
+            patch(
+                "kin_privhelper.deploy_state.ensure_server_id",
+                return_value="fixed-server-id",
+            ),
+            patch(
+                "kin_privhelper.deploy_state.read_license_token",
+                return_value="signed-license-token-blob",
+            ),
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertTrue(ok)
+        dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
+        self.assertIn("/etc/kin-mail/server-id", dests)
+        self.assertIn("/var/lib/kin-mail-console/license.token", dests)
+        bodies = {c.kwargs.get("dest"): c.kwargs.get("body") for c in push_file.await_args_list}
+        self.assertEqual(bodies["/etc/kin-mail/server-id"], "fixed-server-id\n")
+        self.assertEqual(
+            bodies["/var/lib/kin-mail-console/license.token"], "signed-license-token-blob\n"
+        )
+        self.assertTrue(any("Synced server-id" in n for n in notes))
+        self.assertTrue(any("Synced license.token" in n for n in notes))
+
+    async def test_no_local_license_token_skips_that_push(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        noop_blob = (
+            "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
+            "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
+            "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
+            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+        )
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, noop_blob)),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(True, "users pushed")),
+            ),
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(return_value=(0, "")),
+            ) as push_file,
+            patch(
+                "kin_privhelper.deploy_state.ensure_server_id",
+                return_value="fixed-server-id",
+            ),
+            patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertTrue(ok)
+        dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
+        self.assertIn("/etc/kin-mail/server-id", dests)
+        self.assertNotIn("/var/lib/kin-mail-console/license.token", dests)
+
+
+class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):
+    """--ensure-ssh-password is one small step inside cmd_run_ha_orchestration,
+    not the whole job. Its `done` event used to be re-yielded verbatim -
+    DeploySession.tsx closes its EventSource on the first `done` it sees, so
+    the operator's UI looked finished after well under a second while Ansible
+    kept running unattended (re-audit, 25 Aug 2026).
+    """
+
+    async def _collect(self, args: dict | None = None) -> list[dict]:
+        from kin_privhelper.orchestration import cmd_run_ha_orchestration
+
+        return [ev async for ev in cmd_run_ha_orchestration(args)]
+
+    async def test_failure_aborts_with_exactly_one_done_and_no_ansible(self) -> None:
+        from pathlib import Path
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper import protocol as proto
+
+        async def fake_stream(*_a, **_kw):
+            yield proto.event_stdout("ensure-ssh-password: could not reload sshd\n")
+            yield proto.event_done(1)
+
+        with (
+            patch("kin_privhelper.commands._stream_subprocess", new=fake_stream),
+            patch(
+                "kin_privhelper.commands.resolve_prepare_os",
+                return_value=Path("/opt/kin-mail-deploy/install/02-prepare-os.sh"),
+            ),
+            patch(
+                "kin_privhelper.orchestration.load_secrets",
+                new=lambda: (_ for _ in ()).throw(
+                    AssertionError("must not reach load_secrets after ensure-ssh-password fails")
+                ),
+            ),
+        ):
+            events = await self._collect()
+
+        done_events = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done_events), 1, "exactly one done event, not one per subprocess")
+        self.assertEqual(done_events[0].get("exit_code"), 1)
+        self.assertTrue(
+            any("ORCH_FAILED step=ensure_ssh_password" in str(ev.get("data")) for ev in events)
+        )
+        self.assertTrue(
+            any("could not reload sshd" in str(ev.get("data")) for ev in events),
+            "the subprocess's own stdout must still reach the operator",
+        )
+
+    async def test_success_does_not_yield_its_done_and_continues(self) -> None:
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper import protocol as proto
+
+        async def fake_stream(*_a, **_kw):
+            yield proto.event_stdout("ok\n")
+            yield proto.event_done(0)
+
+        # A successful ensure-ssh-password must not itself produce a `done`
+        # or return early - prove control flow reaches load_secrets() by
+        # making that raise and asserting the exception (not a swallowed
+        # early exit) is what stops the generator.
+        sentinel = RuntimeError("reached load_secrets - ensure-ssh-password did not early-return")
+        with (
+            patch("kin_privhelper.commands._stream_subprocess", new=fake_stream),
+            patch(
+                "kin_privhelper.commands.resolve_prepare_os",
+                return_value=Path("/opt/kin-mail-deploy/install/02-prepare-os.sh"),
+            ),
+            patch(
+                "kin_privhelper.orchestration.load_secrets",
+                side_effect=sentinel,
+            ),
+        ):
+            events: list[dict] = []
+            with self.assertRaises(RuntimeError) as ctx:
+                async for ev in self._collect_iter():
+                    events.append(ev)
+            self.assertIs(ctx.exception, sentinel)
+
+        self.assertFalse(
+            any(ev.get("type") == "done" for ev in events),
+            "ensure-ssh-password success must not yield its own done event",
+        )
+        self.assertTrue(any("ok" in str(ev.get("data")) for ev in events))
+
+    async def _collect_iter(self):
+        from kin_privhelper.orchestration import cmd_run_ha_orchestration
+
+        async for ev in cmd_run_ha_orchestration(None):
+            yield ev
 
 
 if __name__ == "__main__":

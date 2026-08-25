@@ -146,6 +146,27 @@ class CommitUsersStoreTests(unittest.TestCase):
         self.assertEqual(reason, "synced")
         self.assertEqual(order, ["peer", "local"])
 
+    def test_local_write_failure_after_successful_push_reports_disagreement(self) -> None:
+        # The replica already has the new state by the time write_local()
+        # runs. A bare exception here used to hide that the two nodes now
+        # disagree until the next successful Promoted write (re-audit,
+        # 25 Aug 2026) - it must come back as a clear (False, message), not
+        # propagate as an unhandled OSError.
+        def write_local_fails() -> None:
+            raise OSError("disk full")
+
+        def push_ok() -> tuple[bool, str]:
+            return True, "ok"
+
+        ok, reason = commit_users_store(
+            action="push_peer_then_commit",
+            write_local=write_local_fails,
+            push_replica=push_ok,
+        )
+        self.assertFalse(ok)
+        self.assertIn("disk full", reason)
+        self.assertIn("disagree", reason)
+
     def test_commit_local_writes_without_push(self) -> None:
         writes: list[str] = []
         ok, reason = commit_users_store(
@@ -242,6 +263,24 @@ class HaSyncWiringTests(unittest.TestCase):
         self.assertNotIn(
             "sudo -n env PYTHONPATH=/opt/kin-mail-console/backend",
             text,
+        )
+
+    def test_live_push_then_write_paths_guard_the_local_write(self) -> None:
+        # run_mutate and _apply_file each duplicate commit_users_store's
+        # push_peer_then_commit logic inline (neither actually calls it in
+        # production) - the OSError guard on write_local() has to be wired
+        # into both of these, not just the tested-but-dead shared helper.
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "console_users_sync.py"
+        ).read_text(encoding="utf-8")
+        occurrences = text.count("The two nodes now disagree")
+        self.assertEqual(
+            occurrences,
+            3,
+            "expected the disagreement message in commit_users_store, "
+            "run_mutate, and _apply_file (one each)",
         )
 
 

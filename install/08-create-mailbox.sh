@@ -315,8 +315,27 @@ create_mailbox_gated() {
     fi
   fi
 
-  if ! zimbra_user_auth_ok "$email" "$pass"; then
-    fail "Account created but auth probe failed for ${email}"
+  # zmprov ca already succeeded - the account exists and a seat is consumed
+  # regardless of what happens below. mailboxd can take a moment to see a
+  # brand-new LDAP account, so a single immediate auth probe can false-
+  # negative on a perfectly good account; retry briefly before giving up.
+  local auth_attempt auth_ok=0
+  for auth_attempt in 1 2 3; do
+    if zimbra_user_auth_ok "$email" "$pass"; then
+      auth_ok=1
+      break
+    fi
+    [ "$auth_attempt" -lt 3 ] && sleep 2
+  done
+  if [ "$auth_ok" -ne 1 ]; then
+    fail "Account created but auth probe failed for ${email} (${auth_attempt} attempts)"
+    info "The account already exists and a seat is already consumed - do not"
+    info "retry create, it will refuse as already-existing. Investigate"
+    info "mailboxd/LDAP, or verify by hand: zmmailbox -m ${email} -p '<password>' gaf"
+    kin_quota_status "$MAIL_DOMAIN" >/dev/null || true
+    info "Seats now: ${KIN_QUOTA_USED}/${KIN_QUOTA_LIMIT}"
+    emit_seats_json 1
+    echo "CREATE_JSON:{\"email\":\"${email}\",\"auth_probe_failed\":true}"
     return 1
   fi
   ok "Created and authenticated: ${email}"
