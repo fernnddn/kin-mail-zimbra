@@ -272,7 +272,7 @@ async def api_create_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "New console users cannot be created while the license is in grace or expired. "
+                "New console users cannot be created while the license is invalid, in grace, or expired. "
                 "Existing mail still flows."
             ),
         )
@@ -553,7 +553,7 @@ async def mailbox_create(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "New mailboxes cannot be created while the license is in grace or expired. "
+                "New mailboxes cannot be created while the license is invalid, in grace, or expired. "
                 "Existing mail still flows."
             ),
         )
@@ -835,45 +835,16 @@ def _request_client_ipv4(request: Request) -> str:
 
 
 def _current_license_view() -> dict:
-    from kin_console.license import verify_license
+    from kin_console.license import license_view
     from kin_privhelper.deploy_state import read_license_token, read_server_id
 
-    sid = read_server_id() or ""
-    token = read_license_token()
-    if not token:
-        return {
-            "present": False,
-            "status": "none",
-            "provisioning_blocked": False,
-            "server_id": sid,
-            "seats": None,
-        }
-    if not sid:
-        return {
-            "present": True,
-            "status": "invalid",
-            "error": "Email Server ID is not available on this host yet",
-            "provisioning_blocked": False,
-            "server_id": "",
-            "seats": None,
-        }
-    try:
-        return {"present": True, **verify_license(token, server_id=sid)}
-    except ValueError as exc:
-        return {
-            "present": True,
-            "status": "invalid",
-            "error": str(exc),
-            "provisioning_blocked": False,
-            "server_id": sid,
-            "seats": None,
-        }
+    return license_view(read_license_token(), read_server_id() or "")
 
 
 def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
     if license_blocked:
         return (
-            "New mailboxes cannot be created while the license is in grace or expired. "
+            "New mailboxes cannot be created while the license is invalid, in grace, or expired. "
             "Existing mail still flows."
         )
     code = str(seats.get("code") or "")
@@ -926,9 +897,9 @@ def _human_mailbox_error(log: str, error: str) -> str:
         return "Seat limit is not set. A Super Admin can paste a signed license on the Settings page."
     if "seat limit reached" in text:
         return "All contracted mailboxes are in use. Contact KIN to add seats."
-    if "grace or expired" in text:
+    if "grace or expired" in text or "license is invalid" in text:
         return (
-            "New mailboxes cannot be created while the license is in grace or expired. "
+            "New mailboxes cannot be created while the license is invalid, in grace, or expired. "
             "Existing mail still flows."
         )
     return error or "The mailbox change did not succeed."

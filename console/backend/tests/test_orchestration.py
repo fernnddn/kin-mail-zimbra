@@ -286,6 +286,8 @@ class InventoryTests(unittest.TestCase):
             repo / "console/frontend/src/wizard/deployPipeline.ts"
         ).read_text(encoding="utf-8")
         self.assertGreaterEqual(pipeline.count("/^Refusing:/m.test(log)"), 2)
+        self.assertIn("Full install complete,\\s*with warnings", pipeline)
+        self.assertIn("if (complete && !failed)", pipeline)
         cmds = (
             repo / "console/backend/kin_privhelper/commands.py"
         ).read_text(encoding="utf-8")
@@ -874,6 +876,11 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn('fail "Pipeline stopped at 11-admin-path-lockdown.sh"', driver)
         self.assertIn("09-hardening.sh failed - mail install continues", driver)
         self.assertNotIn('fail "Pipeline stopped at 09-hardening.sh"', driver)
+        self.assertIn(
+            'soft_failed_stages+=("02-prepare-os.sh --revert-ssh-password")',
+            driver,
+        )
+        self.assertIn("Full install complete, with warnings", driver)
         self.assertIn("ServerAliveInterval=30", orch)
         self.assertIn("ServerAliveCountMax=120", orch)
         health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
@@ -1262,7 +1269,13 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(ok)
         self.assertTrue(any("users pushed" in n for n in notes))
-        push_file.assert_awaited()
+        dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
+        self.assertIn("/etc/kin-mail/server-id", dests)
+        self.assertIn("/etc/kin-mail/ha-setup-complete", dests)
+        self.assertLess(
+            dests.index("/etc/kin-mail/server-id"),
+            dests.index("/etc/kin-mail/ha-setup-complete"),
+        )
 
     async def test_server_id_and_license_token_synced_to_peer(self) -> None:
         from unittest.mock import AsyncMock, patch
@@ -1313,6 +1326,14 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any("Synced server-id" in n for n in notes))
         self.assertTrue(any("Synced license.token" in n for n in notes))
+        token_calls = [
+            c for c in push_file.await_args_list
+            if c.kwargs.get("dest") == "/var/lib/kin-mail-console/license.token"
+        ]
+        self.assertEqual(len(token_calls), 1)
+        self.assertEqual(token_calls[0].kwargs.get("mode"), "600")
+        self.assertEqual(token_calls[0].kwargs.get("owner"), "kin-console")
+        self.assertEqual(token_calls[0].kwargs.get("group"), "kin-console")
 
     async def test_no_local_license_token_skips_that_push(self) -> None:
         from unittest.mock import AsyncMock, patch
@@ -1351,6 +1372,42 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
         self.assertIn("/etc/kin-mail/server-id", dests)
         self.assertNotIn("/var/lib/kin-mail-console/license.token", dests)
+
+    async def test_identity_push_failure_writes_no_peer_marker(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+
+        async def push(_host, _user, _password, _secrets, **kw):
+            if kw.get("dest") == "/etc/kin-mail/server-id":
+                return 1, "scp fail"
+            return 0, ""
+
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(True, "users pushed")),
+            ),
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(side_effect=push),
+            ) as push_file,
+            patch("kin_privhelper.deploy_state.ensure_server_id", return_value="fixed-server-id"),
+            patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertFalse(ok)
+        self.assertTrue(any("Failed to write server-id" in n for n in notes))
+        dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
+        self.assertEqual(dests, ["/etc/kin-mail/server-id"])
+        self.assertNotIn("/etc/kin-mail/ha-setup-complete", dests)
 
 
 class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):

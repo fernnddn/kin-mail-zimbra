@@ -373,6 +373,9 @@ class UnexpectedInstallStopTests(unittest.TestCase):
     def test_transcript_detects_success_and_fail(self) -> None:
         self.assertFalse(ds.transcript_has_terminal_outcome("telemetry -> No\n"))
         self.assertTrue(ds.transcript_has_terminal_outcome("Full install complete\n"))
+        self.assertTrue(
+            ds.transcript_has_terminal_outcome("Full install complete, with warnings\n")
+        )
         self.assertTrue(ds.transcript_has_terminal_outcome("Pipeline stopped at 03-install-zimbra.sh\n"))
         self.assertTrue(ds.transcript_has_terminal_outcome("[FAIL] something\n"))
 

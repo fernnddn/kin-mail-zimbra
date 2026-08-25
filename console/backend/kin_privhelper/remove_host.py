@@ -661,8 +661,7 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                 if c != 0:
                     uninstall_warned = True
                     yield await _emit(
-                        f"departing-node uninstall exited {c}; survivor-side removal "
-                        "already succeeded so this is not blocking",
+                        f"departing-node uninstall exited {c}",
                         err=True,
                     )
             else:
@@ -690,12 +689,32 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                 if code != 0:
                     uninstall_warned = True
                     yield await _emit(
-                        f"departing-node uninstall ssh exit {code}; survivor-side "
-                        "removal already succeeded so this is not blocking",
+                        f"departing-node uninstall ssh exit {code}",
                         err=True,
                     )
         else:
             yield await _emit("forced path: skipping departing-node uninstall (unreachable)")
+
+        if uninstall_warned:
+            yield await _emit(
+                "Refusing to report success: departing-node uninstall failed. "
+                "Survivor topology is already 1vm. Retry Remove Host, or run "
+                f"{script} --decommission on the retired host by hand.",
+                err=True,
+            )
+            result = {
+                "ok": False,
+                "mode": plan.mode,
+                "target": plan.target,
+                "survivor": plan.survivor,
+                "ansible_ok": ansible_ok,
+                "demote_ok": True,
+                "uninstall_ok": False,
+                "uninstall_warned": True,
+            }
+            yield await _emit("REMOVE_HOST_JSON:" + json.dumps(result, separators=(",", ":")))
+            yield proto.event_done(1)
+            return
 
         result = {
             "ok": True,
@@ -704,7 +723,8 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
             "survivor": plan.survivor,
             "ansible_ok": ansible_ok,
             "demote_ok": True,
-            "uninstall_warned": uninstall_warned,
+            "uninstall_ok": True,
+            "uninstall_warned": False,
         }
         yield await _emit("REMOVE_HOST_JSON:" + json.dumps(result, separators=(",", ":")))
         yield proto.event_done(0)

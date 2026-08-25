@@ -93,6 +93,9 @@ export function isHaOrchestrationLog(log: string): boolean {
   UI must use the persisted setup-complete flag from /api/setup/status.
  */
 export function hasFullInstallCompleted(log: string): boolean {
+  if (/Full install complete,\s*with warnings/i.test(log)) {
+    return false;
+  }
   return /Full install complete/i.test(log) || /All selected pipeline stages exited 0/i.test(log);
 }
 
@@ -133,10 +136,11 @@ export function parseInstallProgress(log: string): InstallProgress {
     /Pipeline stopped at /i.test(log) ||
     /Install stopped unexpectedly/i.test(log) ||
     /\[FAIL\]/.test(log) ||
-    /^Refusing:/m.test(log);
+    /^Refusing:/m.test(log) ||
+    /Full install complete,\s*with warnings/i.test(log);
   const complete = hasFullInstallCompleted(log);
 
-  if (complete) {
+  if (complete && !failed) {
     return {
       current: total,
       total,

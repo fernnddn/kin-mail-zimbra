@@ -7,6 +7,7 @@ created." - false, since the account exists and a seat is already used
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from kin_console.app import _mailbox_create_message
 
@@ -34,6 +35,29 @@ class MailboxCreateMessageTests(unittest.TestCase):
             "1 of 25 seats used", {"email": "new.user@example.test"}
         )
         self.assertEqual(msg, "1 of 25 seats used")
+
+
+class CreateMailboxInvalidLicenseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_garbage_token_blocks_before_script(self) -> None:
+        from kin_privhelper.commands import cmd_create_mailbox
+
+        with (
+            patch("kin_privhelper.deploy_state.read_license_token", return_value="garbage"),
+            patch("kin_privhelper.deploy_state.read_server_id", return_value="sid"),
+            patch("kin_privhelper.deploy_state.ensure_server_id", return_value="sid"),
+            patch("kin_privhelper.commands.validate_create_mailbox_args") as validate,
+            patch("kin_privhelper.commands._stream_subprocess") as stream,
+        ):
+            events = [ev async for ev in cmd_create_mailbox({"op": "create"})]
+
+        validate.assert_not_called()
+        stream.assert_not_called()
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0].get("exit_code"), 1)
+        self.assertTrue(
+            any("invalid, in grace, or expired" in str(ev.get("data")) for ev in events)
+        )
 
 
 if __name__ == "__main__":

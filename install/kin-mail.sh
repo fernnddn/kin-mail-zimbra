@@ -442,6 +442,7 @@ run_full_install() {
   if [ "$mid_handoff" -eq 0 ] && [ "${TOPOLOGY:-1vm}" = "1vm" ]; then
     run_stage 02-prepare-os.sh --revert-ssh-password || {
       warn "Could not revert password SSH automatically. Re-run later: sudo ./02-prepare-os.sh --revert-ssh-password"
+      soft_failed_stages+=("02-prepare-os.sh --revert-ssh-password")
     }
   fi
 

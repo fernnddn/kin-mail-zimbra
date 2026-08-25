@@ -781,17 +781,14 @@ async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterato
     op_preview = str(args.get("op") or "create").strip().lower()
     if op_preview in ("create",):
         from .deploy_state import read_license_token, read_server_id, ensure_server_id
-        from kin_console.license import verify_license
+        from kin_console.license import license_view
 
         token = read_license_token()
         if token:
-            try:
-                state = verify_license(token, server_id=read_server_id() or ensure_server_id())
-            except ValueError:
-                state = {"provisioning_blocked": False}
+            state = license_view(token, read_server_id() or ensure_server_id())
             if state.get("provisioning_blocked"):
                 yield proto.event_stderr(
-                    "New mailboxes are blocked while the license is in grace or expired. "
+                    "New mailboxes are blocked while the license is invalid, in grace, or expired. "
                     "Existing mail still flows.\n"
                 )
                 yield proto.event_done(1)

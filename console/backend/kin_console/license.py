@@ -154,6 +154,43 @@ def verify_license(
     }
 
 
+def license_view(token: str, server_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Operator-facing license state. Missing token is not blocked (seats come
+    from CONTRACTED_SEATS). A present token that cannot be verified is blocked
+    so a tampered/corrupt file cannot reopen mailbox create.
+    """
+    sid = str(server_id or "").strip()
+    text = (token or "").strip()
+    if not text:
+        return {
+            "present": False,
+            "status": "none",
+            "provisioning_blocked": False,
+            "seats": None,
+            "server_id": sid,
+        }
+    if not sid:
+        return {
+            "present": True,
+            "status": "invalid",
+            "error": "Email Server ID is not available on this host yet",
+            "provisioning_blocked": True,
+            "seats": None,
+            "server_id": "",
+        }
+    try:
+        return {"present": True, **verify_license(text, server_id=sid, now=now)}
+    except ValueError as exc:
+        return {
+            "present": True,
+            "status": "invalid",
+            "error": str(exc),
+            "provisioning_blocked": True,
+            "seats": None,
+            "server_id": sid,
+        }
+
+
 def sign_payload(payload: dict[str, Any], private_key: Any) -> str:
     """Used by the generator and tests. private_key is Ed25519PrivateKey."""
     clean = validate_payload(payload)

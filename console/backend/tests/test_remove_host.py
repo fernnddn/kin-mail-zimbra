@@ -343,6 +343,20 @@ class RemoveHostSourceInvariantTests(unittest.TestCase):
         self.assertGreater(rollback_calls[0], secret_failure_idx)
         self.assertGreater(rollback_calls[1], ansible_failure_idx)
 
+    def test_uninstall_failure_short_circuits_before_success_json(self) -> None:
+        refuse_idx = self.text.find(
+            "Refusing to report success: departing-node uninstall failed"
+        )
+        fail_json_idx = self.text.find('"uninstall_ok": False')
+        success_json_idx = self.text.find('"uninstall_ok": True')
+        self.assertGreater(refuse_idx, 0)
+        self.assertGreater(fail_json_idx, refuse_idx)
+        self.assertGreater(success_json_idx, fail_json_idx)
+        self.assertNotIn(
+            "already succeeded so this is not blocking",
+            self.text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

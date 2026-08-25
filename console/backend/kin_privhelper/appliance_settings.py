@@ -62,28 +62,9 @@ def parse_admin_ips(raw: str) -> list[str]:
 
 
 def _license_state(token: str, server_id: str) -> dict[str, Any]:
-    from kin_console.license import verify_license
+    from kin_console.license import license_view
 
-    if not token:
-        return {
-            "present": False,
-            "status": "none",
-            "provisioning_blocked": False,
-            "seats": None,
-            "server_id": server_id,
-        }
-    try:
-        verified = verify_license(token, server_id=server_id)
-    except ValueError as exc:
-        return {
-            "present": True,
-            "status": "invalid",
-            "error": str(exc),
-            "provisioning_blocked": False,
-            "seats": None,
-            "server_id": server_id,
-        }
-    return {"present": True, "server_id": server_id, **verified}
+    return license_view(token, server_id)
 
 
 async def cmd_apply_appliance_settings(
@@ -159,6 +140,15 @@ async def _set_seats(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     sid = read_server_id() or ensure_server_id()
     if token:
         state = _license_state(token, sid)
+        if state.get("status") == "invalid":
+            yield _emit(
+                "A license file is present but not valid. Apply a signed license "
+                "before changing seats. CONTRACTED_SEATS is not writable while "
+                "the token is invalid.",
+                err=True,
+            )
+            yield proto.event_done(2)
+            return
         if state.get("present") and state.get("status") not in ("none", "invalid"):
             yield _emit(
                 "A signed license is active. Seat count comes from that license, not this field.",

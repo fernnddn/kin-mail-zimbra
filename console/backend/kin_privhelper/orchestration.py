@@ -1150,6 +1150,13 @@ async def sync_peer_ha_console_state(
     if not users_ok:
         return False, notes
 
+    # Cluster identity next, still before any completion marker. Used to run
+    # after ha-setup-complete: a failed server-id / license.token push then
+    # left the peer login-gated while this node never wrote its own HA marker
+    # (same split-state class as the old users.json-last bug).
+    if not await _push_peer_identity_files(host, user, password, secrets, notes):
+        return False, notes
+
     if plan["noop"]:
         notes.append(
             "Peer console already has TOPOLOGY=2vm and completion markers; nothing to write."
@@ -1235,16 +1242,26 @@ async def sync_peer_ha_console_state(
                 return False, notes
             notes.append("Wrote setup-complete on the peer (was missing)")
 
-    # server-id is meant to be one stable identity for the whole cluster, and
-    # license.token is verified against it - each node used to mint its own
-    # random UUID independently, so a license applied on this node verified
-    # fine here and failed with a wrong-server_id error on the peer, and
-    # Settings/license disagreed between nodes after a VIP failover
-    # (re-audit, 25 Aug 2026). Push this node's values as the source of truth.
+    return True, notes
+
+
+async def _push_peer_identity_files(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+    notes: list[str],
+) -> bool:
+    """Copy this node's server-id and license.token onto the peer.
+
+    Call before writing ha-setup-complete / setup-complete. server-id is one
+    cluster identity; license.token is verified against it. license.token is
+    0600 kin-console (never world-readable 644).
+    """
     from .deploy_state import ensure_server_id, read_license_token
 
     local_server_id = ensure_server_id()
-    code, text = await _push_peer_text_file(
+    code, _text = await _push_peer_text_file(
         host,
         user,
         password,
@@ -1260,31 +1277,33 @@ async def sync_peer_ha_console_state(
             "License checks may disagree between nodes until this is retried. "
             "No auto-retry, no auto-rollback."
         )
-        return False, notes
+        return False
     notes.append("Synced server-id to the peer")
 
     local_license_token = read_license_token()
-    if local_license_token:
-        code, text = await _push_peer_text_file(
-            host,
-            user,
-            password,
-            secrets,
-            body=local_license_token + "\n",
-            remote_tmp="/tmp/kin-mail-peer-license-token",
-            dest="/var/lib/kin-mail-console/license.token",
-            mode="644",
+    if not local_license_token:
+        return True
+    code, _text = await _push_peer_text_file(
+        host,
+        user,
+        password,
+        secrets,
+        body=local_license_token + "\n",
+        remote_tmp="/tmp/kin-mail-peer-license-token",
+        dest="/var/lib/kin-mail-console/license.token",
+        mode="600",
+        owner="kin-console",
+        group="kin-console",
+    )
+    if code != 0:
+        notes.append(
+            f"Failed to write license.token on the peer (exit {code}). "
+            "License/seat status may disagree between nodes until this is "
+            "retried. No auto-retry, no auto-rollback."
         )
-        if code != 0:
-            notes.append(
-                f"Failed to write license.token on the peer (exit {code}). "
-                "License/seat status may disagree between nodes until this is "
-                "retried. No auto-retry, no auto-rollback."
-            )
-            return False, notes
-        notes.append("Synced license.token to the peer")
-
-    return True, notes
+        return False
+    notes.append("Synced license.token to the peer")
+    return True
 
 
 async def _push_peer_install_files(

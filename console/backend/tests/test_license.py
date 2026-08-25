@@ -9,7 +9,7 @@ import unittest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from kin_console.license import sign_payload, verify_license
+from kin_console.license import license_view, sign_payload, verify_license
 
 
 def _raw_public(priv: Ed25519PrivateKey) -> bytes:
@@ -177,6 +177,24 @@ class LicenseVerifyTests(unittest.TestCase):
         token = self._token()
         with self.assertRaises(ValueError):
             verify_license(token, server_id=self.server_id, now=self.now)
+
+    def test_license_view_missing_token_is_not_blocked(self) -> None:
+        state = license_view("", self.server_id)
+        self.assertFalse(state["present"])
+        self.assertEqual(state["status"], "none")
+        self.assertFalse(state["provisioning_blocked"])
+
+    def test_license_view_garbage_token_is_blocked(self) -> None:
+        state = license_view("not-a-license", self.server_id)
+        self.assertTrue(state["present"])
+        self.assertEqual(state["status"], "invalid")
+        self.assertTrue(state["provisioning_blocked"])
+
+    def test_license_view_token_without_server_id_is_blocked(self) -> None:
+        state = license_view("not-a-license", "")
+        self.assertTrue(state["present"])
+        self.assertEqual(state["status"], "invalid")
+        self.assertTrue(state["provisioning_blocked"])
 
 
 if __name__ == "__main__":
