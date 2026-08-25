@@ -21,6 +21,7 @@ from kin_privhelper.rbac import (
 )
 
 from . import auth, draft, users
+from .login_throttle import LOGIN_THROTTLE
 from .privhelper_client import run_command
 from .settings import settings
 from .users import ConsoleUser
@@ -144,10 +145,26 @@ def eula_accept(body: draft.EulaAcceptBody, response: Response) -> dict[str, obj
 
 
 @app.post("/api/login")
-async def login(body: LoginBody, response: Response) -> dict[str, object]:
+async def login(body: LoginBody, request: Request, response: Response) -> dict[str, object]:
+    client = _request_client_ipv4(request) or "unknown"
+    throttle_key = f"{client}|{(body.username or '').strip().lower()}"
+    decision = LOGIN_THROTTLE.check(throttle_key)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Try again in {decision.retry_after_sec}s.",
+            headers={"Retry-After": str(decision.retry_after_sec)},
+        )
     try:
         user = users.authenticate(body.username, body.password)
     except users.AuthError as exc:
+        fail = LOGIN_THROTTLE.record_failure(throttle_key)
+        if not fail.allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many failed login attempts. Try again in {fail.retry_after_sec}s.",
+                headers={"Retry-After": str(fail.retry_after_sec)},
+            ) from exc
         raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
@@ -155,6 +172,7 @@ async def login(body: LoginBody, response: Response) -> dict[str, object]:
             detail="Auth store unavailable",
         ) from exc
 
+    LOGIN_THROTTLE.record_success(throttle_key)
     auth.set_session_cookie(response, user.username)
     # First-boot plaintext lives only under /root (root:root 0600). Console cannot
     # unlink it itself - ask privhelperd after a successful *local* login. Never

@@ -1098,6 +1098,7 @@ export function ConfirmModal({
   confirmLabel = "Confirm",
   variant = "danger",
   loading = false,
+  confirmDisabled = false,
   countdownSeconds = 0,
   onCancel,
   onConfirm,
@@ -1109,6 +1110,8 @@ export function ConfirmModal({
   confirmLabel?: string;
   variant?: "danger" | "warn";
   loading?: boolean;
+  /** Extra gate for Confirm (e.g. probe still running) without blocking Cancel. */
+  confirmDisabled?: boolean;
   countdownSeconds?: number;
   onCancel: () => void;
   onConfirm: () => void;
@@ -1193,7 +1196,7 @@ export function ConfirmModal({
               type="button"
               variant={variant === "danger" ? "destructive" : "primary"}
               loading={loading}
-              disabled={gated || loading}
+              disabled={gated || loading || confirmDisabled}
               onClick={onConfirm}
             >
               {gated ? `Wait ${remaining}s` : confirmLabel}

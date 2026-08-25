@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -14,6 +15,8 @@ from kin_privhelper.rbac import ALL_ROLES, ROLE_SUPER_ADMIN
 
 from . import ad_auth, auth
 from .settings import settings
+
+log = logging.getLogger("kin_console.users")
 
 AUTH_LOCAL: Literal["local"] = "local"
 AUTH_AD: Literal["ad"] = "ad"
@@ -237,8 +240,11 @@ def authenticate(username: str, password: str) -> ConsoleUser:
         result = ad_auth.verify_ad_password(user.ldap_identity(), password)
         if result.ok:
             return user
+        # Never leak AD outage vs bad password via distinct HTTP status codes.
         if result.reason in ("not_enabled", "misconfigured", "unreachable"):
-            raise AuthError(result.detail or "AD authentication unavailable", http_status=503)
+            log.warning(
+                "AD auth unavailable (%s): %s", result.reason, result.detail or ""
+            )
         raise AuthError("Invalid credentials")
 
     raise AuthError("Invalid credentials")

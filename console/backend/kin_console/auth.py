@@ -15,6 +15,7 @@ from .settings import settings
 
 log = logging.getLogger("kin_console.auth")
 
+# Legacy well-known default - must never be minted for new installs.
 DEFAULT_BOOTSTRAP_PASSWORD = "E@syEmail"
 
 
@@ -210,4 +211,5 @@ def require_roles(*allowed: str):
 
 
 def generate_bootstrap_password() -> str:
-    return DEFAULT_BOOTSTRAP_PASSWORD
+    """One-time Super Admin password for fresh bootstrap (not a fixed default)."""
+    return secrets.token_urlsafe(18)

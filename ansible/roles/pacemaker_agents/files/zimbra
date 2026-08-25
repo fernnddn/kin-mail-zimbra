@@ -55,6 +55,23 @@ zimbra_mount_source() {
 }
 
 zimbra_validate() {
+	local src
+	if ! findmnt -n "${ZIMBRA_DIR}" >/dev/null 2>&1; then
+		ocf_log err "${ZIMBRA_DIR} is not mounted"
+		return $OCF_ERR_INSTALLED
+	fi
+	src=$(zimbra_mount_source)
+	case "$src" in
+	/dev/drbd*) ;;
+	*)
+		ocf_log err "${ZIMBRA_DIR} is mounted from ${src:-unknown}, not /dev/drbd*"
+		return $OCF_ERR_INSTALLED
+		;;
+	esac
+	if [ ! -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
+		ocf_log err "${ZIMBRA_DIR}/bin/zmcontrol missing on mounted tree"
+		return $OCF_ERR_INSTALLED
+	fi
 	return $OCF_SUCCESS
 }
 

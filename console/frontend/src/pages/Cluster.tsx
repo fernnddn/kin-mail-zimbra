@@ -797,8 +797,10 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
 
   const vipIp = (cluster.vip_ip || "").trim();
   const vipNode = (cluster.vip_node || "").trim();
-  const vipMismatch = Boolean(vipNode && cluster.promoted && vipNode !== cluster.promoted);
-  const vipTone: StatusTone = !vipIp ? "muted" : vipNode ? (vipMismatch ? "warn" : "ok") : "warn";
+  const promoted = (cluster.promoted || "").trim();
+  const vipOk = Boolean(vipIp && vipNode && promoted && vipNode === promoted);
+  const vipMismatch = Boolean(vipNode && promoted && vipNode !== promoted);
+  const vipTone: StatusTone = !vipIp ? "muted" : vipOk ? "ok" : "warn";
   cards.push(
     <OverviewCard key="vip" $tone={vipTone}>
       <IconChip $tone={vipTone}>
@@ -810,11 +812,13 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
         <OverviewSub $tone={vipTone}>
           {!vipIp
             ? "No floating IP set for this cluster"
-            : vipNode
-              ? vipMismatch
-                ? `Active on ${vipNode} (expected ${cluster.promoted})`
-                : `Active on ${vipNode}`
-              : "Not currently routed to any node"}
+            : vipOk
+              ? `Active on ${vipNode}`
+              : vipNode
+                ? vipMismatch
+                  ? `Active on ${vipNode} (expected ${promoted})`
+                  : `Active on ${vipNode} (Promoted unknown)`
+                : "Not currently routed to any node"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -926,17 +930,15 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
     },
     {
       ok:
-        !cluster.observability
-          ? Boolean(cluster.qdevice_ok)
-          : cluster.observability.status === "healthy",
+        Boolean(cluster.observability) && cluster.observability.status === "healthy",
       label:
-        cluster.observability?.status === "absent"
-          ? "Observability absent"
-          : cluster.observability?.status === "healthy"
-            ? "Observability reachable"
-            : cluster.observability
-              ? "Observability unreachable"
-              : "Observability unknown",
+        !cluster.observability
+          ? "Observability unknown"
+          : cluster.observability.status === "absent"
+            ? "Observability absent"
+            : cluster.observability.status === "healthy"
+              ? "Observability reachable"
+              : "Observability unreachable",
     },
     {
       ok: Boolean(cluster.failcount_ok),
@@ -1003,15 +1005,27 @@ export default function ClusterPage() {
   const [pendingCleanup, setPendingCleanup] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const busyRef = useRef(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = useCallback(async () => {
-    const st = await api<StatusResp>("/api/cluster/status");
-    setCluster(st.cluster || {});
-    if (!esRef.current) setLog(st.log || "");
-    setLastUpdated(Date.now());
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      const st = await api<StatusResp>("/api/cluster/status");
+      setCluster(st.cluster || {});
+      if (!esRef.current) setLog(st.log || "");
+      setLastUpdated(Date.now());
+    } finally {
+      refreshInFlightRef.current = false;
+    }
   }, []);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   useEffect(() => {
     void refresh()
@@ -1030,11 +1044,11 @@ export default function ClusterPage() {
   useEffect(() => {
     if (tab !== "status") return;
     const id = window.setInterval(() => {
-      if (esRef.current || busy) return;
+      if (esRef.current || busyRef.current || refreshInFlightRef.current) return;
       void refresh().catch(() => undefined);
     }, 12000);
     return () => window.clearInterval(id);
-  }, [tab, busy, refresh]);
+  }, [tab, refresh]);
 
   async function manualRefresh() {
     setRefreshing(true);
@@ -1385,6 +1399,9 @@ export default function ClusterPage() {
           kin_user_pass: addKin,
         }),
       });
+      setAddRoot("");
+      setAddKin("");
+      setAddOpen(false);
       setPendingObsAdd(true);
     } catch (err: unknown) {
       setAddErr(err instanceof Error ? err.message : "Could not store credentials");
@@ -1444,7 +1461,13 @@ export default function ClusterPage() {
         </NodeHead>
         <Kv>
           <KvLabel>Role</KvLabel>
-          <KvValue>{isPromoted ? "Serving mail" : "Replica"}</KvValue>
+          <KvValue>
+            {isOffline
+              ? "Unreachable"
+              : isPromoted
+                ? "Serving mail"
+                : "Replica"}
+          </KvValue>
           <KvLabel>IP address</KvLabel>
           <KvValue $mono={Boolean(ip)}>{ip || "Unknown"}</KvValue>
           <KvLabel>Mail VIP</KvLabel>
@@ -1710,8 +1733,12 @@ export default function ClusterPage() {
           }
           message={
             probing ? (
-              <>Probing SSH reachability for <strong>{pendingRemove}</strong>…</>
-            ) : removeProbe?.mode === "forced" ? (
+              <>Probing SSH reachability for <strong>{pendingRemove}</strong>...</>
+            ) : (removeProbe?.errors || []).length > 0 ? (
+              <>{(removeProbe?.errors || []).join(" ")}</>
+            ) : !removeProbe ? (
+              <>Probe did not return a result. Cancel and try again.</>
+            ) : removeProbe.mode === "forced" ? (
               <>
                 <strong>{pendingRemove}</strong> does not answer SSH. This will run the
                 forced path: clear Corosync membership, the DRBD peer, Pacemaker
@@ -1730,17 +1757,24 @@ export default function ClusterPage() {
           }
           detail={
             probing
-              ? undefined
-              : removeProbe?.mode === "forced"
-                ? "A failed forced remove leaves stale references that also block Add Host. Survivor-side cleanup is the part that must succeed."
-                : "This is harder to reverse than maintenance mode. If uninstall on the departing node fails, survivor-side removal still counts as success."
+              ? "You can cancel while probing."
+              : (removeProbe?.errors || []).length > 0
+                ? (removeProbe?.notes || []).join(" ") || undefined
+                : removeProbe?.mode === "forced"
+                  ? "A failed forced remove leaves stale references that also block Add Host. Survivor-side cleanup is the part that must succeed."
+                  : "This is harder to reverse than maintenance mode. If uninstall on the departing node fails, survivor-side removal still counts as success."
           }
-          confirmLabel={probing ? "Probing…" : "Remove host"}
-          loading={busy || probing}
+          confirmLabel={probing ? "Probing..." : "Remove host"}
+          loading={busy}
+          confirmDisabled={
+            probing || !removeProbe || (removeProbe.errors || []).length > 0
+          }
+          countdownSeconds={probing || (removeProbe?.errors || []).length > 0 || !removeProbe ? 0 : 5}
           onCancel={() => {
-            if (busy || probing) return;
+            if (busy) return;
             probeRef.current?.close();
             probeRef.current = null;
+            setProbing(false);
             setPendingRemove(null);
             setRemoveProbe(null);
           }}
@@ -1755,9 +1789,11 @@ export default function ClusterPage() {
           title="Remove Observability"
           message={
             probing ? (
-              <>Probing whether Observability still answers…</>
+              <>Probing whether Observability still answers...</>
             ) : (obsRemoveProbe?.errors || []).length > 0 ? (
               <>{(obsRemoveProbe?.errors || []).join(" ")}</>
+            ) : !obsRemoveProbe ? (
+              <>Probe did not return a result. Cancel and try again.</>
             ) : (
               <>
                 Observability is unreachable. This will disarm SBD on both mail
@@ -1769,19 +1805,28 @@ export default function ClusterPage() {
               </>
             )
           }
-          detail="This is a forced path only. A healthy Observability node cannot be removed. Dual-self-fence risk stays until Add Observability completes."
-          confirmLabel={probing ? "Probing…" : "Remove Observability"}
-          loading={busy || probing}
+          detail={
+            probing
+              ? "You can cancel while probing."
+              : "This is a forced path only. A healthy Observability node cannot be removed. Dual-self-fence risk stays until Add Observability completes."
+          }
+          confirmLabel={probing ? "Probing..." : "Remove Observability"}
+          loading={busy}
+          confirmDisabled={
+            probing || !obsRemoveProbe || (obsRemoveProbe.errors || []).length > 0
+          }
+          countdownSeconds={probing || (obsRemoveProbe?.errors || []).length > 0 || !obsRemoveProbe ? 0 : 5}
           onCancel={() => {
-            if (busy || probing) return;
+            if (busy) return;
             probeRef.current?.close();
             probeRef.current = null;
+            setProbing(false);
             setPendingObsRemove(false);
             setObsRemoveProbe(null);
           }}
           onConfirm={() => {
             if (probing || busy) return;
-            if ((obsRemoveProbe?.errors || []).length > 0) return;
+            if (!obsRemoveProbe || (obsRemoveProbe.errors || []).length > 0) return;
             runObsRemove();
           }}
         />

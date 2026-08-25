@@ -23,8 +23,9 @@ pacemaker_mail_stack_vip_cidr: "24"
 pacemaker_mail_stack_vip_nic: ""
 # After a fence the survivor must stay Promoted; a node location score
 # (prefer A=50) caused automatic failback in ha-build-14. Leave disabled
-# unless an operator explicitly pins the Master to one host.
-pacemaker_mail_stack_prefer_node: mail.gits-it.site
+# unless an operator explicitly pins the Master to one host. prefer_node
+# must be set in inventory when prefer_enabled is true (no lab FQDN default).
+pacemaker_mail_stack_prefer_node: ""
 pacemaker_mail_stack_prefer_score: 50
 pacemaker_mail_stack_prefer_enabled: false
 pacemaker_mail_stack_clone_stickiness: 1000

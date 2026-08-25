@@ -237,6 +237,7 @@ export default function UsersPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
                 required
+                autoComplete="new-password"
               />
             </>
           ) : (

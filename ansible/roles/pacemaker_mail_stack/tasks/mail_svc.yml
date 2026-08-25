@@ -4,18 +4,40 @@
 # Same rules as drbd_clone.yml: never check_mode: false on create/group add.
 # =============================================================================
 
-- name: Require a VIP that is not a mail-node address
+- name: Require a VIP that is not a mail-node or qnetd address
   ansible.builtin.assert:
     that:
       - pacemaker_mail_stack_vip_ip | length > 0
       - pacemaker_mail_stack_vip_ip != (hostvars[inventory_hostname].ansible_host | default(''))
       - pacemaker_mail_stack_vip_ip not in (groups['mail_nodes'] | default([]) | map('extract', hostvars, 'ansible_host') | list)
+      - pacemaker_mail_stack_vip_ip != (corosync_qdevice_qnetd_ip | default(''))
+      - pacemaker_mail_stack_vip_ip not in (groups['monitoring'] | default([]) | map('extract', hostvars, 'ansible_host') | list)
+      - (pacemaker_mail_stack_vip_cidr | string | length > 0)
+      - (pacemaker_mail_stack_vip_cidr | int) >= 8
+      - (pacemaker_mail_stack_vip_cidr | int) <= 30
     fail_msg: >-
       pacemaker_mail_stack_vip_ip={{ pacemaker_mail_stack_vip_ip | default('(empty)') }}
-      is unset or collides with a mail-node ansible_host. Set the VIP explicitly
-      in inventory - never reuse a node NIC address as the floating IP.
+      is unset, has an invalid cidr_netmask, or collides with a mail-node /
+      monitoring / qnetd ansible_host. Set the VIP explicitly in inventory -
+      never reuse a node NIC or witness address as the floating IP.
   run_once: true
   tags: [pacemaker, stack, group]
+
+- name: Refuse prefer-location scores that beat Promoted stickiness
+  ansible.builtin.assert:
+    that:
+      - not (pacemaker_mail_stack_prefer_enabled | bool)
+        or (
+          (pacemaker_mail_stack_prefer_node | length > 0)
+          and ((pacemaker_mail_stack_prefer_score | int) < (pacemaker_mail_stack_clone_stickiness | int))
+        )
+    fail_msg: >-
+      prefer_enabled requires prefer_node and prefer_score
+      ({{ pacemaker_mail_stack_prefer_score }}) strictly less than
+      clone stickiness ({{ pacemaker_mail_stack_clone_stickiness }}).
+      Equal/higher scores recreate automatic failback (ha-build-14).
+  run_once: true
+  tags: [pacemaker, stack, group, drbd]
 
 - name: Check whether the kin-fs filesystem resource already exists
   ansible.builtin.command:
@@ -88,6 +110,8 @@
       ip={{ pacemaker_mail_stack_vip_ip }}
       cidr_netmask={{ pacemaker_mail_stack_vip_cidr }}
       {{ ('nic=' ~ pacemaker_mail_stack_vip_nic) if (pacemaker_mail_stack_vip_nic | length > 0) else '' }}
+      op monitor interval=10s timeout=20s
+      meta migration-threshold=3 failure-timeout=120s
       --group {{ pacemaker_mail_stack_group }}
       --disabled
   # SAFETY: never check_mode: false - would announce VIP on the network.
@@ -95,6 +119,26 @@
   when:
     - pacemaker_mail_stack_vip_cfg.rc != 0
     - not ansible_check_mode
+  tags: [pacemaker, stack, group]
+
+- name: Update kin-vip when inventory IP/cidr/nic drifted from the CIB
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource update {{ pacemaker_mail_stack_vip }}
+      ip={{ pacemaker_mail_stack_vip_ip }}
+      cidr_netmask={{ pacemaker_mail_stack_vip_cidr }}
+      {{ ('nic=' ~ pacemaker_mail_stack_vip_nic) if (pacemaker_mail_stack_vip_nic | length > 0) else '' }}
+  run_once: true
+  when:
+    - pacemaker_mail_stack_vip_cfg.rc == 0
+    - not ansible_check_mode
+    - >-
+      ('ip=' ~ pacemaker_mail_stack_vip_ip) not in pacemaker_mail_stack_vip_cfg.stdout
+      or ('cidr_netmask=' ~ (pacemaker_mail_stack_vip_cidr | string)) not in pacemaker_mail_stack_vip_cfg.stdout
+      or (
+        (pacemaker_mail_stack_vip_nic | length > 0)
+        and (('nic=' ~ pacemaker_mail_stack_vip_nic) not in pacemaker_mail_stack_vip_cfg.stdout)
+      )
   tags: [pacemaker, stack, group]
 
 - name: Note that service group creation is skipped during a dry-run or already exists

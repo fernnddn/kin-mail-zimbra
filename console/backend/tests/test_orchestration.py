@@ -657,11 +657,13 @@ class CheckModeSafetyTests(unittest.TestCase):
         validate = text.find("zimbra_validate()")
         stop = text.find("zimbra_stop()")
         self.assertGreater(start, validate)
+        validate_block = text[validate:start]
+        self.assertIn("findmnt -n", validate_block)
+        self.assertIn("/dev/drbd*", validate_block)
         start_block = text[start : start + 900]
         self.assertIn("findmnt -n", start_block)
         self.assertIn("/dev/drbd*", start_block)
         self.assertIn("bin/zmcontrol", start_block)
-        self.assertNotIn("findmnt", text[validate:start])
         self.assertIn("zimbra_wait_backing_free", text)
         self.assertIn("zimbra_fail2ban_jails unmounted", text[stop : stop + 800])
         self.assertIn("fuser -m", text)
@@ -689,10 +691,16 @@ class CheckModeSafetyTests(unittest.TestCase):
         defaults = (root / "defaults" / "main.yml").read_text(encoding="utf-8")
         self.assertIn("pacemaker_mail_stack_vip_nic: \"\"", defaults)
         self.assertNotIn("pacemaker_mail_stack_vip_nic: ens33", defaults)
+        self.assertIn("pacemaker_mail_stack_prefer_node: \"\"", defaults)
+        self.assertIn("pacemaker_mail_stack_prefer_enabled: false", defaults)
 
         mail_svc = (root / "tasks" / "mail_svc.yml").read_text(encoding="utf-8")
         self.assertNotIn("nic=ens33", mail_svc)
         self.assertIn("nic=' ~ pacemaker_mail_stack_vip_nic", mail_svc)
+        self.assertIn("pcs resource update", mail_svc)
+        self.assertIn("corosync_qdevice_qnetd_ip", mail_svc)
+        self.assertIn("prefer_score", mail_svc)
+        self.assertIn("op monitor interval=10s", mail_svc)
 
         constraints = (root / "tasks" / "constraints.yml").read_text(encoding="utf-8")
         enable = constraints.find("Enable the kin-mail-svc primitives after constraints")
@@ -701,6 +709,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertGreater(wait, enable)
         enable_block = constraints[enable:wait]
         self.assertIn("pcs resource enable", enable_block)
+        self.assertIn("target-role", enable_block)
         self.assertIn("pacemaker_mail_stack_fs", enable_block)
         self.assertIn("pacemaker_mail_stack_zimbra", enable_block)
         self.assertIn("pacemaker_mail_stack_vip", enable_block)
@@ -712,6 +721,8 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("kin-vip[^\\n]*Started", verify)
         self.assertIn("'Promoted' not in pacemaker_mail_stack_status.stdout", verify)
         self.assertIn("promoted-resource-stickiness=", verify)
+        self.assertIn("Verify kin-vip and kin-zimbra Started on the Promoted node", verify)
+        self.assertIn("Verify kin-vip CIB matches inventory IP", verify)
 
         main = (root / "tasks" / "main.yml").read_text(encoding="utf-8")
         constraints_idx = main.find("import_tasks: constraints.yml")

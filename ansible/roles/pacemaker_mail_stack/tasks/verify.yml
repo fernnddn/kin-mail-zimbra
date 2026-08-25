@@ -20,6 +20,44 @@
   run_once: true
   tags: [pacemaker, stack, verify]
 
+- name: Verify kin-vip and kin-zimbra Started on the Promoted node
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CRM=$(crm_mon -1 -r 2>/dev/null || true)
+    PROM=$(printf '%s\n' "$CRM" | sed -n 's/.*Promoted:[[:space:]]*\[\([^]]*\)\].*/\1/p' | head -1)
+    PROM=$(printf '%s\n' "$PROM" | awk '{print $1}' | tr -d "'\"")
+    count=$(printf '%s\n' "$CRM" | sed -n 's/.*Promoted:[[:space:]]*\[\([^]]*\)\].*/\1/p' | head -1 | wc -w | tr -d ' ')
+    VIP=$(printf '%s\n' "$CRM" | grep -E 'kin-vip' | sed -n 's/.*Started[[:space:]]\+\(\S\+\).*/\1/p' | head -1 | tr -d "'\"")
+    ZIM=$(printf '%s\n' "$CRM" | grep -E 'kin-zimbra' | sed -n 's/.*Started[[:space:]]\+\(\S\+\).*/\1/p' | head -1 | tr -d "'\"")
+    echo "promoted=${PROM} vip=${VIP} zimbra=${ZIM} promoted_count=${count}"
+    test -n "$PROM"
+    test "$count" = "1"
+    test -n "$VIP"
+    test -n "$ZIM"
+    test "$PROM" = "$VIP"
+    test "$PROM" = "$ZIM"
+  args:
+    executable: /bin/bash
+  register: pacemaker_mail_stack_vip_on_promoted
+  changed_when: false
+  failed_when: pacemaker_mail_stack_vip_on_promoted.rc != 0
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
+- name: Verify kin-vip CIB matches inventory IP
+  ansible.builtin.command:
+    cmd: pcs resource config {{ pacemaker_mail_stack_vip }}
+  register: pacemaker_mail_stack_vip_verify
+  changed_when: false
+  failed_when: >-
+    pacemaker_mail_stack_vip_verify.rc != 0
+    or (('ip=' ~ pacemaker_mail_stack_vip_ip) not in pacemaker_mail_stack_vip_verify.stdout)
+    or (('cidr_netmask=' ~ (pacemaker_mail_stack_vip_cidr | string)) not in pacemaker_mail_stack_vip_verify.stdout)
+  check_mode: false
+  run_once: true
+  tags: [pacemaker, stack, verify]
+
 - name: Verify the DRBD clone is in promotable mode
   ansible.builtin.command:
     cmd: pcs resource config {{ pacemaker_mail_stack_drbd_clone }}

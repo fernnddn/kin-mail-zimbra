@@ -48,15 +48,18 @@ class SessionLifetimeTests(unittest.TestCase):
 
 
 class BootstrapPasswordTests(unittest.TestCase):
-    def test_generate_bootstrap_password_is_fixed(self) -> None:
-        self.assertEqual(auth.generate_bootstrap_password(), "E@syEmail")
-        self.assertEqual(auth.DEFAULT_BOOTSTRAP_PASSWORD, "E@syEmail")
+    def test_generate_bootstrap_password_is_random(self) -> None:
+        a = auth.generate_bootstrap_password()
+        b = auth.generate_bootstrap_password()
+        self.assertGreaterEqual(len(a), 16)
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(a, auth.DEFAULT_BOOTSTRAP_PASSWORD)
 
-    def test_bootstrap_sh_uses_fixed_password_not_random(self) -> None:
+    def test_bootstrap_sh_mints_random_password(self) -> None:
         root = Path(__file__).resolve().parents[3]
         text = (root / "console" / "bootstrap.sh").read_text(encoding="utf-8")
-        self.assertIn("BOOT_PASS='E@syEmail'", text)
-        self.assertNotIn("token_urlsafe(18)", text)
+        self.assertNotIn("BOOT_PASS='E@syEmail'", text)
+        self.assertIn("token_urlsafe(18)", text)
 
     def test_own_password_api_requires_current_password(self) -> None:
         root = Path(__file__).resolve().parents[3]

@@ -298,16 +298,16 @@ PY
   chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE"
   ok "Migrated admin.hash → users.json (KIN Super Admin)"
 else
-  # Operator-directed default (not random). Still printed once and stored
-  # root-only until the first successful local login deletes that file.
-  BOOT_PASS='E@syEmail'
-  KIN_BOOT_PASS="$BOOT_PASS" KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" \
-    KIN_CONSOLE_USER="$CONSOLE_USER" "${OPT_ROOT}/venv/bin/python" - <<'PY'
-import json, os
+  # One-time random Super Admin password (printed once; root-only file until
+  # first successful local login). Never mint a well-known default.
+  BOOT_PASS="$(
+    KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" \
+      KIN_CONSOLE_USER="$CONSOLE_USER" "${OPT_ROOT}/venv/bin/python" - <<'PY'
+import json, os, secrets
 from pathlib import Path
 import bcrypt
-pwd = os.environ["KIN_BOOT_PASS"].encode("utf-8")
-ph = bcrypt.hashpw(pwd, bcrypt.gensalt(rounds=12)).decode("ascii")
+pwd = secrets.token_urlsafe(18)
+ph = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("ascii")
 username = (os.environ.get("KIN_CONSOLE_USER") or "admin").strip() or "admin"
 users_path = Path(os.environ["KIN_USERS_FILE"])
 payload = {
@@ -325,12 +325,12 @@ payload = {
 }
 users_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 users_path.chmod(0o600)
-# Keep legacy admin.hash in sync for older tooling / rollback reads.
 legacy = Path(os.environ["KIN_HASH_FILE"])
 legacy.write_text(ph + "\n", encoding="utf-8")
 legacy.chmod(0o600)
+print(pwd)
 PY
-  unset KIN_BOOT_PASS
+  )"
   chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE" "$HASH_FILE"
   # Retrievable until first successful local login (then privhelperd deletes it).
   old_umask=$(umask)
