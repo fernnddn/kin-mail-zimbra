@@ -2,8 +2,11 @@
 
 Graceful: target answers SSH. Forced: SSH fails or the node is already Offline;
 survivor cleanup must still succeed so a later Add Host is not blocked.
-Uninstall on the departing node is best-effort and never undoes a successful
-survivor-side removal.
+Departing-node uninstall never undoes a successful survivor-side removal (no
+rollback of cluster state on its failure), but it is not silently best-effort
+either: a failed uninstall now fails the whole job (ok:false) so the operator
+knows the retired host is still fully installed, same as a failed topology
+demote.
 """
 
 from __future__ import annotations
