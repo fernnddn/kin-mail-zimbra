@@ -929,8 +929,7 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
       label: cluster.qdevice_ok ? "qdevice voting" : "qdevice unhealthy",
     },
     {
-      ok:
-        Boolean(cluster.observability) && cluster.observability.status === "healthy",
+      ok: cluster.observability?.status === "healthy",
       label:
         !cluster.observability
           ? "Observability unknown"
