@@ -348,6 +348,14 @@ class InventoryTests(unittest.TestCase):
         self.assertFalse(_INSTALL_DEST_RE.match("/etc/passwd"))
         self.assertFalse(_INSTALL_DEST_RE.match("/root/.ssh/authorized_keys"))
 
+    def test_install_dest_allows_session_secret(self) -> None:
+        # Added so VIP failover does not force a fresh console login (live
+        # 2vm practice run, 25 Aug 2026 raised this as a known-but-unfixed
+        # gap; closed the same day while waiting on the DRBD initial sync).
+        self.assertTrue(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/session.secret"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/session.secret.bak"))
+        self.assertFalse(_INSTALL_DEST_RE.match("/var/lib/kin-mail-console/session-secret"))
+
     def test_orch_done_is_after_peer_console_sync(self) -> None:
         from pathlib import Path
 
@@ -1335,28 +1343,36 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         push_file.assert_not_awaited()
 
     async def test_users_push_success_then_writes_peer_markers(self) -> None:
+        import tempfile
+        from pathlib import Path
         from unittest.mock import AsyncMock, patch
 
+        from kin_console import settings as settings_mod
         from kin_privhelper.orchestration import sync_peer_ha_console_state
 
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
-        with (
-            patch(
-                "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
-            ),
-            patch(
-                "kin_privhelper.console_users_sync.push_local_users_to_peer",
-                new=AsyncMock(return_value=(True, "users pushed")),
-            ),
-            patch(
-                "kin_privhelper.orchestration._push_peer_text_file",
-                new=AsyncMock(return_value=(0, "")),
-            ) as push_file,
-            patch("kin_privhelper.deploy_state.ensure_server_id", return_value="fixed-server-id"),
-            patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
-        ):
-            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+        with tempfile.TemporaryDirectory() as td:
+            secret_path = Path(td) / "session.secret"
+            secret_path.write_text("fixed-session-secret\n", encoding="utf-8")
+            with (
+                patch(
+                    "kin_privhelper.orchestration._ssh_run",
+                    new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                ),
+                patch(
+                    "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                    new=AsyncMock(return_value=(True, "users pushed")),
+                ),
+                patch(
+                    "kin_privhelper.orchestration._push_peer_text_file",
+                    new=AsyncMock(return_value=(0, "")),
+                ) as push_file,
+                patch("kin_privhelper.deploy_state.ensure_server_id", return_value="fixed-server-id"),
+                patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
+                patch("kin_console.auth.ensure_session_secret"),
+                patch.object(settings_mod.settings, "session_secret_file", secret_path),
+            ):
+                ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
 
         self.assertTrue(ok)
         self.assertTrue(any("users pushed" in n for n in notes))
@@ -1369,12 +1385,16 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_server_id_and_license_token_synced_to_peer(self) -> None:
+        import tempfile
+        from pathlib import Path
         from unittest.mock import AsyncMock, patch
 
+        from kin_console import settings as settings_mod
         from kin_privhelper.orchestration import sync_peer_ha_console_state
 
         # Peer already fully caught up on config/markers (noop) - isolates
-        # the new server-id/license.token push from the marker-write block.
+        # the new server-id/license.token/session.secret push from the
+        # marker-write block.
         noop_blob = (
             "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
             "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
@@ -1382,53 +1402,67 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
         )
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
-        with (
-            patch(
-                "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, noop_blob)),
-            ),
-            patch(
-                "kin_privhelper.console_users_sync.push_local_users_to_peer",
-                new=AsyncMock(return_value=(True, "users pushed")),
-            ),
-            patch(
-                "kin_privhelper.orchestration._push_peer_text_file",
-                new=AsyncMock(return_value=(0, "")),
-            ) as push_file,
-            patch(
-                "kin_privhelper.deploy_state.ensure_server_id",
-                return_value="fixed-server-id",
-            ),
-            patch(
-                "kin_privhelper.deploy_state.read_license_token",
-                return_value="signed-license-token-blob",
-            ),
-        ):
-            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+        with tempfile.TemporaryDirectory() as td:
+            secret_path = Path(td) / "session.secret"
+            secret_path.write_text("fixed-session-secret\n", encoding="utf-8")
+            with (
+                patch(
+                    "kin_privhelper.orchestration._ssh_run",
+                    new=AsyncMock(return_value=(0, noop_blob)),
+                ),
+                patch(
+                    "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                    new=AsyncMock(return_value=(True, "users pushed")),
+                ),
+                patch(
+                    "kin_privhelper.orchestration._push_peer_text_file",
+                    new=AsyncMock(return_value=(0, "")),
+                ) as push_file,
+                patch(
+                    "kin_privhelper.deploy_state.ensure_server_id",
+                    return_value="fixed-server-id",
+                ),
+                patch(
+                    "kin_privhelper.deploy_state.read_license_token",
+                    return_value="signed-license-token-blob",
+                ),
+                patch("kin_console.auth.ensure_session_secret"),
+                patch.object(settings_mod.settings, "session_secret_file", secret_path),
+            ):
+                ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
 
         self.assertTrue(ok)
         dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
         self.assertIn("/etc/kin-mail/server-id", dests)
         self.assertIn("/var/lib/kin-mail-console/license.token", dests)
+        self.assertIn("/var/lib/kin-mail-console/session.secret", dests)
         bodies = {c.kwargs.get("dest"): c.kwargs.get("body") for c in push_file.await_args_list}
         self.assertEqual(bodies["/etc/kin-mail/server-id"], "fixed-server-id\n")
         self.assertEqual(
             bodies["/var/lib/kin-mail-console/license.token"], "signed-license-token-blob\n"
         )
+        self.assertEqual(
+            bodies["/var/lib/kin-mail-console/session.secret"], "fixed-session-secret\n"
+        )
         self.assertTrue(any("Synced server-id" in n for n in notes))
         self.assertTrue(any("Synced license.token" in n for n in notes))
-        token_calls = [
-            c for c in push_file.await_args_list
-            if c.kwargs.get("dest") == "/var/lib/kin-mail-console/license.token"
-        ]
-        self.assertEqual(len(token_calls), 1)
-        self.assertEqual(token_calls[0].kwargs.get("mode"), "600")
-        self.assertEqual(token_calls[0].kwargs.get("owner"), "kin-console")
-        self.assertEqual(token_calls[0].kwargs.get("group"), "kin-console")
+        self.assertTrue(any("Synced session.secret" in n for n in notes))
+        for dest in (
+            "/var/lib/kin-mail-console/license.token",
+            "/var/lib/kin-mail-console/session.secret",
+        ):
+            calls = [c for c in push_file.await_args_list if c.kwargs.get("dest") == dest]
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].kwargs.get("mode"), "600")
+            self.assertEqual(calls[0].kwargs.get("owner"), "kin-console")
+            self.assertEqual(calls[0].kwargs.get("group"), "kin-console")
 
-    async def test_no_local_license_token_skips_that_push(self) -> None:
+    async def test_session_secret_push_failure_is_not_fatal(self) -> None:
+        import tempfile
+        from pathlib import Path
         from unittest.mock import AsyncMock, patch
 
+        from kin_console import settings as settings_mod
         from kin_privhelper.orchestration import sync_peer_ha_console_state
 
         noop_blob = (
@@ -1438,31 +1472,93 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
         )
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
-        with (
-            patch(
-                "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, noop_blob)),
-            ),
-            patch(
-                "kin_privhelper.console_users_sync.push_local_users_to_peer",
-                new=AsyncMock(return_value=(True, "users pushed")),
-            ),
-            patch(
-                "kin_privhelper.orchestration._push_peer_text_file",
-                new=AsyncMock(return_value=(0, "")),
-            ) as push_file,
-            patch(
-                "kin_privhelper.deploy_state.ensure_server_id",
-                return_value="fixed-server-id",
-            ),
-            patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
-        ):
-            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        async def push(_host, _user, _password, _secrets, **kw):
+            if kw.get("dest") == "/var/lib/kin-mail-console/session.secret":
+                return 1, "scp fail"
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as td:
+            secret_path = Path(td) / "session.secret"
+            secret_path.write_text("fixed-session-secret\n", encoding="utf-8")
+            with (
+                patch(
+                    "kin_privhelper.orchestration._ssh_run",
+                    new=AsyncMock(return_value=(0, noop_blob)),
+                ),
+                patch(
+                    "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                    new=AsyncMock(return_value=(True, "users pushed")),
+                ),
+                patch(
+                    "kin_privhelper.orchestration._push_peer_text_file",
+                    new=AsyncMock(side_effect=push),
+                ),
+                patch(
+                    "kin_privhelper.deploy_state.ensure_server_id",
+                    return_value="fixed-server-id",
+                ),
+                patch(
+                    "kin_privhelper.deploy_state.read_license_token",
+                    return_value="",
+                ),
+                patch("kin_console.auth.ensure_session_secret"),
+                patch.object(settings_mod.settings, "session_secret_file", secret_path),
+            ):
+                ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        # A session.secret push failure must not fail the whole HA build -
+        # unlike server-id/license.token, it only affects login-cookie
+        # continuity across a future VIP failover.
+        self.assertTrue(ok)
+        self.assertTrue(any("Could not write session.secret" in n for n in notes))
+
+    async def test_no_local_license_token_skips_that_push(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, patch
+
+        from kin_console import settings as settings_mod
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        noop_blob = (
+            "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
+            "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
+            "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
+            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+        )
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with tempfile.TemporaryDirectory() as td:
+            secret_path = Path(td) / "session.secret"
+            secret_path.write_text("fixed-session-secret\n", encoding="utf-8")
+            with (
+                patch(
+                    "kin_privhelper.orchestration._ssh_run",
+                    new=AsyncMock(return_value=(0, noop_blob)),
+                ),
+                patch(
+                    "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                    new=AsyncMock(return_value=(True, "users pushed")),
+                ),
+                patch(
+                    "kin_privhelper.orchestration._push_peer_text_file",
+                    new=AsyncMock(return_value=(0, "")),
+                ) as push_file,
+                patch(
+                    "kin_privhelper.deploy_state.ensure_server_id",
+                    return_value="fixed-server-id",
+                ),
+                patch("kin_privhelper.deploy_state.read_license_token", return_value=""),
+                patch("kin_console.auth.ensure_session_secret"),
+                patch.object(settings_mod.settings, "session_secret_file", secret_path),
+            ):
+                ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
 
         self.assertTrue(ok)
         dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
         self.assertIn("/etc/kin-mail/server-id", dests)
         self.assertNotIn("/var/lib/kin-mail-console/license.token", dests)
+        self.assertIn("/var/lib/kin-mail-console/session.secret", dests)
 
     async def test_identity_push_failure_writes_no_peer_marker(self) -> None:
         from unittest.mock import AsyncMock, patch

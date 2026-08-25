@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
+import { keyframes } from "@emotion/react";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { isOpsRole, useAuth } from "../auth";
 import { api } from "../api";
@@ -33,6 +34,9 @@ type ClusterSnap = {
   promoted?: string | null;
   unpromoted?: string[];
   drbd_uptodate?: boolean;
+  drbd_sync_percent?: number | null;
+  vip_ip?: string | null;
+  vip_node?: string | null;
   qdevice_ok?: boolean;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
@@ -365,6 +369,246 @@ const CardHint = styled.p`
   line-height: 1.45;
 `;
 
+const gaugePulse = keyframes`
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(217, 119, 6, 0)); }
+  50% { filter: drop-shadow(0 0 5px rgba(217, 119, 6, 0.35)); }
+`;
+
+const OverviewGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.85rem;
+  margin: 0 0 1.15rem;
+`;
+
+const OverviewCard = styled.div`
+  border: 1px solid ${theme.line};
+  background: ${theme.bgElev};
+  border-radius: ${theme.radius.md};
+  padding: 1rem 1.1rem;
+  box-shadow: ${theme.shadow.sm};
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-width: 0;
+`;
+
+const OverviewBody = styled.div`
+  min-width: 0;
+  flex: 1;
+`;
+
+const OverviewLabel = styled.p`
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: ${theme.muted};
+`;
+
+const OverviewValue = styled.p`
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 650;
+  color: ${theme.surface[800]};
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const OverviewSub = styled.p<{ $tone?: "ok" | "warn" | "muted" }>`
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  font-weight: ${(p) => (p.$tone && p.$tone !== "muted" ? 600 : 400)};
+  color: ${(p) =>
+    p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.muted};
+`;
+
+const GaugeWrap = styled.div<{ $pulse?: boolean }>`
+  position: relative;
+  width: 76px;
+  height: 76px;
+  flex-shrink: 0;
+  animation: ${(p) => (p.$pulse ? gaugePulse : "none")} 2.4s ease-in-out infinite;
+`;
+
+const GaugeSvg = styled.svg`
+  transform: rotate(-90deg);
+`;
+
+const GaugeTrack = styled.circle`
+  fill: none;
+  stroke: ${theme.surface[200]};
+  stroke-width: 8;
+`;
+
+const GaugeValue = styled.circle<{ $color: string }>`
+  fill: none;
+  stroke: ${(p) => p.$color};
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition:
+    stroke-dashoffset 700ms ease,
+    stroke 300ms ease;
+`;
+
+const GaugeCenter = styled.div`
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+`;
+
+const GaugePct = styled.span`
+  font-size: 0.86rem;
+  font-weight: 750;
+  color: ${theme.surface[800]};
+  line-height: 1;
+`;
+
+function ReplicationGauge({
+  percent,
+  ok,
+  unknown,
+}: {
+  percent: number;
+  ok: boolean;
+  unknown?: boolean;
+}) {
+  const size = 76;
+  const stroke = 8;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const pct = unknown ? 0 : Math.max(0, Math.min(100, percent));
+  const offset = c - (pct / 100) * c;
+  const color = unknown ? theme.surface[300] : ok ? theme.ok : theme.warn;
+  return (
+    <GaugeWrap $pulse={!unknown && !ok} aria-hidden="true">
+      <GaugeSvg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <GaugeTrack cx={size / 2} cy={size / 2} r={r} />
+        <GaugeValue
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          $color={color}
+          strokeDasharray={c}
+          strokeDashoffset={unknown ? c : offset}
+        />
+      </GaugeSvg>
+      <GaugeCenter>
+        <GaugePct>{unknown ? "—" : `${pct.toFixed(0)}%`}</GaugePct>
+      </GaugeCenter>
+    </GaugeWrap>
+  );
+}
+
+function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode[] {
+  const cards: ReactNode[] = [];
+  const nodeCount = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers).length;
+
+  cards.push(
+    <OverviewCard key="topology">
+      <OverviewBody>
+        <OverviewLabel>Topology</OverviewLabel>
+        <OverviewValue>{topology === "2vm" ? "2-node HA pair" : "Single server"}</OverviewValue>
+        <OverviewSub>
+          {topology === "2vm" ? `${nodeCount} mail node${nodeCount === 1 ? "" : "s"} configured` : cluster.local_host || "—"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  if (topology !== "2vm") return cards;
+
+  cards.push(
+    <OverviewCard key="serving">
+      <OverviewBody>
+        <OverviewLabel>Serving mail</OverviewLabel>
+        <OverviewValue>{cluster.promoted || "Unknown"}</OverviewValue>
+        <OverviewSub>
+          {(cluster.unpromoted || []).length
+            ? `Replica: ${(cluster.unpromoted || []).join(", ")}`
+            : "No confirmed replica"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  const vipIp = (cluster.vip_ip || "").trim();
+  const vipNode = (cluster.vip_node || "").trim();
+  const vipMismatch = Boolean(vipNode && cluster.promoted && vipNode !== cluster.promoted);
+  cards.push(
+    <OverviewCard key="vip">
+      <OverviewBody>
+        <OverviewLabel>Mail VIP</OverviewLabel>
+        <OverviewValue>{vipIp || "Not configured"}</OverviewValue>
+        <OverviewSub $tone={!vipIp ? "muted" : vipNode ? (vipMismatch ? "warn" : "ok") : "warn"}>
+          {!vipIp
+            ? "No floating IP set for this cluster"
+            : vipNode
+              ? vipMismatch
+                ? `Active on ${vipNode} (expected ${cluster.promoted})`
+                : `Active on ${vipNode}`
+              : "Not currently routed to any node"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  const pct = cluster.drbd_sync_percent;
+  const uptodate = Boolean(cluster.drbd_uptodate);
+  cards.push(
+    <OverviewCard key="replication">
+      <ReplicationGauge percent={typeof pct === "number" ? pct : uptodate ? 100 : 0} ok={uptodate} unknown={!uptodate && typeof pct !== "number"} />
+      <OverviewBody>
+        <OverviewLabel>DRBD Replication</OverviewLabel>
+        <OverviewValue>
+          {uptodate ? "In sync" : typeof pct === "number" ? `Syncing ${pct.toFixed(0)}%` : "Unknown"}
+        </OverviewValue>
+        <OverviewSub $tone={uptodate ? "ok" : typeof pct === "number" ? "warn" : "muted"}>
+          {uptodate
+            ? "Both nodes UpToDate"
+            : typeof pct === "number"
+              ? "Normal after a fresh Build HA pair or resync"
+              : "No live sync data"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  cards.push(
+    <OverviewCard key="qdevice">
+      <OverviewBody>
+        <OverviewLabel>Quorum device</OverviewLabel>
+        <OverviewValue>{cluster.qdevice_ok ? "Voting" : "Not voting"}</OverviewValue>
+        <OverviewSub $tone={cluster.qdevice_ok ? "ok" : "warn"}>
+          {cluster.qdevice_ok ? "qdevice reachable" : "qdevice missing, offline, or not voting"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  if (cluster.observability) {
+    const obs = cluster.observability;
+    const obsHealthy = obs.status === "healthy";
+    cards.push(
+      <OverviewCard key="observability">
+        <OverviewBody>
+          <OverviewLabel>Observability</OverviewLabel>
+          <OverviewValue>{obs.hostname || obs.ip || (obs.status === "absent" ? "Absent" : "Unknown")}</OverviewValue>
+          <OverviewSub $tone={obsHealthy ? "ok" : obs.status === "absent" ? "muted" : "warn"}>
+            {obsHealthy ? "Reachable" : obs.status === "absent" ? "Not configured" : "Unreachable"}
+          </OverviewSub>
+        </OverviewBody>
+      </OverviewCard>,
+    );
+  }
+
+  return cards;
+}
+
 function parseTaggedJson(log: string, prefix: string): Record<string, unknown> | null {
   for (const line of log.split("\n")) {
     if (line.startsWith(prefix)) {
@@ -392,7 +636,11 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
   return [
     {
       ok: Boolean(cluster.drbd_uptodate),
-      label: cluster.drbd_uptodate ? "DRBD UpToDate" : "DRBD not UpToDate",
+      label: cluster.drbd_uptodate
+        ? "DRBD UpToDate"
+        : typeof cluster.drbd_sync_percent === "number"
+          ? `DRBD syncing (${cluster.drbd_sync_percent.toFixed(0)}% - normal after a fresh Build HA pair)`
+          : "DRBD not UpToDate",
     },
     {
       ok: Boolean(cluster.qdevice_ok),
@@ -475,7 +723,7 @@ export default function ClusterPage() {
     };
   }, [refresh]);
 
-  function runStream(op: "preflight" | "enter" | "exit", target: string) {
+  function runStream(op: "preflight" | "enter" | "exit" | "cleanup", target: string) {
     esRef.current?.close();
     setBusy(true);
     setMessage("");
@@ -525,6 +773,12 @@ export default function ClusterPage() {
             setMessage(code === 0 ? `Pre-flight passed for ${target}.` : `Pre-flight failed for ${target}.`);
           } else if (op === "enter") {
             setMessage(code === 0 ? `${target} is in maintenance.` : `Enter maintenance failed for ${target}.`);
+          } else if (op === "cleanup") {
+            setMessage(
+              code === 0
+                ? "Cleared stale Pacemaker fail-counts."
+                : "Could not clear fail-counts - see the log below.",
+            );
           } else {
             setMessage(code === 0 ? `${target} left maintenance.` : `Exit maintenance not fully verified for ${target}.`);
           }
@@ -839,6 +1093,8 @@ export default function ClusterPage() {
     const pfForThis = preflightTarget === node ? preflight : null;
     const pfFailed = pfForThis ? Object.values(pfForThis).some((c) => !c.ok) : false;
     const pfPassed = !!pfForThis && !pfFailed;
+    const ip = ipForNode(node, cluster.node_ips, cluster.local_host);
+    const isVip = Boolean(cluster.vip_ip) && cluster.vip_node === node;
     const statusTone: "ok" | "idle" | "warn" = isOffline
       ? "warn"
       : isStandby
@@ -865,6 +1121,10 @@ export default function ClusterPage() {
         <Kv>
           <KvLabel>Role</KvLabel>
           <KvValue>{isPromoted ? "Serving mail" : "Replica"}</KvValue>
+          <KvLabel>IP address</KvLabel>
+          <KvValue>{ip || "Unknown"}</KvValue>
+          <KvLabel>Mail VIP</KvLabel>
+          <KvValue>{isVip ? cluster.vip_ip : "—"}</KvValue>
           <KvLabel>Maintenance</KvLabel>
           <KvValue>{isStandby ? "On" : "Off"}</KvValue>
         </Kv>
@@ -1001,8 +1261,21 @@ export default function ClusterPage() {
                       {line.label}
                     </MenuItem>
                   ))}
+                  {ops && cluster.failcount_ok === false ? (
+                    <MenuItem
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setHealthOpen(false);
+                        runStream("cleanup", "");
+                      }}
+                    >
+                      Clear stale fail-counts
+                    </MenuItem>
+                  ) : null}
                 </Dropdown>
               </HealthWrap>
+              <OverviewGrid>{clusterOverviewCards(cluster, topology)}</OverviewGrid>
               {topology === "1vm" ? (
                 <>
                   <ClusterTopology

@@ -173,6 +173,24 @@ def parse_unpromoted(crm: str) -> list[str]:
     return []
 
 
+def parse_resource_node(crm: str, resource: str) -> str | None:
+    """Which node a Pacemaker primitive (e.g. kin-vip) is Started on.
+
+    Same "Started <node>" convention `crm_mon -1 -r` uses for every
+    primitive, as already relied on by zimbra_started_on above.
+    """
+    for line in crm.splitlines():
+        if resource not in line or "Started" not in line:
+            continue
+        match = re.search(r"Started\s+(\S+)", line)
+        if not match:
+            continue
+        node = match.group(1).strip().strip("'\"")
+        if NODE_RE.match(node):
+            return node
+    return None
+
+
 def drbd_both_uptodate(status: str) -> bool:
     """True when every disk/peer-disk line in `drbdadm status` is UpToDate."""
     disks = re.findall(r"(?:disk|peer-disk):\s*(\S+)", status, flags=re.I)
@@ -182,6 +200,25 @@ def drbd_both_uptodate(status: str) -> bool:
     if len(disks) < 2:
         return False
     return all(d.lower() == "uptodate" for d in disks)
+
+
+def drbd_sync_percent(status: str) -> float | None:
+    """Initial/resync progress (0-100) from `drbdadm status`'s `done:NN.NN`
+    field, or None when nothing is actively syncing right now.
+
+    A freshly built HA pair's new node starts Inconsistent and climbs to
+    UpToDate over the first full resync - console showed a flat "DRBD not
+    UpToDate" with no indication this was expected and in progress, so the
+    operator had to SSH in and run drbdadm status by hand to find out it was
+    just 32% through a normal sync (live 2vm practice run, 25 Aug 2026).
+    """
+    m = re.search(r"\bdone:(\d+(?:\.\d+)?)", status)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
 
 
 def qdevice_voting(quorum_text: str) -> bool:
@@ -441,6 +478,10 @@ def _config_server_ip() -> str:
     return _config_value("SERVER_IP")
 
 
+def _config_vip_ip() -> str:
+    return _config_value("CLUSTER_VIP_IP")
+
+
 async def _observability_snapshot(corosync_txt: str) -> dict[str, Any]:
     from .observability_status import (
         configured_observability_identity,
@@ -497,10 +538,13 @@ async def gather_status() -> dict[str, Any]:
         "promoted": promoted,
         "unpromoted": unpromoted,
         "drbd_uptodate": drbd_both_uptodate(drbd),
+        "drbd_sync_percent": drbd_sync_percent(drbd),
         "qdevice_ok": qdevice_voting(quorum),
         "observability": observability,
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
+        "vip_ip": _config_vip_ip(),
+        "vip_node": parse_resource_node(crm, "kin-vip"),
         "addrs": addrs,
         "raw": {
             "pcs_nodes": nodes_text,
@@ -612,8 +656,8 @@ async def wait_exit_healthy(target: str) -> tuple[bool, list[str]]:
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
     args = args or {}
     op = str(args.get("op") or "status").strip().lower()
-    if op not in ("status", "preflight", "enter", "exit"):
-        yield proto.event_stderr("op must be status, preflight, enter, or exit\n")
+    if op not in ("status", "preflight", "enter", "exit", "cleanup"):
+        yield proto.event_stderr("op must be status, preflight, enter, exit, or cleanup\n")
         yield proto.event_done(2)
         return
 
@@ -628,7 +672,9 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"promoted={st['promoted']}")
         yield await _emit(f"unpromoted={st['unpromoted']}")
         yield await _emit(f"drbd_uptodate={st['drbd_uptodate']}")
+        yield await _emit(f"drbd_sync_percent={st.get('drbd_sync_percent')}")
         yield await _emit(f"qdevice_ok={st['qdevice_ok']}")
+        yield await _emit(f"vip={st.get('vip_ip') or '-'} on={st.get('vip_node') or '-'}")
         obs = st.get("observability") or {}
         yield await _emit(
             "observability="
@@ -654,14 +700,54 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "promoted": st["promoted"],
             "unpromoted": st["unpromoted"],
             "drbd_uptodate": st["drbd_uptodate"],
+            "drbd_sync_percent": st.get("drbd_sync_percent"),
             "qdevice_ok": st["qdevice_ok"],
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),
             "node_ips": node_ips,
+            "vip_ip": st.get("vip_ip") or "",
+            "vip_node": st.get("vip_node"),
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
         yield proto.event_done(0)
+        return
+
+    if op == "cleanup":
+        # Clears Pacemaker's sticky per-resource fail-count/last-failure
+        # history (e.g. a monitor probe that raced a still-coming-up
+        # resource during first bring-up) and re-probes every resource on
+        # every node. Does not stop/start/move anything itself - a genuinely
+        # broken resource just fails again on the next monitor. Before this,
+        # the only way to clear a stale fail-count was `pcs resource
+        # cleanup` over SSH (live 2vm practice run, 25 Aug 2026).
+        lock_fh = try_lock_maintenance()
+        if lock_fh is None:
+            yield await _emit(
+                "Refusing: another maintenance enter or exit is already running.",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+        try:
+            yield await _emit("=== maintenance cleanup ===")
+            yield await _emit("pcs resource cleanup")
+            c, out, err = await _capture(["pcs", "resource", "cleanup"], timeout=120)
+            if out:
+                yield await _emit(out)
+            if err:
+                yield await _emit(err, err=True)
+            if c != 0:
+                yield await _emit(f"pcs resource cleanup failed (exit {c})", err=True)
+                yield proto.event_done(c)
+                return
+            st = await gather_status()
+            yield await _emit(f"failcount_ok={st['failcount_ok']}")
+            for line in st["failcount_lines"]:
+                yield await _emit(line)
+            yield proto.event_done(0)
+        finally:
+            release_maintenance_lock(lock_fh)
         return
 
     try:

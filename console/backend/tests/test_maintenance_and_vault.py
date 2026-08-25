@@ -10,12 +10,14 @@ from pathlib import Path
 from kin_console.draft import HOST_PROVISION_KEYS, WizardDraft, public_draft, valid_ipv4
 from kin_privhelper.maintenance import (
     drbd_both_uptodate,
+    drbd_sync_percent,
     node_ips_for_status,
     parse_corosync_ring_addrs,
     parse_failcount_value,
     parse_offline_nodes,
     parse_online_nodes,
     parse_promoted,
+    parse_resource_node,
     parse_standby_nodes,
     parse_unpromoted,
     qdevice_voting,
@@ -71,6 +73,7 @@ CRM = """
   * Clone Set: kin-drbd-clone [kin-drbd] (promotable):
     * Promoted: [ mail2.gits-it.site ]
     * Unpromoted: [ mail.gits-it.site ]
+  * kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail2.gits-it.site
 """
 
 CRM_MASTERS = """
@@ -149,6 +152,15 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.gits-it.site", "mail2.gits-it.site"))
         self.assertFalse(zimbra_started_on("    * kin-zimbra Started mail2.gits-it.site", "mail.gits-it.site"))
 
+    def test_parse_resource_node(self) -> None:
+        self.assertEqual(parse_resource_node(CRM, "kin-vip"), "mail2.gits-it.site")
+        self.assertIsNone(parse_resource_node(CRM, "kin-fs"))
+        self.assertIsNone(
+            parse_resource_node(
+                "  * kin-vip\t(ocf::heartbeat:IPaddr2):\t Stopped", "kin-vip"
+            )
+        )
+
     def test_offline_nodes(self) -> None:
         self.assertEqual(parse_offline_nodes(PCS_OFFLINE), ["mail2.example.test"])
         self.assertEqual(parse_online_nodes(PCS_OFFLINE), ["mail.example.test"])
@@ -159,6 +171,19 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertFalse(drbd_both_uptodate("disk:Inconsistent\npeer-disk:UpToDate"))
         self.assertTrue(qdevice_voting(QUORUM_OK))
         self.assertFalse(qdevice_voting("Quorate: No\n"))
+
+    def test_drbd_sync_percent(self) -> None:
+        # Real output from the live 2vm practice run (25 Aug 2026) that
+        # prompted this: a fresh HA pair's first full sync, mid-progress.
+        syncing = (
+            "kin-zimbra role:Primary\n"
+            "  disk:UpToDate\n"
+            "  peer role:Secondary\n"
+            "    replication:SyncSource peer-disk:Inconsistent done:32.50\n"
+        )
+        self.assertEqual(drbd_sync_percent(syncing), 32.50)
+        self.assertIsNone(drbd_sync_percent(DRBD_OK))
+        self.assertIsNone(drbd_sync_percent(""))
 
     def test_corosync_and_failcount(self) -> None:
         addrs = parse_corosync_ring_addrs(COROSYNC)
@@ -195,6 +220,66 @@ class MaintenanceLockTests(unittest.TestCase):
             third = try_lock_maintenance(path)
             self.assertIsNotNone(third)
             release_maintenance_lock(third)
+
+
+class MaintenanceCleanupOpTests(unittest.IsolatedAsyncioTestCase):
+    """maintenance op=cleanup: the console-native replacement for having to
+    SSH in and run `pcs resource cleanup` by hand to clear a stale Pacemaker
+    fail-count (live 2vm practice run, 25 Aug 2026 - a single self-resolved
+    monitor blip during first bring-up needed exactly this).
+    """
+
+    async def _run(self, op: str = "cleanup") -> list[dict]:
+        from kin_privhelper.maintenance import cmd_maintenance
+
+        return [ev async for ev in cmd_maintenance({"op": op})]
+
+    async def test_runs_cluster_wide_cleanup_and_reports_failcount(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(return_value=(0, "Cleaned up kin-zimbra on mail.example.test", "")),
+            ) as capture,
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(return_value={"failcount_ok": True, "failcount_lines": []}),
+            ),
+        ):
+            events = await self._run()
+
+        capture.assert_awaited_once()
+        self.assertEqual(capture.await_args.args[0], ["pcs", "resource", "cleanup"])
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0].get("exit_code"), 0)
+        self.assertTrue(any("failcount_ok=True" in str(ev.get("data")) for ev in events))
+
+    async def test_refuses_when_maintenance_is_already_locked(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with (
+            patch("kin_privhelper.maintenance.try_lock_maintenance", return_value=None),
+            patch("kin_privhelper.maintenance._capture", new=AsyncMock()) as capture,
+        ):
+            events = await self._run()
+
+        capture.assert_not_awaited()
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0].get("exit_code"), 1)
+
+    async def test_unknown_op_still_rejected(self) -> None:
+        events = await self._run(op="not-a-real-op")
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0].get("exit_code"), 2)
 
 
 class VaultTests(unittest.TestCase):
@@ -332,6 +417,14 @@ class RbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "status"}))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "enter"}))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "maintenance", args={"op": "enter"}))
+
+    def test_customer_cannot_cleanup_failcounts(self) -> None:
+        # Same OPS_ROLES gate as enter/exit - clearing Pacemaker fail-counts
+        # still mutates cluster resource state, even though it doesn't
+        # stop/start/move anything.
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "cleanup"}))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "maintenance", args={"op": "cleanup"}))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "maintenance", args={"op": "cleanup"}))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_host", args={"op": "apply"}))
         self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "remove_host", args={"op": "apply"}))
         self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "remove_observability"))

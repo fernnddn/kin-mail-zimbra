@@ -788,7 +788,7 @@ _PEER_READY_LABELS = {
 
 _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
-    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology|server-id)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/(users\.json|license\.token))$"
+    r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology|server-id)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/(users\.json|license\.token|session\.secret))$"
 )
 
 
@@ -1276,11 +1276,20 @@ async def _push_peer_identity_files(
     secrets: list[str],
     notes: list[str],
 ) -> bool:
-    """Copy this node's server-id and license.token onto the peer.
+    """Copy this node's server-id, license.token, and session.secret onto
+    the peer.
 
     Call before writing ha-setup-complete / setup-complete. server-id is one
-    cluster identity; license.token is verified against it. license.token is
-    0600 kin-console (never world-readable 644).
+    cluster identity; license.token is verified against it. Both
+    license.token and session.secret are 0600 kin-console (never
+    world-readable 644).
+
+    session.secret signs the console's login cookie - each node used to mint
+    its own independently, so a session started on whichever node the VIP
+    currently points at was never valid on the other one (VIP failover
+    forced a fresh login even though nothing about the operator's own
+    session had actually expired). Push this node's value as the source of
+    truth, same as server-id/license.token.
     """
     from .deploy_state import ensure_server_id, read_license_token
 
@@ -1305,28 +1314,66 @@ async def _push_peer_identity_files(
     notes.append("Synced server-id to the peer")
 
     local_license_token = read_license_token()
-    if not local_license_token:
+    if local_license_token:
+        code, _text = await _push_peer_text_file(
+            host,
+            user,
+            password,
+            secrets,
+            body=local_license_token + "\n",
+            remote_tmp="/tmp/kin-mail-peer-license-token",
+            dest="/var/lib/kin-mail-console/license.token",
+            mode="600",
+            owner="kin-console",
+            group="kin-console",
+        )
+        if code != 0:
+            notes.append(
+                f"Failed to write license.token on the peer (exit {code}). "
+                "License/seat status may disagree between nodes until this is "
+                "retried. No auto-retry, no auto-rollback."
+            )
+            return False
+        notes.append("Synced license.token to the peer")
+
+    try:
+        from kin_console.auth import ensure_session_secret
+        from kin_console.settings import settings
+
+        ensure_session_secret()
+        local_session_secret = settings.session_secret_file.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        notes.append(
+            f"Could not read local session.secret ({exc}); the peer keeps its own. "
+            "VIP failover will require a fresh login until this is retried."
+        )
+        return True
+    if not local_session_secret:
         return True
     code, _text = await _push_peer_text_file(
         host,
         user,
         password,
         secrets,
-        body=local_license_token + "\n",
-        remote_tmp="/tmp/kin-mail-peer-license-token",
-        dest="/var/lib/kin-mail-console/license.token",
+        body=local_session_secret + "\n",
+        remote_tmp="/tmp/kin-mail-peer-session-secret",
+        dest="/var/lib/kin-mail-console/session.secret",
         mode="600",
         owner="kin-console",
         group="kin-console",
     )
     if code != 0:
+        # Best-effort, unlike server-id/license.token above: this only
+        # affects login-cookie continuity across a future VIP failover, not
+        # cluster identity or license correctness. Not worth failing the
+        # whole HA build over.
         notes.append(
-            f"Failed to write license.token on the peer (exit {code}). "
-            "License/seat status may disagree between nodes until this is "
-            "retried. No auto-retry, no auto-rollback."
+            f"Could not write session.secret on the peer (exit {code}); the "
+            "peer keeps its own. VIP failover will require a fresh login "
+            "until this is retried."
         )
-        return False
-    notes.append("Synced license.token to the peer")
+        return True
+    notes.append("Synced session.secret to the peer (VIP failover no longer forces a fresh login)")
     return True
 
 
