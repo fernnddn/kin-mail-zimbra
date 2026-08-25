@@ -25,6 +25,7 @@ import TlsStep from "./wizard/steps/TlsStep";
 import TopologyStep from "./wizard/steps/TopologyStep";
 import ZpushStep from "./wizard/steps/ZpushStep";
 import { DeploySessionProvider } from "./wizard/DeploySession";
+import { isHaOrchestrationLog } from "./wizard/deployPipeline";
 import { Lede, Shell, Spinner } from "./ui";
 
 function LoadingShell({ text }: { text: string }) {
@@ -144,7 +145,7 @@ export default function App() {
                 <RequireEula>
                   <RequireAuth>
                     <WizardProvider>
-                      <DeploySessionProvider>
+                      <DeploySessionProvider logFilter={isHaOrchestrationLog}>
                         <AddSecondServerPage />
                       </DeploySessionProvider>
                     </WizardProvider>

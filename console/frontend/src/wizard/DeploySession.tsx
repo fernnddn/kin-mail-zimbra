@@ -86,7 +86,31 @@ async function fetchLastLog(): Promise<LastLogResponse> {
 
 const LOG_BASELINE = "# Deployment activity\n";
 
-export function DeploySessionProvider({ children }: { children: ReactNode }) {
+type DeploySessionProviderProps = {
+  children: ReactNode;
+  /**
+   * The server keeps exactly one deploy transcript (deploy-last.log), shared
+   * across every action - apply_draft, full_install, ha_orchestration. A
+   * fresh DeploySessionProvider (a new page, e.g. Add second server) polls
+   * this on mount, before the operator has started anything of its own. If
+   * that leftover transcript happens to be a *completed* run of a
+   * different action (typically: the single-node install that just
+   * finished on this very host), the fresh page would misread it as its
+   * own completion and skip straight to "Done" - hiding the form the
+   * operator still needs to fill in.
+   *
+   * When set, a polled transcript is only trusted (log/installProgress
+   * updated from it) if this predicate matches it - e.g. pass
+   * isHaOrchestrationLog on the Add second server page so a leftover
+   * full-install transcript is treated as "nothing here yet", not as this
+   * page's own result. Leave unset on the main Deploy page, which owns
+   * apply_draft/full_install and should keep resuming from whatever is
+   * already there (existing, already-relied-on behavior).
+   */
+  logFilter?: (log: string) => boolean;
+};
+
+export function DeploySessionProvider({ children, logFilter }: DeploySessionProviderProps) {
   const { draft, save } = useWizard();
   const { installInProgress, refresh: refreshSetup, fullInstallComplete } = useSetup();
   const [log, setLog] = useState(LOG_BASELINE);
@@ -137,6 +161,8 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
       const terminal = pDisk.complete || pDisk.failed || pLive.complete || pLive.failed;
 
       if (opts?.preserveLiveLog && localStreamRef.current) {
+        // A live SSE owned by this provider is always this page's own run;
+        // logFilter only gates the cold-poll path below.
         // Stall check while EventSource is still open: never shrink/replace a
         // live buffer with a shorter last-log (that flickers the viewer).
         if (cleaned.trim() && cleaned.length > live.length + 64) {
@@ -156,6 +182,15 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
         return false;
       }
 
+      if (logFilter && !logFilter(cleaned)) {
+        // Leftover transcript on the server belongs to a different action
+        // (e.g. a just-finished single-node install, seen from the fresh
+        // Add second server page). Not ours - leave this session's log and
+        // installProgress at baseline instead of misreading it as our own
+        // completed run.
+        return false;
+      }
+
       if (cleaned.trim()) {
         logBufRef.current = cleaned;
         setLog(cleaned);
@@ -172,7 +207,7 @@ export function DeploySessionProvider({ children }: { children: ReactNode }) {
     } catch {
       return installInProgress;
     }
-  }, [installInProgress]);
+  }, [installInProgress, logFilter]);
 
   // Follow server transcript whenever we are not on a live SSE (new tab, or after disconnect).
   useEffect(() => {
