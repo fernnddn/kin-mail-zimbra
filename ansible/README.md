@@ -50,7 +50,7 @@ ansible/
   playbooks/
     mail-add-host.yml
     mail-remove-host.yml
-    …
+    ...
   inventory/
     add-host.example.yml
     remove-host.example.yml
@@ -61,7 +61,7 @@ ansible/
     cluster_remove_host/
     cluster_survivor_replace/
     drbd_live_join/
-    …
+    ...
 ```
 
 ## Syntax-check only (no target VM yet)

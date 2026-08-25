@@ -8,7 +8,7 @@
 #   * Do NOT set check_mode: false on pcs resource create / constraint /
 #     property / group mutations.
 #   * Gate with `when: not ansible_check_mode` so --check never executes them.
-#   * Idempotency: probe with read-only `pcs … config` first; skip create if
+#   * Idempotency: probe with read-only `pcs ... config` first; skip create if
 #     the resource already exists (same pattern as drbd_resource activate.yml).
 #
 # ONLY verify.yml (and read-only existence probes) may use check_mode: false.

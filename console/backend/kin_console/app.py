@@ -793,10 +793,10 @@ async def wizard_deploy_stream(
 async def wizard_deploy_hint(
     _actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
-    """Compat: prefer SSE /api/wizard/deploy/stream?action=… for live output."""
+    """Compat: prefer SSE /api/wizard/deploy/stream?action=... for live output."""
     return {
         "status": "use_stream",
-        "message": "Use GET /api/wizard/deploy/stream?action=…",
+        "message": "Use GET /api/wizard/deploy/stream?action=...",
         "actions": sorted(_STREAM_ACTIONS.keys()),
         "commands": {k: v for k, v in _STREAM_ACTIONS.items()},
     }

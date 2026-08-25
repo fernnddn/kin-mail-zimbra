@@ -7,12 +7,63 @@ import unittest
 from pathlib import Path
 
 from kin_privhelper.add_host import (
+    attach_peer_eligible,
     clear_last_removed_peer,
     plan_add_host,
     read_last_removed_peer,
     render_add_host_inventory,
     write_last_removed_peer,
 )
+
+
+class AttachPeerEligibleTests(unittest.TestCase):
+    def test_fresh_single_deploy_stub_not_eligible(self) -> None:
+        self.assertFalse(
+            attach_peer_eligible(
+                topology="1vm",
+                live_nodes=["mail.example.test"],
+                vip_ip="",
+                vip_node=None,
+                promoted=None,
+                package_stub=True,
+            )
+        )
+
+    def test_fresh_single_without_vip_not_eligible(self) -> None:
+        self.assertFalse(
+            attach_peer_eligible(
+                topology="1vm",
+                live_nodes=["mail.example.test"],
+                vip_ip="",
+                vip_node=None,
+                promoted=None,
+                package_stub=False,
+            )
+        )
+
+    def test_survivor_after_remove_eligible(self) -> None:
+        self.assertTrue(
+            attach_peer_eligible(
+                topology="1vm",
+                live_nodes=["mail.example.test"],
+                vip_ip="192.0.2.16",
+                vip_node="mail.example.test",
+                promoted="mail.example.test",
+                package_stub=False,
+            )
+        )
+
+    def test_two_nodes_not_eligible(self) -> None:
+        self.assertFalse(
+            attach_peer_eligible(
+                topology="1vm",
+                live_nodes=["mail.example.test", "mail2.example.test"],
+                vip_ip="192.0.2.16",
+                vip_node="mail.example.test",
+                promoted="mail.example.test",
+                package_stub=False,
+            )
+        )
 
 
 class LastRemovedPeerTests(unittest.TestCase):

@@ -561,7 +561,17 @@ async def gather_status() -> dict[str, Any]:
     stale_peers = [n for n in addrs if n not in live]
     fc_ok, fc_lines = await _failcounts(nodes)
     observability = await _observability_snapshot(corosync_txt)
+    from .corosync_stub import is_harmless_package_stub_cluster
     from .deploy_state import saved_wizard_topology
+
+    package_stub = bool(
+        corosync_txt
+        and is_harmless_package_stub_cluster(
+            corosync_txt,
+            status_text=crm,
+            live_nodes=nodes,
+        )
+    )
 
     return {
         "local_host": this_hostname(),
@@ -583,6 +593,7 @@ async def gather_status() -> dict[str, Any]:
         "failcount_lines": fc_lines,
         "vip_ip": _config_vip_ip(),
         "vip_node": vip_node,
+        "package_stub": package_stub,
         "addrs": addrs,
         "raw": {
             "pcs_nodes": nodes_text,
@@ -804,9 +815,17 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             local_host=str(st.get("local_host") or ""),
             local_ip=_config_server_ip(),
         )
-        from .add_host import read_last_removed_peer
+        from .add_host import attach_peer_eligible, read_last_removed_peer
 
         last_removed = read_last_removed_peer()
+        attach_ok = attach_peer_eligible(
+            topology=str(st.get("topology") or ""),
+            live_nodes=list(st.get("nodes") or []),
+            vip_ip=str(st.get("vip_ip") or ""),
+            vip_node=st.get("vip_node") if isinstance(st.get("vip_node"), str) else None,
+            promoted=st.get("promoted") if isinstance(st.get("promoted"), str) else None,
+            package_stub=bool(st.get("package_stub")),
+        )
         public = {
             "local_host": st["local_host"],
             "topology": st.get("topology") or "",
@@ -829,6 +848,8 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "vip_ip": st.get("vip_ip") or "",
             "vip_node": st.get("vip_node"),
             "last_removed_peer": last_removed or None,
+            "attach_peer_eligible": attach_ok,
+            "package_stub": bool(st.get("package_stub")),
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
         yield proto.event_done(0)

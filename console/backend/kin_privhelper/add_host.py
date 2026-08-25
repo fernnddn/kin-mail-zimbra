@@ -90,6 +90,35 @@ def clear_last_removed_peer(path: Path | None = None) -> None:
         pass
 
 
+def attach_peer_eligible(
+    *,
+    topology: str,
+    live_nodes: list[str],
+    vip_ip: str = "",
+    vip_node: str | None = None,
+    promoted: str | None = None,
+    package_stub: bool = False,
+) -> bool:
+    """True only for a real one-node survivor HA, not a fresh single deploy.
+
+    Greenfield Add Second Server (1vm with no live VIP/Promoted, or Debian
+    package stub Pacemaker) must use Build HA / run_ha_orchestration.
+    Attach (mail-add-host) is only for after Remove Host when VIP + Promoted
+    still exist on exactly one live mail node.
+    """
+    topo = (topology or "").strip().lower()
+    if topo not in ("1vm", "1"):
+        return False
+    if package_stub:
+        return False
+    online = [str(n).strip() for n in (live_nodes or []) if str(n).strip()]
+    if len(online) != 1:
+        return False
+    if not (vip_ip or "").strip():
+        return False
+    return bool(vip_node) or bool(promoted)
+
+
 def plan_add_host(
     *,
     local_host: str,
@@ -343,6 +372,23 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
     meta_disk = str(args.get("meta_disk") or DEFAULT_META_DISK).strip()
 
     live_nodes = list(st.get("nodes") or [])
+    if not attach_peer_eligible(
+        topology=str(st.get("topology") or ""),
+        live_nodes=live_nodes,
+        vip_ip=vip_ip or str(st.get("vip_ip") or ""),
+        vip_node=st.get("vip_node") if isinstance(st.get("vip_node"), str) else None,
+        promoted=st.get("promoted") if isinstance(st.get("promoted"), str) else None,
+        package_stub=bool(st.get("package_stub")),
+    ):
+        yield await _emit(
+            "Refusing add-host: this console is not a live one-node HA survivor. "
+            "For a fresh single-server deploy, use Add Second Server / Build HA pair "
+            "(ha_orchestration), not attach peer.",
+            err=True,
+        )
+        yield proto.event_done(1)
+        return
+
     plan = plan_add_host(
         local_host=local_host,
         local_ip=local_ip,

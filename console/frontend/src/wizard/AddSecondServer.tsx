@@ -64,6 +64,8 @@ type ClusterTopologyResp = {
     offline?: string[];
     vip_ip?: string;
     last_removed_peer?: { name?: string; ip?: string } | null;
+    /** True only for live one-node HA survivor (post Remove Host), not fresh 1vm. */
+    attach_peer_eligible?: boolean;
   };
 };
 
@@ -85,6 +87,7 @@ export default function AddSecondServerPage() {
   const [topologyChecked, setTopologyChecked] = useState(false);
   const [topologyOk, setTopologyOk] = useState(false);
   const [liveClusterNodes, setLiveClusterNodes] = useState<string[]>([]);
+  const [attachEligible, setAttachEligible] = useState(false);
   const [retiredName, setRetiredName] = useState("");
   const [retiredIp, setRetiredIp] = useState("");
   const [clusterVipPrefill, setClusterVipPrefill] = useState("");
@@ -104,7 +107,9 @@ export default function AddSecondServerPage() {
   const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
   const [haDiskLoading, setHaDiskLoading] = useState(false);
 
-  const attachMode = liveClusterNodes.length === 1;
+  // Survivor attach vs greenfield Build HA: never use node-count alone (Debian
+  // package stub also shows one node on a fresh single deploy).
+  const attachMode = attachEligible;
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +122,7 @@ export default function AddSecondServerPage() {
           ...(st.cluster?.offline || []),
         ].filter(Boolean);
         setLiveClusterNodes([...new Set(nodes)]);
+        setAttachEligible(Boolean(st.cluster?.attach_peer_eligible));
         const last = st.cluster?.last_removed_peer;
         if (last?.name) setRetiredName(last.name);
         if (last?.ip) setRetiredIp(last.ip);
@@ -126,6 +132,7 @@ export default function AddSecondServerPage() {
         if (!cancelled) {
           setTopologyOk(false);
           setLiveClusterNodes([]);
+          setAttachEligible(false);
         }
       })
       .finally(() => {
@@ -291,7 +298,7 @@ export default function AddSecondServerPage() {
           <>
             {attachMode ? (
               <WarnBox role="status">
-                Live one-node cluster detected ({liveClusterNodes.join(", ")}).
+                Live one-node HA survivor detected ({liveClusterNodes.join(", ")}).
                 Continue attaches a blank peer with Add host (pcs node add + DRBD
                 full sync) while this server stays Primary. Build HA pair is not used.
               </WarnBox>
@@ -300,7 +307,12 @@ export default function AddSecondServerPage() {
                 More than one live cluster node is visible. Finish Remove Host or
                 resolve membership before attaching another peer.
               </WarnBox>
-            ) : null}
+            ) : (
+              <Hint>
+                Fresh single-server path: this builds a new HA pair (Build HA).
+                After Remove Host on a live VIP cluster, this page switches to Attach peer.
+              </Hint>
+            )}
             <Section>
               <SectionTitle>New server</SectionTitle>
               <Hint>
