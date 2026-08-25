@@ -888,6 +888,47 @@ class CheckModeSafetyTests(unittest.TestCase):
             "when: not ansible_check_mode",
             sbd_cfg[delay : delay + 500],
         )
+        detect = (
+            repo / "ansible/roles/cluster_setup/tasks/detect.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cluster_setup_any_running", detect)
+        self.assertIn("cluster_setup_nodes_blob", detect)
+        form = (
+            repo / "ansible/roles/cluster_setup/tasks/form.yml"
+        ).read_text(encoding="utf-8")
+        setup = form.find("Form the Corosync cluster")
+        self.assertGreater(setup, 0)
+        self.assertIn("cluster_setup_any_running", form[setup : setup + 900])
+        self.assertIn("cluster_setup_any_configured", form[setup : setup + 900])
+        auth_yml = (
+            repo / "ansible/roles/cluster_setup/tasks/auth.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cluster_setup_any_running", auth_yml)
+        self.assertNotIn("not (cluster_setup_running | bool)", auth_yml)
+        addrs = (
+            repo / "ansible/roles/pacemaker_mail_stack/tasks/corosync_addrs.yml"
+        ).read_text(encoding="utf-8")
+        reload = addrs.find("Reload Corosync after ring0_addr")
+        self.assertGreater(reload, 0)
+        self.assertNotIn(
+            "run_once: true",
+            addrs[reload : addrs.find("Assert Corosync ring0_addr")],
+        )
+        ring0 = addrs.find("Assert Corosync ring0_addr")
+        self.assertGreater(ring0, 0)
+        self.assertIn(
+            "when: not ansible_check_mode",
+            addrs[ring0 : ring0 + 500],
+        )
+        for play in (
+            "mail-drbd.yml",
+            "mail-cluster-setup.yml",
+            "mail-pacemaker.yml",
+            "mail-fencing.yml",
+            "mail-qdevice.yml",
+        ):
+            text = (repo / "ansible/playbooks" / play).read_text(encoding="utf-8")
+            self.assertIn("any_errors_fatal: true", text, play)
         self.assertIn("getent passwd kin-console", orch)
         self.assertIn(
             "useradd --system --home /var/lib/kin-mail-console",

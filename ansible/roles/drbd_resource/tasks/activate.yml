@@ -69,6 +69,20 @@
       }}
   tags: [drbd, resource, activate]
 
+- name: Refuse to continue when DRBD is already dual-Primary
+  ansible.builtin.assert:
+    that:
+      - (drbd_resource_role_pre.stdout | default('') | trim) != 'Primary/Primary'
+    fail_msg: >-
+      drbdadm role is Primary/Primary on {{ inventory_hostname }}. Refusing
+      activate so this play cannot create a clone on top of split-brain.
+      Demote or disconnect by hand, then retry.
+  when:
+    - not ansible_check_mode
+    - drbd_resource_role_pre.rc is defined
+    - (drbd_resource_role_pre.rc | int) == 0
+  tags: [drbd, resource, activate]
+
 - name: Note that Pacemaker owns DRBD so ansible will not down/up/force
   ansible.builtin.debug:
     msg: >-
@@ -152,6 +166,7 @@
     - not (drbd_resource_pacemaker_owns | bool)
     - drbd_resource_dump_md.rc is defined
     - drbd_resource_dump_md.rc != 0
+    - (drbd_resource_status_pre.rc | int) != 0 or (drbd_resource_is_diskless | bool)
     - not ansible_check_mode
   tags: [drbd, resource, activate]
 
@@ -172,6 +187,7 @@
     - not (drbd_resource_pacemaker_owns | bool)
     - drbd_resource_dump_md.rc is defined
     - drbd_resource_dump_md.rc != 0
+    - (drbd_resource_status_pre.rc | int) != 0 or (drbd_resource_is_diskless | bool)
     - drbd_resource_meta_disk_stat.stat.exists | default(false)
     - drbd_resource_meta_disk_stat.stat.isblk | default(false)
     - not ansible_check_mode
@@ -184,14 +200,17 @@
   args:
     executable: /bin/bash
   # SAFETY: never check_mode: false - create-md must not run during --check.
-  # Skip when dump-md already succeeds: a blind re-run on retry would be wrong.
-  # printf yes answers the empty-meta "destroy existing data" prompt so apply
-  # does not hang waiting on stdin. Busy/missing meta is refused above so this
-  # cannot rewrite existing metadata.
+  # Skip when dump-md already succeeds. Skip when the resource is already up
+  # (both-Secondary leftover): dump-md can fail for in-use reasons that are
+  # not in the busy regex; printf yes would rewrite live metadata.
+  # Diskless is torn down first; status_pre still shows rc==0, so allow
+  # create-md after that down when dump-md says the meta is empty.
+  # printf yes answers the empty-meta prompt so apply does not hang on stdin.
   when:
     - drbd_resource_needs_activate | bool
     - drbd_resource_dump_md.rc is defined
     - drbd_resource_dump_md.rc != 0
+    - (drbd_resource_status_pre.rc | int) != 0 or (drbd_resource_is_diskless | bool)
     - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
   tags: [drbd, resource, activate]

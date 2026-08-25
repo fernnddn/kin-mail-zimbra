@@ -342,15 +342,52 @@
   when: cluster_setup_running | bool
   tags: [cluster, setup, detect]
 
+- name: Remember whether any mail node already has a cluster
+  ansible.builtin.set_fact:
+    cluster_setup_any_running: >-
+      {{
+        (
+          ansible_play_hosts
+          | map('extract', hostvars, 'cluster_setup_running')
+          | map('bool')
+          | select
+          | list
+          | length
+        ) > 0
+      }}
+    cluster_setup_any_configured: >-
+      {{
+        (
+          ansible_play_hosts
+          | map('extract', hostvars, 'cluster_setup_configured')
+          | map('bool')
+          | select
+          | list
+          | length
+        ) > 0
+      }}
+    cluster_setup_nodes_blob: >-
+      {{
+        ansible_play_hosts
+        | map('extract', hostvars, 'cluster_setup_nodes_for_assert')
+        | selectattr('stdout', 'defined')
+        | map(attribute='stdout')
+        | select
+        | list
+        | first
+        | default('')
+      }}
+  tags: [cluster, setup, detect]
+
 - name: Refuse to form a cluster that already has unexpected members
   ansible.builtin.assert:
     that:
-      - item in (cluster_setup_nodes_for_assert.stdout | default(''))
+      - item in (cluster_setup_nodes_blob | default(''))
     fail_msg: >-
       A Corosync cluster is already running but {{ item }} is not in
       `pcs status nodes corosync`. Refusing to re-run pcs cluster setup
       (that would destroy or split membership). Fix membership by hand.
   loop: "{{ groups['mail_nodes'] }}"
-  when: cluster_setup_running | bool
+  when: cluster_setup_any_running | bool
   run_once: true
   tags: [cluster, setup, detect]

@@ -327,6 +327,20 @@ if [ -f "$playbook" ] && grep -q 'any_errors_fatal: true' "$playbook"; then
 else
   bad "mail-drbd.yml must set any_errors_fatal so one node cannot create-md alone"
 fi
+pair_fatal_ok=1
+for p in ../../ansible/playbooks/mail-cluster-setup.yml \
+         ../../ansible/playbooks/mail-pacemaker.yml \
+         ../../ansible/playbooks/mail-fencing.yml \
+         ../../ansible/playbooks/mail-qdevice.yml; do
+  if [ ! -f "$p" ] || ! grep -q 'any_errors_fatal: true' "$p"; then
+    pair_fatal_ok=0
+  fi
+done
+if [ "$pair_fatal_ok" -eq 1 ]; then
+  pass "pair playbooks abort when one node fails"
+else
+  bad "mail-cluster-setup/pacemaker/fencing/qdevice must set any_errors_fatal"
+fi
 if [ -f "$activate_yml" ] \
   && grep -q 'KIN_RELEASE_WAIT_BACKING_ONLY' "$activate_yml" \
   && grep -q 'drbd_resource_meta_disk_stat' "$activate_yml" \

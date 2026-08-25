@@ -14,8 +14,8 @@
   # Never --overwrite / --force / pcs cluster destroy.
   run_once: true
   when:
-    - not (cluster_setup_running | bool)
-    - not (cluster_setup_configured | bool)
+    - not (cluster_setup_any_running | default(false) | bool)
+    - not (cluster_setup_any_configured | default(false) | bool)
     - not ansible_check_mode
   register: cluster_setup_form
   tags: [cluster, setup, pcs]

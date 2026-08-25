@@ -21,10 +21,13 @@
   ansible.builtin.command:
     cmd: pcs cluster reload corosync
   # SAFETY: never check_mode: false - live membership reload.
+  # Not run_once: the first host's replace result can be unchanged while
+  # the peer still had a hostname ring0_addr. Reload on every host that
+  # actually rewrote its conf (pcs reload is cluster-wide; a second call
+  # is a no-op).
   when:
     - not ansible_check_mode
     - pacemaker_mail_stack_corosync_replace is changed
-  run_once: true
   tags: [pacemaker, stack, corosync]
 
 - name: Assert Corosync ring0_addr is not the Zimbra service hostname
@@ -36,4 +39,5 @@
     pacemaker_mail_stack_zimbra_service_hostname
     in pacemaker_mail_stack_corosync_ring0.stdout
   check_mode: false
+  when: not ansible_check_mode
   tags: [pacemaker, stack, corosync]

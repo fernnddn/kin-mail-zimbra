@@ -152,6 +152,13 @@ class DrbdResParseTests(unittest.TestCase):
         self.assertIn("printf 'yes", live_join)
         self.assertIn("drbd_live_join_dump_md", live_join)
         self.assertIn("device or resource busy", live_join)
+        self.assertIn("Primary/Primary", activate)
+        create_md = activate.find("Create the DRBD metadata on the external meta-disk")
+        self.assertGreater(create_md, 0)
+        self.assertIn(
+            "drbd_resource_status_pre.rc",
+            activate[create_md : create_md + 1400],
+        )
         needs = activate.find("drbd_resource_needs_activate:")
         self.assertGreater(needs, 0)
         needs_block = activate[needs : needs + 700]
