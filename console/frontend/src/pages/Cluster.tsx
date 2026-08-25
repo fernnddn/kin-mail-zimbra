@@ -32,7 +32,10 @@ type ClusterSnap = {
   nodes?: string[];
   standby?: string[];
   promoted?: string | null;
+  promoted_conflict?: boolean;
+  promoted_names?: string[];
   unpromoted?: string[];
+  zimbra_node?: string | null;
   drbd_uptodate?: boolean;
   drbd_sync_percent?: number | null;
   vip_ip?: string | null;
@@ -77,13 +80,11 @@ function uniqueNames(...groups: Array<string[] | undefined>): string[] {
 function ipForNode(
   name: string,
   ips: Record<string, string> | undefined,
-  localHost?: string,
+  _localHost?: string,
 ): string {
   const map = ips || {};
   if (map[name]) return map[name];
-  if (localHost && map[localHost]) return map[localHost];
-  const values = Object.values(map).filter(Boolean);
-  if (values.length === 1) return values[0];
+  // Never fall back to another node's IP - that mislabels Host B as Host A.
   return "";
 }
 
@@ -769,7 +770,8 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
 
   if (topology !== "2vm") return cards;
 
-  const servingTone: StatusTone = cluster.promoted ? "ok" : "warn";
+  const conflict = Boolean(cluster.promoted_conflict);
+  const servingTone: StatusTone = conflict ? "warn" : cluster.promoted ? "ok" : "warn";
   cards.push(
     <OverviewCard key="serving" $tone={servingTone}>
       <IconChip $tone={servingTone}>
@@ -777,11 +779,17 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
       </IconChip>
       <OverviewBody>
         <OverviewLabel>Serving mail</OverviewLabel>
-        <OverviewValue>{cluster.promoted || "Unknown"}</OverviewValue>
-        <OverviewSub $tone={cluster.promoted ? "ok" : "warn"}>
-          {(cluster.unpromoted || []).length
-            ? `Replica: ${(cluster.unpromoted || []).join(", ")}`
-            : "No confirmed replica"}
+        <OverviewValue>
+          {conflict
+            ? `Conflict: ${(cluster.promoted_names || []).join(", ") || "multiple"}`
+            : cluster.promoted || "Unknown"}
+        </OverviewValue>
+        <OverviewSub $tone={servingTone}>
+          {conflict
+            ? "More than one Promoted node - resolve before maintenance"
+            : (cluster.unpromoted || []).length
+              ? `Replica: ${(cluster.unpromoted || []).join(", ")}`
+              : "No confirmed replica"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -897,6 +905,12 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
       },
     ];
   }
+  const vipIp = (cluster.vip_ip || "").trim();
+  const vipNode = (cluster.vip_node || "").trim();
+  const promoted = (cluster.promoted || "").trim();
+  const zimbraNode = (cluster.zimbra_node || "").trim();
+  const vipOk = Boolean(vipIp && vipNode && promoted && vipNode === promoted);
+  const zimbraOk = Boolean(promoted && zimbraNode && zimbraNode === promoted);
   return [
     {
       ok: Boolean(cluster.drbd_uptodate),
@@ -929,8 +943,30 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
       label: cluster.failcount_ok ? "fail-count 0" : "fail-count nonzero",
     },
     {
-      ok: Boolean(cluster.promoted),
-      label: cluster.promoted ? `Promoted: ${cluster.promoted}` : "Promoted: unknown",
+      ok: Boolean(promoted) && !cluster.promoted_conflict,
+      label: cluster.promoted_conflict
+        ? `Promoted conflict: ${(cluster.promoted_names || []).join(", ") || "multiple"}`
+        : promoted
+          ? `Promoted: ${promoted}`
+          : "Promoted: unknown",
+    },
+    {
+      ok: vipOk,
+      label: !vipIp
+        ? "VIP: not configured"
+        : !vipNode
+          ? "VIP: not Started"
+          : vipOk
+            ? `VIP on ${vipNode}`
+            : `VIP on ${vipNode} (expected ${promoted || "Promoted"})`,
+    },
+    {
+      ok: zimbraOk,
+      label: !zimbraNode
+        ? "kin-zimbra: not Started"
+        : zimbraOk
+          ? `kin-zimbra on ${zimbraNode}`
+          : `kin-zimbra on ${zimbraNode} (expected ${promoted || "Promoted"})`,
     },
   ];
 }
@@ -964,6 +1000,7 @@ export default function ClusterPage() {
   const [addKin, setAddKin] = useState("");
   const [addErr, setAddErr] = useState("");
   const [pendingObsAdd, setPendingObsAdd] = useState(false);
+  const [pendingCleanup, setPendingCleanup] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
@@ -1554,10 +1591,10 @@ export default function ClusterPage() {
                       disabled={busy}
                       onClick={() => {
                         setHealthOpen(false);
-                        runStream("cleanup", "");
+                        setPendingCleanup(true);
                       }}
                     >
-                      Clear stale fail-counts
+                      Clear fail-counts (re-probe)
                     </MenuItem>
                   ) : null}
                 </Dropdown>
@@ -1641,6 +1678,29 @@ export default function ClusterPage() {
           <LogPane aria-label="Maintenance log">{log || "Status and transition output appears here."}</LogPane>
         )}
         {message ? <Hint>{message}</Hint> : null}
+        <ConfirmModal
+          open={pendingCleanup}
+          title="Clear fail-counts"
+          message={
+            <>
+              Run <strong>pcs resource cleanup</strong> on this cluster. That clears
+              sticky fail-count / last-failure history and re-probes every resource.
+              A resource that is still broken may stop or restart during the re-probe.
+            </>
+          }
+          detail="Refused automatically if crm_mon shows dual Promoted or the dual-primary assert fails. Prefer this only after a known transient probe race, not to paper over split-brain."
+          confirmLabel="Re-probe resources"
+          loading={busy}
+          onCancel={() => {
+            if (busy) return;
+            setPendingCleanup(false);
+          }}
+          onConfirm={() => {
+            if (busy) return;
+            setPendingCleanup(false);
+            runStream("cleanup", "");
+          }}
+        />
         <ConfirmModal
           open={!!pendingRemove}
           title={

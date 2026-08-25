@@ -1373,7 +1373,10 @@ async def _push_peer_identity_files(
             "until this is retried."
         )
         return True
-    notes.append("Synced session.secret to the peer (VIP failover no longer forces a fresh login)")
+    notes.append(
+        "Synced session.secret to the peer (shared cookie signing if both "
+        "consoles are used; mail VIP failover does not move the Host A console)"
+    )
     return True
 
 

@@ -17,6 +17,7 @@ from kin_privhelper.maintenance import (
     parse_offline_nodes,
     parse_online_nodes,
     parse_promoted,
+    parse_promoted_names,
     parse_resource_node,
     parse_standby_nodes,
     parse_unpromoted,
@@ -88,6 +89,14 @@ CRM_QUOTED = """
     * Unpromoted: [ 'mail.example.test' ]
 """
 
+CRM_DUAL_PROMOTED = """
+  * Clone Set: kin-drbd-clone [kin-drbd] (promotable):
+    * Promoted: [ mail.example.test mail2.example.test ]
+    * Unpromoted: [ ]
+  * kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail.example.test
+  * kin-zimbra\t(ocf:kin:zimbra):\t Started mail.example.test
+"""
+
 DRBD_OK = """
 kin-zimbra role:Primary
   disk:UpToDate
@@ -147,6 +156,11 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertEqual(parse_unpromoted(CRM_MASTERS), ["mail.example.test"])
         self.assertEqual(parse_promoted(CRM_QUOTED), "mail2.example.test")
         self.assertEqual(parse_unpromoted(CRM_QUOTED), ["mail.example.test"])
+        self.assertIsNone(parse_promoted(CRM_DUAL_PROMOTED))
+        self.assertEqual(
+            parse_promoted_names(CRM_DUAL_PROMOTED),
+            ["mail.example.test", "mail2.example.test"],
+        )
         from kin_privhelper.maintenance import zimbra_started_on
 
         self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.gits-it.site", "mail2.gits-it.site"))
@@ -154,6 +168,7 @@ class MaintenanceParseTests(unittest.TestCase):
 
     def test_parse_resource_node(self) -> None:
         self.assertEqual(parse_resource_node(CRM, "kin-vip"), "mail2.gits-it.site")
+        self.assertEqual(parse_resource_node(CRM_DUAL_PROMOTED, "kin-zimbra"), "mail.example.test")
         self.assertIsNone(parse_resource_node(CRM, "kin-fs"))
         self.assertIsNone(
             parse_resource_node(
@@ -190,6 +205,8 @@ class MaintenanceParseTests(unittest.TestCase):
         self.assertEqual(addrs["mail.example.test"], "192.0.2.15")
         self.assertEqual(parse_failcount_value("scope=status  name=fail-count-kin-zimbra value=0"), 0)
         self.assertEqual(parse_failcount_value("value=3"), 3)
+        self.assertIsNone(parse_failcount_value("garbage without a count"))
+        self.assertEqual(parse_failcount_value("value=INFINITY"), 999)
 
     def test_node_ips_corosync_wins_over_server_ip(self) -> None:
         out = node_ips_for_status(
@@ -234,7 +251,61 @@ class MaintenanceCleanupOpTests(unittest.IsolatedAsyncioTestCase):
 
         return [ev async for ev in cmd_maintenance({"op": op})]
 
+    def _healthy_status(self, **overrides: object) -> dict:
+        st: dict = {
+            "failcount_ok": True,
+            "failcount_lines": [],
+            "promoted_conflict": False,
+            "promoted_names": ["mail.example.test"],
+            "promoted": "mail.example.test",
+            "topology": "2vm",
+        }
+        st.update(overrides)
+        return st
+
     async def test_runs_cluster_wide_cleanup_and_reports_failcount(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            joined = " ".join(argv)
+            if "kin-assert-no-dual-primary" in joined:
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:3] == ["pcs", "resource", "cleanup"]:
+                return 0, "Cleaned up kin-zimbra on mail.example.test", ""
+            return 1, "", f"unexpected argv: {argv}"
+
+        assert_path = MagicMock()
+        assert_path.is_file.return_value = True
+        assert_path.__str__.return_value = "/usr/local/sbin/kin-assert-no-dual-primary.sh"
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch("kin_privhelper.maintenance.ASSERT_SCRIPT", assert_path),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(side_effect=capture_side),
+            ) as capture,
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(return_value=self._healthy_status()),
+            ),
+        ):
+            events = await self._run()
+
+        cleanup_calls = [
+            c for c in capture.await_args_list if c.args and c.args[0][:3] == ["pcs", "resource", "cleanup"]
+        ]
+        self.assertEqual(len(cleanup_calls), 1)
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0].get("exit_code"), 0)
+        self.assertTrue(any("failcount_ok=True" in str(ev.get("data")) for ev in events))
+
+    async def test_refuses_cleanup_on_promoted_conflict(self) -> None:
         from unittest.mock import AsyncMock, patch
 
         with (
@@ -245,21 +316,26 @@ class MaintenanceCleanupOpTests(unittest.IsolatedAsyncioTestCase):
             patch("kin_privhelper.maintenance.release_maintenance_lock"),
             patch(
                 "kin_privhelper.maintenance._capture",
-                new=AsyncMock(return_value=(0, "Cleaned up kin-zimbra on mail.example.test", "")),
+                new=AsyncMock(),
             ) as capture,
             patch(
                 "kin_privhelper.maintenance.gather_status",
-                new=AsyncMock(return_value={"failcount_ok": True, "failcount_lines": []}),
+                new=AsyncMock(
+                    return_value=self._healthy_status(
+                        promoted_conflict=True,
+                        promoted=None,
+                        promoted_names=["mail.example.test", "mail2.example.test"],
+                    )
+                ),
             ),
         ):
             events = await self._run()
 
-        capture.assert_awaited_once()
-        self.assertEqual(capture.await_args.args[0], ["pcs", "resource", "cleanup"])
+        capture.assert_not_awaited()
         done = [ev for ev in events if ev.get("type") == "done"]
         self.assertEqual(len(done), 1)
-        self.assertEqual(done[0].get("exit_code"), 0)
-        self.assertTrue(any("failcount_ok=True" in str(ev.get("data")) for ev in events))
+        self.assertEqual(done[0].get("exit_code"), 1)
+        self.assertTrue(any("dual Promoted" in str(ev.get("data")) for ev in events))
 
     async def test_refuses_when_maintenance_is_already_locked(self) -> None:
         from unittest.mock import AsyncMock, patch

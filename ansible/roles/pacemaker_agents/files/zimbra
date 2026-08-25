@@ -6,11 +6,11 @@ meta_data() {
 	cat <<'META'
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="zimbra" version="1.2">
-<version>1.2</version>
+<resource-agent name="zimbra" version="1.3">
+<version>1.3</version>
 <longdesc lang="en">
 Starts/stops/monitors Zimbra Collaboration via zmcontrol.
-Run only where /opt/zimbra is mounted (DRBD Primary + Filesystem RA).
+Run only where /opt/zimbra is mounted on /dev/drbd* (DRBD Primary + Filesystem RA).
 
 Cold start after DRBD promote: slapd is not running. zmcontrol's
 isLdapLocal() is false when ldap_url is ldap://127.0.0.1:389 (it only
@@ -21,8 +21,10 @@ zmcontrol start.
 
 After a successful start (and on stop, before zmcontrol stop) this
 agent refreshes fail2ban jails via /usr/local/sbin/kin-fail2ban-jails
-so zimbra-auth/zpush-auth track the mounted mailbox logs. A fail2ban
-hiccup is logged and ignored - it must never fail the OCF action.
+so zimbra-auth/zpush-auth track the mounted mailbox logs. On stop it
+also waits until the mount backing has no open holders so DRBD demote
+is not blocked by leftover log-tailer FDs. A fail2ban hiccup on start
+is logged and ignored - it must never fail the OCF start action.
 </longdesc>
 <shortdesc lang="en">Zimbra zmcontrol wrapper</shortdesc>
 <parameters/>
@@ -46,6 +48,11 @@ META
 #######################################################################
 
 ZIMBRA_USER=zimbra
+ZIMBRA_DIR=/opt/zimbra
+
+zimbra_mount_source() {
+	findmnt -n -o SOURCE "${ZIMBRA_DIR}" 2>/dev/null || true
+}
 
 zimbra_validate() {
 	return $OCF_SUCCESS
@@ -53,7 +60,7 @@ zimbra_validate() {
 
 zimbra_monitor() {
 	local out
-	[ -x /opt/zimbra/bin/zmcontrol ] || return $OCF_NOT_RUNNING
+	[ -x "${ZIMBRA_DIR}/bin/zmcontrol" ] || return $OCF_NOT_RUNNING
 	out=$(su - ${ZIMBRA_USER} -c "zmcontrol status" 2>&1) || return $OCF_NOT_RUNNING
 	# Fail if any service line is not Running (ignore Host header / blank / Connect noise)
 	if printf '%s\n' "$out" | grep -v Running | grep -vE '^Host|^$' | grep -v 'Connect:' | grep -q .; then
@@ -68,18 +75,18 @@ zimbra_monitor() {
 }
 
 zimbra_ldap_status() {
-	su - ${ZIMBRA_USER} -c "/opt/zimbra/bin/ldap status" >/dev/null 2>&1
+	su - ${ZIMBRA_USER} -c "${ZIMBRA_DIR}/bin/ldap status" >/dev/null 2>&1
 }
 
 # zmcontrol will not start slapd when ldap_url is 127.0.0.1 (isLdapLocal=0).
 zimbra_ensure_ldap() {
 	local i=0
-	[ -x /opt/zimbra/bin/ldap ] || return 0
+	[ -x "${ZIMBRA_DIR}/bin/ldap" ] || return 0
 	if zimbra_ldap_status; then
 		return 0
 	fi
 	ocf_log info "starting local slapd before zmcontrol"
-	su - ${ZIMBRA_USER} -c "/opt/zimbra/bin/ldap start" || return $OCF_ERR_GENERIC
+	su - ${ZIMBRA_USER} -c "${ZIMBRA_DIR}/bin/ldap start" || return $OCF_ERR_GENERIC
 	while [ $i -lt 30 ]; do
 		zimbra_ldap_status && return 0
 		sleep 2
@@ -89,22 +96,74 @@ zimbra_ensure_ldap() {
 	return $OCF_ERR_GENERIC
 }
 
-# Best-effort fail2ban jail refresh. Never fails the OCF action.
+# mode=mounted: best-effort (must not fail start). mode=unmounted: hard-fail
+# when the helper exists so stop cannot claim success with log-tailers still open.
 zimbra_fail2ban_jails() {
-	local mode="$1" script="/usr/local/sbin/kin-fail2ban-jails" out
+	local mode="$1" script="/usr/local/sbin/kin-fail2ban-jails" out rc
 	if [ ! -x "$script" ]; then
 		ocf_log warn "kin-fail2ban-jails missing; skip jail refresh (${mode})"
 		return 0
+	fi
+	if [ "$mode" = "unmounted" ]; then
+		out=$("$script" unmounted 2>&1)
+		rc=$?
+		ocf_log info "fail2ban jails unmounted rc=${rc}: ${out}"
+		return $rc
 	fi
 	out=$(KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$script" "$mode" 2>&1) || true
 	ocf_log info "fail2ban jails ${mode}: ${out}"
 	return 0
 }
 
+# After umount/demote, leftover FDs on the mapper keep DRBD attach from
+# succeeding on the peer (same failure class as the plain-mount handoff).
+zimbra_wait_backing_free() {
+	local src retries delay attempt=0
+	src=$(zimbra_mount_source)
+	[ -n "$src" ] || src=/dev/drbd0
+	case "$src" in
+	/dev/drbd*|/dev/mapper/*) ;;
+	*)
+		ocf_log warn "unusual mount source ${src}; holder wait uses it anyway"
+		;;
+	esac
+	if ! command -v fuser >/dev/null 2>&1; then
+		ocf_log warn "fuser not installed; skipping open-holder check on ${src}"
+		return 0
+	fi
+	retries="${KIN_OCF_FUSER_RETRIES:-20}"
+	delay="${KIN_OCF_FUSER_DELAY:-1}"
+	while [ "$attempt" -lt "$retries" ]; do
+		if ! fuser -m "$src" >/dev/null 2>&1; then
+			ocf_log info "${src} has no open holders"
+			return 0
+		fi
+		attempt=$((attempt + 1))
+		sleep "$delay"
+	done
+	ocf_log err "${src} still has open holders after stop (checked ${attempt} times)"
+	fuser -vm "$src" 2>&1 | while IFS= read -r line; do
+		ocf_log err "holder: ${line}"
+	done || true
+	return $OCF_ERR_GENERIC
+}
+
 zimbra_start() {
-	local out rc
-	if ! findmnt -n /opt/zimbra >/dev/null 2>&1; then
-		ocf_log err "/opt/zimbra is not mounted"
+	local out rc src
+	if ! findmnt -n "${ZIMBRA_DIR}" >/dev/null 2>&1; then
+		ocf_log err "${ZIMBRA_DIR} is not mounted"
+		return $OCF_ERR_INSTALLED
+	fi
+	src=$(zimbra_mount_source)
+	case "$src" in
+	/dev/drbd*) ;;
+	*)
+		ocf_log err "${ZIMBRA_DIR} is mounted from ${src:-unknown}, not /dev/drbd*"
+		return $OCF_ERR_INSTALLED
+		;;
+	esac
+	if [ ! -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
+		ocf_log err "${ZIMBRA_DIR}/bin/zmcontrol missing on mounted tree"
 		return $OCF_ERR_INSTALLED
 	fi
 	if zimbra_monitor; then
@@ -130,18 +189,29 @@ zimbra_start() {
 }
 
 zimbra_stop() {
-	zimbra_fail2ban_jails unmounted
-	if [ ! -x /opt/zimbra/bin/zmcontrol ]; then
+	# Drop zimbra/zpush jails before stop so mailbox.log FDs do not keep the
+	# DRBD/LUKS backing busy after Filesystem demotes. Hard-fail if the helper
+	# is present and reload fails - soft-skip only when the helper is missing.
+	if ! zimbra_fail2ban_jails unmounted; then
+		ocf_log err "fail2ban jail drop failed; refusing stop so demote cannot race open holders"
+		return $OCF_ERR_GENERIC
+	fi
+	if [ ! -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
+		zimbra_wait_backing_free || return $OCF_ERR_GENERIC
 		return $OCF_SUCCESS
 	fi
 	if ! zimbra_monitor >/dev/null 2>&1; then
+		zimbra_wait_backing_free || return $OCF_ERR_GENERIC
 		return $OCF_SUCCESS
 	fi
 	ocf_log info "zmcontrol stop"
 	su - ${ZIMBRA_USER} -c "zmcontrol stop" || true
 	local i=0
 	while [ $i -lt 24 ]; do
-		zimbra_monitor >/dev/null 2>&1 || return $OCF_SUCCESS
+		if ! zimbra_monitor >/dev/null 2>&1; then
+			zimbra_wait_backing_free || return $OCF_ERR_GENERIC
+			return $OCF_SUCCESS
+		fi
 		sleep 5
 		i=$((i + 1))
 	done

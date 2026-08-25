@@ -156,12 +156,20 @@ def parse_offline_nodes(pcs_nodes: str) -> list[str]:
     return found
 
 
-def parse_promoted(crm: str) -> str | None:
+def parse_promoted_names(crm: str) -> list[str]:
+    """All Promoted/Masters hostnames from crm_mon (may be more than one)."""
     for line in crm.splitlines():
         match = re.search(r"(?:Promoted|Masters):\s*\[([^\]]+)\]", line)
         if match:
-            names = _node_tokens(match.group(1))
-            return names[0] if names else None
+            return _node_tokens(match.group(1))
+    return []
+
+
+def parse_promoted(crm: str) -> str | None:
+    """Stable single Promoted node, or None when missing / dual-Promoted conflict."""
+    names = parse_promoted_names(crm)
+    if len(names) == 1:
+        return names[0]
     return None
 
 
@@ -280,7 +288,11 @@ def node_ips_for_status(
     return out
 
 
-def parse_failcount_value(text: str) -> int:
+def parse_failcount_value(text: str) -> int | None:
+    """Parsed fail-count, or None when the query text is not recognizable.
+
+    Returning 0 for unknown text previously hid probe failures as healthy.
+    """
     m = re.search(r"value=(\d+)", text)
     if m:
         return int(m.group(1))
@@ -292,7 +304,7 @@ def parse_failcount_value(text: str) -> int:
     # pcs prints "INFINITY" sometimes
     if "INFINITY" in text.upper():
         return 999
-    return 0
+    return None
 
 
 def this_hostname() -> str:
@@ -412,6 +424,10 @@ async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:
                 lines.append(f"  {res}@{node} fail-count=query-failed:{c}")
                 continue
             val = parse_failcount_value(text)
+            if val is None:
+                ok = False
+                lines.append(f"  {res}@{node} fail-count=unparsed:{text[:80]}")
+                continue
             lines.append(f"  {res}@{node} fail-count={val}")
             if val != 0:
                 ok = False
@@ -511,8 +527,12 @@ async def gather_status() -> dict[str, Any]:
     standby = parse_standby_nodes(nodes_text)
     offline = parse_offline_nodes(nodes_text)
     _c, crm, _e = await _capture(["crm_mon", "-1", "-r"])
-    promoted = parse_promoted(crm)
+    promoted_names = parse_promoted_names(crm)
+    promoted_conflict = len(promoted_names) > 1
+    promoted = promoted_names[0] if len(promoted_names) == 1 else None
     unpromoted = parse_unpromoted(crm)
+    zimbra_node = parse_resource_node(crm, "kin-zimbra")
+    vip_node = parse_resource_node(crm, "kin-vip")
     _c2, drbd, _e2 = await _capture(["drbdadm", "status", DRBD_RESOURCE])
     _c3, quorum, _e3 = await _capture(["pcs", "quorum", "status"])
     corosync_txt = ""
@@ -536,7 +556,10 @@ async def gather_status() -> dict[str, Any]:
         "offline": offline,
         "stale_peers": stale_peers,
         "promoted": promoted,
+        "promoted_names": promoted_names,
+        "promoted_conflict": promoted_conflict,
         "unpromoted": unpromoted,
+        "zimbra_node": zimbra_node,
         "drbd_uptodate": drbd_both_uptodate(drbd),
         "drbd_sync_percent": drbd_sync_percent(drbd),
         "qdevice_ok": qdevice_voting(quorum),
@@ -544,7 +567,7 @@ async def gather_status() -> dict[str, Any]:
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
         "vip_ip": _config_vip_ip(),
-        "vip_node": parse_resource_node(crm, "kin-vip"),
+        "vip_node": vip_node,
         "addrs": addrs,
         "raw": {
             "pcs_nodes": nodes_text,
@@ -670,7 +693,13 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"offline={st['offline']}")
         yield await _emit(f"stale_peers={st['stale_peers']}")
         yield await _emit(f"promoted={st['promoted']}")
+        if st.get("promoted_conflict"):
+            yield await _emit(
+                f"promoted_conflict=True names={st.get('promoted_names')}",
+                err=True,
+            )
         yield await _emit(f"unpromoted={st['unpromoted']}")
+        yield await _emit(f"zimbra_node={st.get('zimbra_node') or '-'}")
         yield await _emit(f"drbd_uptodate={st['drbd_uptodate']}")
         yield await _emit(f"drbd_sync_percent={st.get('drbd_sync_percent')}")
         yield await _emit(f"qdevice_ok={st['qdevice_ok']}")
@@ -698,7 +727,10 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "offline": st["offline"],
             "stale_peers": st["stale_peers"],
             "promoted": st["promoted"],
+            "promoted_conflict": bool(st.get("promoted_conflict")),
+            "promoted_names": st.get("promoted_names") or [],
             "unpromoted": st["unpromoted"],
+            "zimbra_node": st.get("zimbra_node"),
             "drbd_uptodate": st["drbd_uptodate"],
             "drbd_sync_percent": st.get("drbd_sync_percent"),
             "qdevice_ok": st["qdevice_ok"],
@@ -714,13 +746,12 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         return
 
     if op == "cleanup":
-        # Clears Pacemaker's sticky per-resource fail-count/last-failure
-        # history (e.g. a monitor probe that raced a still-coming-up
-        # resource during first bring-up) and re-probes every resource on
-        # every node. Does not stop/start/move anything itself - a genuinely
-        # broken resource just fails again on the next monitor. Before this,
-        # the only way to clear a stale fail-count was `pcs resource
-        # cleanup` over SSH (live 2vm practice run, 25 Aug 2026).
+        # Clears Pacemaker fail-count/last-failure history and re-probes every
+        # resource. A probe that finds a failed resource may stop/restart it.
+        # Refuse while dual-Promoted or dual-Primary is detected so cleanup
+        # cannot paper over a split-brain. Before this button existed, the
+        # only path was `pcs resource cleanup` over SSH (live 2vm practice,
+        # 25 Aug 2026).
         lock_fh = try_lock_maintenance()
         if lock_fh is None:
             yield await _emit(
@@ -731,7 +762,46 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             return
         try:
             yield await _emit("=== maintenance cleanup ===")
-            yield await _emit("pcs resource cleanup")
+            st = await gather_status()
+            if st.get("promoted_conflict"):
+                yield await _emit(
+                    "Refusing cleanup: crm_mon shows more than one Promoted node "
+                    f"({', '.join(st.get('promoted_names') or [])}). Resolve dual "
+                    "Promoted before re-probing resources.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if ASSERT_SCRIPT.is_file():
+                c_assert, out_a, err_a = await _capture([str(ASSERT_SCRIPT)])
+                assert_txt = (out_a + err_a).strip()
+                if c_assert != 0 or "NO_DUAL_PRIMARY_OK" not in assert_txt:
+                    yield await _emit(
+                        "Refusing cleanup: dual-primary assert failed. "
+                        f"{assert_txt or f'exit {c_assert}'}",
+                        err=True,
+                    )
+                    yield proto.event_done(1)
+                    return
+            elif (st.get("topology") or "") != "1vm":
+                yield await _emit(
+                    f"Refusing cleanup: assert script missing: {ASSERT_SCRIPT}",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if (st.get("topology") or "") != "1vm" and not st.get("promoted"):
+                yield await _emit(
+                    "Refusing cleanup: no stable Promoted node; wait for "
+                    "Pacemaker to settle before re-probing.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            yield await _emit(
+                "pcs resource cleanup (clears fail-counts and re-probes; "
+                "failed resources may restart)"
+            )
             c, out, err = await _capture(["pcs", "resource", "cleanup"], timeout=120)
             if out:
                 yield await _emit(out)

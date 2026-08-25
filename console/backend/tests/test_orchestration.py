@@ -655,9 +655,16 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("<resource-agent", text)
         start = text.find("zimbra_start()")
         validate = text.find("zimbra_validate()")
+        stop = text.find("zimbra_stop()")
         self.assertGreater(start, validate)
-        self.assertIn("findmnt -n /opt/zimbra", text[start : start + 400])
+        start_block = text[start : start + 900]
+        self.assertIn("findmnt -n", start_block)
+        self.assertIn("/dev/drbd*", start_block)
+        self.assertIn("bin/zmcontrol", start_block)
         self.assertNotIn("findmnt", text[validate:start])
+        self.assertIn("zimbra_wait_backing_free", text)
+        self.assertIn("zimbra_fail2ban_jails unmounted", text[stop : stop + 800])
+        self.assertIn("fuser -m", text)
         paths = (
             Path(__file__).resolve().parents[3]
             / "ansible"
