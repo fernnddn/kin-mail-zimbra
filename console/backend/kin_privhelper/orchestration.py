@@ -240,6 +240,13 @@ def render_inventory(
         "    corosync_qdevice_qnetd_inventory_host: " + monitoring.name,
         "    iscsi_initiator_portal: \"" + monitoring.ip + ":3260\"",
         "    cluster_node_base_hacluster_password: '{{ lookup(\"env\", \"KIN_HACLUSTER_PASSWORD\") }}'",
+        # SBD LUN CHAP - same generated secret on target and every initiator.
+        # Userid isn't sensitive (the password is what authenticates), so it
+        # doesn't need the env-lookup indirection.
+        "    iscsi_target_chap_userid: kin-sbd-chap",
+        "    iscsi_target_chap_password: '{{ lookup(\"env\", \"KIN_CHAP_PASSWORD\") }}'",
+        "    iscsi_initiator_chap_userid: kin-sbd-chap",
+        "    iscsi_initiator_chap_password: '{{ lookup(\"env\", \"KIN_CHAP_PASSWORD\") }}'",
         "    cluster_setup_name: kin-mail",
         "    drbd_resource_disk: " + disk,
         "    drbd_resource_meta_disk: " + meta,
@@ -1423,7 +1430,23 @@ async def cmd_run_ha_orchestration(
             yield proto.event_done(2)
             return
         yield emit_line("generated hacluster pcs password (stored in vault, not logged)")
-    secrets = [root_pass, kin_pass, hacluster_pass]
+    chap_pass = secrets_map.get("chap_pass") or ""
+    if not chap_pass:
+        import secrets as pysecrets
+
+        from .provisioning_secrets import store_secrets
+
+        # iSCSI CHAP secrets are conventionally 12-16 chars; token_urlsafe(12)
+        # is comfortably in range after base64 expansion.
+        chap_pass = pysecrets.token_urlsafe(12)
+        try:
+            store_secrets({"chap_pass": chap_pass})
+        except ValueError as exc:
+            yield emit_line(f"Refusing: could not persist SBD CHAP password: {exc}", err=True)
+            yield proto.event_done(2)
+            return
+        yield emit_line("generated SBD LUN CHAP password (stored in vault, not logged)")
+    secrets = [root_pass, kin_pass, hacluster_pass, chap_pass]
 
     try:
         draft = _load_draft()
@@ -1633,6 +1656,7 @@ async def cmd_run_ha_orchestration(
         "KIN_ANSIBLE_PASSWORD": ssh_pass,
         "KIN_ANSIBLE_BECOME_PASSWORD": ssh_pass,
         "KIN_HACLUSTER_PASSWORD": hacluster_pass,
+        "KIN_CHAP_PASSWORD": chap_pass,
         "KIN_MAIL_DEPLOY_DIR": kin_mail_deploy_dir(),
         "ANSIBLE_CONFIG": str(WORK_DIR / "ansible.cfg"),
         "ANSIBLE_HOST_KEY_CHECKING": "False",

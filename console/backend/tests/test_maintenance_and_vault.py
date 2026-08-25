@@ -205,7 +205,11 @@ class VaultTests(unittest.TestCase):
             vault = root / "vault.json"
             marker = root / "marker.json"
             store_secrets(
-                {"host_root_pass": "rootpass99", "kin_user_pass": "kinpass99"},
+                {
+                    "host_root_pass": "rootpass99",
+                    "kin_user_pass": "kinpass99",
+                    "chap_pass": "chapsecret12345",
+                },
                 key_path=key,
                 vault_path=vault,
                 marker_path=marker,
@@ -213,12 +217,15 @@ class VaultTests(unittest.TestCase):
             raw = vault.read_text(encoding="utf-8")
             self.assertNotIn("rootpass99", raw)
             self.assertNotIn("kinpass99", raw)
+            self.assertNotIn("chapsecret12345", raw)
             loaded = load_secrets(key_path=key, vault_path=vault)
             self.assertEqual(loaded["host_root_pass"], "rootpass99")
             self.assertEqual(loaded["kin_user_pass"], "kinpass99")
+            self.assertEqual(loaded["chap_pass"], "chapsecret12345")
             rotate_key(key_path=key, vault_path=vault, marker_path=marker)
             again = load_secrets(key_path=key, vault_path=vault)
             self.assertEqual(again["host_root_pass"], "rootpass99")
+            self.assertEqual(again["chap_pass"], "chapsecret12345")
 
 
 class DraftPublicTests(unittest.TestCase):
