@@ -11,9 +11,14 @@
 # Mail is down from the stop until Pacemaker starts kin-zimbra again. That is
 # intentional for Build HA pair.
 #
-# Idempotent: when /opt/zimbra is unmounted or already on /dev/drbd*, skips
-# stop/umount but still removes any stale pre-cluster fstab block (safe while
-# mail is live on DRBD; fstab-only, no mount change).
+# Idempotent:
+#   * Already on /dev/drbd*: fstab cleanup only. Do not stop mail, do not drop
+#     fail2ban jails (mailbox.log is live), do not fuser the backing device
+#     (DRBD holds it).
+#   * Unmounted (retry after a failed first handoff): drop fail2ban zimbra/
+#     zpush jails, wait until the LUKS mapper has no open holders, then remove
+#     the pre-cluster fstab block. Skipping the holder wait is how a retry
+#     would hit "Can not open backing device" again (live 2vm, 25 Aug 2026).
 # Reuses wait_none_running / umount_retry from migrate-zimbra-to-drbd-disk.sh.
 # =============================================================================
 set -u
@@ -80,6 +85,72 @@ remove_precluster_fstab() {
   remove_precluster_zimbra_fstab || die_release "pre-cluster fstab cleanup failed"
 }
 
+# cryptsetup always holds the raw LUKS partition. fuser -m must target the
+# mapper (the filesystem / DRBD backing), never DATA_DISK, when the mapper
+# exists. On a retry the mount is already gone, so SRC cannot be used.
+backing_fuser_dev() {
+  if [ -b "$(luks_mapper_path)" ]; then
+    luks_mapper_path
+    return 0
+  fi
+  printf '%s\n' "$DATA_DISK"
+}
+
+# ocf:kin:zimbra stop calls this before zmcontrol stop. The handoff must too:
+# fail2ban jails zimbra-auth / zpush-auth tail ${ZIMBRA_DIR}/log/*, and those
+# FDs keep the LUKS mapper busy after umount. 5x1s fuser retries cannot outwait
+# a still-running jail. Best-effort: missing helper must not abort the handoff.
+drop_zimbra_log_holders() {
+  local helper=""
+  if [ -n "${KIN_FAIL2BAN_JAILS:-}" ] && [ -x "${KIN_FAIL2BAN_JAILS}" ]; then
+    helper="${KIN_FAIL2BAN_JAILS}"
+  elif [ -x /usr/local/sbin/kin-fail2ban-jails ]; then
+    helper=/usr/local/sbin/kin-fail2ban-jails
+  elif [ -x "${HERE}/kin-fail2ban-jails.sh" ]; then
+    helper="${HERE}/kin-fail2ban-jails.sh"
+  fi
+  if [ -z "$helper" ]; then
+    warn "kin-fail2ban-jails not found; log-tailers may keep the backing device busy after umount"
+    return 0
+  fi
+  say "Drop fail2ban zimbra/zpush jails so they cannot hold ${ZIMBRA_DIR}/log after umount"
+  KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$helper" unmounted || true
+}
+
+wait_backing_device_free() {
+  local fuser_dev="$1"
+  local fuser_busy=1
+  local fuser_attempt=0
+  local fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-20}"
+  local fuser_delay="${KIN_RELEASE_FUSER_DELAY:-1}"
+
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=10 >/dev/null 2>&1 || true
+  fi
+
+  if ! command -v fuser >/dev/null 2>&1; then
+    warn "fuser not installed; skipping open-holder check on ${fuser_dev}"
+    return 0
+  fi
+  [ -n "$fuser_dev" ] || return 0
+
+  while [ "$fuser_attempt" -lt "$fuser_retries" ]; do
+    if ! fuser -m "$fuser_dev" >/dev/null 2>&1; then
+      fuser_busy=0
+      break
+    fi
+    fuser_attempt=$((fuser_attempt + 1))
+    sleep "$fuser_delay"
+  done
+  if [ "$fuser_busy" -eq 1 ]; then
+    fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    fail "${fuser_dev} still has open holders (checked ${fuser_attempt} times)"
+    return 1
+  fi
+  ok "${fuser_dev} has no open holders"
+  return 0
+}
+
 if [ "${KIN_RELEASE_SOURCE_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -88,10 +159,23 @@ if [ "$(id -u)" -ne 0 ]; then
   die_release "Run as root"
 fi
 
+# activate.yml reuses the holder wait without stop/umount (retry / Diskless
+# leftover). Mail is already down at that point; dropping jails is idempotent.
+if [ "${KIN_RELEASE_WAIT_BACKING_ONLY:-0}" = "1" ]; then
+  drop_zimbra_log_holders
+  wait_backing_device_free "$(backing_fuser_dev)" \
+    || die_release "backing device still has open holders; drbdadm up would fail"
+  ok "Backing device is free for drbdadm up"
+  exit 0
+fi
+
 SRC=$(current_src)
 
 if [ -z "$SRC" ]; then
-  ok "${ZIMBRA_DIR} is not mounted; nothing to release for DRBD attach"
+  ok "${ZIMBRA_DIR} is not mounted; skip stop/umount, still free the backing device"
+  drop_zimbra_log_holders
+  wait_backing_device_free "$(backing_fuser_dev)" \
+    || die_release "backing device still has open holders after a prior umount"
   remove_precluster_fstab
   exit 0
 fi
@@ -116,6 +200,9 @@ if [ ! -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
   die_release "zmcontrol not found under ${ZIMBRA_DIR} while it is still mounted from ${DATA_DISK}"
 fi
 
+# Same order as ocf:kin:zimbra stop: drop log-tailers, then zmcontrol stop.
+drop_zimbra_log_holders
+
 su - zimbra -c "zmcontrol stop" || die_release "zmcontrol stop failed"
 su - zimbra -c "zmconfigdctl stop" >/dev/null 2>&1 || true
 if ! wait_none_running; then
@@ -131,34 +218,8 @@ if findmnt -n "$ZIMBRA_DIR" >/dev/null 2>&1; then
 fi
 ok "Unmounted ${ZIMBRA_DIR}"
 
-if command -v fuser >/dev/null 2>&1; then
-  fuser_dev="$DATA_DISK"
-  if [ "$SRC" = "$(luks_mapper_path)" ]; then
-    # cryptsetup holds the raw LUKS partition; only the mapper is the FS.
-    fuser_dev=$(luks_mapper_path)
-  fi
-  # A log-tailer (fail2ban, journald) or a udev probe can briefly reopen the
-  # just-freed device right after umount and let go a moment later - retry
-  # before treating this as a real stuck holder. Live 2vm practice run
-  # (25 Aug 2026) hit exactly this: fuser -m reported busy, but the follow-up
-  # verbose fuser -vm found nothing, meaning the holder was already gone.
-  fuser_busy=1
-  fuser_attempt=0
-  fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-5}"
-  fuser_delay="${KIN_RELEASE_FUSER_DELAY:-1}"
-  while [ "$fuser_attempt" -lt "$fuser_retries" ]; do
-    if ! fuser -m "$fuser_dev" >/dev/null 2>&1; then
-      fuser_busy=0
-      break
-    fi
-    fuser_attempt=$((fuser_attempt + 1))
-    sleep "$fuser_delay"
-  done
-  if [ "$fuser_busy" -eq 1 ]; then
-    fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
-    die_release "${fuser_dev} still has open holders after umount (checked ${fuser_attempt} times)"
-  fi
-fi
+wait_backing_device_free "$(backing_fuser_dev)" \
+  || die_release "backing device still has open holders after umount"
 
 remove_precluster_fstab
 

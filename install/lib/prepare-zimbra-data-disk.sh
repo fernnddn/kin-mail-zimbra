@@ -193,6 +193,16 @@ case "$(prepare_data_disk_drbd_action "$HELD_BY_DRBD" "$ON_DRBD")" in
     ;;
 esac
 
+# Retry after a failed DRBD handoff: /opt/zimbra is empty, the real tree is
+# on the LUKS mapper. Do not treat leftover files on the mountpoint as
+# "Zimbra on the OS volume", and do not RO-remount the mapper (that can
+# leave a stray tmp mount or look empty while fail2ban still holds it).
+if zimbra_is_mid_handoff; then
+  ok "Mid-handoff: real Zimbra is on the data disk; ${ZIMBRA_DIR} is unmounted"
+  info "Leaving the backing device unmounted for DRBD attach / Pacemaker kin-fs"
+  exit 0
+fi
+
 if [ -x "${ZIMBRA_DIR}/bin/zmcontrol" ]; then
   if [ -n "$Z_MNTSRC" ] && { [ "$Z_MNTSRC" = "$DATA_DISK" ] || [ "$Z_MNTSRC" = "$(luks_mapper_path)" ]; }; then
     ok "${ZIMBRA_DIR} is already on ${Z_MNTSRC}"

@@ -40,6 +40,9 @@
     cmd: grep -E 'meta-disk\s+{{ drbd_resource_meta_disk | regex_escape }}' {{ drbd_resource_res_path }}
   changed_when: false
   check_mode: false
+  # Template is skipped under --check; grepping a missing .res fails closed
+  # and trips any_errors_fatal on live_join_check / first-apply dry-run.
+  when: not ansible_check_mode
   tags: [drbd, resource, config]
 
 - name: Ensure the definition does not use internal meta on the data disk
@@ -51,4 +54,5 @@
   changed_when: false
   failed_when: drbd_resource_internal_meta.rc == 0
   check_mode: false
+  when: not ansible_check_mode
   tags: [drbd, resource, config]

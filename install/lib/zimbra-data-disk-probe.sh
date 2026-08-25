@@ -49,34 +49,107 @@ data_disk_held_by_drbd() {
   return 1
 }
 
+# debugfs can see /bin/zmcontrol on an ext4 backing device without mounting.
+# Used when a leftover log-tailer still holds the LUKS mapper after umount
+# (live 2vm, 25 Aug 2026): mount -o ro then fails, and a false "no install"
+# would make 03-install-zimbra.sh run_fresh onto the empty /opt/zimbra
+# mountpoint. Prints nothing. Returns 0 if the inode is present.
+ext4_superblock_has_zmcontrol() {
+  local dev="$1"
+  local out
+  [ -n "$dev" ] || return 1
+  command -v debugfs >/dev/null 2>&1 || return 1
+  out=$(debugfs -R 'stat /bin/zmcontrol' "$dev" 2>/dev/null || true)
+  printf '%s' "$out" | grep -q 'Inode:'
+}
+
+# When the RO probe cannot mount an ext4 candidate (device busy), decide
+# whether that still counts as a real Zimbra tree.
+# Args: inode_found 0|1, setup_complete_present 0|1
+# Prints: yes | no
+busy_ext4_counts_as_real_install() {
+  if [ "${1:-0}" = "1" ]; then
+    printf '%s\n' "yes"
+    return 0
+  fi
+  if [ "${2:-0}" = "1" ]; then
+    printf '%s\n' "yes"
+    return 0
+  fi
+  printf '%s\n' "no"
+}
+
+# Best-effort: drop fail2ban zimbra/zpush jails so a probe mount (and later
+# drbdadm up) is not blocked by leftover mailbox.log FDs. No-op when mail is
+# still mounted with a live zmcontrol (caller already returned). Missing
+# helper must not fail the probe.
+drop_zimbra_log_holders_best_effort() {
+  local helper=""
+  if [ -n "${KIN_FAIL2BAN_JAILS:-}" ] && [ -x "${KIN_FAIL2BAN_JAILS}" ]; then
+    helper="${KIN_FAIL2BAN_JAILS}"
+  elif [ -x /usr/local/sbin/kin-fail2ban-jails ]; then
+    helper=/usr/local/sbin/kin-fail2ban-jails
+  fi
+  [ -n "$helper" ] || return 0
+  KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$helper" unmounted >/dev/null 2>&1 || true
+}
+
+_umount_probe_dir() {
+  local dir="$1"
+  local i=0
+  [ -n "$dir" ] || return 0
+  while [ "$i" -lt 5 ]; do
+    umount "$dir" >/dev/null 2>&1 && return 0
+    i=$((i + 1))
+    sleep 1
+  done
+  umount "$dir" >/dev/null 2>&1 || true
+}
+
 # Real install on the data path: either DRBD already holds the disk (do not
-# mount it), or a brief RO mount finds bin/zmcontrol (mid-handoff / plain).
+# mount it), or bin/zmcontrol is on the filesystem (mid-handoff / plain).
 # After 02, the filesystem is often on the LUKS mapper, not the raw partition;
 # mounting crypto_LUKS as ext4 fails, so also try the mapper when it is a
-# block device and not already busy (already mounted at /opt/zimbra).
+# block device. Prefer debugfs over mount so a busy mapper cannot look empty.
 # Optional 2nd arg: sysfs root for the holders check.
 # Returns 0 if a real install is present. Never leaves a mount behind.
 zimbra_data_disk_has_real_install() {
   local disk="${1:-${KIN_DRBD_DATA_DISK:-/dev/sdb1}}"
   local sys_root="${2:-${KIN_SYSFS_ROOT:-/sys}}"
-  local tmp rc=1 candidate mapper
+  local tmp candidate mapper fstype setup_done=0 inode=0
   if data_disk_held_by_drbd "$disk" "$sys_root"; then
     return 0
+  fi
+  drop_zimbra_log_holders_best_effort
+  if [ -f "${KIN_SETUP_COMPLETE_MARKER:-/etc/kin-mail/setup-complete}" ]; then
+    setup_done=1
   fi
   mapper="${KIN_LUKS_MAPPER_PATH:-/dev/mapper/${KIN_LUKS_MAPPER_NAME:-kin-zimbra-crypt}}"
   for candidate in "$disk" "$mapper"; do
     [ -b "$candidate" ] || continue
+    fstype=$(blkid -s TYPE -o value "$candidate" 2>/dev/null || true)
+    inode=0
+    if [ "$fstype" = "ext4" ] && ext4_superblock_has_zmcontrol "$candidate"; then
+      return 0
+    fi
     tmp=$(mktemp -d) || continue
     if mount -o ro "$candidate" "$tmp" 2>/dev/null; then
       if mount_has_zmcontrol "$tmp"; then
-        rc=0
+        _umount_probe_dir "$tmp"
+        rmdir "$tmp" 2>/dev/null || true
+        return 0
       fi
-      umount "$tmp" 2>/dev/null || true
+      _umount_probe_dir "$tmp"
+    elif [ "$fstype" = "ext4" ]; then
+      if ext4_superblock_has_zmcontrol "$candidate"; then
+        inode=1
+      fi
+      if [ "$(busy_ext4_counts_as_real_install "$inode" "$setup_done")" = "yes" ]; then
+        rmdir "$tmp" 2>/dev/null || true
+        return 0
+      fi
     fi
     rmdir "$tmp" 2>/dev/null || true
-    if [ "$rc" -eq 0 ]; then
-      return 0
-    fi
   done
   return 1
 }

@@ -28,13 +28,81 @@
   check_mode: false
   tags: [drbd, livejoin, connect]
 
-- name: Create new DRBD metadata on the new node external meta-disk
+- name: Probe whether DRBD metadata already exists on the new-node meta-disk
   ansible.builtin.command:
-    cmd: drbdadm create-md {{ cluster_add_host_drbd_resource }}
-  # SAFETY: never check_mode: false.
+    cmd: drbdadm dump-md {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_dump_md
+  changed_when: false
+  failed_when: false
+  check_mode: false
   when:
     - not ansible_check_mode
     - drbd_live_join_status_pre.rc != 0
+  tags: [drbd, livejoin, connect]
+
+- name: Stat the new-node DRBD meta-disk before create-md
+  ansible.builtin.stat:
+    path: "{{ cluster_add_host_drbd_meta_disk }}"
+    follow: true
+  register: drbd_live_join_meta_stat
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+    - drbd_live_join_dump_md.rc is defined
+    - drbd_live_join_dump_md.rc != 0
+  tags: [drbd, livejoin, connect]
+
+- name: Refuse live-join create-md when the meta-disk is missing
+  ansible.builtin.assert:
+    that:
+      - drbd_live_join_meta_stat.stat.exists | default(false)
+      - drbd_live_join_meta_stat.stat.isblk | default(false)
+    fail_msg: >-
+      drbdadm dump-md failed and {{ cluster_add_host_drbd_meta_disk }} is not a
+      block device. Refusing create-md on the new node.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+    - drbd_live_join_dump_md.rc is defined
+    - drbd_live_join_dump_md.rc != 0
+  tags: [drbd, livejoin, connect]
+
+- name: Refuse live-join create-md when dump-md failed with an I/O or busy error
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          (drbd_live_join_dump_md.stdout | default(''))
+          ~ ' '
+          ~ (drbd_live_join_dump_md.stderr | default(''))
+        ) is not search('(?i)no such file|device or resource busy|permission denied|can not open|cannot open|failed to open|device busy')
+    fail_msg: >-
+      drbdadm dump-md failed on a live block device on the new node.
+      Refusing create-md so existing metadata cannot be rewritten.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+    - drbd_live_join_dump_md.rc is defined
+    - drbd_live_join_dump_md.rc != 0
+    - drbd_live_join_meta_stat.stat.exists | default(false)
+    - drbd_live_join_meta_stat.stat.isblk | default(false)
+  tags: [drbd, livejoin, connect]
+
+- name: Create new DRBD metadata on the new node external meta-disk
+  ansible.builtin.shell: |
+    set -euo pipefail
+    printf 'yes\n' | drbdadm create-md {{ cluster_add_host_drbd_resource }}
+  args:
+    executable: /bin/bash
+  # SAFETY: never check_mode: false.
+  # dump-md success means metadata already exists: do not hang on the yes
+  # prompt and do not rewrite a leftover MD.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+    - drbd_live_join_dump_md.rc is defined
+    - drbd_live_join_dump_md.rc != 0
   tags: [drbd, livejoin, connect]
 
 - name: Settle udev before attaching the just-created backing device

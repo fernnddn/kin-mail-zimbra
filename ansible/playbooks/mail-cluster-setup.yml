@@ -17,6 +17,7 @@
   hosts: mail_nodes
   gather_facts: true
   become: true
+  any_errors_fatal: true
   roles:
     - role: cluster_node_base
       vars:
@@ -27,6 +28,7 @@
   hosts: mail_nodes
   gather_facts: true
   become: true
+  any_errors_fatal: true
   roles:
     - role: cluster_setup
       tags: [cluster, setup]

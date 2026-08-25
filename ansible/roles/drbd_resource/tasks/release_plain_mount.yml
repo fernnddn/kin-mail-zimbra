@@ -76,7 +76,19 @@
   check_mode: false
   tags: [drbd, resource, release]
 
-- name: Require the migrate helper, release script, fstab helper, and LUKS helper
+- name: Stat the fail2ban jail helper on the controller
+  ansible.builtin.stat:
+    path: "{{ kin_mail_deploy_dir }}/install/lib/kin-fail2ban-jails.sh"
+  register: drbd_resource_fail2ban_jails_stat
+  delegate_to: localhost
+  become: false
+  vars:
+    ansible_connection: local
+  run_once: true
+  check_mode: false
+  tags: [drbd, resource, release]
+
+- name: Require the migrate helper, release script, fstab helper, LUKS helper, and fail2ban jail helper
   ansible.builtin.assert:
     that:
       - drbd_resource_release_migrate_stat.stat.exists | default(false)
@@ -87,11 +99,14 @@
       - drbd_resource_precluster_fstab_stat.stat.isreg | default(false)
       - drbd_resource_luks_helper_stat.stat.exists | default(false)
       - drbd_resource_luks_helper_stat.stat.isreg | default(false)
+      - drbd_resource_fail2ban_jails_stat.stat.exists | default(false)
+      - drbd_resource_fail2ban_jails_stat.stat.isreg | default(false)
     fail_msg: >-
       Missing {{ drbd_resource_release_migrate_src }},
       {{ drbd_resource_release_script_src }},
-      {{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh, or
-      {{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh.
+      {{ kin_mail_deploy_dir }}/install/lib/precluster-zimbra-fstab.sh,
+      {{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh, or
+      {{ kin_mail_deploy_dir }}/install/lib/kin-fail2ban-jails.sh.
       Set kin_mail_deploy_dir / KIN_MAIL_DEPLOY_DIR to the tree that contains
       install/lib/.
   run_once: true
@@ -159,7 +174,7 @@
   when: not ansible_check_mode
   tags: [drbd, resource, release]
 
-- name: Stage release-zimbra-plain-mount-for-drbd.sh (and shared fstab helper)
+- name: Stage release-zimbra-plain-mount-for-drbd.sh and shared helpers
   ansible.builtin.copy:
     src: "{{ item.src }}"
     dest: "{{ drbd_resource_release_dir }}/{{ item.dest }}"
@@ -173,6 +188,8 @@
       dest: precluster-zimbra-fstab.sh
     - src: "{{ kin_mail_deploy_dir }}/install/lib/zimbra-data-disk-luks.sh"
       dest: zimbra-data-disk-luks.sh
+    - src: "{{ kin_mail_deploy_dir }}/install/lib/kin-fail2ban-jails.sh"
+      dest: kin-fail2ban-jails.sh
   when: not ansible_check_mode
   tags: [drbd, resource, release]
 
@@ -182,6 +199,7 @@
   environment:
     KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
     KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
+    KIN_FAIL2BAN_JAILS: "{{ drbd_resource_release_dir }}/kin-fail2ban-jails.sh"
   register: drbd_resource_release_result
   # SAFETY: never check_mode: false - must not stop live mail during --check.
   # When already on /dev/drbd*, the script only cleans fstab (no zmcontrol stop).

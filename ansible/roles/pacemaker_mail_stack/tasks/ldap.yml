@@ -91,6 +91,7 @@
       pacemaker_mail_stack_zimbra_require_interprocess_security }}.
       Got: {{ pacemaker_mail_stack_ldap_current.stdout | default('(unavailable)') }}
   when:
+    - not ansible_check_mode
     - pacemaker_mail_stack_zimbra_mnt.rc == 0
     - pacemaker_mail_stack_ldap_current is defined
     - pacemaker_mail_stack_ldap_current.rc == 0

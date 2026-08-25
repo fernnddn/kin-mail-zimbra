@@ -203,7 +203,7 @@ def validate_username(username: str) -> str:
     u = username.strip()
     if not _USERNAME_RE.match(u):
         raise ValueError(
-            "username must be 1–128 chars: letters, digits, . _ @ + -"
+            "username must be 1-128 chars: letters, digits, . _ @ + -"
         )
     return u
 

@@ -39,7 +39,6 @@
 - name: Flag whether quorum.device still needs wiring
   ansible.builtin.set_fact:
     corosync_qdevice_needs_device: "{{ corosync_qdevice_conf_host.rc != 0 }}"
-  run_once: true
   tags: [qdevice, configure]
 
 - name: Ensure helper directory exists for the quorum.device writer
@@ -86,8 +85,13 @@
     cmd: pcs cluster reload corosync
   run_once: true
   when:
-    - corosync_qdevice_needs_device | bool
     - not ansible_check_mode
+    - >-
+      (ansible_play_hosts
+       | map('extract', hostvars, 'corosync_qdevice_needs_device')
+       | select
+       | list
+       | length) > 0
   tags: [qdevice, configure]
 
 - name: Re-check the quorum device configuration after register
@@ -120,5 +124,5 @@
       The quorum device does not point at {{ corosync_qdevice_qnetd_ip }} yet.
     success_msg: >-
       The quorum device points at {{ corosync_qdevice_qnetd_ip }}:{{ corosync_qdevice_qnetd_port }}
-  run_once: true
+  when: not ansible_check_mode
   tags: [qdevice, configure]

@@ -16,6 +16,7 @@
     drbd_resource_status.rc != 0
     or ('Diskless' in (drbd_resource_status.stdout | default('')))
   check_mode: false
+  when: not ansible_check_mode
   tags: [drbd, resource, verify]
 
 - name: Verify the local DRBD role
@@ -28,6 +29,7 @@
     ('Primary' not in drbd_resource_role.stdout and
      'Secondary' not in drbd_resource_role.stdout)
   check_mode: false
+  when: not ansible_check_mode
   tags: [drbd, resource, verify]
 
 - name: Verify the bootstrap primary is Primary
@@ -53,7 +55,9 @@
     drbd_resource_losetup.rc != 0 or
     (drbd_resource_meta_disk not in drbd_resource_losetup.stdout)
   check_mode: false
-  when: drbd_resource_meta_disk is search('loop')
+  when:
+    - not ansible_check_mode
+    - drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, verify]
 
 - name: Verify the DRBD meta-loop service is active
@@ -63,7 +67,9 @@
   changed_when: false
   failed_when: drbd_resource_meta_active.stdout | trim != "active"
   check_mode: false
-  when: drbd_resource_meta_disk is search('loop')
+  when:
+    - not ansible_check_mode
+    - drbd_resource_meta_disk is search('loop')
   tags: [drbd, resource, verify]
 
 - name: Note that first-sync peer disk may still be Inconsistent

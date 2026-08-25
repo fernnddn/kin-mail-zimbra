@@ -10,7 +10,7 @@ This tree ports proven Phase 2 lab work into Ansible **one small slice at a time
 | `playbooks/mail-cluster-setup.yml` | `cluster_node_base`, `cluster_setup` | greenfield `pcs cluster setup` | idempotent; skip if cluster already running |
 | `playbooks/mail-qdevice.yml` | `corosync_qdevice` | 2.2 §1 | dry-run (3.2) |
 | `playbooks/mon-iscsi-target.yml` | `iscsi_target` | 2.1 §3 | dry-run (3.4) |
-| `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2–2.3, 2.9 | dry-run (3.4) |
+| `playbooks/mail-fencing.yml` | `iscsi_initiator`, `softdog`, `sbd_stonith` | 2.2-2.3, 2.9 | dry-run (3.4) |
 | `playbooks/mail-drbd.yml` | `drbd_install`, `drbd_resource` | 2.4, 2.5 | dry-run (3.5) |
 | `playbooks/mail-pacemaker.yml` | `pacemaker_agents`, `pacemaker_mail_stack` | 2.7 | dry-run (3.6) |
 | `playbooks/mail-add-host.yml` | `cluster_node_base`, `cluster_remove_host` (via `cluster_survivor_replace`), `drbd_live_join` (+ reuse) | new | **syntax-only (3.7)** |

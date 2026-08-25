@@ -1,5 +1,5 @@
 ---
-# Final wiring from task 2.7 Stages A–C (live lab values).
+# Final wiring from task 2.7 Stages A-C (live lab values).
 pacemaker_mail_stack_drbd_resource_name: kin-zimbra
 pacemaker_mail_stack_drbd_ra: kin-drbd
 pacemaker_mail_stack_drbd_clone: kin-drbd-clone

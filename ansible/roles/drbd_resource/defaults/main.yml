@@ -34,3 +34,6 @@ drbd_resource_meta_loop_unit: kin-drbd-meta-loop.service
 # After mail-pacemaker.yml the clone owns attach/promote. Ansible must not
 # drbdadm down/up/primary --force on a retry (would fight self-heal).
 drbd_resource_pcs_clone: kin-drbd-clone
+# Staged by release_plain_mount.yml; activate.yml wait-only reuses it.
+# Default so --tags activate still has a path to assert against.
+drbd_resource_release_dir: /var/lib/kin-mail/drbd-plain-mount-handoff

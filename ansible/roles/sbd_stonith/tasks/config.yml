@@ -28,6 +28,7 @@
   register: sbd_stonith_delay_grep
   changed_when: false
   check_mode: false
+  when: not ansible_check_mode
   tags: [sbd, stonith, config]
 
 - name: Check the SBD devices in the configuration
@@ -35,4 +36,5 @@
     cmd: grep -F 'SBD_DEVICE="{{ sbd_stonith_device }}"' {{ sbd_stonith_default_path }}
   changed_when: false
   check_mode: false
+  when: not ansible_check_mode
   tags: [sbd, stonith, config]

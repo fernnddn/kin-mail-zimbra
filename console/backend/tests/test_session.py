@@ -58,6 +58,21 @@ class BootstrapPasswordTests(unittest.TestCase):
         self.assertIn("BOOT_PASS='E@syEmail'", text)
         self.assertNotIn("token_urlsafe(18)", text)
 
+    def test_own_password_api_requires_current_password(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        app = (root / "console" / "backend" / "kin_console" / "app.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("class OwnPasswordBody", app)
+        me = app.find('@app.post("/api/me/password")')
+        self.assertGreater(me, 0)
+        self.assertIn("current_password", app[me : me + 900])
+        self.assertIn("Current password is incorrect", app[me : me + 900])
+        security = (
+            root / "console" / "frontend" / "src" / "pages" / "Security.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("current_password: currentPassword", security)
+
 
 if __name__ == "__main__":
     unittest.main()

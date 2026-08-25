@@ -1,4 +1,4 @@
-# KIN Mail Zabbix extras (Timeline 3.7–3.9, 5.4)
+# KIN Mail Zabbix extras (Timeline 3.7-3.9, 5.4)
 
 Agent `UserParameter` keys and a Zabbix 6.0 template for the HA/backup stack.
 The Zabbix Server / Grafana / agent **packages** are installed by

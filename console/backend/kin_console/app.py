@@ -218,6 +218,11 @@ class SetPasswordBody(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class OwnPasswordBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
+
+
 async def _mutate_console_users(
     actor: str,
     args: dict,
@@ -317,13 +322,20 @@ async def api_set_user_password(
 
 @app.post("/api/me/password")
 async def api_set_own_password(
-    body: SetPasswordBody,
+    body: OwnPasswordBody,
     actor: ConsoleUser = Depends(auth.require_console_user),
 ) -> dict[str, str]:
     if actor.auth_type != users.AUTH_LOCAL:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="AD-backed accounts change their password in Active Directory, not here.",
+        )
+    if not actor.password_hash or not auth.verify_password(
+        body.current_password, actor.password_hash
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
         )
     await _mutate_console_users(
         actor.username,

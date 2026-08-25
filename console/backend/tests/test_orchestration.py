@@ -585,7 +585,7 @@ class CheckModeSafetyTests(unittest.TestCase):
                 ),
                 (
                     "playbooks/mail-pacemaker.yml",
-                    ["--skip-tags", "agents,verify"],
+                    ["--skip-tags", "agents,verify,ldap,memcached"],
                 ),
             ],
         )
@@ -601,7 +601,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertEqual(plays[0][0], "playbooks/mail-cluster-setup.yml")
         self.assertEqual(plays[0][1], ["--skip-tags", "auth,pcs,properties"])
         self.assertEqual(plays[1][1][1], "install,verify,disk_prep")
-        self.assertEqual(plays[2][1], ["--skip-tags", "agents,verify"])
+        self.assertEqual(plays[2][1], ["--skip-tags", "agents,verify,ldap,memcached"])
 
     def test_disk_prep_cleanup_runs_under_check_mode(self) -> None:
         from pathlib import Path
@@ -782,6 +782,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         )
         self.assertIn("choose_shared_ssh_user", orch)
         self.assertIn("_push_peer_deploy_tree", orch)
+        self.assertIn("should_refresh_peer_deploy_tree", orch)
         # Every host in the rendered inventory, including this one, connects
         # over ansible_password - a 1vm host that already ran the post-install
         # SSH revert must have it turned back on before any SSH attempt here,
@@ -825,7 +826,7 @@ class CheckModeSafetyTests(unittest.TestCase):
         activate = (
             repo / "ansible/roles/drbd_resource/tasks/activate.yml"
         ).read_text(encoding="utf-8")
-        force = activate.find("drbdadm primary --force")
+        force = activate.find("cmd: drbdadm primary --force")
         self.assertGreater(force, 0)
         force_when = activate[force : force + 900]
         self.assertIn("not (drbd_resource_pacemaker_owns | bool)", force_when)
@@ -838,6 +839,55 @@ class CheckModeSafetyTests(unittest.TestCase):
         needs_block = activate[needs : needs + 700]
         self.assertIn("drbd_resource_node_a_name", needs_block)
         self.assertIn("'Primary' not in", needs_block)
+        qdev = (
+            repo / "ansible/roles/corosync_qdevice/tasks/configure.yml"
+        ).read_text(encoding="utf-8")
+        flag = qdev.find("Flag whether quorum.device still needs wiring")
+        self.assertGreater(flag, 0)
+        flag_chunk = qdev[flag : qdev.find("Ensure helper directory", flag)]
+        self.assertNotIn("run_once: true", flag_chunk)
+        self.assertIn("ansible_play_hosts", qdev)
+        hosts_yml = (
+            repo / "ansible/roles/pacemaker_mail_stack/tasks/hosts.yml"
+        ).read_text(encoding="utf-8")
+        getent = hosts_yml.find("Verify the Zimbra service hostname resolves to loopback")
+        self.assertGreater(getent, 0)
+        self.assertIn("when: not ansible_check_mode", hosts_yml[getent : getent + 700])
+        res_file = (
+            repo / "ansible/roles/drbd_resource/tasks/resource_file.yml"
+        ).read_text(encoding="utf-8")
+        ext_meta = res_file.find(
+            "Check the kin-zimbra resource definition uses external meta"
+        )
+        self.assertGreater(ext_meta, 0)
+        self.assertIn(
+            "when: not ansible_check_mode",
+            res_file[ext_meta : ext_meta + 700],
+        )
+        ldap_yml = (
+            repo / "ansible/roles/pacemaker_mail_stack/tasks/ldap.yml"
+        ).read_text(encoding="utf-8")
+        ldap_assert = ldap_yml.find("Verify LDAP points to 127.0.0.1")
+        self.assertGreater(ldap_assert, 0)
+        self.assertIn(
+            "not ansible_check_mode",
+            ldap_yml[ldap_assert : ldap_assert + 1600],
+        )
+        confirm = qdev.find("Confirm the quorum device configuration matches")
+        self.assertGreater(confirm, 0)
+        self.assertIn(
+            "when: not ansible_check_mode",
+            qdev[confirm : confirm + 700],
+        )
+        sbd_cfg = (
+            repo / "ansible/roles/sbd_stonith/tasks/config.yml"
+        ).read_text(encoding="utf-8")
+        delay = sbd_cfg.find("Check SBD_DELAY_START is enabled")
+        self.assertGreater(delay, 0)
+        self.assertIn(
+            "when: not ansible_check_mode",
+            sbd_cfg[delay : delay + 500],
+        )
         self.assertIn("getent passwd kin-console", orch)
         self.assertIn(
             "useradd --system --home /var/lib/kin-mail-console",

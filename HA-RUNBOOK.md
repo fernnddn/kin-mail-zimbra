@@ -5,7 +5,7 @@ This is a template: hostnames/IPs/the SBD LUN id below are placeholders like
 a specific deployment, see that deployment's local (gitignored) values file
 (e.g. `docs/HA-RUNBOOK.values.md`).
 
-Operational reference for the **active–passive** KIN Mail pair. Commands and
+Operational reference for the **active-passive** KIN Mail pair. Commands and
 behaviors below are taken from live lab work (Phase 2, HA rebuild 2026-08-12/13,
 ha-build-14/15, maintenance mode, Observability resize, backup/restore, KIN Sight,
 fail2ban OCF hooks) - not from unverified theory.
@@ -37,7 +37,7 @@ Promoted until that node is down or an operator moves it. Resting state as of
 
 ### Expectation: measured downtime, not zero-downtime
 
-This design is **active–passive**, not active–active. Only one node runs Zimbra and
+This design is **active-passive**, not active-active. Only one node runs Zimbra and
 holds the VIP. Every **failover** and every **controlled move** causes a real service
 gap.
 
@@ -198,7 +198,7 @@ node, or a planned swap). Prefer the console Cluster page (section 6) when you
 are taking a node out of service. Use `pcs resource ban` when you only want to
 move the Master and leave both nodes Online.
 
-Expect **~2–3 minutes** of real downtime while Zimbra fully restarts on the target.
+Expect **~2-3 minutes** of real downtime while Zimbra fully restarts on the target.
 
 Do **not** use `pcs resource move … --promoted`. Ban the **currently Promoted**
 node; stickiness holds the new Master after you clear the ban.
@@ -347,7 +347,7 @@ keeps serving. Whole-cluster downtime (both nodes) is out of scope here.
 
 Prefer entering the **currently Unpromoted** node when you can - mail does not
 move (proven: A standby, B stayed Promoted, VIP 200). Entering the Promoted node
-**is** a graceful failover (~2–3 min downtime).
+**is** a graceful failover (~2-3 min downtime).
 
 ### Pre-flight (Check must pass; Enter is refused if any check fails - no override)
 

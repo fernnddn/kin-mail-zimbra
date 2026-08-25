@@ -1,6 +1,6 @@
 ---
 # iSCSI initiator + softdog + SBD/STONITH on Host A/B
-# (tasks 2.2 §2–§4, 2.3 kin-softdog, 2.9 SBD_DELAY_START).
+# (tasks 2.2 §2-§4, 2.3 kin-softdog, 2.9 SBD_DELAY_START).
 #
 # Dry-run only against live lab:
 #   ansible-playbook playbooks/mail-fencing.yml --check
@@ -12,6 +12,7 @@
   hosts: mail_nodes
   gather_facts: true
   become: true
+  any_errors_fatal: true
   roles:
     - role: iscsi_initiator
       tags: [iscsi, initiator]

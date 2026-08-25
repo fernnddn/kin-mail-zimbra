@@ -343,7 +343,7 @@ class Step:
     cluster_join: bool = False
 
 
-# Proven ha-build-01–15 order. remote_install is the OS+Zimbra step on the new
+# Proven ha-build-01-15 order. remote_install is the OS+Zimbra step on the new
 # node; skip_remote_install=1 leaves it to a prior local Deploy on that host.
 STEPS: tuple[Step, ...] = (
     Step("peer_os_prep", "OS prep + Zimbra install on the new node", None, "remote_install"),
@@ -643,7 +643,10 @@ def live_join_check_playbooks(
         )
     runs.append(("playbooks/mail-drbd.yml", drbd_skip))
     runs.append(
-        ("playbooks/mail-pacemaker.yml", ["--skip-tags", "agents,verify"])
+        (
+            "playbooks/mail-pacemaker.yml",
+            ["--skip-tags", "agents,verify,ldap,memcached"],
+        )
     )
     return runs
 
@@ -787,6 +790,27 @@ _SCP_TMP_RE = re.compile(r"^/tmp/kin-mail-peer-[A-Za-z0-9._-]+$")
 _INSTALL_DEST_RE = re.compile(
     r"^/(etc/kin-mail/(config|ha-setup-complete|setup-complete|topology|server-id)|etc/letsencrypt/[A-Za-z0-9._-]+|var/lib/kin-mail-console/(users\.json|license\.token))$"
 )
+
+
+def should_refresh_peer_deploy_tree(
+    *,
+    join_mode: str,
+    ready_ok: bool,
+    missing: list[str],
+) -> bool:
+    """Whether to copy this host's install/ onto the peer before full-install.
+
+    join_mode=apply always refreshes. A retry of Build HA pair otherwise keeps
+    B's stale /opt/kin-mail-deploy from the first attempt, and 02/03 on B would
+    not see handoff/probe fixes that only exist on A. --check only copies when
+    the tree is missing (copying is a mutation).
+    """
+    if (join_mode or "").strip().lower() == "apply":
+        return True
+    if ready_ok:
+        return False
+    blob = " ".join(missing)
+    return "deploy-tree" in blob or "kin-mail.sh" in blob
 
 
 def parse_peer_prep_readiness(text: str, exit_code: int) -> tuple[bool, list[str]]:
@@ -1956,13 +1980,20 @@ async def cmd_run_ha_orchestration(
                 timeout=20,
             )
             ready_ok, ready_missing = parse_peer_prep_readiness(ready_text, ready_code)
-            if not ready_ok and (
-                "deploy-tree" in ready_text
-                or any("kin-mail.sh" in item for item in ready_missing)
+            if should_refresh_peer_deploy_tree(
+                join_mode=join_mode,
+                ready_ok=ready_ok,
+                missing=ready_missing,
             ):
-                yield emit_line(
-                    "Peer is missing /opt/kin-mail-deploy/install; copying it from this host."
-                )
+                if ready_ok:
+                    yield emit_line(
+                        "Refreshing the peer install tree from this host "
+                        "(retry must not run a stale 02/03 against an unmounted /opt/zimbra)."
+                    )
+                else:
+                    yield emit_line(
+                        "Peer is missing /opt/kin-mail-deploy/install; copying it from this host."
+                    )
                 tree_code, tree_text = await _push_peer_deploy_tree(
                     peer, ssh_user, ssh_pass, secrets
                 )
@@ -1971,19 +2002,26 @@ async def cmd_run_ha_orchestration(
                         f"Could not copy the install tree to the peer (exit {tree_code}): {tree_text}",
                         err=True,
                     )
-                else:
-                    yield emit_line("Install tree is on the peer.")
-                    ready_code, ready_text = await _ssh_run(
-                        peer,
-                        ssh_user,
-                        ssh_pass,
-                        secrets,
-                        PEER_OS_PREP_READINESS_CMD,
-                        timeout=20,
+                    failed_step = step.step_id
+                    exit_code = tree_code or 1
+                    yield emit_line(
+                        f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; stopping. "
+                        "No auto-retry, no auto-rollback.",
+                        err=True,
                     )
-                    ready_ok, ready_missing = parse_peer_prep_readiness(
-                        ready_text, ready_code
-                    )
+                    break
+                yield emit_line("Install tree is on the peer.")
+                ready_code, ready_text = await _ssh_run(
+                    peer,
+                    ssh_user,
+                    ssh_pass,
+                    secrets,
+                    PEER_OS_PREP_READINESS_CMD,
+                    timeout=20,
+                )
+                ready_ok, ready_missing = parse_peer_prep_readiness(
+                    ready_text, ready_code
+                )
             if not ready_ok:
                 yield emit_line(
                     "Peer is not ready for remote full-install. Fix all of these, then retry:",

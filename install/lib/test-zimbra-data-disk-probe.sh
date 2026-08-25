@@ -137,6 +137,22 @@ else
   bad "recover CLI: [$act]"
 fi
 
+if [ "$(busy_ext4_counts_as_real_install 1 0)" = "yes" ]; then
+  pass "busy_ext4: debugfs inode is enough (no mount)"
+else
+  bad "busy_ext4 inode should count as real install"
+fi
+if [ "$(busy_ext4_counts_as_real_install 0 1)" = "yes" ]; then
+  pass "busy_ext4: setup-complete + busy ext4 is still a real install"
+else
+  bad "busy_ext4 setup-complete should count as real install"
+fi
+if [ "$(busy_ext4_counts_as_real_install 0 0)" = "no" ]; then
+  pass "busy_ext4: empty ext4 without inode or setup-complete is not a real install"
+else
+  bad "busy_ext4 empty disk must not look like a Zimbra tree"
+fi
+
 wipe_root=$(mktemp -d)
 mkdir -p "$wipe_root/bin" "$wipe_root/lost+found"
 echo stub >"$wipe_root/bin/zmcontrol"
@@ -263,7 +279,8 @@ if grep -q 'zimbra_install_skip_action' ../03-install-zimbra.sh \
   && grep -q 'run_fresh' ../03-install-zimbra.sh \
   && grep -q 'wipe_incomplete_zimbra_tree' ../03-install-zimbra.sh \
   && grep -q 'skip_offline' ../03-install-zimbra.sh \
-  && grep -q 'SKIP_REASON' ../03-install-zimbra.sh; then
+  && grep -q 'SKIP_REASON' ../03-install-zimbra.sh \
+  && grep -q 'mountpoint missing' ../03-install-zimbra.sh; then
   pass "03-install-zimbra.sh uses shared probe, Secondary skip, run_fresh, and offline verify"
 else
   bad "03-install-zimbra.sh missing shared probe / Secondary / run_fresh / verify wiring"
@@ -300,6 +317,14 @@ for stage in 04-tls-dkim.sh 05-healthcheck.sh 06-hybrid-auth.sh 07-zpush.sh 09-h
     bad "${stage} missing mid-handoff gate"
   fi
 done
+
+if grep -q 'ext4_superblock_has_zmcontrol' ./zimbra-data-disk-probe.sh \
+  && grep -q 'busy_ext4_counts_as_real_install' ./zimbra-data-disk-probe.sh \
+  && grep -q 'drop_zimbra_log_holders_best_effort' ./zimbra-data-disk-probe.sh; then
+  pass "probe detects a busy LUKS mapper as a real install (no run_fresh onto OS disk)"
+else
+  bad "probe missing busy-mapper / debugfs / fail2ban drop path"
+fi
 
 if [ "$fails" -ne 0 ]; then
   printf 'FAILED %s checks\n' "$fails"

@@ -352,6 +352,21 @@ if [ -d /opt/zimbra ]; then
   esac
 fi
 
+# Normal umount leaves the mountpoint directory. If it was removed, still skip
+# the installer when the data disk already holds Zimbra (do not run_fresh onto
+# a new OS-disk tree while the mapper has production mail).
+if [ "$SKIP_INSTALLER" -eq 0 ] && [ ! -d /opt/zimbra ]; then
+  if data_disk_held_by_drbd "$DATA_DISK"; then
+    say "2. Installer skipped - data disk is DRBD-attached (no /opt/zimbra mountpoint)"
+    SKIP_INSTALLER=1
+    SKIP_REASON=drbd_secondary
+  elif zimbra_data_disk_has_real_install "$DATA_DISK"; then
+    say "2. Installer skipped - Zimbra already on the data partition (mountpoint missing)"
+    SKIP_INSTALLER=1
+    SKIP_REASON=mid_handoff
+  fi
+fi
+
 if [ "$SKIP_INSTALLER" -eq 0 ]; then
 say "2. Running installer in tmux (attach: tmux attach -t ${SESS})"
 

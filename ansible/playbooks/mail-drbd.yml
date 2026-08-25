@@ -12,6 +12,11 @@
   hosts: mail_nodes
   gather_facts: true
   become: true
+  # Live 2vm (25 Aug 2026): mail2 failed the plain-mount release (open holders
+  # on the LUKS mapper) while mail1 continued into create-md / drbdadm up and
+  # then hit "Can not open backing device". One node must not activate DRBD
+  # while its peer is still stuck on the handoff.
+  any_errors_fatal: true
   roles:
     - role: drbd_install
       tags: [drbd, install]

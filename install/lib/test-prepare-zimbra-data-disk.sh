@@ -136,7 +136,8 @@ if grep -q 'is already on \${Z_MNTSRC}' ./prepare-zimbra-data-disk.sh \
   && grep -q 'accept_zimbra' ./prepare-zimbra-data-disk.sh \
   && grep -q 'leaving unmounted for DRBD/Pacemaker' ./prepare-zimbra-data-disk.sh \
   && grep -q 'skip_drbd_attached' ./prepare-zimbra-data-disk.sh \
-  && grep -q 'data_disk_held_by_drbd' ./prepare-zimbra-data-disk.sh; then
+  && grep -q 'data_disk_held_by_drbd' ./prepare-zimbra-data-disk.sh \
+  && grep -q 'zimbra_is_mid_handoff' ./prepare-zimbra-data-disk.sh; then
   pass "helper keeps already-on-data, mid-handoff accept_zimbra, and DRBD-attached skip"
 else
   bad "helper missing already-on-data, mid-handoff, or DRBD-attached skip path"

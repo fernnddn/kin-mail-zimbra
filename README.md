@@ -72,7 +72,7 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/` | Single-node Zimbra FOSS stages + `kin-mail.sh` bootstrap |
 | `console/` | Admin console skeleton (FastAPI + React); `console/bootstrap.sh` |
 | `ansible/` | Phase 2 HA port (qnetd / qdevice first) plus OS hardening (`playbooks/mail-os-hardening.yml`) |
-| `backup/` | Backup repository pull scripts (`kin-mail-backup.sh` / restore); Timeline 3.1–3.5 |
+| `backup/` | Backup repository pull scripts (`kin-mail-backup.sh` / restore); Timeline 3.1-3.5 |
 | `HA-RUNBOOK.md` | Pacemaker / DRBD / SBD operator runbook |
 | `.github/workflows/` | Shell syntax, ShellCheck, hygiene gates |
 | `NOTICE` | Proprietary terms |

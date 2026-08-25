@@ -30,6 +30,7 @@ const SectionTitle = styled.h2`
 
 export default function SecurityPage() {
   const { user } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
   const [pwMsg, setPwMsg] = useState("");
@@ -48,8 +49,12 @@ export default function SecurityPage() {
     try {
       await api("/api/me/password", {
         method: "POST",
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({
+          current_password: currentPassword,
+          password,
+        }),
       });
+      setCurrentPassword("");
       setPassword("");
       setPassword2("");
       setPwMsg("Password updated.");
@@ -74,6 +79,15 @@ export default function SecurityPage() {
             {pwErr ? <Hint>{pwErr}</Hint> : null}
             {pwMsg ? <Hint>{pwMsg}</Hint> : null}
             <form onSubmit={(e) => void onChangePassword(e)}>
+              <Label htmlFor="cp">Current password</Label>
+              <PasswordInput
+                id="cp"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                minLength={1}
+                required
+                autoComplete="current-password"
+              />
               <Label htmlFor="np">New password</Label>
               <PasswordInput
                 id="np"

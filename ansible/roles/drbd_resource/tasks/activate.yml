@@ -110,6 +110,73 @@
     - not (drbd_resource_pacemaker_owns | bool)
   tags: [drbd, resource, activate]
 
+- name: Stat the DRBD meta-disk before create-md
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_meta_disk }}"
+    follow: true
+  register: drbd_resource_meta_disk_stat
+  check_mode: false
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - drbd_resource_dump_md.rc is defined
+    - drbd_resource_dump_md.rc != 0
+  tags: [drbd, resource, activate]
+
+- name: Combine dump-md stdout/stderr for the empty-vs-busy decision
+  ansible.builtin.set_fact:
+    drbd_resource_dump_md_text: >-
+      {{
+        (drbd_resource_dump_md.stdout | default(''))
+        ~ ' '
+        ~ (drbd_resource_dump_md.stderr | default(''))
+      }}
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - drbd_resource_dump_md.rc is defined
+  tags: [drbd, resource, activate]
+
+- name: Refuse create-md when dump-md failed because the meta-disk is missing
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_meta_disk_stat.stat.exists | default(false)
+      - drbd_resource_meta_disk_stat.stat.isblk | default(false)
+    fail_msg: >-
+      drbdadm dump-md failed and {{ drbd_resource_meta_disk }} is not a block
+      device. Refusing create-md so a down meta-loop cannot look like empty
+      metadata. Start {{ drbd_resource_meta_loop_unit }} (or attach the meta
+      partition), then retry.
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - drbd_resource_dump_md.rc is defined
+    - drbd_resource_dump_md.rc != 0
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Refuse create-md when dump-md failed with an I/O or busy error
+  ansible.builtin.assert:
+    that:
+      - >-
+        drbd_resource_dump_md_text | default('')
+        is not search('(?i)no such file|device or resource busy|permission denied|can not open|cannot open|failed to open|device busy')
+    fail_msg: >-
+      drbdadm dump-md failed on a live block device
+      ({{ drbd_resource_meta_disk }}):
+      {{ drbd_resource_dump_md_text | default('') | trim }}.
+      Refusing create-md so a busy or unreadable meta-disk cannot look like
+      empty metadata.
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - drbd_resource_dump_md.rc is defined
+    - drbd_resource_dump_md.rc != 0
+    - drbd_resource_meta_disk_stat.stat.exists | default(false)
+    - drbd_resource_meta_disk_stat.stat.isblk | default(false)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
 - name: Create the DRBD metadata on the external meta-disk
   ansible.builtin.shell: |
     set -euo pipefail
@@ -119,7 +186,8 @@
   # SAFETY: never check_mode: false - create-md must not run during --check.
   # Skip when dump-md already succeeds: a blind re-run on retry would be wrong.
   # printf yes answers the empty-meta "destroy existing data" prompt so apply
-  # does not hang waiting on stdin.
+  # does not hang waiting on stdin. Busy/missing meta is refused above so this
+  # cannot rewrite existing metadata.
   when:
     - drbd_resource_needs_activate | bool
     - drbd_resource_dump_md.rc is defined
@@ -138,6 +206,50 @@
   # momentarily busy (a log-tailer or udev probe briefly re-opening it),
   # which made `drbdadm up` fail with "Can not open backing device" on a
   # perfectly good device (live 2vm practice run, 25 Aug 2026).
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Require the staged handoff script before waiting on the backing device
+  ansible.builtin.stat:
+    path: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
+  register: drbd_resource_wait_script_stat
+  check_mode: false
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Fail if the handoff script was not staged (do not run --tags activate alone)
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_wait_script_stat.stat.exists | default(false)
+      - drbd_resource_wait_script_stat.stat.isreg | default(false)
+    fail_msg: >-
+      {{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh is
+      missing. mail-drbd.yml must run the release tag before activate (full
+      play, not --tags activate alone) so wait-only can drop fail2ban and
+      fuser the mapper.
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Drop leftover log-tailers and wait until the backing device is free
+  ansible.builtin.command:
+    cmd: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
+  environment:
+    KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
+    KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
+    KIN_FAIL2BAN_JAILS: "{{ drbd_resource_release_dir }}/kin-fail2ban-jails.sh"
+    KIN_RELEASE_WAIT_BACKING_ONLY: "1"
+  # Retry path after a failed first handoff: /opt/zimbra is already unmounted
+  # but fail2ban may still hold the LUKS mapper. Reuse the same wait as the
+  # release script so drbdadm up does not race the leftover FDs.
   when:
     - drbd_resource_needs_activate | bool
     - not (drbd_resource_pacemaker_owns | bool)
@@ -168,6 +280,29 @@
     - drbd_resource_needs_activate | bool
     - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Refuse primary --force when the peer is already Primary
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          (drbd_resource_role_after_up.stdout | default('') | trim).split('/')
+          | last | trim
+        ) != 'Primary'
+    fail_msg: >-
+      Peer DRBD role is already Primary
+      ({{ drbd_resource_role_after_up.stdout | default('') | trim }}).
+      Refusing drbdadm primary --force on {{ inventory_hostname }}
+      (would dual-promote). Inspect drbdadm status; Pacemaker or a manual
+      promote already owns the peer.
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+    - inventory_hostname == drbd_resource_node_a_name
+    - drbd_resource_role_after_up.rc is defined
+    - drbd_resource_role_after_up.rc | int == 0
   tags: [drbd, resource, activate]
 
 - name: Force-promote to Primary only during an empty bootstrap

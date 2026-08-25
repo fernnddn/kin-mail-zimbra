@@ -10,7 +10,7 @@
 #   5) TLS: ensure TLSv1.2/1.3; tighten reverse-proxy ciphers
 #
 # Host firewall / SSH key-only / admin-path lockdown live in 10 + 11 (and
-# Stage 1 SSH ops), not here. See progress logs 7.1–7.4.
+# Stage 1 SSH ops), not here. See progress logs 7.1-7.4.
 #
 #   sudo ./09-hardening.sh              # full Part A on this host
 #   sudo ./09-hardening.sh --os-only    # fail2ban + unattended only (Host B)

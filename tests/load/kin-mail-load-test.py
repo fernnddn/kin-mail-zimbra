@@ -151,7 +151,7 @@ def main() -> int:
         print(f"missing env {args.password_env}", file=sys.stderr)
         return 2
     if args.concurrency < 1 or args.concurrency > 20:
-        print("concurrency must be 1–20 (this is not a soak/stress tool)", file=sys.stderr)
+        print("concurrency must be 1-20 (this is not a soak/stress tool)", file=sys.stderr)
         return 2
 
     stop = threading.Event()

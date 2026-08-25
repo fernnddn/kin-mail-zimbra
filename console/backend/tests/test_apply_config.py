@@ -19,6 +19,7 @@ from kin_privhelper.orchestration import (
     OrchHost,
     build_peer_install_payload,
     parse_peer_prep_readiness,
+    should_refresh_peer_deploy_tree,
 )
 
 
@@ -332,6 +333,31 @@ class PeerReadinessParseTests(unittest.TestCase):
 
         self.assertNotIn("sudo-n", PEER_OS_PREP_READINESS_CMD)
         self.assertIn("deploy-tree", PEER_OS_PREP_READINESS_CMD)
+
+
+class PeerDeployTreeRefreshTests(unittest.TestCase):
+    def test_apply_always_refreshes_even_when_tree_already_exists(self) -> None:
+        self.assertTrue(
+            should_refresh_peer_deploy_tree(
+                join_mode="apply", ready_ok=True, missing=[]
+            )
+        )
+
+    def test_check_does_not_copy_when_tree_is_already_present(self) -> None:
+        self.assertFalse(
+            should_refresh_peer_deploy_tree(
+                join_mode="check", ready_ok=True, missing=[]
+            )
+        )
+
+    def test_check_still_copies_when_the_tree_is_missing(self) -> None:
+        self.assertTrue(
+            should_refresh_peer_deploy_tree(
+                join_mode="check",
+                ready_ok=False,
+                missing=["missing /opt/kin-mail-deploy/install/kin-mail.sh"],
+            )
+        )
 
 
 class PrivilegedRemoteWrapTests(unittest.TestCase):

@@ -118,16 +118,46 @@ class DrbdResParseTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("create-md", activate)
         self.assertIn("printf 'yes", activate)
+        self.assertIn("drbd_resource_meta_disk_stat", activate)
+        self.assertIn("is not a block", activate)
+        self.assertIn("release-zimbra-plain-mount-for-drbd.sh is", activate)
+        self.assertIn("Peer DRBD role is already Primary", activate)
         self.assertIn("drbd_resource_pacemaker_owns", activate)
         self.assertIn("drbd_resource_role_pre", activate)
         self.assertIn("drbd_resource_role_after_up", activate)
-        self.assertIn("drbdadm primary --force", activate)
+        self.assertIn("drbd_resource_dump_md_text", activate)
+        self.assertIn("device or resource busy", activate)
+        resource_file = (
+            REPO_ROOT
+            / "ansible"
+            / "roles"
+            / "drbd_resource"
+            / "tasks"
+            / "resource_file.yml"
+        ).read_text(encoding="utf-8")
+        grep_meta = resource_file.find("Check the kin-zimbra resource definition uses external meta")
+        self.assertGreater(grep_meta, 0)
+        self.assertIn(
+            "when: not ansible_check_mode",
+            resource_file[grep_meta : grep_meta + 900],
+        )
+        live_join = (
+            REPO_ROOT
+            / "ansible"
+            / "roles"
+            / "drbd_live_join"
+            / "tasks"
+            / "connect.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("printf 'yes", live_join)
+        self.assertIn("drbd_live_join_dump_md", live_join)
+        self.assertIn("device or resource busy", live_join)
         needs = activate.find("drbd_resource_needs_activate:")
         self.assertGreater(needs, 0)
         needs_block = activate[needs : needs + 700]
         self.assertIn("drbd_resource_node_a_name", needs_block)
         self.assertIn("'Primary' not in", needs_block)
-        force = activate.find("drbdadm primary --force")
+        force = activate.find("cmd: drbdadm primary --force")
         self.assertNotIn(
             "not (drbd_resource_is_diskless | bool)",
             activate[force : force + 900],
