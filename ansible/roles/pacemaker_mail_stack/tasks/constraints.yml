@@ -72,9 +72,13 @@
   run_once: true
   when:
     - not ansible_check_mode
+    # Python re (Ansible search): do NOT use POSIX character classes here.
+    # Fresh creates use --disabled (target-role=Stopped); without a match
+    # enable is skipped and the Started wait below fails on Build HA pair.
     - >-
       pacemaker_mail_stack_enable_probe.results
-      | selectattr('stdout', 'search', 'target-role[=:][[:space:]]*Stopped')
+      | map(attribute='stdout')
+      | select('search', 'target-role(=|:)\\s*Stopped')
       | list
       | length > 0
   changed_when: false

@@ -698,9 +698,11 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn("nic=ens33", mail_svc)
         self.assertIn("nic=' ~ pacemaker_mail_stack_vip_nic", mail_svc)
         self.assertIn("pcs resource update", mail_svc)
+        self.assertIn("Refuse VIP attr update while kin-vip is Started", mail_svc)
         self.assertIn("corosync_qdevice_qnetd_ip", mail_svc)
         self.assertIn("prefer_score", mail_svc)
         self.assertIn("op monitor interval=10s", mail_svc)
+        self.assertIn("--delete=nic", mail_svc)
 
         constraints = (root / "tasks" / "constraints.yml").read_text(encoding="utf-8")
         enable = constraints.find("Enable the kin-mail-svc primitives after constraints")
@@ -709,7 +711,9 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertGreater(wait, enable)
         enable_block = constraints[enable:wait]
         self.assertIn("pcs resource enable", enable_block)
-        self.assertIn("target-role", enable_block)
+        self.assertIn("target-role(=|:)", enable_block)
+        self.assertIn("Stopped", enable_block)
+        self.assertNotIn("[[:space:]]", enable_block)
         self.assertIn("pacemaker_mail_stack_fs", enable_block)
         self.assertIn("pacemaker_mail_stack_zimbra", enable_block)
         self.assertIn("pacemaker_mail_stack_vip", enable_block)

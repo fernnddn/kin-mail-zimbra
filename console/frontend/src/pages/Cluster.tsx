@@ -214,7 +214,7 @@ const CardActions = styled.div`
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 0.85rem 0;
+  gap: 0.85rem;
   margin-top: 0.35rem;
   padding-top: 0.85rem;
   border-top: 1px solid ${theme.line};
@@ -463,13 +463,41 @@ function VipGlyph() {
   );
 }
 
-function ReplicationGlyph() {
+function RefreshGlyph() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 8a7.5 7.5 0 0113.4-2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M18.2 3.2l1.2 3-3.2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M19 16a7.5 7.5 0 01-13.4 2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M5.8 20.8l-1.2-3 3.2-.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M20 12a8 8 0 10-2.3 5.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <path
+        d="M20 7.5V12h-4.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function FailcountGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M4 19V5M4 19h16"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8 15v-4M12 15V8M16 15v-6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -506,7 +534,8 @@ const OverviewHeader = styled.div`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
   margin: 0 0 0.6rem;
 `;
 
@@ -522,12 +551,14 @@ const OverviewTitle = styled.h2`
 const FreshnessRow = styled.div`
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.55rem;
+  min-width: 0;
 `;
 
 const FreshnessText = styled.span`
   font-size: 0.75rem;
   color: ${theme.muted};
+  white-space: nowrap;
 `;
 
 const RefreshBtn = styled.button`
@@ -541,16 +572,19 @@ const RefreshBtn = styled.button`
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background ${theme.motion.fast}, transform ${theme.motion.fast};
+  flex-shrink: 0;
+  transition: background ${theme.motion.fast}, transform ${theme.motion.fast},
+    color ${theme.motion.fast};
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: ${theme.surface[50]};
+    color: ${theme.accent};
   }
-  &:active {
+  &:active:not(:disabled) {
     transform: scale(0.92);
   }
   &:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: default;
   }
 
@@ -571,7 +605,11 @@ function relativeTime(ms: number): string {
 function FreshnessBadge({ updatedAt }: { updatedAt: number | null }) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    const tick = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      setTick((t) => t + 1);
+    };
+    const id = window.setInterval(tick, 5000);
     return () => window.clearInterval(id);
   }, []);
   if (!updatedAt) return null;
@@ -580,10 +618,14 @@ function FreshnessBadge({ updatedAt }: { updatedAt: number | null }) {
 
 const OverviewGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.9rem;
   margin: 0 0 1.15rem;
   animation: ${fadeIn} ${theme.motion.page} ease;
+
+  @media (min-width: 960px) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 `;
 
 const OverviewCard = styled.div<{ $tone?: Tone }>`
@@ -591,12 +633,18 @@ const OverviewCard = styled.div<{ $tone?: Tone }>`
   border-left: 3px solid ${(p) => toneColor(p.$tone)};
   background: ${theme.bgElev};
   border-radius: ${theme.radius.md};
-  padding: 1rem 1.15rem;
+  padding: 1.05rem 1.15rem;
   box-shadow: ${theme.shadow.sm};
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.9rem;
   min-width: 0;
+  transition: border-color ${theme.motion.fast}, box-shadow ${theme.motion.fast};
+
+  &:hover {
+    border-color: ${theme.surface[300]};
+    box-shadow: ${theme.shadow.md};
+  }
 `;
 
 const OverviewBody = styled.div`
@@ -613,16 +661,18 @@ const OverviewLabel = styled.p`
   color: ${theme.muted};
 `;
 
-const OverviewValue = styled.p<{ $mono?: boolean }>`
+const OverviewValue = styled.p<{ $mono?: boolean; $wrap?: boolean }>`
   margin: 0;
-  font-size: 1.02rem;
+  font-size: 1.05rem;
   font-weight: 650;
   font-family: ${(p) => (p.$mono ? theme.mono : "inherit")};
   font-variant-numeric: tabular-nums;
   color: ${theme.surface[800]};
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: ${(p) => (p.$wrap ? "unset" : "ellipsis")};
+  white-space: ${(p) => (p.$wrap ? "normal" : "nowrap")};
+  word-break: ${(p) => (p.$wrap ? "break-word" : "normal")};
+  line-height: 1.35;
 `;
 
 const OverviewSub = styled.p<{ $tone?: "ok" | "warn" | "muted" }>`
@@ -692,9 +742,9 @@ const GaugePct = styled.span`
 `;
 
 const GaugeState = styled.span<{ $tone: "ok" | "warn" | "muted" }>`
-  font-size: 0.56rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   margin-top: 0.15rem;
   color: ${(p) => (p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.surface[400])};
@@ -779,7 +829,7 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
       </IconChip>
       <OverviewBody>
         <OverviewLabel>Serving mail</OverviewLabel>
-        <OverviewValue>
+        <OverviewValue $wrap>
           {conflict
             ? `Conflict: ${(cluster.promoted_names || []).join(", ") || "multiple"}`
             : cluster.promoted || "Unknown"}
@@ -833,14 +883,37 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
       <OverviewBody>
         <OverviewLabel>DRBD Replication</OverviewLabel>
         <OverviewValue>
-          {uptodate ? "In sync" : typeof pct === "number" ? `Syncing ${pct.toFixed(0)}%` : "Unknown"}
+          {uptodate ? "UpToDate" : typeof pct === "number" ? `${pct.toFixed(0)}% synced` : "Unknown"}
         </OverviewValue>
         <OverviewSub $tone={replTone}>
           {uptodate
-            ? "Both nodes UpToDate"
+            ? "Both replicas in sync"
             : typeof pct === "number"
-              ? "Normal after a fresh Build HA pair or resync"
+              ? "Resync in progress - normal after Build HA or rejoin"
               : "No live sync data"}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
+  const fcOk = cluster.failcount_ok !== false;
+  const fcTone: StatusTone = cluster.failcount_ok === undefined ? "muted" : fcOk ? "ok" : "warn";
+  cards.push(
+    <OverviewCard key="failcount" $tone={fcTone}>
+      <IconChip $tone={fcTone}>
+        <FailcountGlyph />
+      </IconChip>
+      <OverviewBody>
+        <OverviewLabel>Pacemaker fail-count</OverviewLabel>
+        <OverviewValue>
+          {cluster.failcount_ok === undefined ? "Unknown" : fcOk ? "Clear" : "Nonzero"}
+        </OverviewValue>
+        <OverviewSub $tone={fcTone}>
+          {cluster.failcount_ok === undefined
+            ? "Not reported yet"
+            : fcOk
+              ? "Self-heal monitors healthy"
+              : "Ops can re-probe after a transient race"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -1043,6 +1116,7 @@ export default function ClusterPage() {
   useEffect(() => {
     if (tab !== "status") return;
     const id = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       if (esRef.current || busyRef.current || refreshInFlightRef.current) return;
       void refresh().catch(() => undefined);
     }, 12000);
@@ -1569,18 +1643,18 @@ export default function ClusterPage() {
         </Tabs>
         {tab === "status" ? (
           !loaded ? (
-            <Grid>
-              <SkeletonCard>
-                <Skeleton $h="1rem" $w="40%" style={{ marginBottom: 12 }} />
-                <Skeleton $h="0.7rem" $w="70%" style={{ marginBottom: 8 }} />
-                <Skeleton $h="2rem" $w="55%" />
-              </SkeletonCard>
-              <SkeletonCard>
-                <Skeleton $h="1rem" $w="40%" style={{ marginBottom: 12 }} />
-                <Skeleton $h="0.7rem" $w="70%" style={{ marginBottom: 8 }} />
-                <Skeleton $h="2rem" $w="55%" />
-              </SkeletonCard>
-            </Grid>
+            <>
+              <Skeleton $h="2rem" $w="12rem" style={{ marginBottom: 14 }} />
+              <OverviewGrid>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <SkeletonCard key={i}>
+                    <Skeleton $h="0.7rem" $w="45%" style={{ marginBottom: 10 }} />
+                    <Skeleton $h="1.35rem" $w="70%" style={{ marginBottom: 8 }} />
+                    <Skeleton $h="0.75rem" $w="55%" />
+                  </SkeletonCard>
+                ))}
+              </OverviewGrid>
+            </>
           ) : (
             <>
               <HealthWrap>
@@ -1628,10 +1702,10 @@ export default function ClusterPage() {
                   <RefreshBtn
                     type="button"
                     aria-label="Refresh cluster status"
-                    disabled={refreshing}
+                    disabled={refreshing || busy}
                     onClick={() => void manualRefresh()}
                   >
-                    <ReplicationGlyph />
+                    <RefreshGlyph />
                   </RefreshBtn>
                 </FreshnessRow>
               </OverviewHeader>

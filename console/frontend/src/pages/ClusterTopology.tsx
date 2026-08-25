@@ -57,9 +57,19 @@ const SvgWrap = styled.div`
 
 const Actions = styled.div`
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 0.5rem;
   margin-top: 0.35rem;
+
+  @media (max-width: 520px) {
+    flex-direction: column;
+    align-items: stretch;
+
+    button {
+      width: 100%;
+    }
+  }
 `;
 
 const OK = theme.ok;
