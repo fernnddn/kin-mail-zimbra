@@ -296,6 +296,27 @@ async def _demote_survivor_topology_to_1vm(
             notes.append(f"could not read local config to demote topology: {exc}")
             return False, notes
         values = parse_config(text)
+        # Remember the retired peer before clearing PEER_HOST_* so Add Second
+        # Server can fill cluster_add_host_retired_* without asking the operator
+        # to dig through Pacemaker history.
+        retired_name = str(values.get("PEER_HOST_NAME") or plan.target or "").strip()
+        retired_ip = str(values.get("PEER_HOST_IP") or "").strip()
+        if retired_name:
+            from .add_host import write_last_removed_peer
+
+            try:
+                write_last_removed_peer(
+                    retired_name,
+                    retired_ip,
+                    path=CONF_FILE.parent / "last-removed-peer",
+                )
+                notes.append(
+                    f"Recorded last-removed-peer {retired_name}"
+                    + (f" ({retired_ip})" if retired_ip else "")
+                )
+            except OSError as exc:
+                notes.append(f"could not record last-removed-peer: {exc}")
+                return False, notes
         new_values, changed = ensure_topology_1vm(values)
         if changed:
             try:
@@ -333,6 +354,41 @@ async def _demote_survivor_topology_to_1vm(
         notes.append(f"could not read survivor config over SSH (exit {code}); topology not demoted")
         return False, notes
     values = parse_config(blob)
+    retired_name = str(values.get("PEER_HOST_NAME") or plan.target or "").strip()
+    retired_ip = str(values.get("PEER_HOST_IP") or "").strip()
+    if retired_name:
+        from .add_host import write_last_removed_peer
+
+        try:
+            write_last_removed_peer(retired_name, retired_ip)
+            notes.append(
+                f"Recorded last-removed-peer {retired_name}"
+                + (f" ({retired_ip})" if retired_ip else "")
+                + " on this console"
+            )
+        except OSError as exc:
+            notes.append(f"could not record last-removed-peer: {exc}")
+            return False, notes
+        # Also push the marker to the remote survivor so its console can add-host.
+        marker_body = json.dumps(
+            {"name": retired_name, "ip": retired_ip},
+            separators=(",", ":"),
+        ) + "\n"
+        code, _text = await _push_peer_text_file(
+            survivor_host,
+            ssh_user,
+            ssh_pass,
+            secrets,
+            body=marker_body,
+            remote_tmp="/tmp/kin-mail-last-removed-peer",
+            dest="/etc/kin-mail/last-removed-peer",
+            mode="640",
+        )
+        if code != 0:
+            notes.append(
+                f"failed to push last-removed-peer to survivor (exit {code})"
+            )
+            return False, notes
     new_values, changed = ensure_topology_1vm(values)
     if changed:
         code, _text = await _push_peer_text_file(

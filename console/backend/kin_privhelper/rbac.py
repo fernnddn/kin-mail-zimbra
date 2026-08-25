@@ -32,6 +32,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "run_ha_orchestration",
         "ha_disk_preflight",
         "remove_host",
+        "add_host",
         "remove_observability",
         "add_observability",
         "store_observability_secrets",

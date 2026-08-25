@@ -445,6 +445,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "maintenance": proto.CMD_MAINTENANCE,
     "ha_orchestration": proto.CMD_RUN_HA_ORCHESTRATION,
     "remove_host": proto.CMD_REMOVE_HOST,
+    "add_host": proto.CMD_ADD_HOST,
     "remove_observability": proto.CMD_REMOVE_OBSERVABILITY,
     "add_observability": proto.CMD_ADD_OBSERVABILITY,
     "appliance_settings": proto.CMD_APPLY_APPLIANCE_SETTINGS,
@@ -724,6 +725,23 @@ async def wizard_deploy_stream(
         op = (request.query_params.get("op") or "apply").strip().lower()
         target = (request.query_params.get("target") or "").strip()
         stream_args = {"op": op, "target": target}
+    elif cmd == proto.CMD_ADD_HOST:
+        op = (request.query_params.get("op") or "apply").strip().lower()
+        stream_args = {
+            "op": op,
+            "new_name": (request.query_params.get("new_name") or "").strip(),
+            "new_ip": (request.query_params.get("new_ip") or "").strip(),
+            "peer_host_name": (request.query_params.get("peer_host_name") or "").strip(),
+            "peer_host_ip": (request.query_params.get("peer_host_ip") or "").strip(),
+            "retired_name": (request.query_params.get("retired_name") or "").strip(),
+            "retired_ip": (request.query_params.get("retired_ip") or "").strip(),
+            "observability_vm_ip": (
+                request.query_params.get("observability_vm_ip") or ""
+            ).strip(),
+            "cluster_vip_ip": (request.query_params.get("cluster_vip_ip") or "").strip(),
+            "data_disk": (request.query_params.get("data_disk") or "").strip(),
+            "meta_disk": (request.query_params.get("meta_disk") or "").strip(),
+        }
     elif cmd in (proto.CMD_REMOVE_OBSERVABILITY, proto.CMD_ADD_OBSERVABILITY):
         op = (request.query_params.get("op") or "apply").strip().lower()
         stream_args = {"op": op}

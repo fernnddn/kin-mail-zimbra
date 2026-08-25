@@ -58,20 +58,36 @@ function validIpv4(value: string): boolean {
 }
 
 type ClusterTopologyResp = {
-  cluster?: { topology?: string; nodes?: string[]; offline?: string[] };
+  cluster?: {
+    topology?: string;
+    nodes?: string[];
+    offline?: string[];
+    vip_ip?: string;
+    last_removed_peer?: { name?: string; ip?: string } | null;
+  };
 };
 
 export default function AddSecondServerPage() {
   const { user } = useAuth();
   const { deployed, loading: setupLoading } = useSetup();
   const { draft, save, error: draftError } = useWizard();
-  const { log, message, pipelineBusy, installProgress, runHaOrchestration } = useDeploySession();
+  const {
+    log,
+    message,
+    pipelineBusy,
+    installProgress,
+    runHaOrchestration,
+    runAddHost,
+  } = useDeploySession();
   const navigate = useNavigate();
   const ops = isOpsRole(user?.role);
 
   const [topologyChecked, setTopologyChecked] = useState(false);
   const [topologyOk, setTopologyOk] = useState(false);
   const [liveClusterNodes, setLiveClusterNodes] = useState<string[]>([]);
+  const [retiredName, setRetiredName] = useState("");
+  const [retiredIp, setRetiredIp] = useState("");
+  const [clusterVipPrefill, setClusterVipPrefill] = useState("");
 
   const [peerIp, setPeerIp] = useState("");
   const [peerName, setPeerName] = useState("");
@@ -88,6 +104,8 @@ export default function AddSecondServerPage() {
   const [haDisk, setHaDisk] = useState<HaDisk | null>(null);
   const [haDiskLoading, setHaDiskLoading] = useState(false);
 
+  const attachMode = liveClusterNodes.length === 1;
+
   useEffect(() => {
     let cancelled = false;
     void api<ClusterTopologyResp>("/api/cluster/status")
@@ -99,6 +117,10 @@ export default function AddSecondServerPage() {
           ...(st.cluster?.offline || []),
         ].filter(Boolean);
         setLiveClusterNodes([...new Set(nodes)]);
+        const last = st.cluster?.last_removed_peer;
+        if (last?.name) setRetiredName(last.name);
+        if (last?.ip) setRetiredIp(last.ip);
+        if (st.cluster?.vip_ip) setClusterVipPrefill(st.cluster.vip_ip);
       })
       .catch(() => {
         if (!cancelled) {
@@ -113,6 +135,15 @@ export default function AddSecondServerPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!obsIp && draft.observability_vm_ip) setObsIp(draft.observability_vm_ip);
+    if (!vipIp && (draft.cluster_vip_ip || clusterVipPrefill)) {
+      setVipIp(draft.cluster_vip_ip || clusterVipPrefill);
+    }
+    // Prefill once from draft/status; do not fight operator edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.observability_vm_ip, draft.cluster_vip_ip, clusterVipPrefill]);
 
   function checkDisks() {
     setHaDiskLoading(true);
@@ -151,6 +182,12 @@ export default function AddSecondServerPage() {
   function validate(): string {
     if (!peerIp.trim()) return "Enter the second server's IPv4 address.";
     if (!validIpv4(peerIp)) return "Second server IP must be an IPv4 address.";
+    if (attachMode && !peerName.trim()) {
+      return "Enter the new server hostname (must differ from the retired peer).";
+    }
+    if (attachMode && !retiredName.trim()) {
+      return "Enter the previous peer hostname recorded at Remove Host.";
+    }
     if (!obsIp.trim()) return "Enter the Observability VM IPv4 address.";
     if (!validIpv4(obsIp)) return "Observability VM IP must be an IPv4 address.";
     if (!vipIp.trim()) return "Enter the cluster VIP (unused IPv4, not a mail-node address).";
@@ -204,7 +241,21 @@ export default function AddSecondServerPage() {
       return;
     }
     setConfirmOpen(false);
-    await runHaOrchestration({ confirmed: true });
+    if (attachMode) {
+      await runAddHost({
+        confirmed: true,
+        newName: peerName.trim(),
+        newIp: peerIp.trim(),
+        retiredName: retiredName.trim(),
+        retiredIp: retiredIp.trim(),
+        observabilityVmIp: obsIp.trim(),
+        clusterVipIp: vipIp.trim(),
+        dataDisk: haDisk?.data_disk,
+        metaDisk: haDisk?.meta_disk,
+      });
+    } else {
+      await runHaOrchestration({ confirmed: true });
+    }
     setStarting(false);
   }
 
@@ -238,14 +289,16 @@ export default function AddSecondServerPage() {
           </Section>
         ) : (
           <>
-            {liveClusterNodes.length > 0 ? (
+            {attachMode ? (
               <WarnBox role="status">
-                This server already has a live cluster membership
-                ({liveClusterNodes.join(", ")}). Build HA pair is for empty
-                nodes only and will refuse rather than rewrite production
-                Pacemaker state. After Remove host, keep running as a
-                single-node cluster, or use the add-host playbook to attach a
-                blank peer. Do not start Build HA pair against this survivor.
+                Live one-node cluster detected ({liveClusterNodes.join(", ")}).
+                Continue attaches a blank peer with Add host (pcs node add + DRBD
+                full sync) while this server stays Primary. Build HA pair is not used.
+              </WarnBox>
+            ) : liveClusterNodes.length > 1 ? (
+              <WarnBox role="status">
+                More than one live cluster node is visible. Finish Remove Host or
+                resolve membership before attaching another peer.
               </WarnBox>
             ) : null}
             <Section>
@@ -271,18 +324,37 @@ export default function AddSecondServerPage() {
                 />
               </FieldRow>
               <FieldRow>
-                <FieldLabel htmlFor="peer_name" optional>
+                <FieldLabel htmlFor="peer_name" required={attachMode} optional={!attachMode}>
                   Second server hostname
                 </FieldLabel>
                 <Input
                   id="peer_name"
                   value={peerName}
                   onChange={(e) => setPeerName(e.target.value)}
-                  placeholder="mail2.example.co.id"
+                  placeholder="mail2.example.test"
                   autoComplete="off"
                   disabled={starting}
                 />
               </FieldRow>
+              {attachMode ? (
+                <FieldRow>
+                  <FieldLabel htmlFor="retired_name" required>
+                    Previous peer hostname
+                  </FieldLabel>
+                  <Input
+                    id="retired_name"
+                    value={retiredName}
+                    onChange={(e) => setRetiredName(e.target.value)}
+                    placeholder="mail2.example.test"
+                    autoComplete="off"
+                    disabled={starting}
+                  />
+                  <Hint>
+                    Saved automatically when you ran Remove Host
+                    {retiredIp ? ` (${retiredIp})` : ""}. Must differ from the new hostname.
+                  </Hint>
+                </FieldRow>
+              ) : null}
               <FieldRow>
                 <FieldLabel htmlFor="obs_ip" required>
                   Observability VM IP
@@ -438,25 +510,44 @@ export default function AddSecondServerPage() {
             </Section>
 
             <Err>{fieldErr || draftError}</Err>
-            <Button type="button" loading={starting} disabled={starting} onClick={openConfirm}>
-              Continue
+            <Button
+              type="button"
+              loading={starting}
+              disabled={starting || liveClusterNodes.length > 1}
+              onClick={openConfirm}
+            >
+              {attachMode ? "Attach peer" : "Continue"}
             </Button>
           </>
         )}
 
         <ConfirmModal
           open={confirmOpen}
-          title="Add a second server"
+          title={attachMode ? "Attach blank peer" : "Add a second server"}
           message={
-            <>
-              Install Zimbra and cluster software on <strong>{peerIp || "the new server"}</strong>,
-              provision <strong>{obsIp || "the Observability VM"}</strong> as the qdevice/fencing
-              witness, then form a DRBD/Pacemaker HA pair with this server using VIP{" "}
-              <strong>{vipIp || "unset"}</strong>.
-            </>
+            attachMode ? (
+              <>
+                Attach blank peer <strong>{peerName || peerIp}</strong> to this
+                live cluster. Pacemaker stays up on this host; the new node joins
+                as Secondary and DRBD full-syncs. Observability stays at{" "}
+                <strong>{obsIp || "current"}</strong>; VIP{" "}
+                <strong>{vipIp || "unset"}</strong>.
+              </>
+            ) : (
+              <>
+                Install Zimbra and cluster software on <strong>{peerIp || "the new server"}</strong>,
+                provision <strong>{obsIp || "the Observability VM"}</strong> as the qdevice/fencing
+                witness, then form a DRBD/Pacemaker HA pair with this server using VIP{" "}
+                <strong>{vipIp || "unset"}</strong>.
+              </>
+            )
           }
-          detail="This server's own mail, domain, TLS, and directory settings are not changed. Mail delivery keeps running on this server throughout."
-          confirmLabel="Start"
+          detail={
+            attachMode
+              ? "Mail keeps running on this Promoted node during the sync. Use Move Master here later if you want the VIP on the new peer."
+              : "This server's own mail, domain, TLS, and directory settings are not changed. Mail delivery keeps running on this server throughout."
+          }
+          confirmLabel={attachMode ? "Attach peer" : "Start"}
           loading={starting}
           onCancel={() => {
             if (starting) return;

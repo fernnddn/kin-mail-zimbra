@@ -3,22 +3,19 @@
 # Add-host orchestration - replace a permanently lost mail peer with a NEW
 # identity (hostname/IP), not impersonating the retired node.
 #
-# SCOPE (add-host milestone): build logic + ansible-playbook --syntax-check ONLY.
-# There is NO empty VM to target. This playbook has NEVER been executed
-# against any host (not merely "not fully applied").
+# Console Cluster → Add a second server calls this playbook when the survivor
+# still has a live one-node Pacemaker cluster (after Remove Host). Greenfield
+# Build HA pair must not be used against that CIB.
 #
 # Official references encoded in roles:
 #   * pcs cluster node remove / pcs host auth / pcs cluster node add
 #     (RHEL HA "Managing cluster nodes")
 #   * DRBD live full resync: empty Secondary create-md/up → connect to
 #     UpToDate Primary (drbdsetup(8) / LINBIT resync model) - NOT
-#     clear-bitmap skip-sync, NOT cold dual primary --force from 2.4/2.5.
+#     clear-bitmap skip-sync, NOT cold dual primary --force.
 #
-# When a blank VM exists:
-#   ansible-playbook -i inventory/add-host.yml playbooks/mail-add-host.yml --check
-#
-# Survivor replace now starts with shared role cluster_remove_host (same path as
-# playbooks/mail-remove-host.yml), then adds the new identity.
+# Manual:
+#   ansible-playbook -i inventory/add-host.yml playbooks/mail-add-host.yml
 # =============================================================================
 
 - name: Validate add-host identity variables
@@ -42,13 +39,6 @@
           differ from the survivor and from the node being replaced.
       tags: [addhost, validate]
 
-    - name: Record add-host milestone proof status
-      ansible.builtin.debug:
-        msg: >-
-          Playbook mail-add-host: logic + syntax only. It has NEVER been run
-          against any host (not merely 'not fully applied').
-      tags: [addhost, validate]
-
 # -----------------------------------------------------------------------------
 # 1) NEW NODE - package / fencing / agents readiness (before pcs node add)
 # -----------------------------------------------------------------------------
@@ -67,8 +57,21 @@
       tags: [addhost, new, sbd]
     - role: drbd_install
       tags: [addhost, new, drbd]
+    - role: drbd_disk_prep
+      tags: [addhost, new, disk_prep]
     - role: pacemaker_agents
       tags: [addhost, new, agents]
+
+- name: Ensure LUKS under the new-node DRBD data partition
+  hosts: mail_new_node
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Include DRBD LUKS ensure (new node only)
+      ansible.builtin.include_role:
+        name: drbd_resource
+        tasks_from: luks.yml
+      tags: [addhost, new, luks]
 
 # -----------------------------------------------------------------------------
 # 2) SURVIVOR - remove retired, rewrite DRBD peer, pcs cluster node add

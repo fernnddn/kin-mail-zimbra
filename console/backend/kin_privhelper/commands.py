@@ -889,6 +889,13 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
         yield ev
 
 
+async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    from .add_host import cmd_add_host as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
 async def cmd_remove_observability(
     args: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -1144,6 +1151,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: _adapt(cmd_clear_initial_console_password),
     proto.CMD_MAINTENANCE: _adapt(cmd_maintenance),
     proto.CMD_REMOVE_HOST: _adapt(cmd_remove_host),
+    proto.CMD_ADD_HOST: _adapt(cmd_add_host),
     proto.CMD_REMOVE_OBSERVABILITY: _adapt(cmd_remove_observability),
     proto.CMD_ADD_OBSERVABILITY: _adapt(cmd_add_observability),
     proto.CMD_STORE_OBSERVABILITY_SECRETS: _adapt(cmd_store_observability_secrets),

@@ -80,7 +80,9 @@ export function emptyInstallProgress(): InstallProgress {
 export function isHaOrchestrationLog(log: string): boolean {
   return (
     /HA orchestration/i.test(log) ||
+    /Add host \(attach blank peer/i.test(log) ||
     /\bORCH_(DONE|FAILED)\b/.test(log) ||
+    /\bADD_HOST_(JSON|PROBE_JSON)\b/.test(log) ||
     /\[\d+\/\d+\] START /.test(log)
   );
 }

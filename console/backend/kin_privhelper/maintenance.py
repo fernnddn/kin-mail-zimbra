@@ -804,6 +804,9 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             local_host=str(st.get("local_host") or ""),
             local_ip=_config_server_ip(),
         )
+        from .add_host import read_last_removed_peer
+
+        last_removed = read_last_removed_peer()
         public = {
             "local_host": st["local_host"],
             "topology": st.get("topology") or "",
@@ -825,6 +828,7 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "node_ips": node_ips,
             "vip_ip": st.get("vip_ip") or "",
             "vip_node": st.get("vip_node"),
+            "last_removed_peer": last_removed or None,
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
         yield proto.event_done(0)

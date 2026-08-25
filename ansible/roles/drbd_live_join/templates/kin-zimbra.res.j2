@@ -22,13 +22,13 @@ resource {{ drbd_resource_name }} {
   }
   on {{ drbd_resource_node_a_name }} {
     device    {{ drbd_resource_device }};
-    disk      {{ drbd_resource_disk }};
+    disk      {{ drbd_resource_backing_disk | default(drbd_resource_disk) }};
     address   {{ drbd_resource_node_a_address }}:{{ drbd_resource_port }};
     meta-disk {{ drbd_resource_meta_disk }};
   }
   on {{ drbd_resource_node_b_name }} {
     device    {{ drbd_resource_device }};
-    disk      {{ drbd_resource_disk }};
+    disk      {{ drbd_resource_backing_disk | default(drbd_resource_disk) }};
     address   {{ drbd_resource_node_b_address }}:{{ drbd_resource_port }};
     meta-disk {{ drbd_resource_meta_disk }};
   }

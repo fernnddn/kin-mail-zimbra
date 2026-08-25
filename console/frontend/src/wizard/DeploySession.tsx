@@ -22,7 +22,8 @@ export type DeployActionId =
   | "apply_draft"
   | "full_install"
   | "cancel_firewall_deadman"
-  | "ha_orchestration";
+  | "ha_orchestration"
+  | "add_host";
 
 type FinishReason = "done" | "error" | "disconnect" | "busy";
 
@@ -62,6 +63,17 @@ type DeploySessionCtx = {
   setConfirmHa: (v: boolean) => void;
   runDeploy: () => Promise<void>;
   runHaOrchestration: (opts?: { confirmed?: boolean }) => Promise<void>;
+  runAddHost: (opts: {
+    confirmed?: boolean;
+    newName: string;
+    newIp: string;
+    retiredName?: string;
+    retiredIp?: string;
+    observabilityVmIp?: string;
+    clusterVipIp?: string;
+    dataDisk?: string;
+    metaDisk?: string;
+  }) => Promise<void>;
   runCancelDeadman: () => Promise<void>;
   openLogsTab: () => void;
 };
@@ -601,6 +613,78 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
     resetLogBuffer,
   ]);
 
+  const runAddHost = useCallback(
+    async (opts: {
+      confirmed?: boolean;
+      newName: string;
+      newIp: string;
+      retiredName?: string;
+      retiredIp?: string;
+      observabilityVmIp?: string;
+      clusterVipIp?: string;
+      dataDisk?: string;
+      metaDisk?: string;
+    }) => {
+      if (pipelineStartRef.current || pipelineBusy) {
+        setMessage("A deploy or HA job is already running.");
+        return;
+      }
+      if (opts?.confirmed) setConfirmHa(true);
+      if (!(opts?.confirmed || confirmHa)) {
+        setMessage("Tick the confirmation box before attaching the second server.");
+        return;
+      }
+      setMessage("");
+      pipelineStartRef.current = true;
+      if (pipelineEsRef.current) {
+        const prev = pipelineEsRef.current;
+        pipelineEsRef.current = null;
+        prev.close();
+      }
+      resetLogBuffer();
+      append(
+        `\n[${new Date().toISOString()}] Add host (attach blank peer to live cluster)\n` +
+          `# new=${opts.newName} ip=${opts.newIp}\n`,
+      );
+      setLocalBusy(true);
+      const qs = new URLSearchParams({
+        op: "apply",
+        new_name: opts.newName,
+        new_ip: opts.newIp,
+        retired_name: opts.retiredName || "",
+        retired_ip: opts.retiredIp || "",
+        observability_vm_ip: opts.observabilityVmIp || "",
+        cluster_vip_ip: opts.clusterVipIp || "",
+        data_disk: opts.dataDisk || "",
+        meta_disk: opts.metaDisk || "",
+      });
+      pipelineEsRef.current = openStream(
+        "add_host",
+        (_exit, reason) => {
+          pipelineStartRef.current = false;
+          void refreshSetup();
+          void hydrateFromServer().then((still) => {
+            if (reason === "disconnect" || reason === "error") {
+              setLocalBusy(still);
+              return;
+            }
+            setLocalBusy(false);
+          });
+        },
+        qs.toString(),
+      );
+    },
+    [
+      append,
+      confirmHa,
+      hydrateFromServer,
+      openStream,
+      pipelineBusy,
+      refreshSetup,
+      resetLogBuffer,
+    ],
+  );
+
   const runCancelDeadman = useCallback(async () => {
     if (cancelBusy) return;
     setMessage("");
@@ -633,6 +717,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
       setConfirmHa,
       runDeploy,
       runHaOrchestration,
+      runAddHost,
       runCancelDeadman,
       openLogsTab,
     }),
@@ -647,6 +732,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
       confirmHa,
       runDeploy,
       runHaOrchestration,
+      runAddHost,
       runCancelDeadman,
       openLogsTab,
     ],
