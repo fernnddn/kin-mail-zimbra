@@ -15,6 +15,18 @@
   ansible.builtin.command:
     cmd: drbdadm status {{ cluster_add_host_drbd_resource }}
   register: drbd_live_join_status
+  # drbdadm status can legitimately lag right after up/connect just changed
+  # it - drbd_resource/tasks/verify.yml already retries the equivalent check
+  # for this exact reason; this copy of it did not.
+  until: >-
+    drbd_live_join_status.rc == 0
+    and (
+      'UpToDate' in drbd_live_join_status.stdout
+      or 'Inconsistent' in drbd_live_join_status.stdout
+      or 'SyncTarget' in drbd_live_join_status.stdout
+    )
+  retries: 24
+  delay: 5
   changed_when: false
   failed_when: >-
     drbd_live_join_status.rc != 0

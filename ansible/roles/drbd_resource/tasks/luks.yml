@@ -80,6 +80,16 @@
     path: "{{ drbd_resource_backing_disk }}"
     follow: true
   register: drbd_resource_backing_stat
+  # zimbra-data-disk-luks.sh already retries this same check itself before
+  # returning - this is a second, independent check on the controller side
+  # in case anything changed between that process exiting and this task
+  # running. Belt-and-suspenders for the device-busy-after-a-state-change
+  # race class (25 Aug 2026 live 2vm practice run).
+  until: >-
+    drbd_resource_backing_stat.stat.exists | default(false)
+    and drbd_resource_backing_stat.stat.isblk | default(false)
+  retries: 5
+  delay: 1
   when: not ansible_check_mode
   tags: [drbd, resource, luks]
 

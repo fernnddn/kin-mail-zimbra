@@ -37,9 +37,28 @@
     - drbd_live_join_status_pre.rc != 0
   tags: [drbd, livejoin, connect]
 
+- name: Settle udev before attaching the just-created backing device
+  ansible.builtin.command:
+    cmd: udevadm settle --timeout=10
+  changed_when: false
+  failed_when: false
+  # create-md just wrote to the backing/meta device above; drbdadm up on the
+  # sibling role (drbd_resource/tasks/activate.yml) failed with "Can not
+  # open backing device" right after an adjacent device-state change on a
+  # live 2vm practice run (25 Aug 2026) - same shape here (new node, fresh
+  # external meta-loop attach a few tasks earlier), never hardened.
+  when:
+    - not ansible_check_mode
+    - drbd_live_join_status_pre.rc != 0
+  tags: [drbd, livejoin, connect]
+
 - name: Bring up the DRBD resource on the new node as Secondary
   ansible.builtin.command:
     cmd: drbdadm up {{ cluster_add_host_drbd_resource }}
+  register: drbd_live_join_up_result
+  until: drbd_live_join_up_result.rc == 0
+  retries: 5
+  delay: 3
   # SAFETY: never check_mode: false - connects toward live Primary.
   when:
     - not ansible_check_mode

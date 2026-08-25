@@ -69,6 +69,14 @@
   ansible.builtin.command:
     cmd: sbd -d {{ sbd_stonith_device }} dump
   register: sbd_stonith_header_confirm
+  # sbd_stonith_device is the iSCSI-attached fencing LUN - network-backed
+  # storage right after a header write to it is more prone to a transient
+  # read blip than local disk. Same shape as the DRBD device-busy race hit
+  # on a live 2vm practice run (25 Aug 2026): read device state immediately
+  # after a write mutated it, single attempt, fail closed.
+  until: sbd_stonith_header_confirm.rc == 0
+  retries: 5
+  delay: 3
   changed_when: false
   failed_when: false
   check_mode: false

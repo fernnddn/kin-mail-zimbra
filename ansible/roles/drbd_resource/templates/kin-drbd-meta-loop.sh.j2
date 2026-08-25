@@ -27,5 +27,15 @@ if losetup "$DEV" >/dev/null 2>&1; then
 fi
 
 losetup "$DEV" "$IMG"
+
+# Same device-settle race class as the DRBD backing-device fix (25 Aug 2026
+# live 2vm practice run): this oneshot unit runs on every future stop/start
+# of kin-drbd-meta-loop.service (reboot, manual restart), not just once -
+# give the device node a few chances to show up before failing the unit.
+attempt=0
+while [[ ! -b "$DEV" && "$attempt" -lt 5 ]]; do
+  attempt=$((attempt + 1))
+  sleep 1
+done
 test -b "$DEV"
 losetup -j "$IMG"

@@ -264,8 +264,24 @@ case "$ACTION" in
     ;;
 esac
 
+# /dev/mapper/<name> is a udev symlink to the real dm-crypt device node,
+# not something cryptsetup open/luksFormat creates directly - cryptsetup
+# normally blocks internally until udev has processed that, but that wait
+# can be skipped (no udev running, --disable-locks, some chroot/container
+# install environments). Retry briefly before failing closed, same fix as
+# the DRBD "Can not open backing device" race hit on a live 2vm practice
+# run right after an adjacent unmount (25 Aug 2026) - belt-and-suspenders
+# here since format_luks/open_luks just did the equivalent device-state
+# change.
+_backing_attempt=0
+_backing_retries="${KIN_LUKS_BACKING_RETRIES:-5}"
+_backing_delay="${KIN_LUKS_BACKING_DELAY:-1}"
+while [ ! -b "$BACKING" ] && [ "$_backing_attempt" -lt "$_backing_retries" ]; do
+  _backing_attempt=$((_backing_attempt + 1))
+  sleep "$_backing_delay"
+done
 if [ ! -b "$BACKING" ]; then
-  printf '%s\n' "ensure-zimbra-data-luks: backing ${BACKING} is not a block device" >&2
+  printf '%s\n' "ensure-zimbra-data-luks: backing ${BACKING} is not a block device (checked ${_backing_attempt} times)" >&2
   exit 1
 fi
 printf 'KIN_LUKS_BACKING=%s\n' "$BACKING"
