@@ -309,10 +309,12 @@ const KvLabel = styled.dt`
   border-bottom: 1px solid ${theme.line};
 `;
 
-const KvValue = styled.dd`
+const KvValue = styled.dd<{ $mono?: boolean }>`
   margin: 0;
   padding: 0.55rem 0;
   font-weight: 650;
+  font-family: ${(p) => (p.$mono ? theme.mono : "inherit")};
+  font-variant-numeric: tabular-nums;
   text-align: right;
   color: ${theme.surface[800]};
   border-bottom: 1px solid ${theme.line};
@@ -371,21 +373,224 @@ const CardHint = styled.p`
 
 const gaugePulse = keyframes`
   0%, 100% { filter: drop-shadow(0 0 0 rgba(217, 119, 6, 0)); }
-  50% { filter: drop-shadow(0 0 5px rgba(217, 119, 6, 0.35)); }
+  50% { filter: drop-shadow(0 0 6px rgba(217, 119, 6, 0.4)); }
 `;
+
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+type Tone = "ok" | "warn" | "muted" | "accent";
+
+function toneColor(tone?: Tone): string {
+  if (tone === "ok") return theme.ok;
+  if (tone === "warn") return theme.warn;
+  if (tone === "accent") return theme.accent;
+  return theme.surface[200];
+}
+
+function toneSoftBg(tone?: Tone): string {
+  if (tone === "ok") return "rgba(16, 185, 129, 0.12)";
+  if (tone === "warn") return "rgba(217, 119, 6, 0.12)";
+  if (tone === "accent") return theme.accentSoft;
+  return theme.surface[100];
+}
+
+function toneFg(tone?: Tone): string {
+  if (tone === "ok") return theme.ok;
+  if (tone === "warn") return theme.warn;
+  if (tone === "accent") return theme.accent;
+  return theme.surface[400];
+}
+
+const IconChip = styled.div<{ $tone: Tone }>`
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: ${theme.radius.md};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: ${(p) => toneFg(p.$tone)};
+  background: ${(p) => toneSoftBg(p.$tone)};
+
+  svg {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+`;
+
+function TopologyGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="5.2" r="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="5.4" cy="18" r="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="18.6" cy="18" r="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M12 7.4L6.5 16M12 7.4L17.5 16M7.6 18h8.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ServerGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4.5" y="4" width="15" height="6.5" rx="1.4" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="4.5" y="13.5" width="15" height="6.5" rx="1.4" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="7.7" cy="7.25" r="0.9" fill="currentColor" />
+      <circle cx="7.7" cy="16.75" r="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
+function VipGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 3a6 6 0 00-6 6c0 4.5 6 12 6 12s6-7.5 6-12a6 6 0 00-6-6z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="9" r="2.2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function ReplicationGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 8a7.5 7.5 0 0113.4-2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M18.2 3.2l1.2 3-3.2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M19 16a7.5 7.5 0 01-13.4 2.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M5.8 20.8l-1.2-3 3.2-.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function QuorumGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 3l6.5 2.6v5.2c0 4.8-2.8 8.3-6.5 9.9-3.7-1.6-6.5-5.1-6.5-9.9V5.6L12 3z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M9 12l2.2 2.2 3.8-4.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ObservabilityGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+const OverviewHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.6rem;
+`;
+
+const OverviewTitle = styled.h2`
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: ${theme.surface[500]};
+`;
+
+const FreshnessRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+`;
+
+const FreshnessText = styled.span`
+  font-size: 0.75rem;
+  color: ${theme.muted};
+`;
+
+const RefreshBtn = styled.button`
+  border: 1px solid ${theme.line};
+  background: ${theme.bgElev};
+  color: ${theme.surface[600]};
+  border-radius: ${theme.radius.sm};
+  width: 1.8rem;
+  height: 1.8rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background ${theme.motion.fast}, transform ${theme.motion.fast};
+
+  &:hover {
+    background: ${theme.surface[50]};
+  }
+  &:active {
+    transform: scale(0.92);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+`;
+
+function relativeTime(ms: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (secs < 3) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  return `${mins}m ago`;
+}
+
+function FreshnessBadge({ updatedAt }: { updatedAt: number | null }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  if (!updatedAt) return null;
+  return <FreshnessText>Updated {relativeTime(updatedAt)}</FreshnessText>;
+}
 
 const OverviewGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 0.85rem;
   margin: 0 0 1.15rem;
+  animation: ${fadeIn} ${theme.motion.page} ease;
 `;
 
-const OverviewCard = styled.div`
+const OverviewCard = styled.div<{ $tone?: Tone }>`
   border: 1px solid ${theme.line};
+  border-left: 3px solid ${(p) => toneColor(p.$tone)};
   background: ${theme.bgElev};
   border-radius: ${theme.radius.md};
-  padding: 1rem 1.1rem;
+  padding: 1rem 1.15rem;
   box-shadow: ${theme.shadow.sm};
   display: flex;
   align-items: center;
@@ -407,10 +612,12 @@ const OverviewLabel = styled.p`
   color: ${theme.muted};
 `;
 
-const OverviewValue = styled.p`
+const OverviewValue = styled.p<{ $mono?: boolean }>`
   margin: 0;
   font-size: 1.02rem;
   font-weight: 650;
+  font-family: ${(p) => (p.$mono ? theme.mono : "inherit")};
+  font-variant-numeric: tabular-nums;
   color: ${theme.surface[800]};
   overflow: hidden;
   text-overflow: ellipsis;
@@ -418,17 +625,30 @@ const OverviewValue = styled.p`
 `;
 
 const OverviewSub = styled.p<{ $tone?: "ok" | "warn" | "muted" }>`
-  margin: 0.25rem 0 0;
+  margin: 0.3rem 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.78rem;
   font-weight: ${(p) => (p.$tone && p.$tone !== "muted" ? 600 : 400)};
   color: ${(p) =>
     p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.muted};
+
+  &::before {
+    content: "";
+    display: ${(p) => (p.$tone && p.$tone !== "muted" ? "block" : "none")};
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: ${theme.radius.full};
+    background: currentColor;
+    flex-shrink: 0;
+  }
 `;
 
 const GaugeWrap = styled.div<{ $pulse?: boolean }>`
   position: relative;
-  width: 76px;
-  height: 76px;
+  width: 80px;
+  height: 80px;
   flex-shrink: 0;
   animation: ${(p) => (p.$pulse ? gaugePulse : "none")} 2.4s ease-in-out infinite;
 `;
@@ -440,13 +660,13 @@ const GaugeSvg = styled.svg`
 const GaugeTrack = styled.circle`
   fill: none;
   stroke: ${theme.surface[200]};
-  stroke-width: 8;
+  stroke-width: 7;
 `;
 
-const GaugeValue = styled.circle<{ $color: string }>`
+const GaugeValue = styled.circle<{ $stroke: string }>`
   fill: none;
-  stroke: ${(p) => p.$color};
-  stroke-width: 8;
+  stroke: ${(p) => p.$stroke};
+  stroke-width: 7;
   stroke-linecap: round;
   transition:
     stroke-dashoffset 700ms ease,
@@ -457,16 +677,29 @@ const GaugeCenter = styled.div`
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
 `;
 
 const GaugePct = styled.span`
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   font-weight: 750;
+  font-variant-numeric: tabular-nums;
   color: ${theme.surface[800]};
-  line-height: 1;
+  line-height: 1.1;
 `;
+
+const GaugeState = styled.span<{ $tone: "ok" | "warn" | "muted" }>`
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 0.15rem;
+  color: ${(p) => (p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.surface[400])};
+`;
+
+let gaugeGradientSeq = 0;
 
 function ReplicationGauge({
   percent,
@@ -477,44 +710,58 @@ function ReplicationGauge({
   ok: boolean;
   unknown?: boolean;
 }) {
-  const size = 76;
-  const stroke = 8;
+  const size = 80;
+  const stroke = 7;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const pct = unknown ? 0 : Math.max(0, Math.min(100, percent));
   const offset = c - (pct / 100) * c;
-  const color = unknown ? theme.surface[300] : ok ? theme.ok : theme.warn;
+  const gradId = useState(() => `repl-grad-${++gaugeGradientSeq}`)[0];
+  const tone: "ok" | "warn" | "muted" = unknown ? "muted" : ok ? "ok" : "warn";
+  const strokeRef = unknown ? theme.surface[300] : `url(#${gradId})`;
   return (
     <GaugeWrap $pulse={!unknown && !ok} aria-hidden="true">
       <GaugeSvg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <defs>
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={ok ? theme.ok : theme.warn} stopOpacity="0.7" />
+            <stop offset="100%" stopColor={ok ? theme.ok : theme.warn} stopOpacity="1" />
+          </linearGradient>
+        </defs>
         <GaugeTrack cx={size / 2} cy={size / 2} r={r} />
         <GaugeValue
           cx={size / 2}
           cy={size / 2}
           r={r}
-          $color={color}
+          $stroke={strokeRef}
           strokeDasharray={c}
           strokeDashoffset={unknown ? c : offset}
         />
       </GaugeSvg>
       <GaugeCenter>
-        <GaugePct>{unknown ? "—" : `${pct.toFixed(0)}%`}</GaugePct>
+        <GaugePct>{unknown ? "-" : `${pct.toFixed(0)}%`}</GaugePct>
+        <GaugeState $tone={tone}>{unknown ? "no data" : ok ? "in sync" : "syncing"}</GaugeState>
       </GaugeCenter>
     </GaugeWrap>
   );
 }
+
+type StatusTone = "ok" | "warn" | "muted";
 
 function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode[] {
   const cards: ReactNode[] = [];
   const nodeCount = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers).length;
 
   cards.push(
-    <OverviewCard key="topology">
+    <OverviewCard key="topology" $tone="accent">
+      <IconChip $tone="accent">
+        <TopologyGlyph />
+      </IconChip>
       <OverviewBody>
         <OverviewLabel>Topology</OverviewLabel>
         <OverviewValue>{topology === "2vm" ? "2-node HA pair" : "Single server"}</OverviewValue>
         <OverviewSub>
-          {topology === "2vm" ? `${nodeCount} mail node${nodeCount === 1 ? "" : "s"} configured` : cluster.local_host || "—"}
+          {topology === "2vm" ? `${nodeCount} mail node${nodeCount === 1 ? "" : "s"} configured` : cluster.local_host || "-"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -522,12 +769,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
 
   if (topology !== "2vm") return cards;
 
+  const servingTone: StatusTone = cluster.promoted ? "ok" : "warn";
   cards.push(
-    <OverviewCard key="serving">
+    <OverviewCard key="serving" $tone={servingTone}>
+      <IconChip $tone={servingTone}>
+        <ServerGlyph />
+      </IconChip>
       <OverviewBody>
         <OverviewLabel>Serving mail</OverviewLabel>
         <OverviewValue>{cluster.promoted || "Unknown"}</OverviewValue>
-        <OverviewSub>
+        <OverviewSub $tone={cluster.promoted ? "ok" : "warn"}>
           {(cluster.unpromoted || []).length
             ? `Replica: ${(cluster.unpromoted || []).join(", ")}`
             : "No confirmed replica"}
@@ -539,12 +790,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
   const vipIp = (cluster.vip_ip || "").trim();
   const vipNode = (cluster.vip_node || "").trim();
   const vipMismatch = Boolean(vipNode && cluster.promoted && vipNode !== cluster.promoted);
+  const vipTone: StatusTone = !vipIp ? "muted" : vipNode ? (vipMismatch ? "warn" : "ok") : "warn";
   cards.push(
-    <OverviewCard key="vip">
+    <OverviewCard key="vip" $tone={vipTone}>
+      <IconChip $tone={vipTone}>
+        <VipGlyph />
+      </IconChip>
       <OverviewBody>
         <OverviewLabel>Mail VIP</OverviewLabel>
-        <OverviewValue>{vipIp || "Not configured"}</OverviewValue>
-        <OverviewSub $tone={!vipIp ? "muted" : vipNode ? (vipMismatch ? "warn" : "ok") : "warn"}>
+        <OverviewValue $mono={Boolean(vipIp)}>{vipIp || "Not configured"}</OverviewValue>
+        <OverviewSub $tone={vipTone}>
           {!vipIp
             ? "No floating IP set for this cluster"
             : vipNode
@@ -559,15 +814,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
 
   const pct = cluster.drbd_sync_percent;
   const uptodate = Boolean(cluster.drbd_uptodate);
+  const replTone: StatusTone = uptodate ? "ok" : typeof pct === "number" ? "warn" : "muted";
   cards.push(
-    <OverviewCard key="replication">
+    <OverviewCard key="replication" $tone={replTone}>
       <ReplicationGauge percent={typeof pct === "number" ? pct : uptodate ? 100 : 0} ok={uptodate} unknown={!uptodate && typeof pct !== "number"} />
       <OverviewBody>
         <OverviewLabel>DRBD Replication</OverviewLabel>
         <OverviewValue>
           {uptodate ? "In sync" : typeof pct === "number" ? `Syncing ${pct.toFixed(0)}%` : "Unknown"}
         </OverviewValue>
-        <OverviewSub $tone={uptodate ? "ok" : typeof pct === "number" ? "warn" : "muted"}>
+        <OverviewSub $tone={replTone}>
           {uptodate
             ? "Both nodes UpToDate"
             : typeof pct === "number"
@@ -578,12 +834,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
     </OverviewCard>,
   );
 
+  const qdeviceTone: StatusTone = cluster.qdevice_ok ? "ok" : "warn";
   cards.push(
-    <OverviewCard key="qdevice">
+    <OverviewCard key="qdevice" $tone={qdeviceTone}>
+      <IconChip $tone={qdeviceTone}>
+        <QuorumGlyph />
+      </IconChip>
       <OverviewBody>
         <OverviewLabel>Quorum device</OverviewLabel>
         <OverviewValue>{cluster.qdevice_ok ? "Voting" : "Not voting"}</OverviewValue>
-        <OverviewSub $tone={cluster.qdevice_ok ? "ok" : "warn"}>
+        <OverviewSub $tone={qdeviceTone}>
           {cluster.qdevice_ok ? "qdevice reachable" : "qdevice missing, offline, or not voting"}
         </OverviewSub>
       </OverviewBody>
@@ -593,12 +853,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
   if (cluster.observability) {
     const obs = cluster.observability;
     const obsHealthy = obs.status === "healthy";
+    const obsTone: StatusTone = obsHealthy ? "ok" : obs.status === "absent" ? "muted" : "warn";
     cards.push(
-      <OverviewCard key="observability">
+      <OverviewCard key="observability" $tone={obsTone}>
+        <IconChip $tone={obsTone}>
+          <ObservabilityGlyph />
+        </IconChip>
         <OverviewBody>
           <OverviewLabel>Observability</OverviewLabel>
           <OverviewValue>{obs.hostname || obs.ip || (obs.status === "absent" ? "Absent" : "Unknown")}</OverviewValue>
-          <OverviewSub $tone={obsHealthy ? "ok" : obs.status === "absent" ? "muted" : "warn"}>
+          <OverviewSub $tone={obsTone}>
             {obsHealthy ? "Reachable" : obs.status === "absent" ? "Not configured" : "Unreachable"}
           </OverviewSub>
         </OverviewBody>
@@ -702,11 +966,14 @@ export default function ClusterPage() {
   const [pendingObsAdd, setPendingObsAdd] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const refresh = useCallback(async () => {
     const st = await api<StatusResp>("/api/cluster/status");
     setCluster(st.cluster || {});
     if (!esRef.current) setLog(st.log || "");
+    setLastUpdated(Date.now());
   }, []);
 
   useEffect(() => {
@@ -722,6 +989,26 @@ export default function ClusterPage() {
       probeRef.current = null;
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (tab !== "status") return;
+    const id = window.setInterval(() => {
+      if (esRef.current || busy) return;
+      void refresh().catch(() => undefined);
+    }, 12000);
+    return () => window.clearInterval(id);
+  }, [tab, busy, refresh]);
+
+  async function manualRefresh() {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : "Failed to load cluster status");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function runStream(op: "preflight" | "enter" | "exit" | "cleanup", target: string) {
     esRef.current?.close();
@@ -1122,9 +1409,9 @@ export default function ClusterPage() {
           <KvLabel>Role</KvLabel>
           <KvValue>{isPromoted ? "Serving mail" : "Replica"}</KvValue>
           <KvLabel>IP address</KvLabel>
-          <KvValue>{ip || "Unknown"}</KvValue>
+          <KvValue $mono={Boolean(ip)}>{ip || "Unknown"}</KvValue>
           <KvLabel>Mail VIP</KvLabel>
-          <KvValue>{isVip ? cluster.vip_ip : "—"}</KvValue>
+          <KvValue $mono={isVip}>{isVip ? cluster.vip_ip : "-"}</KvValue>
           <KvLabel>Maintenance</KvLabel>
           <KvValue>{isStandby ? "On" : "Off"}</KvValue>
         </Kv>
@@ -1275,6 +1562,20 @@ export default function ClusterPage() {
                   ) : null}
                 </Dropdown>
               </HealthWrap>
+              <OverviewHeader>
+                <OverviewTitle>Cluster Overview</OverviewTitle>
+                <FreshnessRow>
+                  <FreshnessBadge updatedAt={lastUpdated} />
+                  <RefreshBtn
+                    type="button"
+                    aria-label="Refresh cluster status"
+                    disabled={refreshing}
+                    onClick={() => void manualRefresh()}
+                  >
+                    <ReplicationGlyph />
+                  </RefreshBtn>
+                </FreshnessRow>
+              </OverviewHeader>
               <OverviewGrid>{clusterOverviewCards(cluster, topology)}</OverviewGrid>
               {topology === "1vm" ? (
                 <>
