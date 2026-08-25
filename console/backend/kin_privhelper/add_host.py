@@ -305,8 +305,6 @@ async def _emit(text: str, *, err: bool = False) -> dict[str, Any]:
 
 
 async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
-    import secrets as pysecrets
-
     from .apply_config import (
         ensure_topology_2vm,
         parse_config,
@@ -333,7 +331,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         _write_work_files,
         ssh_password_candidates,
     )
-    from .provisioning_secrets import load_secrets, store_secrets
+    from .provisioning_secrets import load_secrets
 
     args = args or {}
     op = str(args.get("op") or "apply").strip().lower()
@@ -446,25 +444,24 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
 
     hacluster_pass = secrets_map.get("hacluster_pass") or ""
     if not hacluster_pass:
-        hacluster_pass = pysecrets.token_urlsafe(24)
-        try:
-            store_secrets({"hacluster_pass": hacluster_pass})
-        except OSError as exc:
-            yield await _emit(f"Refusing: could not persist hacluster password: {exc}", err=True)
-            yield proto.event_done(1)
-            return
-        yield await _emit("generated hacluster pcs password (stored in vault, not logged)")
+        yield await _emit(
+            "Refusing: hacluster password missing from the vault. "
+            "Attach peer must reuse the survivor cluster secret; refusing to mint a new one.",
+            err=True,
+        )
+        yield proto.event_done(1)
+        return
 
     chap_pass = secrets_map.get("chap_pass") or ""
     if not chap_pass:
-        chap_pass = pysecrets.token_urlsafe(12)[:16]
-        try:
-            store_secrets({"chap_pass": chap_pass})
-        except OSError as exc:
-            yield await _emit(f"Refusing: could not persist CHAP password: {exc}", err=True)
-            yield proto.event_done(1)
-            return
-        yield await _emit("generated iSCSI CHAP password (stored in vault, not logged)")
+        yield await _emit(
+            "Refusing: iSCSI CHAP password missing from the vault. "
+            "The live Observability target still expects the original secret; "
+            "refusing to mint a new CHAP that would break initiator login.",
+            err=True,
+        )
+        yield proto.event_done(1)
+        return
 
     lock_fh = try_lock_maintenance()
     if lock_fh is None:

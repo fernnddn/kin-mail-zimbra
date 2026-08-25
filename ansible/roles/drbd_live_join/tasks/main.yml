@@ -3,6 +3,14 @@
   ansible.builtin.import_tasks: meta_loop.yml
   tags: [drbd, livejoin, meta]
 
+# LUKS set_fact from an earlier play is lost across plays. Re-ensure here so
+# kin-zimbra.res.j2 writes the mapper (not raw sdb1) when encryption is on.
+- name: Ensure LUKS on the new-node data partition before writing .res
+  ansible.builtin.include_role:
+    name: drbd_resource
+    tasks_from: luks.yml
+  tags: [drbd, livejoin, luks]
+
 - name: Include the resource definition steps on the new node
   ansible.builtin.import_tasks: resource_file.yml
   tags: [drbd, livejoin, config]

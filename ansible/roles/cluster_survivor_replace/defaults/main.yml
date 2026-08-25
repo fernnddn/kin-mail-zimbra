@@ -12,7 +12,7 @@ cluster_add_host_drbd_resource: kin-zimbra
 cluster_add_host_drbd_res_path: /etc/drbd.d/kin-zimbra.res
 cluster_add_host_drbd_device: /dev/drbd0
 cluster_add_host_drbd_disk: /dev/sdb1
-cluster_add_host_drbd_meta_disk: /dev/loop21
+cluster_add_host_drbd_meta_disk: /dev/sdb2
 cluster_add_host_drbd_port: 7788
 cluster_add_host_drbd_protocol: C
 cluster_add_host_drbd_sync_rate: 100M

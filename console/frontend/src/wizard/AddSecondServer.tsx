@@ -219,13 +219,46 @@ export default function AddSecondServerPage() {
     return "";
   }
 
-  function openConfirm() {
+  async function openConfirm() {
     const err = validate();
     if (err) {
       setFieldErr(err);
       return;
     }
     setFieldErr("");
+    // Greenfield: persist peer first, then re-check disks so the peer is included.
+    // Attach mode stays local-only (survivor disks already live).
+    if (!attachMode) {
+      setStarting(true);
+      try {
+        await save({
+          topology: "2vm",
+          peer_host_ip: peerIp.trim(),
+          peer_host_name: peerName.trim(),
+          observability_vm_ip: obsIp.trim(),
+          cluster_vip_ip: vipIp.trim(),
+          ...(replacingCreds ? { host_root_pass: rootPass, kin_user_pass: adminPass } : {}),
+          current_step: "deploy",
+        });
+        const disk = await api<HaDisk>("/api/wizard/ha-disk-preflight");
+        setHaDisk(disk);
+        if (!disk.ok && disk.build_allowed !== true) {
+          setFieldErr(
+            (disk.errors && disk.errors[0]) ||
+              "Resolve the DRBD disk issue on both servers before continuing.",
+          );
+          setStarting(false);
+          return;
+        }
+      } catch (saveErr) {
+        setFieldErr(
+          saveErr instanceof Error ? saveErr.message : "Could not save or check disks.",
+        );
+        setStarting(false);
+        return;
+      }
+      setStarting(false);
+    }
     setConfirmOpen(true);
   }
 

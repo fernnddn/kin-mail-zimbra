@@ -286,7 +286,11 @@ async def _demote_survivor_topology_to_1vm(
         parse_config,
         write_config_file,
     )
-    from .deploy_state import HA_SETUP_COMPLETE_MARKER, write_topology_marker
+    from .deploy_state import (
+        HA_SETUP_COMPLETE_MARKER,
+        demote_wizard_draft_after_remove_host,
+        write_topology_marker,
+    )
 
     notes: list[str] = []
     if plan.local_is_survivor:
@@ -332,6 +336,7 @@ async def _demote_survivor_topology_to_1vm(
             except OSError as exc:
                 notes.append(f"could not clear local ha-setup-complete: {exc}")
                 return False, notes
+        notes.extend(demote_wizard_draft_after_remove_host())
         notes.append(
             "Demoted local /etc/kin-mail/config to TOPOLOGY=1vm, cleared peer fields "
             "(VIP and Observability IP kept)"

@@ -56,6 +56,48 @@ WIZARD_DRAFT_FILE = Path(
     os.environ.get("KIN_CONSOLE_DRAFT", "/var/lib/kin-mail-console/wizard-draft.json")
 )
 
+
+def demote_wizard_draft_after_remove_host() -> list[str]:
+    """After Remove Host, clear peer fields so stale 2vm draft cannot block UI.
+
+    Keeps observability_vm_ip and cluster_vip_ip (still live on the survivor).
+    Best-effort: missing or unreadable draft is not a demote failure.
+    """
+    notes: list[str] = []
+    path = WIZARD_DRAFT_FILE
+    if not path.is_file():
+        return notes
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        notes.append("wizard draft unreadable; left unchanged")
+        return notes
+    if not isinstance(raw, dict):
+        return notes
+    changed = False
+    if str(raw.get("topology") or "").strip() != "1vm":
+        raw["topology"] = "1vm"
+        changed = True
+    for key in ("peer_host_ip", "peer_host_name"):
+        if str(raw.get(key) or "").strip():
+            raw[key] = ""
+            changed = True
+    if not changed:
+        return notes
+    raw["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
+        notes.append(
+            "Demoted wizard draft to topology=1vm and cleared peer fields "
+            "(VIP and Observability IP kept)"
+        )
+    except OSError as exc:
+        notes.append(f"could not demote wizard draft: {exc}")
+    return notes
+
+
 # Last deploy transcript (also used by console last-log API).
 DEPLOY_LAST_LOG = Path(
     os.environ.get("KIN_DEPLOY_LAST_LOG", "/var/log/kin-mail/deploy-last.log")

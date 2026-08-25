@@ -453,5 +453,42 @@ class FullInstallRefuseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1], {"type": "done", "exit_code": 1})
 
 
+class DemoteWizardDraftTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.draft = Path(self._td.name) / "wizard-draft.json"
+        self._old = ds.WIZARD_DRAFT_FILE
+        ds.WIZARD_DRAFT_FILE = self.draft
+
+    def tearDown(self) -> None:
+        ds.WIZARD_DRAFT_FILE = self._old
+
+    def test_clears_peer_keeps_vip_and_obs(self) -> None:
+        self.draft.write_text(
+            json.dumps(
+                {
+                    "topology": "2vm",
+                    "peer_host_ip": "192.0.2.14",
+                    "peer_host_name": "mail2.example.test",
+                    "observability_vm_ip": "192.0.2.12",
+                    "cluster_vip_ip": "192.0.2.16",
+                }
+            ),
+            encoding="utf-8",
+        )
+        notes = ds.demote_wizard_draft_after_remove_host()
+        self.assertTrue(any("wizard draft" in n for n in notes))
+        data = json.loads(self.draft.read_text(encoding="utf-8"))
+        self.assertEqual(data["topology"], "1vm")
+        self.assertEqual(data["peer_host_ip"], "")
+        self.assertEqual(data["peer_host_name"], "")
+        self.assertEqual(data["cluster_vip_ip"], "192.0.2.16")
+        self.assertEqual(data["observability_vm_ip"], "192.0.2.12")
+
+    def test_missing_draft_is_noop(self) -> None:
+        self.assertEqual(ds.demote_wizard_draft_after_remove_host(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,7 @@ def live_cluster_blocks_apply(
     peer_ip: str,
     corosync_conf: str,
     status_text: str = "",
+    cib_text: str | None = None,
 ) -> bool:
     """True when join_mode=apply must stop rather than mutate a live CIB.
 
@@ -78,7 +79,10 @@ def live_cluster_blocks_apply(
     if peer_name in live_nodes or peer_ip in set(ring.values()):
         return False
     if is_harmless_package_stub_cluster(
-        corosync_conf, status_text=status_text, live_nodes=live_nodes
+        corosync_conf,
+        status_text=status_text,
+        live_nodes=live_nodes,
+        cib_text=cib_text,
     ):
         return False
     return True
@@ -1726,6 +1730,15 @@ async def cmd_run_ha_orchestration(
     ring = parse_corosync_ring_addrs(corosync_txt) if corosync_txt else {}
     peer_is_member = peer.name in live_nodes or peer.ip in set(ring.values())
     status_text = str((st.get("raw") or {}).get("crm") or "")
+    cib_text = ""
+    try:
+        from .maintenance import _capture
+
+        _cib_code, cib_out, _cib_err = await _capture(["pcs", "cib"], timeout=30)
+        if _cib_code == 0 and cib_out:
+            cib_text = cib_out
+    except Exception:  # noqa: BLE001
+        cib_text = ""
 
     if live_cluster_blocks_apply(
         join_mode=join_mode,
@@ -1734,6 +1747,7 @@ async def cmd_run_ha_orchestration(
         peer_ip=peer.ip,
         corosync_conf=corosync_txt,
         status_text=status_text,
+        cib_text=cib_text or None,
     ):
         yield emit_line(
             "Refusing join_mode=apply: a live Pacemaker cluster already exists "
@@ -1752,7 +1766,10 @@ async def cmd_run_ha_orchestration(
         and live_nodes
         and not peer_is_member
         and is_harmless_package_stub_cluster(
-            corosync_txt, status_text=status_text, live_nodes=live_nodes
+            corosync_txt,
+            status_text=status_text,
+            live_nodes=live_nodes,
+            cib_text=cib_text or None,
         )
     ):
         yield emit_line(

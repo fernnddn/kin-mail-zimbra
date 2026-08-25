@@ -11,9 +11,66 @@
 # full resync (SyncSource→SyncTarget). Do NOT use new-current-uuid --clear-bitmap
 # here - that skips/shortens sync and assumes shipped identical data.
 #
+# Disk paths MUST come from the live .res (same as remove-host). Inventory
+# defaults (/dev/sdb1) must never overwrite a LUKS mapper already in use on
+# the Promoted Primary.
+#
 #   * Do NOT set check_mode: false on template apply / drbdadm adjust.
 #   * Gate with `when: not ansible_check_mode`.
 # =============================================================================
+
+- name: Read the live DRBD resource file on the survivor
+  ansible.builtin.slurp:
+    src: "{{ cluster_add_host_drbd_res_path }}"
+  register: cluster_survivor_replace_res_slurp
+  failed_when: false
+  check_mode: false
+  tags: [cluster, survivor, drbd]
+
+- name: Require the survivor DRBD resource file
+  ansible.builtin.assert:
+    that:
+      - cluster_survivor_replace_res_slurp.content is defined
+    fail_msg: >-
+      Missing {{ cluster_add_host_drbd_res_path }} on the survivor.
+      Refusing to template a new peer resource from role defaults.
+  tags: [cluster, survivor, drbd]
+
+- name: Decode the live DRBD resource text
+  ansible.builtin.set_fact:
+    cluster_survivor_replace_res_text: "{{ cluster_survivor_replace_res_slurp.content | b64decode }}"
+  tags: [cluster, survivor, drbd]
+
+- name: Read disk paths from the live resource file for the survivor node
+  ansible.builtin.set_fact:
+    cluster_survivor_replace_live_disk: "{{ cluster_survivor_replace_res_text | kin_drbd_node_disk(cluster_add_host_survivor_name) }}"
+    cluster_survivor_replace_live_meta: "{{ cluster_survivor_replace_res_text | kin_drbd_node_meta_disk(cluster_add_host_survivor_name) }}"
+    cluster_survivor_replace_live_device: "{{ cluster_survivor_replace_res_text | kin_drbd_node_device(cluster_add_host_survivor_name) }}"
+  tags: [cluster, survivor, drbd]
+
+- name: Apply live disk paths, falling back to inventory only when the file has none
+  ansible.builtin.set_fact:
+    drbd_resource_disk: "{{ cluster_survivor_replace_live_disk | kin_drbd_prefer_live_path(cluster_add_host_drbd_disk) }}"
+    drbd_resource_meta_disk: "{{ cluster_survivor_replace_live_meta | kin_drbd_prefer_live_path(cluster_add_host_drbd_meta_disk) }}"
+    drbd_resource_device: "{{ cluster_survivor_replace_live_device | kin_drbd_prefer_live_path(cluster_add_host_drbd_device) }}"
+    # Both peers must name the same backing path style (raw or LUKS mapper).
+    # The new node opens the same mapper name via luks.yml before live-join.
+    drbd_resource_backing_disk: "{{ cluster_survivor_replace_live_disk | kin_drbd_prefer_live_path(cluster_add_host_drbd_disk) }}"
+  tags: [cluster, survivor, drbd]
+
+- name: Refuse to rewrite DRBD with an empty meta-disk or an unproven loop default
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_disk is search('^/dev/')
+      - drbd_resource_meta_disk is search('^/dev/')
+      - drbd_resource_device is search('^/dev/')
+      - drbd_resource_meta_disk != '/dev/loop21' or cluster_survivor_replace_live_meta == '/dev/loop21'
+    fail_msg: >-
+      cluster_survivor_replace would write disk={{ drbd_resource_disk }}
+      meta-disk={{ drbd_resource_meta_disk }}. The live file must already
+      name those paths, or inventory must set cluster_add_host_drbd_*
+      (rebuild meta is /dev/sdb2, not /dev/loop21).
+  tags: [cluster, survivor, drbd]
 
 - name: Check the current DRBD peer definition on the survivor
   ansible.builtin.command:
@@ -47,6 +104,7 @@
       --check mode: the DRBD template/adjust is NOT applied. The old peer is visible
       in the file: {{ cluster_survivor_replace_res_pre.stdout | default('(unreadable)') }}.
       New target peer: {{ cluster_add_host_new_name }} /
-      {{ cluster_add_host_new_address }}.
+      {{ cluster_add_host_new_address }}. Live backing kept:
+      {{ drbd_resource_backing_disk }}.
   when: ansible_check_mode
   tags: [cluster, survivor, drbd]

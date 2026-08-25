@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -185,10 +186,12 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         self._old_conf_file = ac.CONF_FILE
         self._old_topo_marker = ds.TOPOLOGY_MARKER
         self._old_ha_marker = ds.HA_SETUP_COMPLETE_MARKER
+        self._old_draft = ds.WIZARD_DRAFT_FILE
         ac.CONF_DIR = root / "kin-mail"
         ac.CONF_FILE = ac.CONF_DIR / "config"
         ds.TOPOLOGY_MARKER = root / "kin-mail" / "topology"
         ds.HA_SETUP_COMPLETE_MARKER = root / "kin-mail" / "ha-setup-complete"
+        ds.WIZARD_DRAFT_FILE = root / "wizard-draft.json"
         # privhelperd always runs as root in production; this sandbox does not.
         chown_patch = patch.object(ac.os, "chown")
         self.addCleanup(chown_patch.stop)
@@ -199,6 +202,7 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         ac.CONF_FILE = self._old_conf_file
         ds.TOPOLOGY_MARKER = self._old_topo_marker
         ds.HA_SETUP_COMPLETE_MARKER = self._old_ha_marker
+        ds.WIZARD_DRAFT_FILE = self._old_draft
 
     async def test_local_survivor_demotes_config_and_topology_marker(self) -> None:
         ac.write_config_file(
@@ -210,6 +214,18 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
                 "CLUSTER_VIP_IP": "192.0.2.16",
                 "MAIL_HOST": LOCAL,
             }
+        )
+        ds.WIZARD_DRAFT_FILE.write_text(
+            json.dumps(
+                {
+                    "topology": "2vm",
+                    "peer_host_ip": "192.0.2.14",
+                    "peer_host_name": PEER,
+                    "observability_vm_ip": "192.0.2.53",
+                    "cluster_vip_ip": "192.0.2.16",
+                }
+            ),
+            encoding="utf-8",
         )
         ds.HA_SETUP_COMPLETE_MARKER.parent.mkdir(parents=True, exist_ok=True)
         ds.HA_SETUP_COMPLETE_MARKER.write_text("pair\n", encoding="utf-8")
@@ -231,6 +247,7 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(ok)
         self.assertTrue(any("Demoted local" in n for n in notes))
+        self.assertTrue(any("wizard draft" in n for n in notes))
         body = ac.CONF_FILE.read_text(encoding="utf-8")
         self.assertIn('TOPOLOGY="1vm"', body)
         self.assertIn('PEER_HOST_IP=""', body)
@@ -239,6 +256,12 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('OBSERVABILITY_VM_IP="192.0.2.53"', body)
         self.assertEqual(ds.TOPOLOGY_MARKER.read_text(encoding="utf-8").strip(), "1vm")
         self.assertFalse(ds.HA_SETUP_COMPLETE_MARKER.is_file())
+        draft = json.loads(ds.WIZARD_DRAFT_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(draft.get("topology"), "1vm")
+        self.assertEqual(draft.get("peer_host_ip"), "")
+        self.assertEqual(draft.get("peer_host_name"), "")
+        self.assertEqual(draft.get("cluster_vip_ip"), "192.0.2.16")
+        self.assertEqual(draft.get("observability_vm_ip"), "192.0.2.53")
 
     async def test_local_survivor_already_1vm_is_noop_but_still_returns(self) -> None:
         ac.write_config_file({"TOPOLOGY": "1vm", "MAIL_HOST": LOCAL})
