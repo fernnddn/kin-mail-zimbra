@@ -1406,6 +1406,23 @@ async def cmd_run_ha_orchestration(
     yield emit_line("=== HA orchestration Slice 2 ===")
     yield emit_line(f"join_mode={join_mode} skip_remote_install={skip_remote}")
 
+    # Every host in the rendered inventory - including this one - connects
+    # over ansible_password (see render_inventory). A 1vm host that already
+    # ran the post-install SSH revert (kin-mail.sh, single-node only) would
+    # otherwise refuse the very connection this orchestration needs to reach
+    # itself. Idempotent and fast (just an sshd config toggle) if password
+    # SSH is already on.
+    try:
+        from .commands import _stream_subprocess, resolve_prepare_os
+
+        prep_script = resolve_prepare_os()
+        async for ev in _stream_subprocess(
+            [str(prep_script), "--ensure-ssh-password"], cwd=prep_script.parent
+        ):
+            yield ev
+    except (FileNotFoundError, RuntimeError) as exc:
+        yield emit_line(f"WARN: could not ensure local password SSH: {exc}", err=True)
+
     secrets_map = load_secrets()
     root_pass = secrets_map.get("host_root_pass") or ""
     kin_pass = secrets_map.get("kin_user_pass") or ""

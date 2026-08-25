@@ -730,16 +730,42 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn('f "NOT consistent:', health)
         self.assertIn("-10 minutes", health)
         prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
-        self.assertIn("00-kin-mail.conf", prepare)
-        self.assertIn("PasswordAuthentication yes", prepare)
-        self.assertIn("PermitRootLogin yes", prepare)
         self.assertIn("useradd -m -s /bin/bash -G sudo", prepare)
-        self.assertIn("PasswordAuthentication[[:space:]]+no", prepare)
+        # sshd config toggling itself lives in the sourced library (also used
+        # standalone by HA orchestration to re-enable password SSH on a 1vm
+        # host that already reverted it - see the KIN_CHAP_PASSWORD test
+        # below for the analogous CHAP-generation pinning).
+        self.assertIn("lib/ssh-password-toggle.sh", prepare)
+        toggle = (repo / "install/lib/ssh-password-toggle.sh").read_text(encoding="utf-8")
+        self.assertIn("00-kin-mail.conf", toggle)
+        self.assertIn("PasswordAuthentication yes", toggle)
+        self.assertIn("PermitRootLogin yes", toggle)
+        self.assertIn("PasswordAuthentication[[:space:]]+no", toggle)
+        self.assertIn("enable_ssh_password", toggle)
+        self.assertIn("disable_ssh_password", toggle)
         orch = (repo / "console/backend/kin_privhelper/orchestration.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("choose_shared_ssh_user", orch)
         self.assertIn("_push_peer_deploy_tree", orch)
+        # Every host in the rendered inventory, including this one, connects
+        # over ansible_password - a 1vm host that already ran the post-install
+        # SSH revert must have it turned back on before any SSH attempt here,
+        # not after.
+        self.assertIn("--ensure-ssh-password", orch)
+        ensure_idx = orch.index("--ensure-ssh-password")
+        # The ansible_env dict entry (the actual runtime value passed to the
+        # ansible-playbook subprocess), not render_inventory's template
+        # string - both contain the substring "KIN_ANSIBLE_PASSWORD" but
+        # only this one marks when the real connection attempt happens.
+        env_assignment = '"KIN_ANSIBLE_PASSWORD": ssh_pass,'
+        self.assertIn(env_assignment, orch)
+        first_ssh_attempt_idx = orch.index(env_assignment)
+        self.assertLess(
+            ensure_idx,
+            first_ssh_attempt_idx,
+            "--ensure-ssh-password must run before the first SSH/ansible connection attempt",
+        )
         self.assertIn(
             "secrets, extract, timeout=60, stdin_text=password",
             orch,

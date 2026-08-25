@@ -47,6 +47,10 @@ CREATE_MAILBOX_CANDIDATES = (
     "install/08-create-mailbox.sh",
     "08-create-mailbox.sh",
 )
+PREPARE_OS_CANDIDATES = (
+    "install/02-prepare-os.sh",
+    "02-prepare-os.sh",
+)
 
 
 def resolve_under_deploy(candidates: tuple[str, ...], label: str) -> Path:
@@ -96,6 +100,10 @@ def resolve_kin_mail() -> Path:
 
 def resolve_firewall() -> Path:
     return resolve_under_deploy(FIREWALL_CANDIDATES, "10-host-firewall.sh")
+
+
+def resolve_prepare_os() -> Path:
+    return resolve_under_deploy(PREPARE_OS_CANDIDATES, "02-prepare-os.sh")
 
 
 def resolve_create_mailbox() -> Path:

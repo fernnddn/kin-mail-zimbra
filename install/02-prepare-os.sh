@@ -8,37 +8,26 @@
 #       Turn password/root SSH back off once HA ansible no longer needs it
 #       (see stage 1b below). Refuses if no SSH key is on file for kin/root,
 #       so it can never lock the operator out.
+#   sudo ./02-prepare-os.sh --ensure-ssh-password
+#       Turn password/root SSH back ON. HA orchestration (Add second server,
+#       Build HA pair) connects to every node - including this one - over
+#       ansible_password, so a 1vm host that already reverted (above) needs
+#       this before it can join a pair. Fast: only touches sshd config, does
+#       not repeat OS-user creation or package install.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# shellcheck source=lib/ssh-password-toggle.sh
+. ./lib/ssh-password-toggle.sh
 need_root
 
 if [ "${1:-}" = "--revert-ssh-password" ]; then
-  OS_USER="${KIN_OS_USER:-kin}"
-  key_found=0
-  for home in "/home/${OS_USER}" "/root"; do
-    f="${home}/.ssh/authorized_keys"
-    if [ -s "$f" ]; then
-      key_found=1
-      info "Found authorized_keys: ${f}"
-    fi
-  done
-  if [ "$key_found" -ne 1 ]; then
-    fail "No authorized_keys found for ${OS_USER} or root - refusing to disable password SSH (would lock this host out)."
-    exit 1
-  fi
-  cat > /etc/ssh/sshd_config.d/00-kin-mail.conf <<'EOF'
-# KIN Mail - reverted to key-only once HA ansible no longer needs sshpass.
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin prohibit-password
-EOF
-  chmod 644 /etc/ssh/sshd_config.d/00-kin-mail.conf
-  if systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1; then
-    ok "sshd reverted to key-only (SSH key confirmed present first)"
-  else
-    warn "Could not reload sshd - key-only drop-in is in place; reboot or reload sshd"
-  fi
+  disable_ssh_password
+  exit $?
+fi
+
+if [ "${1:-}" = "--ensure-ssh-password" ]; then
+  enable_ssh_password
   exit 0
 fi
 
@@ -87,38 +76,9 @@ if [ -n "${HOST_ROOT_PASS:-}" ]; then
   }
   ok "Password set for root"
 fi
-install -d -m 755 /etc/ssh/sshd_config.d
 # OpenSSH uses the first obtained value; Include position varies by image.
 # Write our drop-in AND comment key-only lines in other drop-ins / sshd_config.
-cat > /etc/ssh/sshd_config.d/00-kin-mail.conf <<'EOF'
-# KIN Mail - password SSH for HA ansible (sshpass). Cloud-init key-only would
-# make Build HA pair fail even when the wizard passwords are correct.
-PasswordAuthentication yes
-KbdInteractiveAuthentication yes
-PermitRootLogin yes
-EOF
-chmod 644 /etc/ssh/sshd_config.d/00-kin-mail.conf
-shopt -s nullglob
-for f in /etc/ssh/sshd_config.d/*.conf; do
-  [ "$(basename "$f")" = "00-kin-mail.conf" ] && continue
-  sed -i -E \
-    -e 's/^([[:space:]]*PasswordAuthentication[[:space:]]+no)/# KIN Mail: \1/' \
-    -e 's/^([[:space:]]*KbdInteractiveAuthentication[[:space:]]+no)/# KIN Mail: \1/' \
-    -e 's/^([[:space:]]*PermitRootLogin[[:space:]]+(no|prohibit-password|without-password))/# KIN Mail: \1/' \
-    "$f"
-done
-if [ -f /etc/ssh/sshd_config ]; then
-  sed -i -E \
-    -e 's/^#?[[:space:]]*PasswordAuthentication[[:space:]].*/PasswordAuthentication yes/' \
-    -e 's/^#?[[:space:]]*KbdInteractiveAuthentication[[:space:]].*/KbdInteractiveAuthentication yes/' \
-    -e 's/^#?[[:space:]]*PermitRootLogin[[:space:]].*/PermitRootLogin yes/' \
-    /etc/ssh/sshd_config
-fi
-if systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1; then
-  ok "sshd allows password login for kin/root (HA ansible)"
-else
-  warn "Could not reload sshd - password SSH drop-in is in place; reboot or reload sshd"
-fi
+enable_ssh_password
 
 # --- 2. /etc/hosts -----------------------------------------------------------
 # The FQDN must resolve to the LAN address during Zimbra install. Ubuntu's
