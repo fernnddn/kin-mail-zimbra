@@ -230,6 +230,99 @@ def _host_for(name: str, ip: str) -> OrchHost:
     return OrchHost(name, ip, _iqn_suffix(name))
 
 
+async def _demote_survivor_topology_to_1vm(
+    *,
+    plan: RemovePlan,
+    survivor_host: OrchHost,
+    ssh_user: str,
+    ssh_pass: str,
+    secrets: list[str],
+) -> list[str]:
+    """Set TOPOLOGY=1vm and clear PEER_HOST_*/OBSERVABILITY_VM_IP/CLUSTER_VIP_IP
+    on the surviving node's console config, after a successful remove-host.
+
+    The ansible role only touches Pacemaker/Corosync/DRBD membership - nothing
+    rewrites /etc/kin-mail/config. Left at TOPOLOGY=2vm, the survivor keeps
+    console_users_sync doing replica-first pushes toward the now-retired peer
+    (503s) and the wizard keeps offering 2vm-only actions.
+    """
+    from .apply_config import (
+        CONF_FILE,
+        ensure_topology_1vm,
+        format_config,
+        parse_config,
+        write_config_file,
+    )
+
+    notes: list[str] = []
+    if plan.local_is_survivor:
+        try:
+            text = CONF_FILE.read_text(encoding="utf-8") if CONF_FILE.is_file() else ""
+        except OSError as exc:
+            notes.append(f"could not read local config to demote topology: {exc}")
+            return notes
+        values = parse_config(text)
+        new_values, changed = ensure_topology_1vm(values)
+        if changed:
+            try:
+                write_config_file(new_values)
+            except OSError as exc:
+                notes.append(f"could not write demoted local config: {exc}")
+                return notes
+        from .deploy_state import write_topology_marker
+
+        write_topology_marker("1vm")
+        notes.append("Demoted local /etc/kin-mail/config to TOPOLOGY=1vm, cleared peer fields")
+        return notes
+
+    # Survivor is remote (this console is on the departing node): read/write
+    # its config over the same password-SSH path used for peer HA console sync.
+    from .orchestration import _push_peer_text_file, _ssh_run
+
+    code, blob = await _ssh_run(
+        survivor_host,
+        ssh_user,
+        ssh_pass,
+        secrets,
+        "cat /etc/kin-mail/config 2>/dev/null || true",
+        timeout=20,
+    )
+    if code != 0:
+        notes.append(f"could not read survivor config over SSH (exit {code}); topology not demoted")
+        return notes
+    values = parse_config(blob)
+    new_values, changed = ensure_topology_1vm(values)
+    if changed:
+        code, _text = await _push_peer_text_file(
+            survivor_host,
+            ssh_user,
+            ssh_pass,
+            secrets,
+            body=format_config(new_values),
+            remote_tmp="/tmp/kin-mail-survivor-config",
+            dest="/etc/kin-mail/config",
+            mode="600",
+        )
+        if code != 0:
+            notes.append(f"failed to push demoted config to survivor (exit {code})")
+            return notes
+    code, _text = await _push_peer_text_file(
+        survivor_host,
+        ssh_user,
+        ssh_pass,
+        secrets,
+        body="1vm\n",
+        remote_tmp="/tmp/kin-mail-survivor-topology",
+        dest="/etc/kin-mail/topology",
+        mode="644",
+    )
+    if code != 0:
+        notes.append(f"failed to push /etc/kin-mail/topology=1vm to survivor (exit {code})")
+        return notes
+    notes.append("Demoted survivor /etc/kin-mail/config and topology marker to TOPOLOGY=1vm over SSH")
+    return notes
+
+
 async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     from .maintenance import (
         gather_status,
@@ -483,6 +576,16 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
             return
         ansible_ok = True
         yield await _emit("survivor-side remove-host playbook finished")
+
+        demote_notes = await _demote_survivor_topology_to_1vm(
+            plan=plan,
+            survivor_host=survivor_host,
+            ssh_user=ssh_user,
+            ssh_pass=ssh_pass,
+            secrets=secrets,
+        )
+        for line in demote_notes:
+            yield await _emit(line)
 
         script = uninstall_script()
         remote_cmd = f"sudo -n {script} --decommission"

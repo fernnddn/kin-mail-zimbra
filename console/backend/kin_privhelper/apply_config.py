@@ -195,6 +195,58 @@ def ensure_topology_2vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
     return out, True
 
 
+def ensure_topology_1vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
+    """Set TOPOLOGY=1vm and clear peer/cluster fields (remove-host demote).
+
+    Mirrors the 1vm branch of merge_draft(). Without this, a survivor left
+    at TOPOLOGY=2vm with a stale PEER_HOST_IP/NAME after remove-host keeps
+    console_users_sync doing replica-first pushes toward the retired node.
+    Does not invent other keys. Caller writes with format_config().
+    """
+    current = str(values.get("TOPOLOGY") or "").strip().lower()
+    peer_ip = str(values.get("PEER_HOST_IP") or "").strip()
+    peer_name = str(values.get("PEER_HOST_NAME") or "").strip()
+    if current in ("1vm", "1") and not peer_ip and not peer_name:
+        return dict(values), False
+    out = dict(values)
+    out["TOPOLOGY"] = "1vm"
+    out["PEER_HOST_IP"] = ""
+    out["PEER_HOST_NAME"] = ""
+    out["OBSERVABILITY_VM_IP"] = ""
+    out["CLUSTER_VIP_IP"] = ""
+    return out, True
+
+
+def write_config_file(values: dict[str, str]) -> None:
+    """Atomically write /etc/kin-mail/config, preserving ownership.
+
+    Backs up the previous file first (same convention as apply_wizard_draft's
+    inline write). Raises OSError on failure - caller decides how to report it.
+    """
+    from .deploy_state import ensure_kin_mail_dir
+
+    existed = CONF_FILE.is_file()
+    if existed:
+        stamp = int(time.time())
+        backup = CONF_FILE.with_name(f"config.bak.{stamp}")
+        shutil.copy2(CONF_FILE, backup)
+        os.chmod(backup, 0o600)
+        st = CONF_FILE.stat()
+        os.chown(backup, st.st_uid, st.st_gid)
+
+    ensure_kin_mail_dir(CONF_DIR)
+    tmp = CONF_FILE.with_suffix(".tmp")
+    tmp.write_text(format_config(values), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    if existed:
+        st = CONF_FILE.stat()
+        os.chown(tmp, st.st_uid, st.st_gid)
+    else:
+        os.chown(tmp, 0, 0)
+    tmp.replace(CONF_FILE)
+    os.chmod(CONF_FILE, 0o600)
+
+
 def parse_ip_dash_o_v4(text: str) -> list[tuple[str, str]]:
     """Parse `ip -4 -o addr show scope global` into (ipv4, iface) pairs."""
     rows: list[tuple[str, str]] = []

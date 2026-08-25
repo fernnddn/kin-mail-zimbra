@@ -242,7 +242,12 @@ async def acquire_run_slot(
     can run again.
     """
     global _running, _run_gen, _running_since
-    installing_fn = is_installing or deploy_state.full_install_in_progress
+    # pipeline_in_progress(), not full_install_in_progress(): the latter only
+    # matches kin-mail.sh/zmsetup processes, so an HA orchestration run (which
+    # is ansible-playbook + peer SSH, no such process on this host once disk
+    # prep hands off) looked like a stale lock and got stolen out from under
+    # it after BUSY_WAIT_SEC.
+    installing_fn = is_installing or deploy_state.pipeline_in_progress
     timeout = BUSY_WAIT_SEC if wait_sec is None else wait_sec
     can_wait = cmd in PIPELINE_WAIT_CMDS
     deadline = time.monotonic() + (timeout if can_wait else 0.0)

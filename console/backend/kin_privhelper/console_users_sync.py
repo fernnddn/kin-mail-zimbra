@@ -8,13 +8,15 @@ passwords and bcrypt hashes are never logged.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import re
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from . import protocol as proto
 from .orchestration import OrchHost
@@ -25,6 +27,57 @@ USERS_REMOTE_TMP = "/tmp/kin-mail-peer-users"
 MUTATION_REMOTE_TMP = "/tmp/kin-mail-peer-users-mut"
 _MUTATION_FILE_RE = re.compile(r"^/tmp/kin-mail-peer-users-mut$")
 CONSOLE_USERS_OWNER = os.environ.get("KIN_CONSOLE_USERS_OWNER", "kin-console")
+
+# apply-file (SSH-invoked on the Promoted node when the mutation originated on
+# the other node) runs as its own standalone process, entirely outside
+# privhelperd's single-flight _running lock. Without this, it can race an
+# in-daemon console-user commit on the same node: both read users.json before
+# either writes, and one edit silently disappears (lost update), or the two
+# processes push conflicting bodies to the peer in different orders.
+USERS_MUTATION_LOCK = Path(
+    os.environ.get("KIN_USERS_MUTATION_LOCK", "/var/lib/kin-mail-console/users-mutation.lock")
+)
+
+
+def _lock_users_mutation(timeout: float = 15.0) -> IO[str] | None:
+    """Bounded-wait flock around a read-modify-write of users.json.
+
+    Poll-based (like daemon.acquire_run_slot's steal-wait), not blocking
+    fcntl.flock(), so a stuck holder cannot hang this process forever.
+    Returns None on timeout or if the lock file cannot be opened - callers
+    then refuse the mutation rather than risk a silent lost update.
+    """
+    try:
+        USERS_MUTATION_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(USERS_MUTATION_LOCK, "a+", encoding="utf-8")
+    except OSError:
+        return None
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                fh.close()
+                return None
+            time.sleep(0.2)
+        except OSError:
+            fh.close()
+            return None
+
+
+def _unlock_users_mutation(fh: IO[str] | None) -> None:
+    if fh is None:
+        return
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        fh.close()
+    except OSError:
+        pass
 
 SYNC_FAIL = (
     "Could not sync console users to the other mail node. "
@@ -466,36 +519,52 @@ async def run_mutate(
         payload = {"ok": True, "code": "ok", "user": public}
         return 0, payload, note
 
-    target_user, new_users = apply_mutation_to_users(load_users(), mutation)
-    from kin_console.users import users_json_text
+    # A concurrent apply-file SSH invocation (mutation forwarded from the
+    # other node) runs outside privhelperd's process and its _running lock -
+    # only this flock stands between the two racing on the same users.json.
+    # Acquire off the event loop thread: the wait is a blocking poll loop
+    # that must not stall every other connection privhelperd is serving.
+    lock_fh = await asyncio.to_thread(_lock_users_mutation)
+    if lock_fh is None:
+        payload = {
+            "ok": False,
+            "code": "sync_failed",
+            "error": "Another console user change is already being applied on this node. Retry shortly.",
+        }
+        return 1, payload, str(payload["error"])
+    try:
+        target_user, new_users = apply_mutation_to_users(load_users(), mutation)
+        from kin_console.users import users_json_text
 
-    body = users_json_text(new_users)
+        body = users_json_text(new_users)
 
-    def write_local() -> None:
-        _write_local_users(new_users, mutation)
+        def write_local() -> None:
+            _write_local_users(new_users, mutation)
 
-    if plan["action"] == "push_peer_then_commit":
-        replica = OrchHost(
-            str(plan.get("replica_name") or "peer"),
-            str(plan.get("replica_ip") or ""),
-            "peer",
-        )
-        ok, err = await push_users_json_to(replica, body)
+        if plan["action"] == "push_peer_then_commit":
+            replica = OrchHost(
+                str(plan.get("replica_name") or "peer"),
+                str(plan.get("replica_ip") or ""),
+                "peer",
+            )
+            ok, err = await push_users_json_to(replica, body)
+            if not ok:
+                payload = {"ok": False, "code": "sync_failed", "error": err}
+                return 1, payload, err
+            write_local()
+            public = target_user.public() if target_user is not None else None
+            payload = {"ok": True, "code": "ok", "user": public}
+            return 0, payload, "Pushed console users to the other mail node, then applied locally"
+
+        ok, reason = commit_users_store(action=plan["action"], write_local=write_local)
         if not ok:
-            payload = {"ok": False, "code": "sync_failed", "error": err}
-            return 1, payload, err
-        write_local()
+            payload = {"ok": False, "code": "sync_failed", "error": reason}
+            return 1, payload, reason
         public = target_user.public() if target_user is not None else None
         payload = {"ok": True, "code": "ok", "user": public}
-        return 0, payload, "Pushed console users to the other mail node, then applied locally"
-
-    ok, reason = commit_users_store(action=plan["action"], write_local=write_local)
-    if not ok:
-        payload = {"ok": False, "code": "sync_failed", "error": reason}
-        return 1, payload, reason
-    public = target_user.public() if target_user is not None else None
-    payload = {"ok": True, "code": "ok", "user": public}
-    return 0, payload, "Console user change applied on this node"
+        return 0, payload, "Console user change applied on this node"
+    finally:
+        _unlock_users_mutation(lock_fh)
 
 
 async def cmd_mutate_console_users(
@@ -571,23 +640,43 @@ async def _apply_file(path: str) -> int:
                 )
             )
             return 1
-        target_user, new_users = apply_mutation_to_users(load_users(), mutation)
-        from kin_console.users import users_json_text
-
-        body = users_json_text(new_users)
-        replica = OrchHost(
-            str(plan.get("replica_name") or "peer"),
-            str(plan.get("replica_ip") or ""),
-            "peer",
-        )
-        ok, err = await push_users_json_to(replica, body)
-        if not ok:
-            print("USERS_RESULT:" + json.dumps({"ok": False, "code": "sync_failed", "error": err}))
+        # Same flock as the in-daemon run_mutate() commit path: apply-file is
+        # its own standalone process (launched fresh over SSH per mutation),
+        # entirely outside privhelperd's _running lock, so this is the only
+        # thing serializing it against a same-time local console-user commit.
+        lock_fh = await asyncio.to_thread(_lock_users_mutation)
+        if lock_fh is None:
+            print(
+                "USERS_RESULT:"
+                + json.dumps(
+                    {
+                        "ok": False,
+                        "code": "sync_failed",
+                        "error": "Another console user change is already being applied on this node.",
+                    }
+                )
+            )
             return 1
-        _write_local_users(new_users, mutation)
-        public = target_user.public() if target_user is not None else None
-        print("USERS_RESULT:" + json.dumps({"ok": True, "code": "ok", "user": public}, separators=(",", ":")))
-        return 0
+        try:
+            target_user, new_users = apply_mutation_to_users(load_users(), mutation)
+            from kin_console.users import users_json_text
+
+            body = users_json_text(new_users)
+            replica = OrchHost(
+                str(plan.get("replica_name") or "peer"),
+                str(plan.get("replica_ip") or ""),
+                "peer",
+            )
+            ok, err = await push_users_json_to(replica, body)
+            if not ok:
+                print("USERS_RESULT:" + json.dumps({"ok": False, "code": "sync_failed", "error": err}))
+                return 1
+            _write_local_users(new_users, mutation)
+            public = target_user.public() if target_user is not None else None
+            print("USERS_RESULT:" + json.dumps({"ok": True, "code": "ok", "user": public}, separators=(",", ":")))
+            return 0
+        finally:
+            _unlock_users_mutation(lock_fh)
     except KeyError:
         print("USERS_RESULT:" + json.dumps({"ok": False, "code": "not_found", "error": "User not found"}))
         return 1

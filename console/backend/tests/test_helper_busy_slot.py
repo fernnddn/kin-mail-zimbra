@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 
+from kin_privhelper import deploy_state as ds
 from kin_privhelper import protocol as proto
 from kin_privhelper.daemon import (
     acquire_run_slot,
@@ -78,6 +81,42 @@ class HelperRunSlotTests(unittest.IsolatedAsyncioTestCase):
             wait_sec=2,
             is_installing=lambda: False,
         )
+        self.assertIsNotNone(token)
+        await release_run_slot(token)
+
+
+class HelperRunSlotProductionDefaultTests(unittest.IsolatedAsyncioTestCase):
+    """Exercise acquire_run_slot(cmd) exactly as daemon._handle calls it - no
+    explicit is_installing - so a bug in the default (e.g. checking only
+    full_install_in_progress and missing a live HA orchestration run) shows
+    up here instead of only in tests that stub the check away.
+    """
+
+    def setUp(self) -> None:
+        reset_run_slot_for_tests()
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self._old_ha = ds.HA_ORCH_RUNNING_MARKER
+        ds.HA_ORCH_RUNNING_MARKER = Path(self._td.name) / "ha-orchestration.running"
+        self.addCleanup(setattr, ds, "HA_ORCH_RUNNING_MARKER", self._old_ha)
+
+    def tearDown(self) -> None:
+        reset_run_slot_for_tests()
+
+    async def test_does_not_steal_lock_while_ha_orchestration_marker_present(self) -> None:
+        ds.HA_ORCH_RUNNING_MARKER.write_text("started\n", encoding="utf-8")
+        mark_run_slot_busy_for_tests()  # simulate the run_ha_orchestration handler
+        token = await acquire_run_slot(proto.CMD_RUN_HA_ORCHESTRATION, wait_sec=0)
+        self.assertIsNone(
+            token,
+            "acquire_run_slot's default is_installing must treat a live HA "
+            "orchestration marker as work in progress, not steal the lock",
+        )
+
+    async def test_steals_when_no_marker_and_no_install_process(self) -> None:
+        self.assertFalse(ds.HA_ORCH_RUNNING_MARKER.exists())
+        mark_run_slot_busy_for_tests()
+        token = await acquire_run_slot(proto.CMD_RUN_HA_ORCHESTRATION, wait_sec=0)
         self.assertIsNotNone(token)
         await release_run_slot(token)
 

@@ -6,6 +6,7 @@ import unittest
 
 from kin_privhelper.apply_config import (
     cloudflare_creds_error,
+    ensure_topology_1vm,
     ensure_topology_2vm,
     format_config,
     iface_for_ipv4,
@@ -151,6 +152,83 @@ class TopologyUpsertTests(unittest.TestCase):
     def test_numeric_2_is_already_2vm(self) -> None:
         out, changed = ensure_topology_2vm({"TOPOLOGY": "2"})
         self.assertFalse(changed)
+
+    def test_demote_clears_peer_and_cluster_fields(self) -> None:
+        values = {
+            "TOPOLOGY": "2vm",
+            "PEER_HOST_IP": "192.0.2.14",
+            "PEER_HOST_NAME": "mail2.example.test",
+            "OBSERVABILITY_VM_IP": "192.0.2.53",
+            "CLUSTER_VIP_IP": "192.0.2.16",
+            "MAIL_HOST": "mail.example.test",
+        }
+        out, changed = ensure_topology_1vm(values)
+        self.assertTrue(changed)
+        self.assertEqual(out["TOPOLOGY"], "1vm")
+        self.assertEqual(out["PEER_HOST_IP"], "")
+        self.assertEqual(out["PEER_HOST_NAME"], "")
+        self.assertEqual(out["OBSERVABILITY_VM_IP"], "")
+        self.assertEqual(out["CLUSTER_VIP_IP"], "")
+        self.assertEqual(out["MAIL_HOST"], "mail.example.test")
+
+    def test_demote_already_1vm_and_clean_is_noop(self) -> None:
+        values = {"TOPOLOGY": "1vm", "MAIL_HOST": "mail.example.test"}
+        out, changed = ensure_topology_1vm(values)
+        self.assertFalse(changed)
+        self.assertEqual(out["MAIL_HOST"], "mail.example.test")
+
+    def test_demote_1vm_with_leftover_peer_ip_still_writes(self) -> None:
+        # A host that reached 1vm some other way but still carries a stale
+        # PEER_HOST_IP must still be cleaned up, not treated as a no-op.
+        values = {"TOPOLOGY": "1vm", "PEER_HOST_IP": "192.0.2.14"}
+        out, changed = ensure_topology_1vm(values)
+        self.assertTrue(changed)
+        self.assertEqual(out["PEER_HOST_IP"], "")
+
+
+class ConfigFileWriteTests(unittest.TestCase):
+    """write_config_file() - the remove-host demote path needs a real write,
+    not just the pure merge, so exercise it against a scratch directory.
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path as _Path
+        from unittest.mock import patch
+
+        from kin_privhelper import apply_config as ac
+
+        self._ac = ac
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self._old_dir = ac.CONF_DIR
+        self._old_file = ac.CONF_FILE
+        ac.CONF_DIR = _Path(self._td.name) / "kin-mail"
+        ac.CONF_FILE = ac.CONF_DIR / "config"
+        # os.chown(uid 0) needs real root; privhelperd always runs as root in
+        # production, this test only cares that the right chown call happens.
+        chown_patch = patch.object(ac.os, "chown")
+        self._chown = chown_patch.start()
+        self.addCleanup(chown_patch.stop)
+
+    def tearDown(self) -> None:
+        self._ac.CONF_DIR = self._old_dir
+        self._ac.CONF_FILE = self._old_file
+
+    def test_writes_fresh_file_root_owned_mode_0600(self) -> None:
+        self._ac.write_config_file({"TOPOLOGY": "1vm", "MAIL_HOST": "mail.example.test"})
+        self.assertTrue(self._ac.CONF_FILE.is_file())
+        body = self._ac.CONF_FILE.read_text(encoding="utf-8")
+        self.assertIn('TOPOLOGY="1vm"', body)
+        self.assertEqual(self._ac.CONF_FILE.stat().st_mode & 0o777, 0o600)
+
+    def test_rewrite_backs_up_previous_file(self) -> None:
+        self._ac.write_config_file({"TOPOLOGY": "2vm"})
+        self._ac.write_config_file({"TOPOLOGY": "1vm"})
+        backups = list(self._ac.CONF_DIR.glob("config.bak.*"))
+        self.assertEqual(len(backups), 1)
+        self.assertIn('TOPOLOGY="2vm"', backups[0].read_text(encoding="utf-8"))
+        self.assertIn('TOPOLOGY="1vm"', self._ac.CONF_FILE.read_text(encoding="utf-8"))
 
 
 class PeerPayloadTests(unittest.TestCase):

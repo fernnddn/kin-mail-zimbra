@@ -355,6 +355,27 @@ class InventoryTests(unittest.TestCase):
         self.assertGreater(marker_idx, fail_idx)
         self.assertGreater(marker_idx, sync_idx)
 
+    def test_admin_pass_is_added_to_ha_stream_redaction_before_ansible_runs(self) -> None:
+        # HA stream redaction used to cover only root/kin/hacluster/chap - the
+        # peer installer's own stdout (echoed through this stream) can also
+        # contain the Zimbra ADMIN_PASS it was handed (platform bug audit,
+        # 25 Aug 2026).
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "orchestration.py"
+        ).read_text(encoding="utf-8")
+        base_idx = text.find("secrets = [root_pass, kin_pass, hacluster_pass, chap_pass]")
+        admin_idx = text.find("secrets.append(admin_pass)")
+        ansible_idx = text.find('yield emit_line(f"RUN {\' \'.join(argv)}")')
+        self.assertGreater(base_idx, 0)
+        self.assertGreater(admin_idx, 0)
+        self.assertGreater(ansible_idx, 0)
+        self.assertLess(base_idx, admin_idx)
+        self.assertLess(admin_idx, ansible_idx)
+
     def test_disk_preflight_refuse_stamps_orch_failed(self) -> None:
         from pathlib import Path
 
@@ -1161,6 +1182,74 @@ class PeerInstallArchiveTests(unittest.TestCase):
             dest = Path(td) / "peer-install.tgz"
             with self.assertRaises(FileNotFoundError):
                 build_peer_install_archive(src, dest)
+
+
+class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
+    """sync_peer_ha_console_state must not leave the peer at TOPOLOGY=2vm +
+    ha-setup-complete when the users.json push fails - that split state used
+    to strand the local wizard on the anonymous pre-deploy Super Admin
+    identity even though the peer already looked fully done (platform bug
+    audit, 25 Aug 2026).
+    """
+
+    _PROBE_BLOB = (
+        "KIN_PEER_STATE_BEGIN\nHA=0\nSETUP=0\nCFG=1\nTOPO=0\nKIN_PEER_STATE_END\n"
+        "KIN_PEER_HA_BEGIN\nKIN_PEER_HA_END\n"
+        "KIN_PEER_TOPO_BEGIN\nKIN_PEER_TOPO_END\n"
+        'KIN_PEER_CFG_BEGIN\nTOPOLOGY="1vm"\nKIN_PEER_CFG_END\n'
+    )
+
+    async def test_users_push_failure_writes_no_peer_marker(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(False, "users push boom")),
+            ),
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(return_value=(0, "")),
+            ) as push_file,
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertFalse(ok)
+        self.assertTrue(any("users push boom" in n for n in notes))
+        push_file.assert_not_awaited()
+
+    async def test_users_push_success_then_writes_peer_markers(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(True, "users pushed")),
+            ),
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(return_value=(0, "")),
+            ) as push_file,
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertTrue(ok)
+        self.assertTrue(any("users pushed" in n for n in notes))
+        push_file.assert_awaited()
 
 
 if __name__ == "__main__":

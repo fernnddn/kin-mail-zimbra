@@ -13,6 +13,7 @@ from kin_console.users import (
     apply_delete_user,
     apply_set_local_password,
 )
+from kin_privhelper import console_users_sync as cus
 from kin_privhelper.console_users_sync import (
     SYNC_FAIL,
     apply_mutation_to_users,
@@ -202,17 +203,28 @@ class ApplyMutationTests(unittest.TestCase):
 
 
 class HaSyncWiringTests(unittest.TestCase):
-    def test_peer_console_sync_always_copies_users_json(self) -> None:
+    def test_peer_console_sync_pushes_users_before_any_completion_marker(self) -> None:
+        # users.json must land (or the whole sync must fail) before any
+        # ha-setup-complete/setup-complete/topology marker is written to the
+        # peer. Users used to be pushed last: a failure there after markers
+        # already landed left the peer durably "done" while this node's own
+        # ha-setup-complete was never written (platform bug audit, 25 Aug
+        # 2026) - the local wizard stayed on the anonymous pre-deploy Super
+        # Admin identity even though mail was already live on both nodes.
         text = (
             Path(__file__).resolve().parents[1]
             / "kin_privhelper"
             / "orchestration.py"
         ).read_text(encoding="utf-8")
         self.assertIn("push_local_users_to_peer", text)
-        noop_idx = text.find("Peer console already has TOPOLOGY=2vm")
         users_idx = text.find("push_local_users_to_peer")
+        noop_idx = text.find("Peer console already has TOPOLOGY=2vm")
+        ha_marker_idx = text.find("Wrote ha-setup-complete on the peer")
+        self.assertGreater(users_idx, 0)
         self.assertGreater(noop_idx, 0)
-        self.assertGreater(users_idx, noop_idx)
+        self.assertGreater(ha_marker_idx, 0)
+        self.assertLess(users_idx, noop_idx)
+        self.assertLess(users_idx, ha_marker_idx)
         self.assertIn("getent passwd kin-console", text)
         self.assertIn(
             "useradd --system --home /var/lib/kin-mail-console",
@@ -265,6 +277,37 @@ class ApplyFileSymlinkGuardTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 if mut_path.exists() or mut_path.is_symlink():
                     mut_path.unlink()
+
+
+class UsersMutationLockTests(unittest.TestCase):
+    """apply-file runs as its own standalone process outside privhelperd's
+    _running lock (platform bug audit, 25 Aug 2026). This flock is the only
+    thing serializing it against an in-daemon console-user commit racing the
+    same users.json - prove contention is actually detected, not just wired.
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self._old = cus.USERS_MUTATION_LOCK
+        cus.USERS_MUTATION_LOCK = Path(self._td.name) / "users-mutation.lock"
+        self.addCleanup(setattr, cus, "USERS_MUTATION_LOCK", self._old)
+
+    def test_second_acquire_fails_while_first_is_held(self) -> None:
+        first = cus._lock_users_mutation(timeout=1.0)
+        self.assertIsNotNone(first)
+        second = cus._lock_users_mutation(timeout=0.3)
+        self.assertIsNone(second, "a concurrent holder must not also acquire the lock")
+        cus._unlock_users_mutation(first)
+
+    def test_lock_is_reusable_after_release(self) -> None:
+        first = cus._lock_users_mutation(timeout=1.0)
+        cus._unlock_users_mutation(first)
+        second = cus._lock_users_mutation(timeout=1.0)
+        self.assertIsNotNone(second, "lock must be acquirable again once released")
+        cus._unlock_users_mutation(second)
 
 
 if __name__ == "__main__":

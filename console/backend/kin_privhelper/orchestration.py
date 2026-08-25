@@ -1133,6 +1133,23 @@ async def sync_peer_ha_console_state(
         setup_marker_present=bool(probe.get("setup_present")),
         topology_marker_text=str(probe.get("topology_text") or ""),
     )
+
+    # Push users.json first, before any completion marker lands on the peer.
+    # Used to run last: a failure here after the markers had already been
+    # written left the peer durably at TOPOLOGY=2vm + ha-setup-complete
+    # (login-gated, cluster "done") while record_ha_orchestration_success()
+    # on this node was never reached (caller only calls it when this whole
+    # function returns ok) - the local wizard kept the anonymous pre-deploy
+    # Super Admin identity even though mail was already live on both nodes.
+    # Failing here now, before any marker write, keeps both sides
+    # consistently "not yet complete" and safely retryable.
+    from .console_users_sync import push_local_users_to_peer
+
+    users_ok, users_note = await push_local_users_to_peer(host, user, password, secrets)
+    notes.append(users_note)
+    if not users_ok:
+        return False, notes
+
     if plan["noop"]:
         notes.append(
             "Peer console already has TOPOLOGY=2vm and completion markers; nothing to write."
@@ -1218,12 +1235,6 @@ async def sync_peer_ha_console_state(
                 return False, notes
             notes.append("Wrote setup-complete on the peer (was missing)")
 
-    from .console_users_sync import push_local_users_to_peer
-
-    users_ok, users_note = await push_local_users_to_peer(host, user, password, secrets)
-    notes.append(users_note)
-    if not users_ok:
-        return False, notes
     return True, notes
 
 
@@ -1476,6 +1487,13 @@ async def cmd_run_ha_orchestration(
         yield emit_line(f"Refusing: {exc}", err=True)
         yield proto.event_done(2)
         return
+
+    # The peer installer's own stdout (echoed through this HA stream) can
+    # include the Zimbra admin password it was handed - root/kin/hacluster/
+    # chap covered every OS-level secret but not this one.
+    admin_pass = str(config.get("ADMIN_PASS") or "").strip()
+    if admin_pass:
+        secrets.append(admin_pass)
 
     topology = str(draft.get("topology") or config.get("TOPOLOGY") or "").strip()
     if topology and topology not in ("2vm", "2"):
