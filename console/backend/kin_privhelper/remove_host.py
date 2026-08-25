@@ -90,6 +90,16 @@ def plan_remove_host(
 
     local_is_survivor = bool(survivor) and names_match(local_canon, survivor)
 
+    # Never remove the host that is serving this console session. Operators
+    # must open the peer console (or the VIP on the peer after a move) to
+    # retire the other node. Self-remove used to uninstall mid-session and
+    # leave VIP/console cut off during the job.
+    if local_is_target:
+        errors.append(
+            "refusing to remove the host serving this console; open the peer "
+            "console and remove this node from there"
+        )
+
     if local_is_target and not others:
         errors.append("refusing to remove the last remaining mail node")
 
@@ -199,6 +209,7 @@ def probe_payload(plan: RemovePlan, *, target_ssh_ok: bool) -> dict[str, Any]:
         "survivor": plan.survivor,
         "reachable": target_ssh_ok,
         "local_is_survivor": plan.local_is_survivor,
+        "local_is_target": plan.local_is_target,
         "errors": list(plan.errors),
         "notes": list(plan.notes),
     }

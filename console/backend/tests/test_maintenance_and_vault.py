@@ -507,6 +507,214 @@ class RbacTests(unittest.TestCase):
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "remove_observability"))
         self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "add_observability"))
 
+    def test_customer_cannot_failback(self) -> None:
+        self.assertFalse(command_allowed(ROLE_CUSTOMER_ADMIN, "maintenance", args={"op": "failback"}))
+        self.assertTrue(command_allowed(ROLE_SUPER_ADMIN, "maintenance", args={"op": "failback"}))
+        self.assertTrue(command_allowed(ROLE_SUPPORT_OPS, "maintenance", args={"op": "failback"}))
+
+
+class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
+    """Controlled Master move: ban current Promoted, wait, clear."""
+
+    async def _run(self, target: str = "mail.example.test") -> list[dict]:
+        from kin_privhelper.maintenance import cmd_maintenance
+
+        return [ev async for ev in cmd_maintenance({"op": "failback", "target": target})]
+
+    def _status(self, **overrides: object) -> dict:
+        st: dict = {
+            "local_host": "mail2.example.test",
+            "topology": "2vm",
+            "nodes": ["mail.example.test", "mail2.example.test"],
+            "standby": [],
+            "offline": [],
+            "promoted": "mail2.example.test",
+            "promoted_names": ["mail2.example.test"],
+            "promoted_conflict": False,
+            "unpromoted": ["mail.example.test"],
+            "zimbra_node": "mail2.example.test",
+            "vip_ip": "192.0.2.16",
+            "vip_node": "mail2.example.test",
+            "drbd_uptodate": True,
+            "drbd_sync_percent": None,
+            "qdevice_ok": True,
+            "failcount_ok": True,
+            "failcount_lines": [],
+        }
+        st.update(overrides)
+        return st
+
+    async def test_bans_current_then_clears_after_settle(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        target = "mail.example.test"
+        current = "mail2.example.test"
+        calls: list[list[str]] = []
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            calls.append(list(argv))
+            joined = " ".join(argv)
+            if "kin-assert-no-dual-primary" in joined:
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:3] == ["pcs", "resource", "ban"]:
+                return 0, "ban ok\n", ""
+            if argv[:3] == ["pcs", "resource", "clear"]:
+                return 0, "clear ok\n", ""
+            if argv[0] == "curl":
+                return 0, "200", ""
+            return 0, "", ""
+
+        settle_states = [
+            self._status(),  # initial gate
+            self._status(),  # after sync wait (already uptodate)
+            # mid settle: still on current
+            self._status(),
+            # settled on target
+            self._status(
+                promoted=target,
+                promoted_names=[target],
+                vip_node=target,
+                zimbra_node=target,
+            ),
+            # post-clear verify
+            self._status(
+                promoted=target,
+                promoted_names=[target],
+                vip_node=target,
+                zimbra_node=target,
+            ),
+        ]
+        status_iter = iter(settle_states)
+
+        async def gather_side() -> dict:
+            try:
+                return next(status_iter)
+            except StopIteration:
+                return self._status(
+                    promoted=target,
+                    promoted_names=[target],
+                    vip_node=target,
+                    zimbra_node=target,
+                )
+
+        assert_path = MagicMock()
+        assert_path.is_file.return_value = True
+        assert_path.__str__.return_value = "/usr/local/sbin/kin-assert-no-dual-primary.sh"
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch("kin_privhelper.maintenance.ASSERT_SCRIPT", assert_path),
+            patch(
+                "kin_privhelper.maintenance.resolve_target",
+                new=AsyncMock(return_value=target),
+            ),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(side_effect=capture_side),
+            ),
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(side_effect=gather_side),
+            ),
+            patch("kin_privhelper.maintenance.FAILBACK_POLL_SEC", 0),
+        ):
+            events = await self._run(target)
+
+        ban = [c for c in calls if c[:3] == ["pcs", "resource", "ban"]]
+        clear = [c for c in calls if c[:3] == ["pcs", "resource", "clear"]]
+        self.assertEqual(len(ban), 1)
+        self.assertEqual(ban[0][3:], ["kin-drbd-clone", current, "--promoted"])
+        self.assertEqual(len(clear), 1)
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(done[-1].get("exit_code"), 0)
+        self.assertTrue(any("Master move to" in str(ev.get("data")) for ev in events))
+
+    async def test_refuses_when_already_promoted(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        target = "mail.example.test"
+        assert_path = MagicMock()
+        assert_path.is_file.return_value = True
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch("kin_privhelper.maintenance.ASSERT_SCRIPT", assert_path),
+            patch(
+                "kin_privhelper.maintenance.resolve_target",
+                new=AsyncMock(return_value=target),
+            ),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(return_value=(0, "NO_DUAL_PRIMARY_OK\n", "")),
+            ),
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(
+                    return_value=self._status(
+                        promoted=target,
+                        promoted_names=[target],
+                        vip_node=target,
+                        zimbra_node=target,
+                    )
+                ),
+            ),
+        ):
+            events = await self._run(target)
+
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(done[-1].get("exit_code"), 1)
+        self.assertTrue(any("already Promoted" in str(ev.get("data")) for ev in events))
+
+    async def test_refuses_when_drbd_not_uptodate(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        target = "mail.example.test"
+        assert_path = MagicMock()
+        assert_path.is_file.return_value = True
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch("kin_privhelper.maintenance.ASSERT_SCRIPT", assert_path),
+            patch(
+                "kin_privhelper.maintenance.resolve_target",
+                new=AsyncMock(return_value=target),
+            ),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(return_value=(0, "NO_DUAL_PRIMARY_OK\n", "")),
+            ),
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(
+                    return_value=self._status(
+                        drbd_uptodate=False,
+                        drbd_sync_percent=42.0,
+                    )
+                ),
+            ),
+            patch("kin_privhelper.maintenance.FAILBACK_TIMEOUT_SEC", 0),
+            patch("kin_privhelper.maintenance.FAILBACK_POLL_SEC", 0),
+        ):
+            events = await self._run(target)
+
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(done[-1].get("exit_code"), 1)
+        self.assertTrue(
+            any("DRBD did not reach UpToDate" in str(ev.get("data")) for ev in events)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

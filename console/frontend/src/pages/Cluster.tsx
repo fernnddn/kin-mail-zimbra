@@ -63,6 +63,7 @@ type RemoveProbe = {
   target: string;
   survivor: string;
   reachable: boolean;
+  local_is_target?: boolean;
   errors?: string[];
   notes?: string[];
 };
@@ -75,6 +76,14 @@ function uniqueNames(...groups: Array<string[] | undefined>): string[] {
     }
   }
   return out;
+}
+
+function hostsMatch(left?: string, right?: string): boolean {
+  const a = (left || "").trim().toLowerCase();
+  const b = (right || "").trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a.split(".")[0] === b.split(".")[0];
 }
 
 function ipForNode(
@@ -1075,6 +1084,7 @@ export default function ClusterPage() {
   const [addErr, setAddErr] = useState("");
   const [pendingObsAdd, setPendingObsAdd] = useState(false);
   const [pendingCleanup, setPendingCleanup] = useState(false);
+  const [pendingFailback, setPendingFailback] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
   const refreshInFlightRef = useRef(false);
@@ -1134,7 +1144,7 @@ export default function ClusterPage() {
     }
   }
 
-  function runStream(op: "preflight" | "enter" | "exit" | "cleanup", target: string) {
+  function runStream(op: "preflight" | "enter" | "exit" | "cleanup" | "failback", target: string) {
     esRef.current?.close();
     setBusy(true);
     setMessage("");
@@ -1189,6 +1199,12 @@ export default function ClusterPage() {
               code === 0
                 ? "Cleared stale Pacemaker fail-counts."
                 : "Could not clear fail-counts - see the log below.",
+            );
+          } else if (op === "failback") {
+            setMessage(
+              code === 0
+                ? `Master moved to ${target}. Mail VIP should be on that node.`
+                : `Master move to ${target} did not finish - see the log below.`,
             );
           } else {
             setMessage(code === 0 ? `${target} left maintenance.` : `Exit maintenance not fully verified for ${target}.`);
@@ -1504,11 +1520,21 @@ export default function ClusterPage() {
     const isStandby = standby.has(node);
     const isPromoted = cluster.promoted === node;
     const isOffline = offline.has(node);
+    const isLocal = hostsMatch(node, cluster.local_host);
     const pfForThis = preflightTarget === node ? preflight : null;
     const pfFailed = pfForThis ? Object.values(pfForThis).some((c) => !c.ok) : false;
     const pfPassed = !!pfForThis && !pfFailed;
     const ip = ipForNode(node, cluster.node_ips, cluster.local_host);
     const isVip = Boolean(cluster.vip_ip) && cluster.vip_node === node;
+    const canFailback =
+      ops &&
+      !isOffline &&
+      !isStandby &&
+      !isPromoted &&
+      Boolean(cluster.promoted) &&
+      !cluster.promoted_conflict &&
+      !cluster.maintenance_active &&
+      Boolean(cluster.qdevice_ok);
     const statusTone: "ok" | "idle" | "warn" = isOffline
       ? "warn"
       : isStandby
@@ -1547,6 +1573,12 @@ export default function ClusterPage() {
           <KvValue $mono={isVip}>{isVip ? cluster.vip_ip : "-"}</KvValue>
           <KvLabel>Maintenance</KvLabel>
           <KvValue>{isStandby ? "On" : "Off"}</KvValue>
+          {isLocal ? (
+            <>
+              <KvLabel>Console</KvLabel>
+              <KvValue>This session</KvValue>
+            </>
+          ) : null}
         </Kv>
         {pfForThis ? (
           <CheckList>
@@ -1580,18 +1612,48 @@ export default function ClusterPage() {
                   ) : (
                     <Button
                       type="button"
-                      disabled={busy || !pfPassed || (!!cluster.maintenance_active && !isStandby)}
+                      disabled={
+                        busy ||
+                        isLocal ||
+                        !pfPassed ||
+                        (!!cluster.maintenance_active && !isStandby)
+                      }
                       onClick={() => runStream("enter", node)}
                     >
                       Enter Maintenance
                     </Button>
                   )}
+                  {canFailback ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={busy || !cluster.drbd_uptodate}
+                      onClick={() => setPendingFailback(node)}
+                    >
+                      Move Master here
+                    </Button>
+                  ) : null}
                 </PrepButtons>
-                {!isStandby && !pfPassed ? (
+                {isLocal && !isStandby ? (
+                  <CardHint>
+                    This console is on this host. Enter Maintenance and Remove Host
+                    are only available from the peer console.
+                  </CardHint>
+                ) : null}
+                {!isLocal && !isStandby && !pfPassed ? (
                   <CardHint>
                     {pfFailed
                       ? "All checks must pass before you can enter maintenance."
                       : "Run Check first to enable Enter Maintenance."}
+                  </CardHint>
+                ) : null}
+                {canFailback && !cluster.drbd_uptodate ? (
+                  <CardHint>
+                    Wait for DRBD to finish syncing
+                    {typeof cluster.drbd_sync_percent === "number"
+                      ? ` (${cluster.drbd_sync_percent.toFixed(0)}%)`
+                      : ""}{" "}
+                    before Move Master here.
                   </CardHint>
                 ) : null}
               </PrepCluster>
@@ -1600,12 +1662,19 @@ export default function ClusterPage() {
               <Button
                 type="button"
                 variant="danger"
-                disabled={busy || probing || (!isOffline && !isStandby)}
+                disabled={
+                  busy ||
+                  probing ||
+                  isLocal ||
+                  (!isOffline && !isStandby)
+                }
                 onClick={() => openRemove(node)}
               >
                 Remove Host
               </Button>
-              {!isOffline && !isStandby ? (
+              {isLocal ? (
+                <CardHint>Cannot remove the host serving this console.</CardHint>
+              ) : !isOffline && !isStandby ? (
                 <CardHint>Put this node in maintenance before Remove Host.</CardHint>
               ) : null}
             </RemoveCluster>
@@ -1625,7 +1694,7 @@ export default function ClusterPage() {
         <PageHeader
           icon={<ClusterIcon />}
           title="Cluster"
-          subtitle="Take one mail node offline for planned work. Run Check, then Enter Maintenance. Closing the browser does not exit maintenance; use Exit Maintenance."
+          subtitle="Take the peer mail node offline for planned work, or move the Master back after failover. You cannot Enter Maintenance or Remove Host on the server serving this console."
         />
         {cluster.maintenance_active ? (
           <WarnBox>
@@ -1798,6 +1867,33 @@ export default function ClusterPage() {
           }}
         />
         <ConfirmModal
+          open={!!pendingFailback}
+          title="Move Master here"
+          message={
+            <>
+              Move mail service (DRBD Master, Zimbra, and VIP) to{" "}
+              <strong>{pendingFailback}</strong>. The console waits for DRBD
+              sync to finish, then bans the current Promoted node, waits until
+              this node is Promoted with VIP and HTTPS healthy, and clears the
+              temporary ban.
+            </>
+          }
+          detail="Expect several minutes of mail downtime while Zimbra restarts on the target. This is active-passive: there is no zero-downtime path. Stickiness keeps the new Master after the ban is cleared (no automatic bounce back)."
+          confirmLabel="Move Master"
+          loading={busy}
+          countdownSeconds={5}
+          onCancel={() => {
+            if (busy) return;
+            setPendingFailback(null);
+          }}
+          onConfirm={() => {
+            if (!pendingFailback || busy) return;
+            const target = pendingFailback;
+            setPendingFailback(null);
+            runStream("failback", target);
+          }}
+        />
+        <ConfirmModal
           open={!!pendingRemove}
           title={
             removeProbe?.mode === "forced"
@@ -1840,9 +1936,19 @@ export default function ClusterPage() {
           confirmLabel={probing ? "Probing..." : "Remove host"}
           loading={busy}
           confirmDisabled={
-            probing || !removeProbe || (removeProbe.errors || []).length > 0
+            probing ||
+            !removeProbe ||
+            (removeProbe.errors || []).length > 0 ||
+            !!removeProbe.local_is_target
           }
-          countdownSeconds={probing || (removeProbe?.errors || []).length > 0 || !removeProbe ? 0 : 5}
+          countdownSeconds={
+            probing ||
+            (removeProbe?.errors || []).length > 0 ||
+            !removeProbe ||
+            removeProbe.local_is_target
+              ? 0
+              : 5
+          }
           onCancel={() => {
             if (busy) return;
             probeRef.current?.close();

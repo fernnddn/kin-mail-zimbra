@@ -38,6 +38,10 @@ FAILCOUNT_RESOURCES = (
 COROSYNC_CONF = Path("/etc/corosync/corosync.conf")
 RESYNC_TIMEOUT_SEC = int(os.environ.get("KIN_MAINT_RESYNC_TIMEOUT", "180"))
 RESYNC_POLL_SEC = 5
+# Controlled Master move (ban -> clear). Zimbra OCF start timeout is 600s.
+FAILBACK_TIMEOUT_SEC = int(os.environ.get("KIN_FAILBACK_TIMEOUT", "900"))
+FAILBACK_POLL_SEC = 5
+DRBD_CLONE = os.environ.get("KIN_DRBD_CLONE", "kin-drbd-clone")
 MAINT_LOCK_PATH = Path(
     os.environ.get("KIN_MAINT_LOCK", "/run/kin-mail/maintenance.lock")
 )
@@ -319,6 +323,17 @@ def this_hostname() -> str:
     if fq and fq != "localhost":
         return fq
     return socket.gethostname()
+
+
+def hosts_match(left: str, right: str) -> bool:
+    """True when hostnames are the same FQDN or share the same short name."""
+    a = (left or "").strip().lower()
+    b = (right or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.split(".")[0] == b.split(".")[0]
 
 
 async def _pcs_nodes_text() -> str:
@@ -676,11 +691,81 @@ async def wait_exit_healthy(target: str) -> tuple[bool, list[str]]:
         await asyncio.sleep(RESYNC_POLL_SEC)
 
 
+async def wait_drbd_uptodate(*, timeout_sec: int | None = None) -> tuple[bool, list[str]]:
+    """Poll until both DRBD replicas are UpToDate (or timeout)."""
+    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+    logs: list[str] = []
+    deadline = asyncio.get_event_loop().time() + limit
+    while True:
+        st = await gather_status()
+        pct = st.get("drbd_sync_percent")
+        uptodate = bool(st["drbd_uptodate"])
+        if pct is None:
+            logs.append(f"drbd_uptodate={uptodate}")
+        else:
+            logs.append(f"drbd_uptodate={uptodate} sync={pct:.1f}%")
+        if uptodate:
+            logs.append("DRBD both replicas UpToDate")
+            return True, logs
+        if asyncio.get_event_loop().time() >= deadline:
+            logs.append(f"TIMEOUT waiting for DRBD UpToDate after {limit}s")
+            return False, logs
+        await asyncio.sleep(FAILBACK_POLL_SEC)
+
+
+async def wait_failback_settled(
+    target: str,
+    *,
+    timeout_sec: int | None = None,
+) -> tuple[bool, list[str]]:
+    """Wait until Promoted + VIP (+ Zimbra) are on target after a ban."""
+    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+    logs: list[str] = []
+    deadline = asyncio.get_event_loop().time() + limit
+    vip_ip = ""
+    while True:
+        st = await gather_status()
+        vip_ip = str(st.get("vip_ip") or vip_ip or "")
+        promoted = st.get("promoted")
+        vip_node = st.get("vip_node")
+        zimbra_node = st.get("zimbra_node")
+        dual = bool(st.get("promoted_conflict"))
+        last = (
+            f"promoted={promoted} vip_node={vip_node} zimbra_node={zimbra_node} "
+            f"dual_promoted={dual}"
+        )
+        logs.append(last)
+        promoted_ok = bool(promoted) and hosts_match(str(promoted), target)
+        vip_ok = bool(vip_node) and hosts_match(str(vip_node), target)
+        zimbra_ok = bool(zimbra_node) and hosts_match(str(zimbra_node), target)
+        https_ok = True
+        if vip_ip and promoted_ok and vip_ok:
+            body, _c = await _https_code(f"https://{vip_ip}/")
+            https_ok = body == "200"
+            logs.append(f"https://{vip_ip}/ → HTTP {body}")
+        if promoted_ok and vip_ok and zimbra_ok and https_ok and not dual:
+            dual_ok = True
+            if ASSERT_SCRIPT.is_file():
+                c, out, err = await _capture([str(ASSERT_SCRIPT)])
+                dual_txt = (out + err).strip()
+                dual_ok = c == 0 and "NO_DUAL_PRIMARY_OK" in dual_txt
+                logs.append(dual_txt or f"dual-primary assert exit {c}")
+            if dual_ok:
+                logs.append(f"Master settled on {target}")
+                return True, logs
+        if asyncio.get_event_loop().time() >= deadline:
+            logs.append(f"TIMEOUT waiting for Master on {target} after {limit}s: {last}")
+            return False, logs
+        await asyncio.sleep(FAILBACK_POLL_SEC)
+
+
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
     args = args or {}
     op = str(args.get("op") or "status").strip().lower()
-    if op not in ("status", "preflight", "enter", "exit", "cleanup"):
-        yield proto.event_stderr("op must be status, preflight, enter, exit, or cleanup\n")
+    if op not in ("status", "preflight", "enter", "exit", "cleanup", "failback"):
+        yield proto.event_stderr(
+            "op must be status, preflight, enter, exit, cleanup, or failback\n"
+        )
         yield proto.event_done(2)
         return
 
@@ -848,6 +933,15 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
 
     try:
         if op == "enter":
+            local = this_hostname()
+            if hosts_match(target, local):
+                yield await _emit(
+                    "Refusing Enter Maintenance on the host serving this console. "
+                    "Open the peer console and put this node in maintenance from there.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
             ok, logs, checks = await run_preflight(target)
             for line in logs:
                 yield await _emit(line)
@@ -883,6 +977,152 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
                 )
                 yield proto.event_done(1)
                 return
+            yield proto.event_done(0)
+            return
+
+        if op == "failback":
+            # Controlled Master move (HA-RUNBOOK §3): ban current Promoted,
+            # wait for target + VIP, then clear. Does not enable prefer pin.
+            yield await _emit(
+                f"Controlled Master move to {target} "
+                f"(expect several minutes of mail downtime while Zimbra restarts)"
+            )
+            st = await gather_status()
+            if st.get("promoted_conflict"):
+                yield await _emit(
+                    "Refusing failback: crm_mon shows more than one Promoted node "
+                    f"({', '.join(st.get('promoted_names') or [])}).",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if ASSERT_SCRIPT.is_file():
+                c_assert, out_a, err_a = await _capture([str(ASSERT_SCRIPT)])
+                assert_txt = (out_a + err_a).strip()
+                if c_assert != 0 or "NO_DUAL_PRIMARY_OK" not in assert_txt:
+                    yield await _emit(
+                        "Refusing failback: dual-primary assert failed. "
+                        f"{assert_txt or f'exit {c_assert}'}",
+                        err=True,
+                    )
+                    yield proto.event_done(1)
+                    return
+            current = st.get("promoted")
+            if not current:
+                yield await _emit(
+                    "Refusing failback: no stable Promoted node yet.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if hosts_match(str(current), target):
+                yield await _emit(
+                    f"Refusing failback: {target} is already Promoted.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if target in (st.get("standby") or []) or target in (st.get("offline") or []):
+                yield await _emit(
+                    f"Refusing failback: {target} must be Online (not Standby/Offline).",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if current in (st.get("standby") or []) or current in (st.get("offline") or []):
+                yield await _emit(
+                    f"Refusing failback: current Promoted {current} is not Online.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            if not bool(st.get("qdevice_ok")):
+                yield await _emit(
+                    "Refusing failback: quorum device is not voting.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+
+            yield await _emit("Waiting for DRBD both replicas UpToDate before move")
+            sync_ok, sync_logs = await wait_drbd_uptodate()
+            for line in sync_logs:
+                yield await _emit(line)
+            if not sync_ok:
+                yield await _emit(
+                    "Refusing failback: DRBD did not reach UpToDate/UpToDate in time.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+
+            yield await _emit(
+                f"pcs resource ban {DRBD_CLONE} {current} --promoted"
+            )
+            c, out, err = await _capture(
+                ["pcs", "resource", "ban", DRBD_CLONE, current, "--promoted"],
+                timeout=120,
+            )
+            if out:
+                yield await _emit(out)
+            if err:
+                yield await _emit(err, err=True)
+            if c != 0:
+                yield await _emit(
+                    f"pcs resource ban failed (exit {c}); left cluster unchanged",
+                    err=True,
+                )
+                yield proto.event_done(c)
+                return
+
+            yield await _emit(
+                f"Waiting for Promoted + VIP + Zimbra on {target} "
+                f"(timeout {FAILBACK_TIMEOUT_SEC}s)"
+            )
+            settled, settle_logs = await wait_failback_settled(target)
+            for line in settle_logs:
+                yield await _emit(line)
+            if not settled:
+                yield await _emit(
+                    "Failback did not settle on the target. Ban may still be in "
+                    f"place on {current}. Do not issue a second ban; capture pcs "
+                    f"status and clear manually when safe: pcs resource clear {DRBD_CLONE}",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+
+            yield await _emit(f"pcs resource clear {DRBD_CLONE}")
+            c2, out2, err2 = await _capture(
+                ["pcs", "resource", "clear", DRBD_CLONE],
+                timeout=120,
+            )
+            if out2:
+                yield await _emit(out2)
+            if err2:
+                yield await _emit(err2, err=True)
+            if c2 != 0:
+                yield await _emit(
+                    f"pcs resource clear failed (exit {c2}); Master is on {target} "
+                    "but the temporary ban may still be present",
+                    err=True,
+                )
+                yield proto.event_done(c2)
+                return
+
+            st = await gather_status()
+            yield await _emit(
+                f"promoted_now={st.get('promoted')} vip_node={st.get('vip_node')} "
+                f"drbd_uptodate={st.get('drbd_uptodate')}"
+            )
+            if not hosts_match(str(st.get("promoted") or ""), target):
+                yield await _emit(
+                    f"After clear, Promoted is {st.get('promoted')}, not {target}",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+            yield await _emit(f"Master move to {target} complete")
             yield proto.event_done(0)
             return
 

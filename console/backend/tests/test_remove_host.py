@@ -96,6 +96,22 @@ class PlanRemoveHostTests(unittest.TestCase):
         self.assertTrue(plan.errors)
         self.assertTrue(any("ambiguous" in e for e in plan.errors))
 
+    def test_refuse_removing_self_always(self) -> None:
+        plan = plan_remove_host(
+            local_host=LOCAL,
+            target=LOCAL,
+            members=[LOCAL, PEER],
+            offline=[],
+            stale_peers=[],
+            known_peer=PEER,
+            promoted=LOCAL,
+            target_ssh_ok=True,
+            survivor_ssh_ok=True,
+        )
+        self.assertTrue(plan.local_is_target)
+        self.assertTrue(plan.errors)
+        self.assertTrue(any("serving this console" in e for e in plan.errors))
+
     def test_refuse_removing_self_when_survivor_unreachable(self) -> None:
         plan = plan_remove_host(
             local_host=LOCAL,

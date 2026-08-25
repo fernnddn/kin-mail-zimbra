@@ -38,7 +38,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
     }
 )
 
-MAINTENANCE_MUTATE_OPS = frozenset({"enter", "exit", "cleanup"})
+MAINTENANCE_MUTATE_OPS = frozenset({"enter", "exit", "cleanup", "failback"})
 
 SUPER_ONLY_COMMANDS = frozenset(
     {
