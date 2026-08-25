@@ -38,7 +38,7 @@ set LDAP `zimbraServiceHostname` to `127.0.0.1` (that is also nginx
 (`zmproxyctl restart`) so baked-in lookup/memcached IPs update.
 
 **DRBD location:** the clone is **not** pinned to Host A. A `prefers A=50`
-constraint auto-failed-back after a real fence (ha-build-14). The role
+constraint auto-failed-back after a real fence (controlled failover test). The role
 removes that pin and sets Promoted stickiness so the survivor stays active
 until an operator moves it (`pacemaker_mail_stack_prefer_enabled: true`
 restores the old pin if ever needed).

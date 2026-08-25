@@ -42,5 +42,5 @@
       cluster_remove_host must tolerate an unreachable retired node. It must
       NEVER touch kin-zimbra/VIP/DRBD Primary beyond peer-file membership
       bookkeeping. Live apply against production A/B is out of scope until a
-      blank/replace VM exists (same honesty bar as slice 3.7).
+      blank/replace VM exists (same honesty bar as add-host milestone).
   tags: [cluster, remove_host, preflight]

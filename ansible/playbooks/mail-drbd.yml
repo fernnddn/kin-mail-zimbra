@@ -1,7 +1,7 @@
 ---
 # DRBD install + kin-zimbra resource (tasks 2.4 / 2.5).
 #
-# Dry-run only against live lab:
+# Dry-run only against production cluster:
 #   ansible-playbook playbooks/mail-drbd.yml --check
 #
 # PRODUCTION WARNING: kin-zimbra backs live /opt/zimbra data. Mutating tasks

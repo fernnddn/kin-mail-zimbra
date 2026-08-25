@@ -21,5 +21,5 @@
     msg: >-
       Verification only confirms kin-softdog is active and /dev/watchdog exists.
       Proof of a real watchdog reboot (boot_id change) requires a test like
-      task 2.2/2.3 and is NOT run against the live lab through this playbook.
+      softdog stage and is NOT run against the production cluster through this playbook.
   tags: [softdog, verify]

@@ -1,7 +1,7 @@
 ---
-# Pacemaker mail stack from task 2.7 (promotable DRBD + kin-mail-svc + LDAP HA).
+# Pacemaker mail stack from Pacemaker mail-stack stage (promotable DRBD + kin-mail-svc + LDAP HA).
 #
-# Dry-run only against live lab:
+# Dry-run only against production cluster:
 #   ansible-playbook playbooks/mail-pacemaker.yml --check
 #
 # PRODUCTION WARNING: pcs resource create / constraint add / promote alter the

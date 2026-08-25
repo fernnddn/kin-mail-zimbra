@@ -43,7 +43,7 @@ function RequireEula({ children }: { children: ReactNode }) {
   const { accepted, loading } = useEula();
   const { deployed, loading: setupLoading } = useSetup();
   const location = useLocation();
-  if (loading || setupLoading) return <LoadingShell text="Loading…" />;
+  if (loading || setupLoading) return <LoadingShell text="Loading..." />;
   if (deployed) return <>{children}</>;
   if (!accepted) return <Navigate to="/eula" replace state={{ from: location }} />;
   return <>{children}</>;
@@ -51,7 +51,7 @@ function RequireEula({ children }: { children: ReactNode }) {
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return <LoadingShell text="Checking session…" />;
+  if (loading) return <LoadingShell text="Checking session..." />;
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -91,7 +91,7 @@ function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [deployed]);
 
-  if (setupLoading || authLoading) return <LoadingShell text="Checking setup…" />;
+  if (setupLoading || authLoading) return <LoadingShell text="Checking setup..." />;
   if (deployed && !user && graceElapsed) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -99,7 +99,7 @@ function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
 /** Bare /wizard → Deploy while install runs, Cluster once deployed, else topology. */
 function WizardIndexRedirect() {
   const { deployed, installInProgress, loading } = useSetup();
-  if (loading) return <LoadingShell text="Checking setup…" />;
+  if (loading) return <LoadingShell text="Checking setup..." />;
   const dest = wizardHomePath(installInProgress, deployed);
   if (!dest.startsWith("/wizard/")) {
     return <Navigate to={dest} replace />;
@@ -110,7 +110,7 @@ function WizardIndexRedirect() {
 
 function HomeRedirect() {
   const { deployed, installInProgress, loading } = useSetup();
-  if (loading) return <LoadingShell text="Checking setup…" />;
+  if (loading) return <LoadingShell text="Checking setup..." />;
   return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
 }
 

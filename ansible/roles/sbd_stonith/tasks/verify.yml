@@ -56,8 +56,8 @@
     msg: >-
       The dry-run only confirms the file/config/STONITH resource exists.
       The effectiveness of SBD_DELAY_START (rejoin race protection) and
-      fence/partition behaviour requires a real reboot/fence like task 2.3/2.9 -
-      not run against the live lab through this playbook. After this role,
+      fence/partition behaviour requires a real reboot/fence like softdog stage/2.9 -
+      not run against the production cluster through this playbook. After this role,
       schedule a deliberate graceful pcs cluster stop failover test and confirm
       the survivor promotes DRBD and starts kin-mail-svc without manual start.
   tags: [sbd, stonith, verify]

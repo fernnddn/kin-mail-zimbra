@@ -56,7 +56,7 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertIn("pacemaker_mail_stack_zimbra_service_shortname: mail", inv)
         self.assertIn("pacemaker_mail_stack_prefer_node: mail.example.test", inv)
-        self.assertNotIn("mail.gits-it.site", inv)
+        self.assertNotIn("gits-it", inv)
         self.assertNotIn("scsi-36001405", inv)
         self.assertNotIn("10.10.40.", inv)
         self.assertNotIn("pacemaker_mail_stack_vip_nic", inv)

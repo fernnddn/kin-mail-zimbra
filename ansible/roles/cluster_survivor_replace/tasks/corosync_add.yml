@@ -69,7 +69,7 @@
     msg: >-
       pcs host auth / cluster node add {{ cluster_add_host_new_name }} was NOT
       executed (--check mode or the node is already in membership). It has never
-      been tested against a real host in slice 3.7.
+      been tested against a real host in add-host milestone.
   when: >-
     ansible_check_mode
     or (cluster_add_host_new_name in cluster_survivor_replace_nodes_add.stdout)

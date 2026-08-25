@@ -1,6 +1,6 @@
 ---
 # Entry - granular includes; labels are progress-UI ready.
-# Source: Phase 2 task 2.2 §1 (qdevice client wiring only).
+# Source: Phase 2 softdog stage §1 (qdevice client wiring only).
 
 - name: Include the qdevice package installation steps
   ansible.builtin.import_tasks: install.yml

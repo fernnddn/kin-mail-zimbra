@@ -2,11 +2,11 @@
 # Survivor-side replace of a permanently lost peer with a NEW identity.
 # Shared with drbd_live_join via cluster_add_host_* (set in inventory / play vars).
 
-cluster_add_host_survivor_name: mail.gits-it.site
+cluster_add_host_survivor_name: mail.example.test
 cluster_add_host_survivor_address: ""
-cluster_add_host_retired_name: mail2.gits-it.site
+cluster_add_host_retired_name: mail2.example.test
 cluster_add_host_retired_address: ""
-cluster_add_host_new_name: mail3.gits-it.site
+cluster_add_host_new_name: mail3.example.test
 cluster_add_host_new_address: ""
 cluster_add_host_drbd_resource: kin-zimbra
 cluster_add_host_drbd_res_path: /etc/drbd.d/kin-zimbra.res

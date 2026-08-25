@@ -345,7 +345,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="/dev/mapper/kin-zimbra-crypt\n/dev/mapper/kin-zimbra-crypt",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="this server (mail.gits-it.site)",
+            label="this server (mail.example.test)",
         )
         self.assertEqual(r["errors"], [])
         self.assertTrue(r["ok"])
@@ -371,7 +371,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="/dev/mapper/kin-zimbra-crypt\n/dev/mapper/kin-zimbra-crypt",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="this server (mail.gits-it.site)",
+            label="this server (mail.example.test)",
         )
         peer = evaluate_node(
             lsblk=_lsblk(sdb="ready"),
@@ -379,7 +379,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="",
             zimbra_exists=False,
             require_zimbra_on_data=True,
-            label="second server (mail2.gits-it.site)",
+            label="second server (mail2.example.test)",
         )
         comb = combine_results(local, peer)
         self.assertEqual(comb["errors"], [])
@@ -395,7 +395,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="/dev/mapper/kin-zimbra-crypt[/]",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="this server (mail.gits-it.site)",
+            label="this server (mail.example.test)",
         )
         self.assertEqual(r["errors"], [])
         self.assertTrue(r["ok"])

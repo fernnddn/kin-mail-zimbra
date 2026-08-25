@@ -26,7 +26,7 @@ Colocation Constraints:
 # Same shape as this lab's location lines in docs/progress/2.14.
 PCS_QUOTED = """\
 Location Constraints:
-  resource 'kin-drbd-clone' prefers node 'mail.gits-it.site' with score 50
+  resource 'kin-drbd-clone' prefers node 'mail.example.test' with score 50
 Ordering Constraints:
   promote resource 'kin-drbd-clone' then start resource 'kin-mail-svc'
 Colocation Constraints:

@@ -318,7 +318,7 @@ export default function SettingsPage() {
           subtitle="Directory sign-in, trusted console IPs, TLS, and the signed license for this Email Server."
         />
         {error ? <WarnBox>{error}</WarnBox> : null}
-        {!loaded ? <Hint>Loading settings…</Hint> : null}
+        {!loaded ? <Hint>Loading settings...</Hint> : null}
 
         <Section>
           <SectionTitle>License</SectionTitle>

@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-# Proven HA layout (ha-build-03 / HA-RUNBOOK): data + small external meta.
+# Proven HA layout (HA-RUNBOOK): data + small external meta.
 DEFAULT_DATA_DISK = "/dev/sdb1"
 DEFAULT_META_DISK = "/dev/sdb2"
 LUKS_MAPPER_NAME = "kin-zimbra-crypt"

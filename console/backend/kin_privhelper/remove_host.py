@@ -259,17 +259,14 @@ async def _demote_survivor_topology_to_1vm(
     ssh_pass: str,
     secrets: list[str],
 ) -> tuple[bool, list[str]]:
-    """Set TOPOLOGY=1vm and clear PEER_HOST_*/OBSERVABILITY_VM_IP/CLUSTER_VIP_IP
-    on the surviving node's console config, after a successful remove-host.
+    """Set TOPOLOGY=1vm and clear PEER_HOST_* on the surviving node's config.
 
-    The ansible role only touches Pacemaker/Corosync/DRBD membership - nothing
-    rewrites /etc/kin-mail/config. Left at TOPOLOGY=2vm, the survivor keeps
-    console_users_sync doing replica-first pushes toward the now-retired peer
-    (503s) and the wizard keeps offering 2vm-only actions.
+    Keeps CLUSTER_VIP_IP and OBSERVABILITY_VM_IP (still live on Pacemaker /
+    qdevice). Clears ha-setup-complete so the console no longer reports a
+    finished two-server pair after the peer is gone.
 
     Returns (ok, notes) - the caller must surface a False here, not just log
-    the notes and report the overall job as ok:true (re-audit, 25 Aug 2026:
-    a failure here used to be silently swallowed).
+    the notes and report the overall job as ok:true.
     """
     from .apply_config import (
         CONF_FILE,
@@ -278,6 +275,7 @@ async def _demote_survivor_topology_to_1vm(
         parse_config,
         write_config_file,
     )
+    from .deploy_state import HA_SETUP_COMPLETE_MARKER, write_topology_marker
 
     notes: list[str] = []
     if plan.local_is_survivor:
@@ -294,10 +292,18 @@ async def _demote_survivor_topology_to_1vm(
             except OSError as exc:
                 notes.append(f"could not write demoted local config: {exc}")
                 return False, notes
-        from .deploy_state import write_topology_marker
-
         write_topology_marker("1vm")
-        notes.append("Demoted local /etc/kin-mail/config to TOPOLOGY=1vm, cleared peer fields")
+        if HA_SETUP_COMPLETE_MARKER.is_file():
+            try:
+                HA_SETUP_COMPLETE_MARKER.unlink()
+                notes.append("Cleared local ha-setup-complete (pair setup no longer valid)")
+            except OSError as exc:
+                notes.append(f"could not clear local ha-setup-complete: {exc}")
+                return False, notes
+        notes.append(
+            "Demoted local /etc/kin-mail/config to TOPOLOGY=1vm, cleared peer fields "
+            "(VIP and Observability IP kept)"
+        )
         return True, notes
 
     # Survivor is remote (this console is on the departing node): read/write
@@ -344,7 +350,24 @@ async def _demote_survivor_topology_to_1vm(
     if code != 0:
         notes.append(f"failed to push /etc/kin-mail/topology=1vm to survivor (exit {code})")
         return False, notes
-    notes.append("Demoted survivor /etc/kin-mail/config and topology marker to TOPOLOGY=1vm over SSH")
+    code, _text = await _ssh_run(
+        survivor_host,
+        ssh_user,
+        ssh_pass,
+        secrets,
+        "rm -f /etc/kin-mail/ha-setup-complete",
+        timeout=15,
+    )
+    if code != 0:
+        notes.append(
+            f"failed to clear survivor ha-setup-complete (exit {code}); "
+            "topology demoted but pair marker may still be present"
+        )
+        return False, notes
+    notes.append(
+        "Demoted survivor /etc/kin-mail/config and topology marker to TOPOLOGY=1vm "
+        "over SSH (VIP and Observability IP kept; ha-setup-complete cleared)"
+    )
     return True, notes
 
 

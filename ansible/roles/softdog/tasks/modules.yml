@@ -1,5 +1,5 @@
 ---
-# modules-load alone is deny-listed on Ubuntu (task 2.3). Still ship the files
+# modules-load alone is deny-listed on Ubuntu (softdog stage). Still ship the files
 # for parity with 2.2; real boot path is kin-softdog.service (explicit modprobe).
 
 - name: Prepare the softdog module list for modules-load

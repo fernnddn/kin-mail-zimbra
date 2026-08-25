@@ -259,8 +259,8 @@ def render_inventory(
     if mail_hosts:
         primary = mail_hosts[0]
         short = primary.name.split(".")[0].lower() or primary.name
-        # Role defaults still say mail.gits-it.site. The hostname remap and
-        # optional prefer pin must follow this pair, not the lab FQDN.
+        # Role defaults ship example.test placeholders. Remap hostname and
+        # optional prefer pin to this pair's real FQDNs.
         lines.append(f"    pacemaker_mail_stack_zimbra_service_hostname: {primary.name}")
         lines.append(f"    pacemaker_mail_stack_zimbra_service_shortname: {short}")
         lines.append(f"    pacemaker_mail_stack_prefer_node: {primary.name}")
@@ -297,7 +297,7 @@ def render_inventory(
         lines.append(f"        {host.name}:")
         lines.append(f"          ansible_host: {host.ip}")
         lines.append(
-            f'          iscsi_initiator_name: "iqn.2026-08.site.gits-it:{host.iqn_suffix}"'
+            f'          iscsi_initiator_name: "iqn.2026-08.example.test:{host.iqn_suffix}"'
         )
     lines.append("")
     return "\n".join(lines)
@@ -343,7 +343,7 @@ class Step:
     cluster_join: bool = False
 
 
-# Proven ha-build-01-15 order. remote_install is the OS+Zimbra step on the new
+# Proven HA orchestration order. remote_install is the OS+Zimbra step on the new
 # node; skip_remote_install=1 leaves it to a prior local Deploy on that host.
 STEPS: tuple[Step, ...] = (
     Step("peer_os_prep", "OS prep + Zimbra install on the new node", None, "remote_install"),
@@ -1736,11 +1736,12 @@ async def cmd_run_ha_orchestration(
         status_text=status_text,
     ):
         yield emit_line(
-            "Refusing join_mode=apply: the wizard peer is not a member of the live "
-            f"Pacemaker cluster ({live_nodes}). Applying mail-cluster-setup / "
-            "mail-drbd / mail-pacemaker would mutate the production CIB. Use "
-            "join_mode=check for a dry-run of the join playbooks against the live "
-            "pair, or set the wizard peer to the intended HA partner.",
+            "Refusing join_mode=apply: a live Pacemaker cluster already exists "
+            f"({live_nodes}) and the wizard peer is not a member. Build HA pair "
+            "must not rewrite a production CIB. After Remove host, the survivor "
+            "keeps its one-node cluster; re-adding a peer needs the add-host "
+            "playbook (mail-add-host), not a fresh Build HA pair. For a brand-new "
+            "pair, form the cluster only on empty nodes (no live resources).",
             err=True,
         )
         yield proto.event_done(2)
@@ -1830,7 +1831,7 @@ async def cmd_run_ha_orchestration(
         )
         monitoring = renamed
 
-    yield emit_line("Checking DRBD backing disks (read-only lsblk)…")
+    yield emit_line("Checking DRBD backing disks (read-only lsblk)...")
     disk = await _probe_ha_disks(
         local=local,
         peer=peer,
@@ -1948,7 +1949,7 @@ async def cmd_run_ha_orchestration(
             yield proto.event_done(prep_exit or 1)
             return
         if join_mode == "apply":
-            yield emit_line("Re-checking DRBD backing disks after auto-partition…")
+            yield emit_line("Re-checking DRBD backing disks after auto-partition...")
             disk = await _probe_ha_disks(
                 local=local,
                 peer=peer,

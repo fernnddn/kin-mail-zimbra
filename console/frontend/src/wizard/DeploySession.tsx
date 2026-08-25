@@ -219,7 +219,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
       if (!cancelled && still) {
         setMessage((m) =>
           m === "Stream closed" || m.startsWith("Live stream disconnected")
-            ? "Following server progress (live stream disconnected)…"
+            ? "Following server progress (live stream disconnected)..."
             : m,
         );
       }
@@ -350,7 +350,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
         if (pipelineEsRef.current !== es) return;
         // EventSource drops on background tabs / brief network blips. Do NOT treat as finished
         // until the server confirms the install is no longer running.
-        append(`[stream] disconnected, checking server status…\n`);
+        append(`[stream] disconnected, checking server status...\n`);
         flushLog();
         es.close();
         onFinished(undefined, "disconnect");
@@ -358,7 +358,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
           await refreshSetup();
           const still = await hydrateFromServer();
           if (still) {
-            setMessage("Live stream disconnected, following server progress…");
+            setMessage("Live stream disconnected, following server progress...");
             setLocalBusy(true);
           } else {
             setMessage((m) =>
@@ -390,7 +390,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
       const wrapped = (exit?: number, reason?: FinishReason) => {
         if (reason === "busy") {
           if (attempt < 12) {
-            setMessage("Waiting for the previous job to finish…");
+            setMessage("Waiting for the previous job to finish...");
             window.setTimeout(() => {
               pipelineEsRef.current = openStream(
                 action,
@@ -532,7 +532,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
         setMessage("Could not save settings, Deploy stopped before install.");
         return;
       }
-      append(`\n[${new Date().toISOString()}] Starting mail system install…\n`);
+      append(`\n[${new Date().toISOString()}] Starting mail system install...\n`);
       pipelineEsRef.current = openStream("full_install", onInstallFinished);
     });
   }, [

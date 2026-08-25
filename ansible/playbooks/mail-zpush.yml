@@ -13,8 +13,8 @@
 # role when HA orchestration passes --tags snippets. Keep snippets in a
 # separate play so that tag actually writes the files.
 #
-# Dry-run against live lab:
-#   ansible-playbook playbooks/mail-zpush.yml --limit mail.gits-it.site --check
+# Dry-run against production cluster:
+#   ansible-playbook playbooks/mail-zpush.yml --limit mail.example.test --check
 #
 # PRODUCTION WARNING: nginx template edits + zmproxyctl restart are gated with
 # `when: not ansible_check_mode` and only run when snippets/template change.

@@ -261,7 +261,7 @@ export default function UsersPage() {
             ))}
           </Select>
           <Button type="submit" variant="primary" loading={busy}>
-            {busy ? "Creating…" : "Create user"}
+            {busy ? "Creating..." : "Create user"}
           </Button>
         </FormGrid>
         <ConfirmModal

@@ -27,7 +27,7 @@ def _load():
     return mod, path
 
 
-IQN = "iqn.2026-08.site.gits-it:kin-mail-sbd"
+IQN = "iqn.2026-08.example.test:kin-mail-sbd"
 PATH_NAME = f"ip-192.0.2.12:3260-iscsi-{IQN}-lun-0"
 SCSI_ID = "scsi-36001405794acfc6ef564471952d8017b"
 

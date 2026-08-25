@@ -305,7 +305,7 @@ export default function CreateMailboxPage() {
                               onChange={(e) => setRenameLocal(e.target.value.replace(/@.*$/, ""))}
                               aria-label="New local part"
                             />
-                            <DomainSuffix>@{domain || "…"}</DomainSuffix>
+                            <DomainSuffix>@{domain || "..."}</DomainSuffix>
                             <Button
                               type="button"
                               variant="primary"
@@ -376,7 +376,7 @@ export default function CreateMailboxPage() {
                   required
                   placeholder="jane.doe"
                 />
-                <DomainSuffix>@{domain || "…"}</DomainSuffix>
+                <DomainSuffix>@{domain || "..."}</DomainSuffix>
               </LocalRow>
               <Split>
                 <div>
@@ -411,7 +411,7 @@ export default function CreateMailboxPage() {
                 <option value="locked">Locked</option>
               </Select>
               <Button type="submit" variant="primary" loading={busy} disabled={!!maintHint || !canCreate}>
-                {busy ? "Creating…" : "Create mailbox"}
+                {busy ? "Creating..." : "Create mailbox"}
               </Button>
             </FormGrid>
             {message ? <Hint>{message}</Hint> : null}

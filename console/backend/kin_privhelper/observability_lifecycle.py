@@ -197,7 +197,7 @@ def render_observability_inventory(
                 "          ansible_password: '{{ lookup(\"env\", \"KIN_ANSIBLE_PASSWORD\") }}'"
             )
         lines.append(
-            f'          iscsi_initiator_name: "iqn.2026-08.site.gits-it:{iqn_suffix}"'
+            f'          iscsi_initiator_name: "iqn.2026-08.example.test:{iqn_suffix}"'
         )
     lines.append("")
     return "\n".join(lines)

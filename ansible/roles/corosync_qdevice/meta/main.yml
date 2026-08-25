@@ -3,7 +3,7 @@ galaxy_info:
   role_name: corosync_qdevice
   description: >
     Install and wire corosync-qdevice clients on mail cluster nodes against a
-    Monitoring VM running corosync-qnetd (KIN Mail Phase 2 task 2.2 §1).
+    Monitoring VM running corosync-qnetd (KIN Mail Phase 2 softdog stage §1).
   license: proprietary
   min_ansible_version: "2.14"
   platforms:

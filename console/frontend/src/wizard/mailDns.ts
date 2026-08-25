@@ -58,7 +58,7 @@ export function isPublicIPv4(ip: string): boolean {
 
 /**
  * Name field for typical DNS panels (Cloudflare, Route 53, cPanel, Niagahoster).
- * Relative to the zone so `mail.gits-it.site` is pasted as `mail`, not the FQDN.
+ * Relative to the zone so `mail.example.test` is pasted as `mail`, not the FQDN.
  */
 export function dnsZoneRelativeName(
   recordFqdn: string,

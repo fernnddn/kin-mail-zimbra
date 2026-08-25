@@ -1,20 +1,20 @@
 ---
-# Example inventory - Monitoring + mail nodes (qdevice + fencing).
+# Example inventory - Observability + mail nodes (qdevice + fencing).
 # Copy to lab.yml (gitignored) and fill in auth - never commit passwords.
 #
 #   cp inventory/lab.example.yml inventory/lab.yml
 #
-# Rebuild topology (2026-08-12):
-#   mail  (Zimbra 01 / Host A) : 10.10.40.15
-#   mail2 (Zimbra 02 / Host B) : 10.10.40.14 - empty peer, no Zimbra install
-#   mon   (Observability)      : 10.10.40.12
+# Placeholder addresses use RFC 5737 documentation space only:
+#   mail  (Mail A)        : 192.0.2.15
+#   mail2 (Mail B)        : 192.0.2.14
+#   mon   (Observability) : 192.0.2.12
+#   VIP                   : 192.0.2.16
 
 all:
   vars:
-    # Keep in sync with live lab.yml - role defaults still ship old IPs.
-    corosync_qdevice_qnetd_ip: 10.10.40.12
-    corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
-    iscsi_initiator_portal: "10.10.40.12:3260"
+    corosync_qdevice_qnetd_ip: 192.0.2.12
+    corosync_qdevice_qnetd_inventory_host: mon.example.test
+    iscsi_initiator_portal: "192.0.2.12:3260"
     # Set in lab.yml (gitignored). Both roles refuse to run without these -
     # same secret on the target (Observability) and every initiator (mail
     # nodes). iscsiadm requires 12-16 chars.
@@ -28,41 +28,36 @@ all:
     # IQN. Override only if that discovery is ambiguous:
     # iscsi_initiator_sbd_by_id: /dev/disk/by-id/scsi-...
     # sbd_stonith_device: /dev/disk/by-id/scsi-...
-    # Rebuild: Host A is 10.10.40.15 - do NOT reuse old-lab VIP .15.
-    # Public FortiGate NAT targets VIP 10.10.40.16 (not Host A .15).
-    pacemaker_mail_stack_vip_ip: 10.10.40.16
-    drbd_resource_node_a_name: mail.gits-it.site
-    drbd_resource_node_a_address: 10.10.40.15
-    drbd_resource_node_b_name: mail2.gits-it.site
-    drbd_resource_node_b_address: 10.10.40.14
-    # Proven rebuild layout. Role defaults still say /dev/loop21.
+    # VIP must be unused (never a mail-node address).
+    pacemaker_mail_stack_vip_ip: 192.0.2.16
+    drbd_resource_node_a_name: mail.example.test
+    drbd_resource_node_a_address: 192.0.2.15
+    drbd_resource_node_b_name: mail2.example.test
+    drbd_resource_node_b_address: 192.0.2.14
     drbd_resource_disk: /dev/sdb1
     drbd_resource_meta_disk: /dev/sdb2
-    # Partition meta: do not keep the old-lab loop unit enabled.
     pacemaker_agents_keep_meta_loop_unit: ""
   children:
     monitoring:
       hosts:
-        mon.gits-it.site:
-          ansible_host: 10.10.40.12
+        mon.example.test:
+          ansible_host: 192.0.2.12
           ansible_user: kin
           # ansible_password: "..."
           # ansible_become_password: "..."
     mail_nodes:
       hosts:
-        mail.gits-it.site:
-          ansible_host: 10.10.40.15
+        mail.example.test:
+          ansible_host: 192.0.2.15
           ansible_user: kin
-          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
-          # Host A / current Primary - Z-Push until HA placement is decided.
+          iscsi_initiator_name: "iqn.2026-08.example.test:mail"
           zpush_install_enabled: true
           # ansible_password: "..."
           # ansible_become_password: "..."
-        mail2.gits-it.site:
-          ansible_host: 10.10.40.14
+        mail2.example.test:
+          ansible_host: 192.0.2.14
           ansible_user: kin
-          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail2"
-          # Host B - leave false until Pacemaker / dual-node Z-Push design lands.
+          iscsi_initiator_name: "iqn.2026-08.example.test:mail2"
           zpush_install_enabled: false
           # ansible_password: "..."
           # ansible_become_password: "..."

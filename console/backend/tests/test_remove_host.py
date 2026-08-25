@@ -168,9 +168,11 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         self._old_conf_dir = ac.CONF_DIR
         self._old_conf_file = ac.CONF_FILE
         self._old_topo_marker = ds.TOPOLOGY_MARKER
+        self._old_ha_marker = ds.HA_SETUP_COMPLETE_MARKER
         ac.CONF_DIR = root / "kin-mail"
         ac.CONF_FILE = ac.CONF_DIR / "config"
         ds.TOPOLOGY_MARKER = root / "kin-mail" / "topology"
+        ds.HA_SETUP_COMPLETE_MARKER = root / "kin-mail" / "ha-setup-complete"
         # privhelperd always runs as root in production; this sandbox does not.
         chown_patch = patch.object(ac.os, "chown")
         self.addCleanup(chown_patch.stop)
@@ -180,6 +182,7 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         ac.CONF_DIR = self._old_conf_dir
         ac.CONF_FILE = self._old_conf_file
         ds.TOPOLOGY_MARKER = self._old_topo_marker
+        ds.HA_SETUP_COMPLETE_MARKER = self._old_ha_marker
 
     async def test_local_survivor_demotes_config_and_topology_marker(self) -> None:
         ac.write_config_file(
@@ -192,6 +195,8 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
                 "MAIL_HOST": LOCAL,
             }
         )
+        ds.HA_SETUP_COMPLETE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        ds.HA_SETUP_COMPLETE_MARKER.write_text("pair\n", encoding="utf-8")
         plan = RemovePlan(
             mode="graceful",
             target=PEER,
@@ -214,7 +219,10 @@ class DemoteSurvivorTopologyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('TOPOLOGY="1vm"', body)
         self.assertIn('PEER_HOST_IP=""', body)
         self.assertIn('PEER_HOST_NAME=""', body)
+        self.assertIn('CLUSTER_VIP_IP="192.0.2.16"', body)
+        self.assertIn('OBSERVABILITY_VM_IP="192.0.2.53"', body)
         self.assertEqual(ds.TOPOLOGY_MARKER.read_text(encoding="utf-8").strip(), "1vm")
+        self.assertFalse(ds.HA_SETUP_COMPLETE_MARKER.is_file())
 
     async def test_local_survivor_already_1vm_is_noop_but_still_returns(self) -> None:
         ac.write_config_file({"TOPOLOGY": "1vm", "MAIL_HOST": LOCAL})

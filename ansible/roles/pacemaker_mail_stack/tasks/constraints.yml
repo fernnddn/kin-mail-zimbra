@@ -42,7 +42,7 @@
 # Group members are created --disabled (meta target-role=Stopped on each
 # primitive) so they do not start on a Secondary before colocation exists.
 # pcs resource enable <group> only clears the group wrapper; the three
-# primitives stay Stopped (disabled) - that is the log-26 / live lab state.
+# primitives stay Stopped (disabled) - that is the prior deploy log / production cluster state.
 # Enable the primitives themselves after constraints are in place - but only
 # when they are still disabled, so a later stack re-run does not force-enable
 # resources an operator stopped for maintenance.
@@ -111,7 +111,7 @@
     msg: >-
       The colocation/order constraints already exist or this is --check mode: pcs
       constraint add was NOT executed. The schema needs with-rsc-role=Promoted
-      (not just role=) as in task 2.7.
+      (not just role=) as in Pacemaker mail-stack stage.
   when: ansible_check_mode
   run_once: true
   tags: [pacemaker, stack, constraints]

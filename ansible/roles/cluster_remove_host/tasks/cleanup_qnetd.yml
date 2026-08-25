@@ -45,6 +45,7 @@
   register: cluster_remove_host_nss_find
   changed_when: false
   failed_when: false
+  ignore_unreachable: true
   check_mode: false
   delegate_to: "{{ cluster_remove_host_qnetd_inventory_host }}"
   when: cluster_remove_host_qnetd_inventory_host | length > 0
@@ -53,7 +54,19 @@
 - name: Set NSS delete list
   ansible.builtin.set_fact:
     cluster_remove_host_nss_delete: "{{ cluster_remove_host_nss_find.stdout_lines | default([]) | reject('equalto', '') | list }}"
-  when: cluster_remove_host_qnetd_inventory_host | length > 0
+  when:
+    - cluster_remove_host_qnetd_inventory_host | length > 0
+    - not (cluster_remove_host_nss_find is unreachable)
+  tags: [cluster, remove_host, qnetd]
+
+- name: Note skipped qnetd cleanup when Monitoring is unreachable
+  ansible.builtin.debug:
+    msg: >-
+      Monitoring/qnetd host unreachable - skipping NSS nickname cleanup.
+      Survivor membership and DRBD peer drop still applied.
+  when:
+    - cluster_remove_host_qnetd_inventory_host | length > 0
+    - cluster_remove_host_nss_find is unreachable
   tags: [cluster, remove_host, qnetd]
 
 - name: Delete only exact matching NSS nicknames for the retired node
@@ -63,10 +76,12 @@
   register: cluster_remove_host_nss_del
   changed_when: cluster_remove_host_nss_del.rc == 0
   failed_when: false
+  ignore_unreachable: true
   delegate_to: "{{ cluster_remove_host_qnetd_inventory_host }}"
   when:
     - not ansible_check_mode
     - cluster_remove_host_qnetd_inventory_host | length > 0
+    - not (cluster_remove_host_nss_find is unreachable)
     - (cluster_remove_host_nss_delete | default([]) | length) > 0
   tags: [cluster, remove_host, qnetd]
 
@@ -77,5 +92,7 @@
       {{ cluster_remove_host_nss_delete | default([]) }}.
       Empty list means no node-specific nickname existed (common with a shared
       cluster cert) - treated as success / already clean.
-  when: cluster_remove_host_qnetd_inventory_host | length > 0
+  when:
+    - cluster_remove_host_qnetd_inventory_host | length > 0
+    - not (cluster_remove_host_nss_find is unreachable)
   tags: [cluster, remove_host, qnetd]

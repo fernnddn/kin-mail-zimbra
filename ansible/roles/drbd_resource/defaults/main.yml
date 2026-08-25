@@ -1,6 +1,6 @@
 ---
-# Production kin-zimbra (task 2.5): EXTERNAL meta on loop - never internal meta
-# on a populated /dev/sdb1 (internal would overwrite end of existing filesystem).
+# Production kin-zimbra: EXTERNAL meta on loop - never internal meta
+# on a populated data partition (internal would overwrite end of filesystem).
 drbd_resource_name: kin-zimbra
 drbd_resource_device: /dev/drbd0
 # Raw GPT data partition. DRBD's `disk` directive uses
@@ -21,13 +21,12 @@ drbd_resource_port: 7788
 drbd_resource_protocol: C
 drbd_resource_sync_rate: 100M
 drbd_resource_res_path: /etc/drbd.d/kin-zimbra.res
-# Names are the conventional lab FQDNs. Addresses MUST come from inventory
-# ansible_host (see tasks/resource_file.yml). Empty on purpose: the previous
-# hardcoded .13/.12 values were the old-lab mail IPs and now belong to
-# Backup / Observability - applying them would aim replication at the wrong VMs.
-drbd_resource_node_a_name: mail.gits-it.site
+# Names are placeholders only. Addresses MUST come from inventory
+# ansible_host (see tasks/resource_file.yml). Empty on purpose: never bake
+# site IPs into role defaults (that would aim replication at the wrong hosts).
+drbd_resource_node_a_name: mail.example.test
 drbd_resource_node_a_address: ""
-drbd_resource_node_b_name: mail2.gits-it.site
+drbd_resource_node_b_name: mail2.example.test
 drbd_resource_node_b_address: ""
 drbd_resource_meta_loop_script: /usr/local/sbin/kin-drbd-meta-loop.sh
 drbd_resource_meta_loop_unit: kin-drbd-meta-loop.service

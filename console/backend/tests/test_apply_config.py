@@ -154,7 +154,7 @@ class TopologyUpsertTests(unittest.TestCase):
         out, changed = ensure_topology_2vm({"TOPOLOGY": "2"})
         self.assertFalse(changed)
 
-    def test_demote_clears_peer_and_cluster_fields(self) -> None:
+    def test_demote_clears_peer_keeps_vip_and_observability(self) -> None:
         values = {
             "TOPOLOGY": "2vm",
             "PEER_HOST_IP": "192.0.2.14",
@@ -168,8 +168,9 @@ class TopologyUpsertTests(unittest.TestCase):
         self.assertEqual(out["TOPOLOGY"], "1vm")
         self.assertEqual(out["PEER_HOST_IP"], "")
         self.assertEqual(out["PEER_HOST_NAME"], "")
-        self.assertEqual(out["OBSERVABILITY_VM_IP"], "")
-        self.assertEqual(out["CLUSTER_VIP_IP"], "")
+        # VIP and Observability stay - Pacemaker / qdevice still use them.
+        self.assertEqual(out["OBSERVABILITY_VM_IP"], "192.0.2.53")
+        self.assertEqual(out["CLUSTER_VIP_IP"], "192.0.2.16")
         self.assertEqual(out["MAIL_HOST"], "mail.example.test")
 
     def test_demote_already_1vm_and_clean_is_noop(self) -> None:

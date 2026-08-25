@@ -194,7 +194,7 @@ function HaDiskStatus({ haDisk, haDiskLoading }: { haDisk: HaDisk | null; haDisk
           <Skeleton $h="0.7rem" $w="78%" style={{ marginBottom: 8 }} />
           <Skeleton $h="0.7rem" $w="54%" />
           <Hint style={{ margin: "0.55rem 0 0" }}>
-            Checking second-disk partitions on both mail servers…
+            Checking second-disk partitions on both mail servers...
           </Hint>
         </div>
       )}
@@ -448,7 +448,7 @@ export default function DeployStep() {
                   : "All install stages finished."
                 : current > 0
                   ? `Current: ${label}`
-                  : "Preparing install…"}
+                  : "Preparing install..."}
           </StageMeta>
           <StageList aria-label={haLog ? "HA orchestration steps" : "Install stages"}>
             {(haLog ? HA_ORCH_STAGES : FULL_INSTALL_STAGES).map((stage, idx) => {
@@ -611,7 +611,7 @@ export default function DeployStep() {
             loading={cancelBusy}
             onClick={() => void runCancelDeadman()}
           >
-            {cancelBusy ? "Confirming…" : "Confirm access is OK"}
+            {cancelBusy ? "Confirming..." : "Confirm access is OK"}
           </Button>
         </StepCard>
       )}
@@ -619,7 +619,7 @@ export default function DeployStep() {
       {activeRun && !(complete && !failed) && (
         <Hint>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
-            <Spinner /> Working… open View logs in a new tab for the live stream. Stay on this page
+            <Spinner /> Working... open View logs in a new tab for the live stream. Stay on this page
             until the stage finishes; leaving does not stop the server-side job.
           </span>
         </Hint>

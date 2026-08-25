@@ -1,5 +1,5 @@
 ---
-# Packages + agents from task 2.7 (Filesystem / IPaddr2 / custom OCF).
+# Packages + agents from Pacemaker mail-stack stage (Filesystem / IPaddr2 / custom OCF).
 pacemaker_agents_packages:
   - resource-agents-extra
 pacemaker_agents_ocf_provider_dir: /usr/lib/ocf/resource.d/kin

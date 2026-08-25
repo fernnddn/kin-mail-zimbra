@@ -57,7 +57,9 @@ function validIpv4(value: string): boolean {
   return IPV4.test(value.trim());
 }
 
-type ClusterTopologyResp = { cluster?: { topology?: string } };
+type ClusterTopologyResp = {
+  cluster?: { topology?: string; nodes?: string[]; offline?: string[] };
+};
 
 export default function AddSecondServerPage() {
   const { user } = useAuth();
@@ -69,6 +71,7 @@ export default function AddSecondServerPage() {
 
   const [topologyChecked, setTopologyChecked] = useState(false);
   const [topologyOk, setTopologyOk] = useState(false);
+  const [liveClusterNodes, setLiveClusterNodes] = useState<string[]>([]);
 
   const [peerIp, setPeerIp] = useState("");
   const [peerName, setPeerName] = useState("");
@@ -89,10 +92,19 @@ export default function AddSecondServerPage() {
     let cancelled = false;
     void api<ClusterTopologyResp>("/api/cluster/status")
       .then((st) => {
-        if (!cancelled) setTopologyOk(st.cluster?.topology === "1vm");
+        if (cancelled) return;
+        setTopologyOk(st.cluster?.topology === "1vm");
+        const nodes = [
+          ...(st.cluster?.nodes || []),
+          ...(st.cluster?.offline || []),
+        ].filter(Boolean);
+        setLiveClusterNodes([...new Set(nodes)]);
       })
       .catch(() => {
-        if (!cancelled) setTopologyOk(false);
+        if (!cancelled) {
+          setTopologyOk(false);
+          setLiveClusterNodes([]);
+        }
       })
       .finally(() => {
         if (!cancelled) setTopologyChecked(true);
@@ -226,6 +238,16 @@ export default function AddSecondServerPage() {
           </Section>
         ) : (
           <>
+            {liveClusterNodes.length > 0 ? (
+              <WarnBox role="status">
+                This server already has a live cluster membership
+                ({liveClusterNodes.join(", ")}). Build HA pair is for empty
+                nodes only and will refuse rather than rewrite production
+                Pacemaker state. After Remove host, keep running as a
+                single-node cluster, or use the add-host playbook to attach a
+                blank peer. Do not start Build HA pair against this survivor.
+              </WarnBox>
+            ) : null}
             <Section>
               <SectionTitle>New server</SectionTitle>
               <Hint>
@@ -385,7 +407,7 @@ export default function AddSecondServerPage() {
             <Section>
               <SectionTitle>Disk check</SectionTitle>
               {haDiskLoading ? (
-                <Hint>Checking second-disk partitions on both mail servers…</Hint>
+                <Hint>Checking second-disk partitions on both mail servers...</Hint>
               ) : haDisk && !haDisk.ok && haDisk.build_allowed !== true ? (
                 <WarnBox>
                   <strong>Second disk not ready for DRBD.</strong> This stays blocked until both

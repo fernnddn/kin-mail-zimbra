@@ -1,5 +1,5 @@
 ---
-# TLS flow from task 2.2 (manual because mon has no pcsd):
+# TLS flow from softdog stage (manual because mon has no pcsd):
 #   copy CA from qnetd → init/request on first mail node → sign on mon →
 #   import (-M) → distribute PKCS#12 to peers (-m).
 #
@@ -7,7 +7,7 @@
 # and after -m on secondaries). cert9.db exists as soon as -i runs, so it
 # must not mean "fully wired" - an interrupt before -m would skip import.
 # PKCS#12 may exist only on the node that ran -M until copy/-m finish.
-# Mutating steps require not ansible_check_mode (no apply on live lab).
+# Mutating steps require not ansible_check_mode (no apply on production cluster).
 
 - name: Drop stale qdevice NSS when a rebuild forces TLS reinit
   ansible.builtin.file:

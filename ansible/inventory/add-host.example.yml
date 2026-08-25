@@ -1,51 +1,49 @@
 ---
-# Example inventory for the add-host scenario (slice 3.7).
+# Example inventory for the add-host scenario.
 # Copy to add-host.yml (gitignored if you add passwords) and edit identities.
 #
 #   cp inventory/add-host.example.yml inventory/add-host.yml
 #
-# IMPORTANT: placeholder new-node addresses below are NOT a live lab VM.
+# Placeholder addresses use RFC 5737 documentation space only.
 # syntax-check only - do not expect --check against these names to work until
 # a real blank VM exists.
 
 all:
   vars:
-    cluster_add_host_survivor_name: mail.gits-it.site
-    cluster_add_host_survivor_address: 10.10.40.15
-    cluster_add_host_retired_name: mail2.gits-it.site
-    cluster_add_host_retired_address: 10.10.40.14
-    # NEW identity - must differ from retired Host B and from the live VIP .16.
-    cluster_add_host_new_name: mail3.gits-it.site
-    cluster_add_host_new_address: 10.10.40.17
+    cluster_add_host_survivor_name: mail.example.test
+    cluster_add_host_survivor_address: 192.0.2.15
+    cluster_add_host_retired_name: mail2.example.test
+    cluster_add_host_retired_address: 192.0.2.14
+    # NEW identity - must differ from the retired peer and from the live VIP.
+    cluster_add_host_new_name: mail3.example.test
+    cluster_add_host_new_address: 192.0.2.17
     cluster_add_host_hacluster_password: ""
     cluster_node_base_hacluster_password: "{{ cluster_add_host_hacluster_password }}"
-    # Reuse fencing defaults; override initiator name for the new host.
-    iscsi_initiator_portal: "10.10.40.12:3260"
+    iscsi_initiator_portal: "192.0.2.12:3260"
     # Same secret already on the Observability target and the survivor node.
     iscsi_initiator_chap_userid: ""
     iscsi_initiator_chap_password: ""
   children:
     monitoring:
       hosts:
-        mon.gits-it.site:
-          ansible_host: 10.10.40.12
+        mon.example.test:
+          ansible_host: 192.0.2.12
           ansible_user: kin
           # ansible_password: "..."
     mail_survivor:
       hosts:
-        mail.gits-it.site:
-          ansible_host: 10.10.40.15
+        mail.example.test:
+          ansible_host: 192.0.2.15
           ansible_user: kin
-          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
+          iscsi_initiator_name: "iqn.2026-08.example.test:mail"
           # ansible_password: "..."
     mail_new_node:
       hosts:
-        mail3.gits-it.site:
-          ansible_host: 10.10.40.17
+        mail3.example.test:
+          ansible_host: 192.0.2.17
           ansible_user: kin
-          iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail3"
+          iscsi_initiator_name: "iqn.2026-08.example.test:mail3"
           # ansible_password: "..."
-    # Convenience parent for roles that historically expect mail_nodes.
     mail_nodes:
       children:
         mail_survivor:

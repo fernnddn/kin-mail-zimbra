@@ -183,9 +183,9 @@ tune_scratch_ram() {
   # clamd/amavis from the restored LDAP do not OOM the host.
   zimbra_sh 'zmlocalconfig -e mailboxd_java_heap_size=512' || true
   zimbra_sh 'zmlocalconfig -e mailboxd_java_heap_new_size_percent=20' || true
-  zimbra_sh 'zmprov -l ms mail.gits-it.site -zimbraServiceEnabled antivirus' || true
-  zimbra_sh 'zmprov -l ms mail.gits-it.site -zimbraServiceEnabled antispam' || true
-  zimbra_sh 'zmprov -l ms mail.gits-it.site -zimbraServiceEnabled snmp' || true
+  zimbra_sh 'zmprov -l ms mail.example.test -zimbraServiceEnabled antivirus' || true
+  zimbra_sh 'zmprov -l ms mail.example.test -zimbraServiceEnabled antispam' || true
+  zimbra_sh 'zmprov -l ms mail.example.test -zimbraServiceEnabled snmp' || true
 }
 
 verify_functional() {
@@ -197,7 +197,7 @@ verify_functional() {
   echo "$accts" | grep -q 'admin@' || { fail "admin@ missing from LDAP"; return 1; }
   ok "LDAP has admin@ and test1@"
 
-  if ! zimbra_sh 'zmmailbox -z -m test1@gits-it.site gaf' >/tmp/kin-restore-gaf.txt; then
+  if ! zimbra_sh 'zmmailbox -z -m test1@example.test gaf' >/tmp/kin-restore-gaf.txt; then
     fail "zmmailbox gaf test1 failed (mailboxd not usable)"
     return 1
   fi
@@ -205,7 +205,7 @@ verify_functional() {
   ok "test1 mailbox reachable"
 
   if [ -n "$MARKER" ]; then
-    marker_hit=$(zimbra_sh "zmmailbox -z -m test1@gits-it.site s -t message --limit 20 '$MARKER'" || true)
+    marker_hit=$(zimbra_sh "zmmailbox -z -m test1@example.test s -t message --limit 20 '$MARKER'" || true)
     printf '%s\n' "$marker_hit" | sed 's/^/      /'
     echo "$marker_hit" | grep -q "$MARKER" || { fail "marker mail not found in test1: $MARKER"; return 1; }
     ok "marker mail present in test1"
@@ -219,7 +219,7 @@ verify_functional() {
 
 finish_scratch() {
   # Scratch Zimbra uses the production mail hostname. Leaving proxy/mta up
-  # puts a second mail.gits-it.site on the VLAN. Default is remind-only so a
+  # puts a second mail.example.test on the VLAN. Default is remind-only so a
   # drill can still inspect; --stop-after turns it into zmcontrol stop.
   if [ "$STOP_AFTER" = 1 ]; then
     say "Stopping scratch Zimbra (--stop-after)"
@@ -283,12 +283,12 @@ case "$MODE" in
   full)
     zimbra_sh 'zmcontrol stop' || true
     restore_ldap
-    if ! grep -q 'mail.gits-it.site' /etc/hosts; then
-      echo "127.0.0.1 mail.gits-it.site" >> /etc/hosts
+    if ! grep -q 'mail.example.test' /etc/hosts; then
+      echo "127.0.0.1 mail.example.test" >> /etc/hosts
     fi
     apply_ldap_secrets_from_backup
-    zimbra_sh 'zmlocalconfig -e zimbra_server_hostname=mail.gits-it.site' || true
-    zimbra_sh 'zmlocalconfig -e ldap_host=mail.gits-it.site' || true
+    zimbra_sh 'zmlocalconfig -e zimbra_server_hostname=mail.example.test' || true
+    zimbra_sh 'zmlocalconfig -e ldap_host=mail.example.test' || true
     zimbra_sh 'ldap stop' || true
     zimbra_sh 'ldap start' || true
     restore_mysql

@@ -133,13 +133,14 @@
   tags: [observability, disarm, qdevice]
 
 - name: Reload Corosync after stripping the quorum device
+  # run_once evaluates hostvars on the first play host only. If that host's
+  # strip was already clean but a peer printed UPDATED, skipping reload left
+  # the peer's runtime qdevice pointing at a removed witness. Always reload
+  # once after the strip pass (idempotent when conf was unchanged).
   ansible.builtin.command:
     cmd: pcs cluster reload corosync
   run_once: true
-  when:
-    - not ansible_check_mode
-    - observability_strip is defined
-    - "'UPDATED' in (observability_strip.stdout | default(''))"
+  when: not ansible_check_mode
   tags: [observability, disarm, qdevice]
 
 - name: Stop corosync-qdevice (witness is gone)

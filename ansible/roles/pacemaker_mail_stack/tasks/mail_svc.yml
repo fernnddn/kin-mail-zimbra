@@ -35,7 +35,7 @@
       prefer_enabled requires prefer_node and prefer_score
       ({{ pacemaker_mail_stack_prefer_score }}) strictly less than
       clone stickiness ({{ pacemaker_mail_stack_clone_stickiness }}).
-      Equal/higher scores recreate automatic failback (ha-build-14).
+      Equal/higher scores recreate automatic failback (controlled failover test).
   run_once: true
   tags: [pacemaker, stack, group, drbd]
 

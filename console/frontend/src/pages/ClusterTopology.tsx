@@ -129,7 +129,7 @@ function NodeGlyph({
         {subtitle.toUpperCase()}
       </text>
       <text x={x - 46} y={y + 8} fill={INK} fontSize={13} fontWeight={650}>
-        {title.length > 22 ? `${title.slice(0, 20)}…` : title}
+        {title.length > 22 ? `${title.slice(0, 20)}...` : title}
       </text>
       {addr ? (
         <text x={x - 46} y={y + 26} fill={SUB} fontSize={11}>

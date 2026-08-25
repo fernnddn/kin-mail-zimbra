@@ -220,7 +220,7 @@ function DnsField({
 
 function DnsRow({ row, lookingUpIp }: { row: MailDnsRow; lookingUpIp?: boolean }) {
   const aPendingText = lookingUpIp
-    ? "Looking up this server's public IPv4…"
+    ? "Looking up this server's public IPv4..."
     : "Not known here yet - paste the public IPv4 from the network team (not 10.x / 192.168.x).";
   return (
     <Row>

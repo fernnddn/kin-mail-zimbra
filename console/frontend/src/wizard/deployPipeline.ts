@@ -119,7 +119,7 @@ export function parseInstallProgress(log: string): InstallProgress {
 
   const total = FULL_INSTALL_STAGE_COUNT;
   let current = 0;
-  let label = "Starting…";
+  let label = "Starting...";
   let script = "";
 
   for (let i = 0; i < FULL_INSTALL_STAGES.length; i++) {
@@ -166,7 +166,7 @@ export function parseInstallProgress(log: string): InstallProgress {
     return {
       current: 0,
       total,
-      label: "Preparing…",
+      label: "Preparing...",
       script: "",
       complete: false,
       failed: false,
@@ -176,7 +176,7 @@ export function parseInstallProgress(log: string): InstallProgress {
   return {
     current,
     total,
-    label: current ? label : "Waiting…",
+    label: current ? label : "Waiting...",
     script,
     complete: false,
     failed: false,
@@ -188,7 +188,7 @@ export function parseHaOrchProgress(log: string): InstallProgress {
   const startRe = /\[(\d+)\/(\d+)\] START (\S+):\s*(.+)$/gm;
   let current = 0;
   let total = 0;
-  let label = "Starting…";
+  let label = "Starting...";
   let script = "";
   let m: RegExpExecArray | null;
   while ((m = startRe.exec(log)) !== null) {
@@ -241,7 +241,7 @@ export function parseHaOrchProgress(log: string): InstallProgress {
   return {
     current,
     total: resolvedTotal,
-    label: current ? label : "Waiting…",
+    label: current ? label : "Waiting...",
     script,
     complete: false,
     failed: false,

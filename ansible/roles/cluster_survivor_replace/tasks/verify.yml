@@ -24,7 +24,7 @@
 - name: Note that membership verification is skipped on dry-run / syntax-only
   ansible.builtin.debug:
     msg: >-
-      Membership verification is skipped under --check/syntax-only - slice 3.7 has
+      Membership verification is skipped under --check/syntax-only - add-host milestone has
       no target VM. Once an empty host exists, assert new in / retired out.
   when: ansible_check_mode
   tags: [cluster, survivor, verify]

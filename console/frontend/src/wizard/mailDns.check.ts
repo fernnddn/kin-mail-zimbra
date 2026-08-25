@@ -32,7 +32,7 @@ export function assertMailDnsContract(): void {
   eq(dnsZoneRelativeName("mail.example.test", "example.test"), { name: "mail", inZone: true }, "A name");
   eq(dnsZoneRelativeName("example.test", "example.test"), { name: "@", inZone: true }, "apex");
   eq(dnsZoneRelativeName("_dmarc.example.test", "example.test"), { name: "_dmarc", inZone: true }, "dmarc name");
-  eq(dnsZoneRelativeName("mail.example.test.", "GITS-IT.SITE"), { name: "mail", inZone: true }, "trailing-dot");
+  eq(dnsZoneRelativeName("mail.example.test.", "EXAMPLE.TEST"), { name: "mail", inZone: true }, "trailing-dot");
   eq(
     dnsZoneRelativeName("mail.other.example", "example.test"),
     { name: "mail.other.example", inZone: false },

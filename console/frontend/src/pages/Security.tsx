@@ -107,7 +107,7 @@ export default function SecurityPage() {
                 autoComplete="new-password"
               />
               <Button type="submit" loading={pwBusy}>
-                {pwBusy ? "Saving…" : "Update password"}
+                {pwBusy ? "Saving..." : "Update password"}
               </Button>
             </form>
           </Section>

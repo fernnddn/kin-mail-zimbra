@@ -3,7 +3,7 @@ iscsi_target_packages:
   - targetcli-fb
 iscsi_target_service: target
 iscsi_target_portal_port: 3260
-iscsi_target_iqn: "iqn.2026-08.site.gits-it:kin-mail-sbd"
+iscsi_target_iqn: "iqn.2026-08.example.test:kin-mail-sbd"
 iscsi_target_backstore_name: kin-sbd
 iscsi_target_lun_dir: /var/lib/kin-mail
 iscsi_target_lun_img: /var/lib/kin-mail/sbd-lun.img

@@ -3,7 +3,7 @@
 # Add-host orchestration - replace a permanently lost mail peer with a NEW
 # identity (hostname/IP), not impersonating the retired node.
 #
-# SCOPE (slice 3.7): build logic + ansible-playbook --syntax-check ONLY.
+# SCOPE (add-host milestone): build logic + ansible-playbook --syntax-check ONLY.
 # There is NO empty VM to target. This playbook has NEVER been executed
 # against any host (not merely "not fully applied").
 #
@@ -42,7 +42,7 @@
           differ from the survivor and from the node being replaced.
       tags: [addhost, validate]
 
-    - name: Record slice 3.7 proof status
+    - name: Record add-host milestone proof status
       ansible.builtin.debug:
         msg: >-
           Playbook mail-add-host: logic + syntax only. It has NEVER been run

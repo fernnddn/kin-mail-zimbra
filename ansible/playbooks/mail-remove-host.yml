@@ -8,7 +8,7 @@
 #
 # SCOPE: syntax-check / code-review first. Do NOT run against a healthy live
 # A/B pair as a rehearsal. End-to-end proof needs a blank/replace VM (same
-# honesty bar as slice 3.7 / design brief).
+# honesty bar as add-host milestone / product scope note).
 #
 #   ansible-playbook -i inventory/remove-host.example.yml \
 #     playbooks/mail-remove-host.yml --syntax-check

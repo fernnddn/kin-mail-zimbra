@@ -196,12 +196,12 @@ def ensure_topology_2vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
 
 
 def ensure_topology_1vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
-    """Set TOPOLOGY=1vm and clear peer/cluster fields (remove-host demote).
+    """Set TOPOLOGY=1vm and clear peer fields (remove-host demote).
 
-    Mirrors the 1vm branch of merge_draft(). Without this, a survivor left
-    at TOPOLOGY=2vm with a stale PEER_HOST_IP/NAME after remove-host keeps
-    console_users_sync doing replica-first pushes toward the retired node.
-    Does not invent other keys. Caller writes with format_config().
+    Clears PEER_HOST_* so console_users_sync stops replica-first pushes to the
+    retired node. Keeps CLUSTER_VIP_IP and OBSERVABILITY_VM_IP: Pacemaker and
+    qdevice still use them on the survivor until the operator changes VIP or
+    removes Observability. Does not invent other keys.
     """
     current = str(values.get("TOPOLOGY") or "").strip().lower()
     peer_ip = str(values.get("PEER_HOST_IP") or "").strip()
@@ -212,8 +212,6 @@ def ensure_topology_1vm(values: dict[str, str]) -> tuple[dict[str, str], bool]:
     out["TOPOLOGY"] = "1vm"
     out["PEER_HOST_IP"] = ""
     out["PEER_HOST_NAME"] = ""
-    out["OBSERVABILITY_VM_IP"] = ""
-    out["CLUSTER_VIP_IP"] = ""
     return out, True
 
 
@@ -400,7 +398,7 @@ def _zcs_platform() -> tuple[str, str]:
 def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
     """Query Maldua GitHub releases for the newest .tgz matching this Ubuntu.
 
-    Filenames include a build timestamp (e.g. …UBUNTU24_64.20260801175919.tgz);
+    Filenames include a build timestamp (e.g. ...UBUNTU24_64.20260801175919.tgz);
     hardcoding the short name 404s and leaves empty stubs under /opt/zcs-src.
     """
     plat, tag = _zcs_platform()
@@ -439,7 +437,7 @@ def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
     if not best_url:
         return None
     zcs_file = best_url.rsplit("/", 1)[-1]
-    # …/download/{tag}/{version}/{file}
+    # .../download/{tag}/{version}/{file}
     parts = best_url.split("/")
     try:
         zcs_version = parts[parts.index("download") + 2]

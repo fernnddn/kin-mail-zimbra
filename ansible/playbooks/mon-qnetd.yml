@@ -6,7 +6,7 @@
 # Dry-run (preferred until a blank test VM exists):
 #   ansible-playbook playbooks/mon-qnetd.yml --check
 #
-# Do NOT run without --check against the live lab cluster unless you intend
+# Do NOT run without --check against the production cluster cluster unless you intend
 # to mutate that host - production qnetd/DRBD/Pacemaker already run there.
 
 - name: Set up the qnetd arbitrator on the Monitoring VM

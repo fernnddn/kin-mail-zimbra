@@ -1,9 +1,9 @@
 ---
-# Port of Phase 2 task 2.2 §1 - corosync-qdevice clients on Host A + Host B.
+# Port of Phase 2 softdog stage §1 - corosync-qdevice clients on Host A + Host B.
 # Requires Monitoring qnetd (role corosync_qnetd / playbook mon-qnetd.yml).
 # Out of scope: iSCSI/SBD/softdog/Pacemaker STONITH (later slices).
 #
-# Dry-run against live lab only:
+# Dry-run against production cluster only:
 #   ansible-playbook playbooks/mail-qdevice.yml --check
 #
 # Do NOT full-apply on the production HA pair until a blank test cluster exists.

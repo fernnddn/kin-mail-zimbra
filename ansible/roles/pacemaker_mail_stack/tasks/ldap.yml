@@ -1,5 +1,5 @@
 ---
-# LDAP localhost fix from task 2.7 Stage C - values live on the shared DRBD
+# LDAP localhost fix from Pacemaker mail-stack stage Stage C - values live on the shared DRBD
 # filesystem. Mutating zmlocalconfig is gated; read-only verify may run when
 # /opt/zimbra is mounted (Promoted node only).
 #
@@ -85,7 +85,7 @@
       - "'ldap_url = ' + pacemaker_mail_stack_ldap_url in pacemaker_mail_stack_ldap_current.stdout"
       - "'ldap_master_url = ' + pacemaker_mail_stack_ldap_url in pacemaker_mail_stack_ldap_current.stdout"
     fail_msg: >-
-      The LDAP HA fix from task 2.7 is incomplete on this node. Expected
+      The LDAP HA fix from Pacemaker mail-stack stage is incomplete on this node. Expected
       {{ pacemaker_mail_stack_ldap_url }} and
       zimbra_require_interprocess_security={{
       pacemaker_mail_stack_zimbra_require_interprocess_security }}.

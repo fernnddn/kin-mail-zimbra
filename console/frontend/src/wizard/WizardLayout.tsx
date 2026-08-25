@@ -175,7 +175,7 @@ export default function WizardLayout() {
   // already running - installInProgress defaults to false before the first
   // /api/setup/status response.
   if (setupLoading) {
-    return <LoadingPage text="Checking setup…" />;
+    return <LoadingPage text="Checking setup..." />;
   }
 
   // Mid-install / mid-orchestration always stays on Deploy. Leaving does not
@@ -196,7 +196,7 @@ export default function WizardLayout() {
   // Linear-step gating needs the server-confirmed furthest step. Do not flash
   // a clickable sidebar from the empty draft before GET /api/wizard/draft returns.
   if (!navLocked && draftLoading) {
-    return <LoadingPage text="Loading draft…" />;
+    return <LoadingPage text="Loading draft..." />;
   }
 
   if (!navLocked && activeIdx > furthestIdx) {

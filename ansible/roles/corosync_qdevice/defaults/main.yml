@@ -1,5 +1,5 @@
 ---
-# Defaults - qdevice client on mail nodes (task 2.2 §1).
+# Defaults - qdevice client on mail nodes (softdog stage §1).
 # Pair with role corosync_qnetd on the Monitoring VM.
 
 corosync_qdevice_package: corosync-qdevice
@@ -7,7 +7,7 @@ corosync_qdevice_service: corosync-qdevice
 
 # Cluster / QNetd pairing (matches lab kin-mail + mon)
 corosync_qdevice_cluster_name: kin-mail
-corosync_qdevice_qnetd_inventory_host: mon.gits-it.site
+corosync_qdevice_qnetd_inventory_host: mon.example.test
 # Must be overridden in inventory. Empty on purpose: the previous default
 # targeted an address that is now a mail node, not the witness VM.
 corosync_qdevice_qnetd_ip: ""

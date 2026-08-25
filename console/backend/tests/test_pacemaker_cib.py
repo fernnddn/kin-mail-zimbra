@@ -147,13 +147,13 @@ num_updates="4" admin_epoch="0" have-quorum="1" dc-uuid="1">
       </cluster_property_set>
     </crm_config>
     <nodes>
-      <node id="1" uname="mail.gits-it.site"/>
+      <node id="1" uname="mail.example.test"/>
     </nodes>
     <resources/>
     <constraints/>
   </configuration>
   <status>
-    <node_state id="1" uname="mail.gits-it.site" in_ccm="true" crmd="online" join="member" expected="member">
+    <node_state id="1" uname="mail.example.test" in_ccm="true" crmd="online" join="member" expected="member">
       <lrm id="1">
         <lrm_resources/>
       </lrm>
@@ -173,8 +173,8 @@ KIN_MAIL_NODES_ONLY_CIB = """\
       </cluster_property_set>
     </crm_config>
     <nodes>
-      <node id="1" uname="mail.gits-it.site"/>
-      <node id="2" uname="mail2.gits-it.site"/>
+      <node id="1" uname="mail.example.test"/>
+      <node id="2" uname="mail2.example.test"/>
     </nodes>
     <resources/>
     <constraints/>

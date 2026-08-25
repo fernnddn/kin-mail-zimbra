@@ -9,24 +9,23 @@
 
 all:
   vars:
-    cluster_remove_host_survivor_name: mail.gits-it.site
-    cluster_remove_host_survivor_address: 10.10.40.15
-    cluster_remove_host_retired_name: mail2.gits-it.site
-    cluster_remove_host_retired_address: 10.10.40.14
+    cluster_remove_host_survivor_name: mail.example.test
+    cluster_remove_host_survivor_address: 192.0.2.15
+    cluster_remove_host_retired_name: mail2.example.test
+    cluster_remove_host_retired_address: 192.0.2.14
     # Copy and replace names/IPs with the live Pacemaker nodelist
-    # (hostname -f). Proven rebuild disks; the role reads the live .res
-    # first and refuses /dev/loop21 unless that file already uses it.
+    # (hostname -f). The role reads the live .res first and refuses
+    # /dev/loop21 unless that file already uses it.
     cluster_remove_host_drbd_disk: /dev/sdb1
     cluster_remove_host_drbd_meta_disk: /dev/sdb2
-    # Also accepted via cluster_add_host_* aliases for add-host reuse.
   children:
     monitoring:
       hosts:
-        mon.gits-it.site:
-          ansible_host: 10.10.40.12
+        mon.example.test:
+          ansible_host: 192.0.2.12
           ansible_user: kin
     mail_survivor:
       hosts:
-        mail.gits-it.site:
-          ansible_host: 10.10.40.15
+        mail.example.test:
+          ansible_host: 192.0.2.15
           ansible_user: kin

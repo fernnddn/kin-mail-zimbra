@@ -1,5 +1,6 @@
 ---
-observability_watchdog_wait_sec: 40
+# Watchdog disarm path needs ~35s; keep margin above msgwait/softdog settle.
+observability_watchdog_wait_sec: 55
 observability_retired_ip: ""
 observability_sbd_stop_order: ""
 observability_promoted: ""
@@ -12,4 +13,4 @@ observability_disarm_dropin: >-
 observability_kin_mail_config: /etc/kin-mail/config
 observability_iscsi_iqn: >-
   {{ iscsi_initiator_target_iqn
-     | default('iqn.2026-08.site.gits-it:kin-mail-sbd') }}
+     | default('iqn.2026-08.example.test:kin-mail-sbd') }}

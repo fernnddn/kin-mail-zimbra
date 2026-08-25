@@ -1,5 +1,5 @@
 ---
-# Ensure quorum.device points at Monitoring (task 2.2 corosync.conf snippet).
+# Ensure quorum.device points at Monitoring (softdog stage corosync.conf snippet).
 #
 # pcs quorum device add contacts qnetd via pcsd (:2224). Our Monitoring VM runs
 # corosync-qnetd only (no pcsd) - same as Phase 2 - so greenfield uses the

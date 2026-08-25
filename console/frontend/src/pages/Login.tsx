@@ -118,7 +118,7 @@ export default function LoginPage() {
               disabled={busy}
             />
             <Button type="submit" loading={busy} style={{ width: "100%" }}>
-              {busy ? "Signing in…" : "Sign In"}
+              {busy ? "Signing in..." : "Sign In"}
             </Button>
           </form>
         </Card>

@@ -176,7 +176,7 @@ export default function DeployLogsPage() {
                     ? `Step ${current}/${total}: ${label}`
                     : log
                       ? "Last run transcript"
-                      : "Waiting for deploy output…"}
+                      : "Waiting for deploy output..."}
           </p>
         </TitleBlock>
         <Meta>

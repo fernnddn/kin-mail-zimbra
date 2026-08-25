@@ -96,7 +96,7 @@ export default function EulaPage() {
             loading={busy}
             style={{ width: "100%" }}
           >
-            {busy ? "Saving…" : "Accept and continue"}
+            {busy ? "Saving..." : "Accept and continue"}
           </Button>
         </form>
       </Card>

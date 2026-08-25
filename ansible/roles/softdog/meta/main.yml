@@ -2,7 +2,7 @@
 galaxy_info:
   role_name: softdog
   description: >-
-    kin-softdog.service explicit modprobe for SBD (task 2.2 §3 + 2.3 blacklist fix).
+    kin-softdog.service explicit modprobe for SBD (softdog stage §3 + 2.3 blacklist fix).
   license: proprietary
   min_ansible_version: "2.14"
 dependencies: []

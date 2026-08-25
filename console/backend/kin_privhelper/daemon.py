@@ -95,7 +95,7 @@ def _safe_exec_error(exc: BaseException) -> str:
     # Collapse whitespace for the SSE one-liner.
     text = " ".join(text.split())
     if len(text) > 480:
-        text = text[:480] + "…"
+        text = text[:480] + "..."
     return f"{name}: {text}"
 
 

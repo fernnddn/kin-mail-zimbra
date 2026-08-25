@@ -4,9 +4,9 @@ iscsi_initiator_packages:
 # Must be overridden in inventory (witness/qnetd host). Empty on purpose:
 # the previous default targeted an address that is now a mail node.
 iscsi_initiator_portal: ""
-iscsi_initiator_target_iqn: "iqn.2026-08.site.gits-it:kin-mail-sbd"
+iscsi_initiator_target_iqn: "iqn.2026-08.example.test:kin-mail-sbd"
 # Override per host in inventory (mail vs mail2).
-iscsi_initiator_name: "iqn.2026-08.site.gits-it:mail"
+iscsi_initiator_name: "iqn.2026-08.example.test:mail"
 iscsi_initiator_name_file: /etc/iscsi/initiatorname.iscsi
 # Empty on purpose. The previous default was an old lab scsi-by-id that is
 # not the current HA-RUNBOOK device and will not exist on a new pair.

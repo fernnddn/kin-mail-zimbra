@@ -37,13 +37,13 @@ from kin_privhelper.rbac import (
 
 PCS_NODES = """
 Pacemaker Nodes:
- Online: mail.gits-it.site mail2.gits-it.site
+ Online: mail.example.test mail2.example.test
 """
 
 PCS_STANDBY = """
 Pacemaker Nodes:
- Online: mail2.gits-it.site
- Standby: mail.gits-it.site
+ Online: mail2.example.test
+ Standby: mail.example.test
 """
 
 # Ubuntu 22.04 pcs 0.10 (RHBZ 1619253): a node still draining resources is
@@ -72,9 +72,9 @@ Pacemaker Nodes:
 
 CRM = """
   * Clone Set: kin-drbd-clone [kin-drbd] (promotable):
-    * Promoted: [ mail2.gits-it.site ]
-    * Unpromoted: [ mail.gits-it.site ]
-  * kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail2.gits-it.site
+    * Promoted: [ mail2.example.test ]
+    * Unpromoted: [ mail.example.test ]
+  * kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail2.example.test
 """
 
 CRM_MASTERS = """
@@ -100,7 +100,7 @@ CRM_DUAL_PROMOTED = """
 DRBD_OK = """
 kin-zimbra role:Primary
   disk:UpToDate
-  mail.gits-it.site role:Secondary
+  mail.example.test role:Secondary
     peer-disk:UpToDate
 """
 
@@ -109,8 +109,8 @@ Quorate:          Yes
 Flags:            Quorate Qdevice
 
     Nodeid      Votes    Qdevice Name
-         1          1   A,V,NMW  mail.gits-it.site (local)
-         2          1   A,V,NMW  mail2.gits-it.site
+         1          1   A,V,NMW  mail.example.test (local)
+         2          1   A,V,NMW  mail2.example.test
          0          1            Qdevice
 """
 
@@ -130,7 +130,7 @@ nodelist {
 
 class MaintenanceParseTests(unittest.TestCase):
     def test_validate_node_name(self) -> None:
-        self.assertEqual(validate_node_name("mail.gits-it.site"), "mail.gits-it.site")
+        self.assertEqual(validate_node_name("mail.example.test"), "mail.example.test")
         with self.assertRaises(ValueError):
             validate_node_name("mail; rm -rf /")
         with self.assertRaises(ValueError):
@@ -139,10 +139,10 @@ class MaintenanceParseTests(unittest.TestCase):
     def test_nodes_and_standby(self) -> None:
         self.assertEqual(
             parse_online_nodes(PCS_NODES),
-            ["mail.gits-it.site", "mail2.gits-it.site"],
+            ["mail.example.test", "mail2.example.test"],
         )
-        self.assertEqual(parse_standby_nodes(PCS_STANDBY), ["mail.gits-it.site"])
-        self.assertEqual(parse_promoted(CRM), "mail2.gits-it.site")
+        self.assertEqual(parse_standby_nodes(PCS_STANDBY), ["mail.example.test"])
+        self.assertEqual(parse_promoted(CRM), "mail2.example.test")
         self.assertEqual(
             parse_standby_nodes(PCS_DRAINING),
             ["mail.example.test"],
@@ -163,11 +163,11 @@ class MaintenanceParseTests(unittest.TestCase):
         )
         from kin_privhelper.maintenance import zimbra_started_on
 
-        self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.gits-it.site", "mail2.gits-it.site"))
-        self.assertFalse(zimbra_started_on("    * kin-zimbra Started mail2.gits-it.site", "mail.gits-it.site"))
+        self.assertTrue(zimbra_started_on("    * kin-zimbra\t(ocf:kin:zimbra):\t Started mail2.example.test", "mail2.example.test"))
+        self.assertFalse(zimbra_started_on("    * kin-zimbra Started mail2.example.test", "mail.example.test"))
 
     def test_parse_resource_node(self) -> None:
-        self.assertEqual(parse_resource_node(CRM, "kin-vip"), "mail2.gits-it.site")
+        self.assertEqual(parse_resource_node(CRM, "kin-vip"), "mail2.example.test")
         self.assertEqual(parse_resource_node(CRM_DUAL_PROMOTED, "kin-zimbra"), "mail.example.test")
         self.assertIsNone(parse_resource_node(CRM, "kin-fs"))
         self.assertIsNone(
