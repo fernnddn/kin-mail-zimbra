@@ -20,6 +20,28 @@
 #     the pre-cluster fstab block. Skipping the holder wait is how a retry
 #     would hit "Can not open backing device" again (live 2vm, 25 Aug 2026).
 # Reuses wait_none_running / umount_retry from migrate-zimbra-to-drbd-disk.sh.
+#
+# -----------------------------------------------------------------------------
+# STATE AFTER A FAILED HANDOFF, AND WHAT A RETRY DOES
+# -----------------------------------------------------------------------------
+# mail-drbd.yml sets any_errors_fatal: true, so if ONE node fails here the play
+# aborts before ANY node runs activate.yml. The pair can therefore never end up
+# half-activated (one node with DRBD up, one stuck on the handoff).
+#
+# What the failing node is left with, in order:
+#     zmcontrol stop   -> DONE   (mail is down on this node)
+#     umount /opt/zimbra -> DONE (host namespace is clean)
+#     fstab mark       -> STILL PRESENT (removed only after the holder wait)
+#     drbdadm up       -> NEVER RAN
+# A node that already succeeded is left with mail down, fstab cleaned, and DRBD
+# still not up. Both states are safe: no data has moved and nothing is mounted
+# on the data partition.
+#
+# Re-running Build HA pair resumes correctly from either state. With
+# /opt/zimbra unmounted the script takes the "not mounted" branch: it skips
+# stop/umount entirely, re-drops the fail2ban jails, waits for the backing
+# device, and then removes the fstab mark (idempotent). Nothing has to be
+# undone by hand, and mail stays down until Pacemaker starts kin-zimbra.
 # =============================================================================
 set -u
 
@@ -54,6 +76,26 @@ export FSTAB FSTAB_MARK ZIMBRA_DIR KIN_PRECLUSTER_FSTAB_BAK_PREFIX
 
 # shellcheck source=precluster-zimbra-fstab.sh
 . "${HERE}/precluster-zimbra-fstab.sh"
+
+KIN_RELEASE_UDEV_PAUSED=0
+KIN_RELEASE_UDISKS_STOPPED=0
+
+# nudge_backing_holders pauses the udev exec queue and stops udisks2 to keep
+# them from re-opening the just-unmounted mapper. Both MUST come back even
+# when the handoff dies (die_release), is timed out by Ansible, or is
+# interrupted: a permanently stopped udev exec queue means /dev/disk/by-id
+# symlinks stop being created, which silently breaks the iSCSI SBD device
+# discovery and DRBD device nodes later in the very same deployment.
+release_restore_system_state() {
+  if [ "${KIN_RELEASE_UDEV_PAUSED:-0}" = "1" ]; then
+    udevadm control --start-exec-queue >/dev/null 2>&1 || true
+    KIN_RELEASE_UDEV_PAUSED=0
+  fi
+  if [ "${KIN_RELEASE_UDISKS_STOPPED:-0}" = "1" ]; then
+    systemctl start udisks2.service >/dev/null 2>&1 || true
+    KIN_RELEASE_UDISKS_STOPPED=0
+  fi
+}
 
 die_release() {
   fail "$*"
@@ -225,13 +267,148 @@ print("\n".join(found))
 PY
 }
 
+# Decimal maj:min of a block device, to match /proc/*/mountinfo field 3.
+backing_majmin() {
+  local dev="$1" out major minor
+  [ -n "$dev" ] || return 1
+  # Test seam: the suite has no real dm device to stat.
+  if [ -n "${KIN_RELEASE_TEST_MAJMIN:-}" ]; then
+    printf '%s\n' "${KIN_RELEASE_TEST_MAJMIN}"
+    return 0
+  fi
+  [ -b "$dev" ] || return 1
+  if command -v lsblk >/dev/null 2>&1; then
+    out=$(lsblk -ndo MAJ:MIN "$dev" 2>/dev/null | tr -d ' ' | head -n1)
+    case "$out" in
+      [0-9]*:[0-9]*) printf '%s\n' "$out"; return 0 ;;
+    esac
+  fi
+  out=$(stat -Lc '%t %T' "$dev" 2>/dev/null || true)
+  [ -n "$out" ] || return 1
+  case "$out" in *' '*) ;; *) return 1 ;; esac
+  major=$(printf '%d' "0x${out%% *}" 2>/dev/null || printf '')
+  minor=$(printf '%d' "0x${out##* }" 2>/dev/null || printf '')
+  [ -n "$major" ] && [ -n "$minor" ] || return 1
+  printf '%s:%s\n' "$major" "$minor"
+}
+
+# Mounts of this device that survive in OTHER mount namespaces.
+#
+# THIS IS THE ONE THE OLD CODE COULD NOT SEE. Any systemd unit started with
+# PrivateTmp=/ProtectSystem=/PrivateDevices= gets its own mount namespace
+# holding a snapshot of the mount table. If such a unit was started while
+# /opt/zimbra was mounted, that namespace keeps the mount - and therefore one
+# open reference on the dm device - even after a completely successful umount
+# in the host namespace. The signature is exactly the live Host A failure
+# (mail.gits-it.site, 26 Aug 2026 phase3-1):
+#
+#     findmnt      -> clean (host namespace only)
+#     fuser/-m     -> clean (it is a mount reference, not an open fd)
+#     /proc/*/fd   -> clean (same reason)
+#     sysfs holders-> clean (not a stacked block device)
+#     dmsetup open -> 1     <-- the only thing that still sees it
+#
+# and it never clears on its own, so waiting longer can never fix it.
+list_mountns_holders() {
+  local dev="$1" majmin self_ns pid ns mp comm proc
+  proc="${KIN_RELEASE_PROC_ROOT:-/proc}"
+  majmin=$(backing_majmin "$dev") || return 0
+  [ -n "$majmin" ] || return 0
+  self_ns=$(readlink "${proc}/self/ns/mnt" 2>/dev/null \
+    || cat "${proc}/self/ns/mnt" 2>/dev/null || printf '')
+  # ONE awk over every mountinfo at once. Per-pid awk calls here cost tens of
+  # thousands of forks across the 90-iteration wait loop on a busy mail node.
+  while IFS='|' read -r pid mp; do
+    [ -n "$pid" ] || continue
+    [ -n "$mp" ] || continue
+    ns=$(readlink "${proc}/${pid}/ns/mnt" 2>/dev/null \
+      || cat "${proc}/${pid}/ns/mnt" 2>/dev/null || printf '')
+    [ -n "$ns" ] || continue
+    # The host namespace is already proven clean by findmnt above; anything
+    # left here is by definition a foreign namespace.
+    [ "$ns" = "$self_ns" ] && continue
+    comm=$(tr -d '\n' <"${proc}/${pid}/comm" 2>/dev/null || printf '')
+    printf '%s|%s|%s|%s\n' "$pid" "$ns" "$mp" "${comm:-?}"
+  done <<EOF
+$(awk -v mm="$majmin" '
+    $3 == mm {
+      f = FILENAME
+      sub(/\/mountinfo$/, "", f)
+      sub(/.*\//, "", f)
+      if (!seen[f]++) print f "|" $5
+    }
+  ' "${proc}"/[0-9]*/mountinfo 2>/dev/null || true)
+EOF
+}
+
+# One line per distinct foreign mount namespace (many pids share one).
+list_mountns_holders_uniq() {
+  list_mountns_holders "$1" | awk -F'|' '!seen[$2]++'
+}
+
+# Self-heal: drop that namespace's reference with a lazy umount executed
+# inside it. Surgical on purpose - it frees the dm device WITHOUT killing the
+# service, so fail2ban/nginx/php-fpm keep running and no cluster daemon is
+# ever put at risk.
+release_mountns_holders() {
+  local dev="$1" pid ns mp comm freed=1
+  command -v nsenter >/dev/null 2>&1 || return 1
+  while IFS='|' read -r pid ns mp comm; do
+    [ -n "$pid" ] || continue
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$mp" ] || continue
+    warn "mount-namespace holder: pid ${pid} (${comm}) still has ${mp} from ${dev} in ${ns}"
+    if nsenter -t "$pid" -m -- umount -l "$mp" >/dev/null 2>&1; then
+      ok "lazy-unmounted ${mp} inside pid ${pid} (${comm}) mount namespace"
+      freed=0
+    else
+      warn "could not umount ${mp} inside pid ${pid} (${comm}); restart that unit to release ${dev}"
+    fi
+  done <<EOF
+$(list_mountns_holders_uniq "$dev")
+EOF
+  return "$freed"
+}
+
+# swapon on the backing device also holds it with no mount and no fuser line.
+list_swap_holders() {
+  local dev="$1" real
+  [ -n "$dev" ] || return 0
+  real=$(backing_realpath "$dev")
+  awk -v a="$dev" -v b="$real" 'NR>1 && ($1==a || $1==b) {print $1}' \
+    /proc/swaps 2>/dev/null || true
+}
+
+# Never SIGTERM/SIGKILL these, even if they do hold an fd on the backing
+# device. Killing corosync/pacemaker on a live node triggers a self-fence
+# (node reboots); killing systemd-udevd/sshd/the Ansible worker breaks the
+# very run that is trying to fix things. Fail closed with a clear reason
+# instead - that is always recoverable, a self-fence is not.
+release_pid_is_protected() {
+  local pid="$1" comm=""
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$pid" -eq 1 ] && return 0
+  [ "$pid" -eq "$$" ] && return 0
+  [ "$pid" -eq "${PPID:-0}" ] && return 0
+  comm=$(tr -d '\n' <"${KIN_RELEASE_PROC_ROOT:-/proc}/${pid}/comm" 2>/dev/null || printf '')
+  case "$comm" in
+    systemd|systemd-udevd|udevd|systemd-journal|systemd-journald) return 0 ;;
+    sshd|dbus-daemon|dbus-broker|init|kthreadd) return 0 ;;
+    multipathd|iscsid|iscsiuio) return 0 ;;
+    corosync|corosync-qdevice|pacemakerd|pacemaker-*|crmd|lrmd|sbd) return 0 ;;
+    drbdsetup|drbdadm|nsenter) return 0 ;;
+    python|python3|python3.*|ansible*) return 0 ;;
+  esac
+  return 1
+}
+
 # fuser -m alone is not enough after umount: kernel/journal holders and some
 # userspace FDs can leave the mapper EBUSY for drbdadm while fuser -m is quiet
 # (live Build HA, 26 Aug 2026: mail1 "Can not open backing device" on
 # /dev/mapper/kin-zimbra-crypt after a "successful" fuser wait).
 backing_device_busy_reason() {
   local fuser_dev="$1"
-  local real holders open_count mounts path fd_holders
+  local real holders open_count mounts path fd_holders swap_hit ns_hit
 
   if [ -z "$fuser_dev" ] || [ ! -e "$fuser_dev" ]; then
     printf '%s\n' "missing backing path ${fuser_dev:-"(empty)"}"
@@ -280,6 +457,25 @@ backing_device_busy_reason() {
     fi
   fi
 
+  # Checked BEFORE the dmsetup open count so the operator gets the actionable
+  # cause ("pid 900 (fail2ban-server) at /opt/zimbra") instead of the opaque
+  # "open count=1" that made this failure unreadable on live Host A.
+  swap_hit=$(list_swap_holders "$fuser_dev")
+  if [ -n "$swap_hit" ]; then
+    printf '%s\n' "swap active on ${swap_hit}"
+    return 0
+  fi
+
+  ns_hit=$(list_mountns_holders_uniq "$fuser_dev")
+  if [ -z "$ns_hit" ] && [ "$real" != "$fuser_dev" ]; then
+    ns_hit=$(list_mountns_holders_uniq "$real")
+  fi
+  if [ -n "$ns_hit" ]; then
+    printf '%s\n' "mount-namespace holders: $(printf '%s\n' "$ns_hit" \
+      | awk -F'|' '{printf "pid %s (%s) at %s; ", $1, $4, $3}')"
+    return 0
+  fi
+
   if command -v dmsetup >/dev/null 2>&1 && [[ "$fuser_dev" == /dev/mapper/* ]]; then
     open_count=$(dmsetup info -c --noheadings -o open -- "$(basename "$fuser_dev")" 2>/dev/null | tr -d ' ' || true)
     # Open count 0 = free. Non-numeric / empty = skip. Any positive = busy.
@@ -326,31 +522,50 @@ drop_leftover_zimbra_procs() {
 # fuser line (live Host A mail.gits-it.site, 26 Aug 2026 phase3-1).
 nudge_backing_holders() {
   local fuser_dev="$1"
-  local real line pid
+  local real line pid swap_hit
   real=$(backing_realpath "$fuser_dev")
 
   drop_zimbra_log_holders
   drop_leftover_zimbra_procs
 
-  # udisksd / udev blkid probes reopen the just-unmounted LUKS mapper.
+  # Swap and foreign-namespace mounts hold the dm device with no host mount
+  # and no open fd, so neither fuser nor the proc-fd scan can ever clear them.
+  # These two are the actual self-heal; the kill loops below only mop up real
+  # fd holders.
+  swap_hit=$(list_swap_holders "$fuser_dev")
+  if [ -n "$swap_hit" ] && command -v swapoff >/dev/null 2>&1; then
+    warn "swap still active on ${swap_hit}; swapoff before DRBD attach"
+    swapoff "$swap_hit" >/dev/null 2>&1 || true
+  fi
+  release_mountns_holders "$fuser_dev" || true
+  if [ "$real" != "$fuser_dev" ]; then
+    release_mountns_holders "$real" || true
+  fi
+
+  # Settle BEFORE pausing the queue: udevadm settle can never drain while the
+  # exec queue is stopped, so the old order just burnt the full timeout doing
+  # nothing on every nudge.
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+  fi
+  # udisksd / udev blkid probes reopen the just-unmounted LUKS mapper. Both
+  # are restored by release_restore_system_state (EXIT/INT/TERM trap).
   if command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet udisks2.service 2>/dev/null; then
       systemctl stop udisks2.service >/dev/null 2>&1 || true
+      KIN_RELEASE_UDISKS_STOPPED=1
     fi
   fi
   if command -v udevadm >/dev/null 2>&1; then
-    udevadm control --stop-exec-queue >/dev/null 2>&1 || true
-    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+    if udevadm control --stop-exec-queue >/dev/null 2>&1; then
+      KIN_RELEASE_UDEV_PAUSED=1
+    fi
   fi
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     pid=${line%%:*}
-    case "$pid" in
-      ''|*[!0-9]*) continue ;;
-    esac
-    [ "$pid" -eq 1 ] && continue
-    [ "$pid" -eq "$$" ] && continue
+    release_pid_is_protected "$pid" && continue
     kill -TERM "$pid" 2>/dev/null || true
   done <<EOF
 $(list_block_fd_holders "$fuser_dev")
@@ -360,11 +575,7 @@ EOF
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     pid=${line%%:*}
-    case "$pid" in
-      ''|*[!0-9]*) continue ;;
-    esac
-    [ "$pid" -eq 1 ] && continue
-    [ "$pid" -eq "$$" ] && continue
+    release_pid_is_protected "$pid" && continue
     kill -KILL "$pid" 2>/dev/null || true
   done <<EOF
 $(list_block_fd_holders "$fuser_dev")
@@ -458,9 +669,7 @@ wait_backing_device_free() {
     fi
     sleep "$fuser_delay"
   done
-  if command -v udevadm >/dev/null 2>&1; then
-    udevadm control --start-exec-queue >/dev/null 2>&1 || true
-  fi
+  release_restore_system_state
   if [ "$fuser_busy" -eq 1 ]; then
     warn "backing still busy after ${fuser_attempt} checks: ${reason}"
     if command -v fuser >/dev/null 2>&1; then
@@ -475,6 +684,13 @@ wait_backing_device_free() {
     if [ -n "$real" ] && [ "$real" != "$fuser_dev" ]; then
       list_block_fd_holders "$real" 2>/dev/null | sed 's/^/    proc-fd /' || true
     fi
+    list_mountns_holders_uniq "$fuser_dev" 2>/dev/null \
+      | sed 's/^/    mount-ns /' || true
+    if [ -n "$real" ] && [ "$real" != "$fuser_dev" ]; then
+      list_mountns_holders_uniq "$real" 2>/dev/null \
+        | sed 's/^/    mount-ns /' || true
+    fi
+    list_swap_holders "$fuser_dev" 2>/dev/null | sed 's/^/    swap /' || true
     findmnt -S "$fuser_dev" 2>&1 | sed 's/^/    /' || true
     lsblk -o NAME,TYPE,MOUNTPOINT,FSTYPE "$fuser_dev" 2>&1 | sed 's/^/    /' || true
     if command -v dmsetup >/dev/null 2>&1 && [[ "$fuser_dev" == /dev/mapper/* ]]; then
@@ -492,6 +708,10 @@ wait_backing_device_free() {
 if [ "${KIN_RELEASE_SOURCE_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
+
+# Installed only on the executed path so sourcing for tests cannot leave a
+# trap on the caller's shell.
+trap release_restore_system_state EXIT INT TERM
 
 if [ "$(id -u)" -ne 0 ]; then
   die_release "Run as root"

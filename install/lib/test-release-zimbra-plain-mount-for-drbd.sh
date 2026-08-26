@@ -507,6 +507,194 @@ else
   bad "release/activate must pass KIN_DRBD_BACKING_DISK, RESOURCE_NAME, and PCS_CLONE"
 fi
 
+# =============================================================================
+# Regression: open-count-without-fuser (live Host A, 26 Aug 2026 phase3-1).
+#
+# A mount surviving in ANOTHER mount namespace holds the dm device at
+# open count=1 while findmnt, fuser, /proc/*/fd and sysfs holders are all
+# clean. Waiting can never clear it, so the old code looped until timeout and
+# died with the unreadable "dmsetup open count=1".
+# =============================================================================
+PROCROOT="$ROOT/proc"
+make_fake_proc() {
+  # $1 = pid, $2 = comm, $3 = ns id, $4 = majmin ("" for no mount entry)
+  rm -rf "$PROCROOT"
+  mkdir -p "$PROCROOT/self/ns" "$PROCROOT/$1/ns"
+  printf 'mnt:[4026531840]\n' >"$PROCROOT/self/ns/mnt"
+  printf '%s\n' "$2" >"$PROCROOT/$1/comm"
+  printf 'mnt:[%s]\n' "$3" >"$PROCROOT/$1/ns/mnt"
+  if [ -n "${4:-}" ]; then
+    printf '36 35 %s / %s rw,relatime - ext4 /dev/mapper/kin-zimbra-crypt rw\n' \
+      "$4" "$ROOT/opt/zimbra" >"$PROCROOT/$1/mountinfo"
+  fi
+}
+
+# fuser and the fd scan must both be quiet so we reach the namespace check.
+cat >"$STUB/fuser" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$STUB/fuser"
+cat >"$STUB/drbdadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/drbdadm.log"
+exit 1
+EOF
+chmod +x "$STUB/drbdadm"
+rm -f "$STUB/pcs"
+
+# nsenter stub: a successful lazy umount inside the namespace removes that
+# namespace's mount entry, exactly like the real one.
+cat >"$STUB/nsenter" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/nsenter.log"
+target=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -t) target="\$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "\$target" ] && rm -f "${PROCROOT}/\${target}/mountinfo"
+exit 0
+EOF
+chmod +x "$STUB/nsenter"
+
+make_fake_proc 900 fail2ban-server 4026532111 "253:0"
+: >"$ROOT/nsenter.log"
+: >"$ROOT/drbdadm.log"
+write_fstab
+: >"$ROOT/mnt_state"
+KIN_RELEASE_WAIT_BACKING_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+  KIN_RELEASE_TEST_MAJMIN="253:0" \
+  KIN_RELEASE_FUSER_RETRIES=6 KIN_RELEASE_FUSER_DELAY=0 \
+  "$SCRIPT" >"$ROOT/ns_heal.out" 2>&1
+ns_heal_rc=$?
+if [ "$ns_heal_rc" -eq 0 ] \
+  && grep -q 'umount' "$ROOT/nsenter.log" \
+  && grep -q '\-t 900' "$ROOT/nsenter.log"; then
+  pass "foreign mount-namespace holder is lazy-unmounted, handoff then succeeds"
+else
+  bad "namespace holder must be released via nsenter umount -l (rc=$ns_heal_rc)"
+fi
+
+# Same holder, but nsenter is unavailable: must fail closed AND name the
+# culprit instead of printing the opaque dmsetup open count.
+mv "$STUB/nsenter" "$ROOT/nsenter.disabled"
+make_fake_proc 900 fail2ban-server 4026532111 "253:0"
+write_fstab
+: >"$ROOT/mnt_state"
+KIN_RELEASE_WAIT_BACKING_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+  KIN_RELEASE_TEST_MAJMIN="253:0" \
+  KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 \
+  "$SCRIPT" >"$ROOT/ns_fail.out" 2>&1
+ns_fail_rc=$?
+if [ "$ns_fail_rc" -ne 0 ] \
+  && grep -q 'mount-namespace holders' "$ROOT/ns_fail.out" \
+  && grep -q 'fail2ban-server' "$ROOT/ns_fail.out"; then
+  pass "unreleasable namespace holder fails closed and names the process"
+else
+  bad "namespace holder must fail closed naming the holder, not 'open count=1'"
+fi
+mv "$ROOT/nsenter.disabled" "$STUB/nsenter"
+
+# A pid in OUR namespace must never be reported (that is the host mount,
+# already covered by findmnt) - otherwise every run would false-positive.
+make_fake_proc 901 fail2ban-server 4026531840 "253:0"
+same_ns_out=$(
+  KIN_RELEASE_SOURCE_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+    KIN_RELEASE_TEST_MAJMIN="253:0" \
+    bash -c '. "$0" >/dev/null 2>&1; list_mountns_holders /dev/mapper/x' "$SCRIPT" 2>/dev/null
+)
+if [ -z "$same_ns_out" ]; then
+  pass "a mount in our own namespace is not reported as a foreign holder"
+else
+  bad "own-namespace mount must not be treated as a foreign holder"
+fi
+
+# A non-matching maj:min must not match either.
+make_fake_proc 902 fail2ban-server 4026532111 "9:9"
+other_dev_out=$(
+  KIN_RELEASE_SOURCE_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+    KIN_RELEASE_TEST_MAJMIN="253:0" \
+    bash -c '. "$0" >/dev/null 2>&1; list_mountns_holders /dev/mapper/x' "$SCRIPT" 2>/dev/null
+)
+if [ -z "$other_dev_out" ]; then
+  pass "a mount of a different device is not reported as a holder"
+else
+  bad "maj:min match must be exact"
+fi
+
+# =============================================================================
+# Regression: never SIGKILL a process whose death is worse than the failure.
+# Killing corosync/pacemaker on a live node self-fences it (node reboots).
+# =============================================================================
+protected_ok=1
+for proc_name in corosync pacemakerd sshd systemd-udevd python3 sbd; do
+  make_fake_proc 950 "$proc_name" 4026532111 ""
+  if ! KIN_RELEASE_SOURCE_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+      bash -c '. "$0" >/dev/null 2>&1; release_pid_is_protected 950' "$SCRIPT" 2>/dev/null; then
+    protected_ok=0
+    printf '    not protected: %s\n' "$proc_name"
+  fi
+done
+make_fake_proc 951 java 4026532111 ""
+if KIN_RELEASE_SOURCE_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+    bash -c '. "$0" >/dev/null 2>&1; release_pid_is_protected 951' "$SCRIPT" 2>/dev/null; then
+  protected_ok=0
+  printf '    wrongly protected: java\n'
+fi
+if [ "$protected_ok" -eq 1 ]; then
+  pass "cluster/system daemons are never killed; a stray java still is"
+else
+  bad "kill guard must protect cluster daemons and still allow real holders"
+fi
+
+# =============================================================================
+# Regression: a failed handoff must not leave udev's exec queue stopped.
+# A permanently paused queue stops /dev/disk/by-id from being populated, which
+# breaks iSCSI SBD discovery and DRBD device nodes later in the SAME run.
+# =============================================================================
+cat >"$STUB/udevadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/udevadm.log"
+exit 0
+EOF
+chmod +x "$STUB/udevadm"
+cat >"$STUB/systemctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/systemctl.log"
+[ "\$1" = "is-active" ] && exit 0
+exit 0
+EOF
+chmod +x "$STUB/systemctl"
+mv "$STUB/nsenter" "$ROOT/nsenter.disabled"
+make_fake_proc 900 fail2ban-server 4026532111 "253:0"
+: >"$ROOT/udevadm.log"
+: >"$ROOT/systemctl.log"
+write_fstab
+: >"$ROOT/mnt_state"
+KIN_RELEASE_WAIT_BACKING_ONLY=1 KIN_RELEASE_PROC_ROOT="$PROCROOT" \
+  KIN_RELEASE_TEST_MAJMIN="253:0" \
+  KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 \
+  "$SCRIPT" >/dev/null 2>&1
+mv "$ROOT/nsenter.disabled" "$STUB/nsenter"
+if grep -q 'stop-exec-queue' "$ROOT/udevadm.log" \
+  && grep -q 'start-exec-queue' "$ROOT/udevadm.log" \
+  && grep -q 'start udisks2' "$ROOT/systemctl.log"; then
+  pass "failed handoff still restarts the udev exec queue and udisks2"
+else
+  bad "udev exec queue / udisks2 must be restored even when the handoff fails"
+fi
+
+# settle must be issued BEFORE the queue is paused (it can never drain after).
+if [ -n "$(awk '/settle/{s=NR} /stop-exec-queue/{q=NR} END{if (s && q && s<q) print "ok"}' "$ROOT/udevadm.log")" ]; then
+  pass "udevadm settle runs before the exec queue is paused"
+else
+  bad "settle after stop-exec-queue can never drain; it must come first"
+fi
+rm -f "$STUB/udevadm" "$STUB/systemctl"
+
 if [ "$fails" -eq 0 ]; then
   printf 'ALL OK\n'
   exit 0

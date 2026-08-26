@@ -44,6 +44,11 @@ console/**/*.pyc
 
 # --- logs and scratch --------------------------------------------------------
 *.log
+# Deployment/orchestration transcripts pasted in for debugging. These carry
+# real hostnames and 10.x addresses; this repo is public, so they must never
+# be committed by accident (log-phase3-1.txt, 26 Aug 2026).
+log-*.txt
+*-phase[0-9]*.txt
 *.bak
 *.bak.*
 /tmp/
