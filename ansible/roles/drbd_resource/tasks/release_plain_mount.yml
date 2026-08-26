@@ -138,7 +138,8 @@
       /opt/zimbra is mounted from
       {{ drbd_resource_zimbra_mount_src.stdout | trim }} (plain data partition).
       Stopping Zimbra and unmounting so drbdadm up can attach
-      {{ drbd_resource_disk }}. Mail stays down on this node until Pacemaker
+      {{ drbd_resource_backing_disk | default(drbd_resource_disk) }}.
+      Mail stays down on this node until Pacemaker
       kin-fs mounts /dev/drbd0 and starts kin-zimbra (mail-pacemaker.yml).
   when: drbd_resource_needs_plain_mount_release | bool
   tags: [drbd, resource, release]

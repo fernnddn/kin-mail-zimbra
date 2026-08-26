@@ -85,10 +85,15 @@ remove_precluster_fstab() {
   remove_precluster_zimbra_fstab || die_release "pre-cluster fstab cleanup failed"
 }
 
-# cryptsetup always holds the raw LUKS partition. fuser -m must target the
-# mapper (the filesystem / DRBD backing), never DATA_DISK, when the mapper
+# cryptsetup always holds the raw LUKS partition. Holder checks must target
+# the mapper (the filesystem / DRBD backing), never DATA_DISK, when the mapper
 # exists. On a retry the mount is already gone, so SRC cannot be used.
+# Prefer KIN_DRBD_BACKING_DISK when Ansible already resolved the mapper path.
 backing_fuser_dev() {
+  if [ -n "${KIN_DRBD_BACKING_DISK:-}" ] && [ -b "${KIN_DRBD_BACKING_DISK}" ]; then
+    printf '%s\n' "${KIN_DRBD_BACKING_DISK}"
+    return 0
+  fi
   if [ -b "$(luks_mapper_path)" ]; then
     luks_mapper_path
     return 0
@@ -98,8 +103,8 @@ backing_fuser_dev() {
 
 # ocf:kin:zimbra stop calls this before zmcontrol stop. The handoff must too:
 # fail2ban jails zimbra-auth / zpush-auth tail ${ZIMBRA_DIR}/log/*, and those
-# FDs keep the LUKS mapper busy after umount. 5x1s fuser retries cannot outwait
-# a still-running jail. Best-effort: missing helper must not abort the handoff.
+# FDs keep the LUKS mapper busy after umount. Best-effort: missing helper must
+# not abort the handoff.
 drop_zimbra_log_holders() {
   local helper=""
   if [ -n "${KIN_FAIL2BAN_JAILS:-}" ] && [ -x "${KIN_FAIL2BAN_JAILS}" ]; then
@@ -117,25 +122,94 @@ drop_zimbra_log_holders() {
   KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$helper" unmounted || true
 }
 
+# fuser -m alone is not enough after umount: kernel/journal holders and some
+# userspace FDs can leave the mapper EBUSY for drbdadm while fuser -m is quiet
+# (live Build HA, 26 Aug 2026: mail1 "Can not open backing device" on
+# /dev/mapper/kin-zimbra-crypt after a "successful" fuser wait).
+backing_device_busy_reason() {
+  local fuser_dev="$1"
+  local real holders open_count mounts
+
+  if [ -z "$fuser_dev" ] || [ ! -e "$fuser_dev" ]; then
+    printf '%s\n' "missing backing path ${fuser_dev:-"(empty)"}"
+    return 0
+  fi
+
+  mounts=$(findmnt -n -S "$fuser_dev" 2>/dev/null || true)
+  if [ -n "$mounts" ]; then
+    printf '%s\n' "still mounted: ${mounts}"
+    return 0
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    if fuser "$fuser_dev" >/dev/null 2>&1; then
+      printf '%s\n' "fuser holders on ${fuser_dev}"
+      return 0
+    fi
+    if fuser -m "$fuser_dev" >/dev/null 2>&1; then
+      printf '%s\n' "fuser -m holders on ${fuser_dev}"
+      return 0
+    fi
+  fi
+
+  real=$(readlink -f "$fuser_dev" 2>/dev/null || printf '%s' "$fuser_dev")
+  if [ -e "$real" ]; then
+    holders=$(ls -A "/sys/class/block/$(basename "$real")/holders" 2>/dev/null || true)
+    if [ -n "$holders" ]; then
+      printf '%s\n' "sysfs holders: ${holders}"
+      return 0
+    fi
+  fi
+
+  if command -v dmsetup >/dev/null 2>&1 && [[ "$fuser_dev" == /dev/mapper/* ]]; then
+    open_count=$(dmsetup info -c --noheadings -o open -- "$(basename "$fuser_dev")" 2>/dev/null | tr -d ' ' || true)
+    # Open count 0 = free. Non-numeric / empty = skip. Any positive = busy.
+    if [ -n "$open_count" ] && [ "$open_count" -gt 0 ] 2>/dev/null; then
+      printf '%s\n' "dmsetup open count=${open_count}"
+      return 0
+    fi
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 - "$fuser_dev" <<'PY'
+import errno, os, sys
+path = sys.argv[1]
+try:
+    fd = os.open(path, os.O_RDWR)
+    os.close(fd)
+except OSError as exc:
+    if exc.errno in (errno.EBUSY, errno.EAGAIN):
+        sys.exit(1)
+    # Other errors (EPERM, etc.) are not treated as "busy holders".
+    sys.exit(0)
+sys.exit(0)
+PY
+    then
+      printf '%s\n' "open(O_RDWR) EBUSY on ${fuser_dev}"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 wait_backing_device_free() {
   local fuser_dev="$1"
   local fuser_busy=1
   local fuser_attempt=0
-  local fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-20}"
+  local fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-40}"
   local fuser_delay="${KIN_RELEASE_FUSER_DELAY:-1}"
+  local reason=""
 
   if command -v udevadm >/dev/null 2>&1; then
     udevadm settle --timeout=10 >/dev/null 2>&1 || true
   fi
+  sync 2>/dev/null || true
 
-  if ! command -v fuser >/dev/null 2>&1; then
-    warn "fuser not installed; skipping open-holder check on ${fuser_dev}"
-    return 0
-  fi
   [ -n "$fuser_dev" ] || return 0
 
   while [ "$fuser_attempt" -lt "$fuser_retries" ]; do
-    if ! fuser -m "$fuser_dev" >/dev/null 2>&1; then
+    if ! reason=$(backing_device_busy_reason "$fuser_dev"); then
       fuser_busy=0
       break
     fi
@@ -143,10 +217,21 @@ wait_backing_device_free() {
     sleep "$fuser_delay"
   done
   if [ "$fuser_busy" -eq 1 ]; then
-    fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    warn "backing still busy after ${fuser_attempt} checks: ${reason}"
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+      fuser -v "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    fi
+    findmnt -S "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    lsblk -o NAME,TYPE,MOUNTPOINT,FSTYPE "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+    if command -v dmsetup >/dev/null 2>&1 && [[ "$fuser_dev" == /dev/mapper/* ]]; then
+      dmsetup info "$(basename "$fuser_dev")" 2>&1 | sed 's/^/    /' || true
+    fi
     fail "${fuser_dev} still has open holders (checked ${fuser_attempt} times)"
     return 1
   fi
+  # Brief settle so udev/journal flush cannot race the immediate drbdadm up.
+  sleep "${KIN_RELEASE_POST_FREE_SLEEP:-2}"
   ok "${fuser_dev} has no open holders"
   return 0
 }
@@ -210,6 +295,10 @@ if ! wait_none_running; then
   dump_zimbra_lingering
   die_release "Zimbra still has Running services after stop"
 fi
+# Leftover java/mailboxd under uid zimbra can hold mapper FDs after a "Stopped"
+# status line. Best-effort; wait_backing_device_free is the hard gate.
+pkill -u zimbra 2>/dev/null || true
+sleep 1
 ok "Zimbra is stopped"
 
 umount_retry "$ZIMBRA_DIR" || die_release "umount ${ZIMBRA_DIR} failed"

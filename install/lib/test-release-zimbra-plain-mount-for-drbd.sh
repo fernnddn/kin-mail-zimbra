@@ -23,6 +23,7 @@ export KIN_ZIMBRA_DIR="$ROOT/opt/zimbra"
 export KIN_MIGRATE_LIB="$PWD/migrate-zimbra-to-drbd-disk.sh"
 export KIN_MIGRATE_SKIP_PS_CHECK=1
 export KIN_MIGRATE_STOP_WAIT_SEC=0
+export KIN_RELEASE_POST_FREE_SLEEP=0
 export KIN_ZMCONTROL_STATUS_TEXT='Host mail.example.test
 	ldap                    Stopped
 	mailbox                 Stopped
@@ -58,6 +59,10 @@ STATE="${ROOT}/mnt_state"
 src=""
 [ -f "\$STATE" ] && src=\$(cat "\$STATE")
 [ -n "\$src" ] || exit 1
+if [ "\${1:-}" = "-n" ] && [ "\${2:-}" = "-S" ]; then
+  # Not mounted from this block device during tests unless STATE matches.
+  exit 1
+fi
 if [ "\${1:-}" = "-n" ] && [ "\${2:-}" = "-o" ] && [ "\${3:-}" = "SOURCE" ]; then
   printf '%s\n' "\$src"; exit 0
 fi
@@ -197,9 +202,12 @@ FUSER_COUNTER="$ROOT/fuser_calls"
 cat >"$STUB/fuser" <<EOF
 #!/usr/bin/env bash
 [ "\${1:-}" = "-vm" ] && exit 1
+[ "\${1:-}" = "-v" ] && exit 1
 n=\$(wc -l <"$FUSER_COUNTER")
 echo call >>"$FUSER_COUNTER"
-[ "\$n" -lt 2 ] && exit 0
+# Each wait loop may call fuser twice (with and without -m). Stay busy for
+# the first two loops, then go free.
+[ "\$n" -lt 4 ] && exit 0
 exit 1
 EOF
 chmod +x "$STUB/fuser"

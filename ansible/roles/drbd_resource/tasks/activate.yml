@@ -263,12 +263,28 @@
     cmd: "{{ drbd_resource_release_dir }}/release-zimbra-plain-mount-for-drbd.sh"
   environment:
     KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
+    KIN_DRBD_BACKING_DISK: "{{ drbd_resource_backing_disk | default(drbd_resource_disk) }}"
     KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
     KIN_FAIL2BAN_JAILS: "{{ drbd_resource_release_dir }}/kin-fail2ban-jails.sh"
     KIN_RELEASE_WAIT_BACKING_ONLY: "1"
+    KIN_RELEASE_FUSER_RETRIES: "40"
+    KIN_RELEASE_FUSER_DELAY: "1"
+    KIN_RELEASE_POST_FREE_SLEEP: "2"
   # Retry path after a failed first handoff: /opt/zimbra is already unmounted
   # but fail2ban may still hold the LUKS mapper. Reuse the same wait as the
   # release script so drbdadm up does not race the leftover FDs.
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Tear down any half-up DRBD resource before a clean attach
+  ansible.builtin.command:
+    cmd: drbdadm down {{ drbd_resource_name }}
+  register: drbd_resource_down_before_up
+  changed_when: drbd_resource_down_before_up.rc == 0
+  failed_when: false
   when:
     - drbd_resource_needs_activate | bool
     - not (drbd_resource_pacemaker_owns | bool)
@@ -280,13 +296,58 @@
     cmd: drbdadm up {{ drbd_resource_name }}
   register: drbd_resource_up_result
   until: drbd_resource_up_result.rc == 0
-  retries: 5
-  delay: 3
+  retries: 10
+  delay: 5
+  failed_when: false
   # SAFETY: never check_mode: false - up must not run during --check.
+  # failed_when false so the next tasks can dump backing-device diagnostics
+  # before fail closed (live Build HA 26 Aug 2026: opaque "Can not open
+  # backing device" without holders printed).
   when:
     - drbd_resource_needs_activate | bool
     - not (drbd_resource_pacemaker_owns | bool)
     - not ansible_check_mode
+  tags: [drbd, resource, activate]
+
+- name: Dump backing-device diagnostics when drbdadm up failed
+  ansible.builtin.shell: |
+    set -u
+    backing='{{ drbd_resource_backing_disk | default(drbd_resource_disk) }}'
+    printf 'KIN_DRBD_UP_FAIL backing=%s\n' "$backing"
+    findmnt -S "$backing" || true
+    lsblk -o NAME,TYPE,MOUNTPOINT,FSTYPE "$backing" || true
+    fuser -vm "$backing" 2>&1 || true
+    fuser -v "$backing" 2>&1 || true
+    if [[ "$backing" == /dev/mapper/* ]]; then
+      dmsetup info "$(basename "$backing")" || true
+    fi
+    drbdadm status {{ drbd_resource_name }} || true
+  args:
+    executable: /bin/bash
+  register: drbd_resource_up_diag
+  changed_when: false
+  failed_when: false
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+    - drbd_resource_up_result is defined
+    - (drbd_resource_up_result.rc | default(0) | int) != 0
+  tags: [drbd, resource, activate]
+
+- name: Fail closed after a failed drbdadm up with diagnostics in the log
+  ansible.builtin.fail:
+    msg: >-
+      drbdadm up {{ drbd_resource_name }} failed on {{ inventory_hostname }}
+      (rc={{ drbd_resource_up_result.rc | default('?') }}).
+      stderr={{ drbd_resource_up_result.stderr | default('') }}.
+      Diagnostics: {{ drbd_resource_up_diag.stdout | default('') }}
+  when:
+    - drbd_resource_needs_activate | bool
+    - not (drbd_resource_pacemaker_owns | bool)
+    - not ansible_check_mode
+    - drbd_resource_up_result is defined
+    - (drbd_resource_up_result.rc | default(0) | int) != 0
   tags: [drbd, resource, activate]
 
 - name: Read the DRBD role after attach
