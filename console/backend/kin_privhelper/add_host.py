@@ -17,7 +17,14 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from . import protocol as proto
-from .orchestration import OrchHost, kin_mail_deploy_dir, valid_ipv4, valid_name
+from .orchestration import (
+    OrchHost,
+    kin_mail_deploy_dir,
+    ssh_password_candidates,
+    sync_peer_ha_console_state,
+    valid_ipv4,
+    valid_name,
+)
 
 LAST_REMOVED_PEER_PATH = Path(
     os.environ.get("KIN_LAST_REMOVED_PEER", "/etc/kin-mail/last-removed-peer")
@@ -545,6 +552,23 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         except OSError as exc:
             yield await _emit(
                 f"add-host ansible succeeded but console config update failed: {exc}",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+
+        # Same peer console path as Build HA: install :9443 on the new peer.
+        peer_host = OrchHost(plan.new_name, plan.new_ip, "mail2")
+        yield await _emit("Deploying admin console to the new peer (:9443)")
+        peer_ok, peer_notes = await sync_peer_ha_console_state(
+            peer_host, ssh_user, ssh_pass, secrets
+        )
+        for note in peer_notes:
+            yield await _emit(note, err=not peer_ok)
+        if not peer_ok:
+            yield await _emit(
+                "Add-host playbook succeeded but peer console deploy failed. "
+                "Retry Add Second Server (or sync peer console) after fixing the peer.",
                 err=True,
             )
             yield proto.event_done(1)

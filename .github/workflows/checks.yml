@@ -64,6 +64,9 @@ jobs:
       - name: ensure-outbound-dns helper tests
         run: bash install/lib/test-ensure-outbound-dns.sh
 
+      - name: peer-console-activate helper tests
+        run: bash console/deploy/test-peer-console-activate.sh
+
       - name: Install shellcheck
         run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
 

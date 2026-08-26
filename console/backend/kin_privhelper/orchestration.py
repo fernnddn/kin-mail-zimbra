@@ -987,9 +987,9 @@ async def _install_staged_peer_file(
     chmod_dir = ""
     if dest_dir.rstrip("/") == "/etc/kin-mail":
         chmod_dir = f"chmod 755 {dest_dir} && "
-    # Mail B never runs console/bootstrap.sh, so kin-console may not exist yet.
-    # install -o kin-console then fails with "invalid user" and HA apply dies
-    # at peer_console_state after the cluster is already live.
+    # Mail B gets a full console via ensure_peer_console_runtime (peer activate).
+    # create kin-console here too so identity pushes stay safe if activate was
+    # skipped on a health-OK resume path that somehow lacks the user.
     ensure_owner = ""
     if owner == "kin-console" or group == "kin-console":
         ensure_owner = (
@@ -1104,6 +1104,162 @@ def _block_between(text: str, begin: str, end: str) -> str:
     return text[start + len(begin) : stop]
 
 
+def peer_console_activate_src() -> Path:
+    """peer-console-activate.sh next to deployed (or checkout) console/deploy/."""
+    return Path(__file__).resolve().parents[2] / "deploy" / "peer-console-activate.sh"
+
+
+def peer_console_opt_root() -> Path:
+    return Path(os.environ.get("KIN_MAIL_CONSOLE_OPT", "/opt/kin-mail-console"))
+
+
+def build_peer_console_archive(src_opt: Path, dest_tgz: Path) -> None:
+    """Tar Host A's installed /opt/kin-mail-console for the peer."""
+    src = src_opt.resolve()
+    if not (src / "venv" / "bin" / "python").is_file() and not (
+        src / "venv" / "bin" / "python3"
+    ).is_file():
+        raise FileNotFoundError(f"console venv missing under {src}")
+    if not (src / "frontend" / "dist").is_dir():
+        raise FileNotFoundError(f"frontend/dist missing under {src}")
+    dest_tgz.parent.mkdir(parents=True, exist_ok=True)
+
+    def _filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        name = info.name.replace("\\", "/")
+        if name.startswith("/") or ".." in Path(name).parts:
+            return None
+        parts = Path(name).parts
+        if "node_modules" in parts or "__pycache__" in parts:
+            return None
+        if name.endswith((".pyc", ".pyo")):
+            return None
+        return info
+
+    with tarfile.open(dest_tgz, "w:gz") as tar:
+        tar.add(src, arcname="kin-mail-console", filter=_filter)
+
+
+PEER_CONSOLE_HEALTH_CMD = (
+    "set -e; "
+    "test -x /opt/kin-mail-console/venv/bin/python "
+    "-o -x /opt/kin-mail-console/venv/bin/python3; "
+    "test -d /opt/kin-mail-console/frontend/dist; "
+    "systemctl is-active --quiet kin-mail-console.service; "
+    "code=$(curl -sk -o /dev/null -w '%{http_code}' "
+    "https://127.0.0.1:9443/api/health || true); "
+    "test \"$code\" = 200"
+)
+
+
+async def ensure_peer_console_runtime(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> tuple[bool, list[str]]:
+    """Install /opt/kin-mail-console on the peer and start :9443 if needed.
+
+    Idempotent: skips transfer when health already passes. Must run before
+    users.json / identity / completion markers.
+    """
+    notes: list[str] = []
+    health_code, _health_text = await _ssh_run(
+        host,
+        user,
+        password,
+        secrets,
+        wrap_privileged_remote(PEER_CONSOLE_HEALTH_CMD),
+        timeout=30,
+        stdin_text=password,
+    )
+    if health_code == 0:
+        notes.append(
+            "Peer console already healthy on :9443; skipping tree transfer."
+        )
+        return True, notes
+
+    src_opt = peer_console_opt_root()
+    activate_src = peer_console_activate_src()
+    if not activate_src.is_file():
+        notes.append(
+            f"peer-console-activate.sh missing at {activate_src}. "
+            "Re-run console/bootstrap.sh on this host, then retry."
+        )
+        return False, notes
+    if not src_opt.is_dir():
+        notes.append(
+            f"Local console tree missing at {src_opt}. "
+            "Bootstrap the console on this host before Build HA."
+        )
+        return False, notes
+
+    local_tgz = WORK_DIR / "peer-console.tgz"
+    try:
+        build_peer_console_archive(src_opt, local_tgz)
+    except (OSError, FileNotFoundError) as exc:
+        notes.append(f"Could not archive local console tree: {exc}")
+        return False, notes
+
+    remote_tgz = "/tmp/kin-mail-peer-console.tgz"
+    remote_activate = "/tmp/kin-mail-peer-console-activate.sh"
+    scp_code, scp_text = await _scp_put(
+        host, user, password, secrets, local_tgz, remote_tgz, timeout=600
+    )
+    if scp_code != 0:
+        notes.append(
+            f"Could not copy console tree to the peer (exit {scp_code}): {scp_text}"
+        )
+        return False, notes
+    scp_act, scp_act_text = await _scp_put(
+        host, user, password, secrets, activate_src, remote_activate, timeout=30
+    )
+    if scp_act != 0:
+        notes.append(
+            f"Could not copy peer-console-activate.sh (exit {scp_act}): {scp_act_text}"
+        )
+        return False, notes
+
+    peer_name = (host.name or "").strip()
+    peer_ip = (host.ip or "").strip()
+
+    def _sh_single(value: str) -> str:
+        return "'" + value.replace("'", "'\"'\"'") + "'"
+
+    extract_and_activate = wrap_privileged_remote(
+        "set -e; "
+        "mkdir -p /opt; "
+        "rm -rf /opt/kin-mail-console; "
+        f"tar -C /opt -xzf {remote_tgz}; "
+        f"rm -f {remote_tgz}; "
+        f"install -m 755 {remote_activate} /opt/kin-mail-console/deploy/peer-console-activate.sh; "
+        f"rm -f {remote_activate}; "
+        "export KIN_PEER_CONSOLE_ACTIVATE=1; "
+        f"export KIN_PEER_CONSOLE_NAME={_sh_single(peer_name)}; "
+        f"export KIN_PEER_CONSOLE_IP={_sh_single(peer_ip)}; "
+        "/opt/kin-mail-console/deploy/peer-console-activate.sh"
+    )
+    # Activate can apt-install + restart services; allow several minutes.
+    act_code, act_text = await _ssh_run(
+        host,
+        user,
+        password,
+        secrets,
+        extract_and_activate,
+        timeout=600,
+        stdin_text=password,
+    )
+    if act_code != 0:
+        notes.append(
+            f"Peer console activate failed (exit {act_code}). "
+            "No auto-retry, no auto-rollback."
+        )
+        if act_text.strip():
+            notes.append(act_text.strip()[-2000:])
+        return False, notes
+    notes.append("Installed and activated console on the peer (:9443)")
+    return True, notes
+
+
 def parse_peer_console_probe(text: str) -> dict[str, Any]:
     """Parse PEER_CONSOLE_PROBE_CMD stdout. Config body is never logged by callers."""
     blob = text or ""
@@ -1161,6 +1317,15 @@ async def sync_peer_ha_console_state(
         setup_marker_present=bool(probe.get("setup_present")),
         topology_marker_text=str(probe.get("topology_text") or ""),
     )
+
+    # Full console on Mail B before users/identity/markers. Used to only sync
+    # state files; Mail B never ran bootstrap, so :9443 was Host A only.
+    runtime_ok, runtime_notes = await ensure_peer_console_runtime(
+        host, user, password, secrets
+    )
+    notes.extend(runtime_notes)
+    if not runtime_ok:
+        return False, notes
 
     # Push users.json first, before any completion marker lands on the peer.
     # Used to run last: a failure here after the markers had already been

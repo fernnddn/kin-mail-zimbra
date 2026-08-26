@@ -210,9 +210,11 @@ export default function TopologyStep() {
             fail-closed.
           </Hint>
           <Hint>
-            Mail B does not need console/bootstrap.sh. Build HA pair copies
-            /opt/kin-mail-deploy/install from this host. Mail B still needs user
-            kin, matching passwords, SSH password login, and one blank spare disk.
+            Build HA installs the admin console on Mail B from this host (no second
+            git clone or console/bootstrap.sh on B). Mail B still needs user kin,
+            matching passwords, SSH password login, and one blank spare disk. After
+            bootstrap on this host, the git checkout under home is optional to keep;
+            runtime lives in /opt/kin-mail-console.
           </Hint>
         </>
       ) : null}

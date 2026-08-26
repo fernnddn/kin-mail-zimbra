@@ -1349,6 +1349,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 "kin_privhelper.orchestration._ssh_run",
                 new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
             ),
+                patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
+                ),
             patch(
                 "kin_privhelper.console_users_sync.push_local_users_to_peer",
                 new=AsyncMock(return_value=(False, "users push boom")),
@@ -1380,6 +1384,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
                     new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                ),
+                patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
                 ),
                 patch(
                     "kin_privhelper.console_users_sync.push_local_users_to_peer",
@@ -1431,6 +1439,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
                     new=AsyncMock(return_value=(0, noop_blob)),
+                ),
+                patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
                 ),
                 patch(
                     "kin_privhelper.console_users_sync.push_local_users_to_peer",
@@ -1509,6 +1521,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                     new=AsyncMock(return_value=(0, noop_blob)),
                 ),
                 patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
+                ),
+                patch(
                     "kin_privhelper.console_users_sync.push_local_users_to_peer",
                     new=AsyncMock(return_value=(True, "users pushed")),
                 ),
@@ -1559,6 +1575,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                     new=AsyncMock(return_value=(0, noop_blob)),
                 ),
                 patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
+                ),
+                patch(
                     "kin_privhelper.console_users_sync.push_local_users_to_peer",
                     new=AsyncMock(return_value=(True, "users pushed")),
                 ),
@@ -1599,6 +1619,10 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 "kin_privhelper.orchestration._ssh_run",
                 new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
             ),
+                patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
+                ),
             patch(
                 "kin_privhelper.console_users_sync.push_local_users_to_peer",
                 new=AsyncMock(return_value=(True, "users pushed")),
@@ -1617,6 +1641,37 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         dests = [c.kwargs.get("dest") for c in push_file.await_args_list]
         self.assertEqual(dests, ["/etc/kin-mail/server-id"])
         self.assertNotIn("/etc/kin-mail/ha-setup-complete", dests)
+
+    async def test_peer_console_runtime_failure_skips_users_and_markers(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+            ),
+            patch(
+                "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                new=AsyncMock(return_value=(False, ["activate boom"])),
+            ),
+            patch(
+                "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                new=AsyncMock(return_value=(True, "users pushed")),
+            ) as users_push,
+            patch(
+                "kin_privhelper.orchestration._push_peer_text_file",
+                new=AsyncMock(return_value=(0, "")),
+            ) as push_file,
+        ):
+            ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertFalse(ok)
+        self.assertTrue(any("activate boom" in n for n in notes))
+        users_push.assert_not_awaited()
+        push_file.assert_not_awaited()
 
 
 class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):

@@ -17,7 +17,7 @@ skips if the cluster is already running. Never `pcs cluster destroy` against thi
 | Role | Host | IP | Notes |
 |---|---|---|---|
 | Mail A | `mail.<MAIL_DOMAIN>` | `<HOST_A_IP>` | Console `:9443`. Currently **Unpromoted**. |
-| Mail B | `mail2.<MAIL_DOMAIN>` | `<HOST_B_IP>` | Currently **Promoted** (serves mail + VIP). |
+| Mail B | `mail2.<MAIL_DOMAIN>` | `<HOST_B_IP>` | Console `:9443` after Build HA. Currently **Promoted** (serves mail + VIP). |
 | Observability | `mon.<MAIL_DOMAIN>` | `<OBSERVABILITY_IP>` | qnetd `:5403`, iSCSI SBD LUN `:3260`, Zabbix `:8080` |
 | Backup | `backup.<MAIL_DOMAIN>` | `<BACKUP_IP>` | Backup repo + Grafana `:3000`. Scratch restore target. |
 | Cluster VIP | Pacemaker `kin-vip` | **`<CLUSTER_VIP_IP>/24`** on `<NET_IFACE>` | FortiGate NAT targets this, **not** Host A `<HOST_A_IP>`. |
@@ -32,8 +32,9 @@ Promoted until that node is down or an operator moves it. Resting state as of
 > **Not covered here:** first Zimbra install (`install/kin-mail.sh`) - see `README.md`.  
 > **Single-node → HA:** if `/opt/zimbra` is still on the OS volume, Build HA pair
 > refuses until you migrate onto the data partition - **§13**.  
-> **Console:** `https://<HOST_A_IP>:9443` lives on Host A’s OS, not on the VIP. If A
-> is down, the console is down even when mail is healthy on B.
+> **Console:** `https://<HOST_A_IP>:9443` and `https://<HOST_B_IP>:9443` after
+> Build HA (or Add Second Server). Console is **not** on the VIP. Mail stays
+> VIP-only. If Host A is down, open the console on Host B’s management IP.
 
 ### Expectation: measured downtime, not zero-downtime
 
@@ -79,8 +80,8 @@ repeatable downtime**, fencing against split-brain, and a single consistent stor
 ┌────────▼────────┐    Corosync/Pacemaker     ┌────────▼────────┐
 │ Host A          │◄─────────────────────────►│ Host B          │
 │ mail            │                           │ mail2           │
-│ console :9443   │      DRBD kin-zimbra      │ (Promoted today)│
-│                 │◄═════════════════════════►│                 │
+│ console :9443   │      DRBD kin-zimbra      │ console :9443   │
+│                 │◄═════════════════════════►│ (Promoted today)│
 │ stickiness 1000 │   /dev/drbd0 ↔ /opt/zimbra (when Master)    │
 └─────────────────┘     data /dev/sdb1  meta /dev/sdb2          └─────────────────┘
                                  │
@@ -638,7 +639,8 @@ on that node; do not leave it watching `/opt/zimbra/log` while unmounted.
 4. **LDAP bind** is localhost (`ldap://127.0.0.1:389`) plus
    `zimbra_require_interprocess_security=0` so Zimbra can start on either node
    from the shared store. Revisit if you split Pacemaker node name from mail FQDN.
-5. **Console is not HA** - `:9443` is Host A only.
+5. **Console on both mail nodes** - `:9443` on `<HOST_A_IP>` and `<HOST_B_IP>`
+   after Build HA / Add Second Server (not on the VIP). If A is down, use B.
 6. **Grafana is not on Observability** - it is on Backup `<BACKUP_IP>`. Probing `<OBSERVABILITY_IP>:3000`
    will look like “Grafana disappeared.”
 7. **Scratch Zimbra on Backup** remains installed but **must stay stopped** so it

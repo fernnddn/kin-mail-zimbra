@@ -238,12 +238,16 @@ class HaSyncWiringTests(unittest.TestCase):
             / "orchestration.py"
         ).read_text(encoding="utf-8")
         self.assertIn("push_local_users_to_peer", text)
+        self.assertIn("ensure_peer_console_runtime", text)
+        runtime_idx = text.find("ensure_peer_console_runtime")
         users_idx = text.find("push_local_users_to_peer")
         noop_idx = text.find("Peer console already has TOPOLOGY=2vm")
         ha_marker_idx = text.find("Wrote ha-setup-complete on the peer")
+        self.assertGreater(runtime_idx, 0)
         self.assertGreater(users_idx, 0)
         self.assertGreater(noop_idx, 0)
         self.assertGreater(ha_marker_idx, 0)
+        self.assertLess(runtime_idx, users_idx)
         self.assertLess(users_idx, noop_idx)
         self.assertLess(users_idx, ha_marker_idx)
         self.assertIn("getent passwd kin-console", text)
@@ -251,6 +255,19 @@ class HaSyncWiringTests(unittest.TestCase):
             "useradd --system --home /var/lib/kin-mail-console",
             text,
         )
+
+    def test_add_host_deploys_peer_console_after_ansible(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "add_host.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("sync_peer_ha_console_state", text)
+        self.assertLess(
+            text.find("mail-add-host.yml"),
+            text.find("sync_peer_ha_console_state"),
+        )
+        self.assertIn("Deploying admin console to the new peer", text)
 
     def test_forward_mutation_uses_password_sudo_wrapper(self) -> None:
         text = (
