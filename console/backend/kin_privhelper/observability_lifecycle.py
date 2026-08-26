@@ -31,6 +31,16 @@ def boot_id_unchanged(before: str, after: str) -> bool:
     return left == right
 
 
+def _names_match(left: str, right: str) -> bool:
+    a = (left or "").strip().lower()
+    b = (right or "").strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.split(".", 1)[0] == b.split(".", 1)[0]
+
+
 def sbd_stop_order(*, promoted: str, hosts: list[str]) -> list[str]:
     """Unpromoted first, then Promoted (HA-RUNBOOK section 7)."""
     names = [h.strip() for h in hosts if h and str(h).strip()]
@@ -81,8 +91,10 @@ def plan_remove_observability(
         errors.append("no Observability node is configured; nothing to remove")
     if ssh_ok or reachable or status == "healthy":
         errors.append(
-            "Observability still answers; Remove is only allowed when the "
-            "witness is unreachable"
+            "Observability still answers on the qnetd port (or SSH). "
+            "Power off or delete that VM first, wait until Cluster shows "
+            "Observability unreachable, then Remove again. Graceful online "
+            "remove is not supported."
         )
     if ident and status == "unreachable" and not ssh_ok and not reachable:
         notes.append(
@@ -152,11 +164,16 @@ def render_observability_inventory(
     local_mail_name: str = "",
     force_tls_reinit: bool = False,
     expect_fresh_sbd: bool = False,
+    include_observability_host: bool = True,
 ) -> str:
     """YAML inventory with env-lookup passwords. Never embed secret values.
 
     mail_hosts: (name, ip, iqn_suffix)
     Observability SSH uses KIN_OBS_* env; mail nodes use KIN_ANSIBLE_*.
+
+    Forced Remove Observability must set include_observability_host=False:
+    the witness is already dead, and listing it with empty KIN_OBS_* only
+    risks ansible touching a hole. Add Observability keeps it True.
     """
     lines = [
         "all:",
@@ -173,19 +190,32 @@ def render_observability_inventory(
         f"    observability_expect_fresh_sbd: {str(bool(expect_fresh_sbd)).lower()}",
         '    kin_mail_deploy_dir: "' + kin_mail_deploy_dir() + '"',
         "  children:",
-        "    monitoring:",
-        "      hosts:",
-        f"        {obs_name}:",
-        f"          ansible_host: {obs_ip}",
-        "          ansible_connection: ssh",
-        "          ansible_user: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_USER\") }}'",
-        "          ansible_password: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_PASSWORD\") }}'",
-        "          ansible_become_password: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_BECOME_PASSWORD\") }}'",
-        "    mail_nodes:",
-        "      hosts:",
     ]
+    if include_observability_host:
+        lines.extend(
+            [
+                "    monitoring:",
+                "      hosts:",
+                f"        {obs_name}:",
+                f"          ansible_host: {obs_ip}",
+                "          ansible_connection: ssh",
+                "          ansible_user: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_USER\") }}'",
+                "          ansible_password: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_PASSWORD\") }}'",
+                "          ansible_become_password: '{{ lookup(\"env\", \"KIN_OBS_ANSIBLE_BECOME_PASSWORD\") }}'",
+            ]
+        )
+    lines.extend(
+        [
+            "    mail_nodes:",
+            "      hosts:",
+        ]
+    )
     for name, ip, iqn_suffix in mail_hosts:
-        conn = "local" if local_mail_name and name == local_mail_name else "ssh"
+        conn = (
+            "local"
+            if local_mail_name and _names_match(name, local_mail_name)
+            else "ssh"
+        )
         lines.append(f"        {name}:")
         lines.append(f"          ansible_host: {ip}")
         lines.append(f"          ansible_connection: {conn}")

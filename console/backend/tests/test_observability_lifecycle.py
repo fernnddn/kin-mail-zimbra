@@ -115,6 +115,32 @@ class ObservabilityLifecycleTests(unittest.TestCase):
         self.assertNotIn("cluster_remove_host", inv)
         self.assertNotIn("cluster_survivor_replace", inv)
 
+    def test_remove_inventory_omits_dead_observability_host(self) -> None:
+        inv = render_observability_inventory(
+            mail_hosts=[
+                ("mail.gits-it.site", "192.0.2.51", "mail"),
+                ("mail2.gits-it.site", "192.0.2.52", "mail2"),
+            ],
+            obs_name="observability-retired",
+            obs_ip="192.0.2.53",
+            retired_ip="192.0.2.53",
+            local_mail_name="mail",  # short name must still map to local
+            include_observability_host=False,
+        )
+        self.assertNotIn("monitoring:", inv)
+        self.assertNotIn("KIN_OBS_ANSIBLE_PASSWORD", inv)
+        self.assertIn("mail_nodes:", inv)
+        self.assertIn("ansible_connection: local", inv)
+        self.assertIn("observability_retired_ip: \"192.0.2.53\"", inv)
+
+    def test_remove_error_tells_operator_to_power_off_first(self) -> None:
+        plan = plan_remove_observability(
+            identity="192.0.2.53",
+            reachable=True,
+            ssh_ok=False,
+        )
+        self.assertTrue(any("Power off or delete" in e for e in plan.errors))
+
     def test_inventory_name(self) -> None:
         self.assertEqual(
             observability_inventory_name(ip="192.0.2.99", hostname="obs.example.test"),

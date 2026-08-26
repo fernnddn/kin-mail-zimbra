@@ -203,7 +203,16 @@ async def cmd_remove_observability(
     mail = _mail_hosts(st, config)
     if len(mail) < 2:
         yield await _emit(
-            "Refusing: need both mail nodes in config/corosync to disarm fencing",
+            "Refusing: need both mail nodes in config/corosync to disarm fencing "
+            f"(resolved {len(mail)}: {[h.name for h in mail] or 'none'})",
+            err=True,
+        )
+        yield proto.event_done(2)
+        return
+    if not kin_pass and not root_pass:
+        yield await _emit(
+            "Refusing: mail-node provisioning vault is empty; store host "
+            "credentials on the Cluster page before Remove Observability",
             err=True,
         )
         yield proto.event_done(2)
@@ -224,6 +233,8 @@ async def cmd_remove_observability(
             obs_ip=identity or "0.0.0.0",
             retired_ip=identity,
             local_mail_name=local_name,
+            # Witness is already dead; do not list it in inventory.
+            include_observability_host=False,
         )
         order = sbd_stop_order(
             promoted=promoted_before,
@@ -237,7 +248,7 @@ async def cmd_remove_observability(
         ]
         extra_env = {
             "KIN_ANSIBLE_USER": "kin",
-            "KIN_ANSIBLE_PASSWORD": kin_pass,
+            "KIN_ANSIBLE_PASSWORD": kin_pass or root_pass,
             "KIN_ANSIBLE_BECOME_PASSWORD": kin_pass or root_pass,
         }
         secrets = [p for p in (root_pass, kin_pass) if p]
@@ -261,6 +272,8 @@ async def cmd_remove_observability(
             yield proto.event_done(play_exit)
             return
 
+        # Always clear local config identity after a successful disarm play,
+        # even if ansible already rewrote peer configs.
         write_observability_vm_ip("")
         yield await _emit("cleared OBSERVABILITY_VM_IP in local config")
 
@@ -269,7 +282,9 @@ async def cmd_remove_observability(
         if str(after_obs.get("status") or "") != "absent":
             yield await _emit(
                 "cleanup finished but Observability identity is still present "
-                f"(status={after_obs.get('status')} ip={after_obs.get('ip')})",
+                f"(status={after_obs.get('status')} ip={after_obs.get('ip')}). "
+                "Check corosync.conf still has a quorum.device block, or re-run "
+                "Remove after confirming both mail nodes stripped the witness.",
                 err=True,
             )
             yield proto.event_done(1)
