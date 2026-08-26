@@ -1021,8 +1021,10 @@ class CheckModeSafetyTests(unittest.TestCase):
         topo = (repo / "console/frontend/src/wizard/steps/TopologyStep.tsx").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Mail B does not need console/bootstrap.sh", topo)
-        self.assertIn("copies", topo)
+        self.assertIn("Build HA installs the admin console on Mail B from this host", topo)
+        self.assertIn("no second", topo)
+        self.assertIn("console/bootstrap.sh on B", topo)
+        self.assertIn("/opt/kin-mail-console", topo)
         checks = (repo / ".github/workflows/checks.yml").read_text(encoding="utf-8")
         self.assertIn("--exclude='test_*.py'", checks)
         types = (repo / "console/frontend/src/wizard/types.ts").read_text(
@@ -1672,6 +1674,33 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("activate boom" in n for n in notes))
         users_push.assert_not_awaited()
         push_file.assert_not_awaited()
+
+    async def test_ensure_peer_console_runtime_skips_transfer_when_healthy(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.orchestration import ensure_peer_console_runtime
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with (
+            patch(
+                "kin_privhelper.orchestration._ssh_run",
+                new=AsyncMock(return_value=(0, "")),
+            ) as ssh,
+            patch(
+                "kin_privhelper.orchestration._scp_put",
+                new=AsyncMock(return_value=(0, "")),
+            ) as scp,
+            patch(
+                "kin_privhelper.orchestration.build_peer_console_archive",
+            ) as build,
+        ):
+            ok, notes = await ensure_peer_console_runtime(host, "kin", "pw", [])
+
+        self.assertTrue(ok)
+        self.assertTrue(any("already healthy" in n for n in notes))
+        ssh.assert_awaited()
+        scp.assert_not_awaited()
+        build.assert_not_called()
 
 
 class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):
