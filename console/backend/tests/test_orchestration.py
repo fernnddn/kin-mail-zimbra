@@ -322,7 +322,12 @@ class InventoryTests(unittest.TestCase):
             "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
             "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
             "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
-            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+            'KIN_PEER_CFG_BEGIN\n'
+            'TOPOLOGY="2vm"\n'
+            'MAIL_HOST="mail2.example.test"\n'
+            'SERVER_IP="192.0.2.14"\n'
+            'MAIL_DOMAIN="example.test"\n'
+            'KIN_PEER_CFG_END\n'
         )
         parsed = parse_peer_console_probe(blob)
         self.assertTrue(parsed["ok"])
@@ -1436,7 +1441,12 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
             "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
             "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
-            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+            'KIN_PEER_CFG_BEGIN\n'
+            'TOPOLOGY="2vm"\n'
+            'MAIL_HOST="mail2.example.test"\n'
+            'SERVER_IP="192.0.2.14"\n'
+            'MAIL_DOMAIN="example.test"\n'
+            'KIN_PEER_CFG_END\n'
         )
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
         with tempfile.TemporaryDirectory() as td:
@@ -1510,7 +1520,12 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
             "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
             "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
-            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+            'KIN_PEER_CFG_BEGIN\n'
+            'TOPOLOGY="2vm"\n'
+            'MAIL_HOST="mail2.example.test"\n'
+            'SERVER_IP="192.0.2.14"\n'
+            'MAIL_DOMAIN="example.test"\n'
+            'KIN_PEER_CFG_END\n'
         )
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
 
@@ -1570,7 +1585,12 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             "KIN_PEER_STATE_BEGIN\nHA=1\nSETUP=1\nCFG=1\nTOPO=1\nKIN_PEER_STATE_END\n"
             "KIN_PEER_HA_BEGIN\ncomplete 2026-08-21T00:00:00Z\nKIN_PEER_HA_END\n"
             "KIN_PEER_TOPO_BEGIN\n2vm\nKIN_PEER_TOPO_END\n"
-            'KIN_PEER_CFG_BEGIN\nTOPOLOGY="2vm"\nKIN_PEER_CFG_END\n'
+            'KIN_PEER_CFG_BEGIN\n'
+            'TOPOLOGY="2vm"\n'
+            'MAIL_HOST="mail2.example.test"\n'
+            'SERVER_IP="192.0.2.14"\n'
+            'MAIL_DOMAIN="example.test"\n'
+            'KIN_PEER_CFG_END\n'
         )
         host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
         with tempfile.TemporaryDirectory() as td:

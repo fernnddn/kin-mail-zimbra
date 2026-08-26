@@ -52,9 +52,13 @@ say "Peer console activate"
 info "Install root : ${OPT_ROOT}"
 info "Listen port  : ${CONSOLE_PORT}"
 
-if [ ! -x "${OPT_ROOT}/venv/bin/python" ]; then
-  fail "Missing ${OPT_ROOT}/venv/bin/python - transfer /opt/kin-mail-console from Host A first"
+if [ ! -x "${OPT_ROOT}/venv/bin/python" ] && [ ! -x "${OPT_ROOT}/venv/bin/python3" ]; then
+  fail "Missing ${OPT_ROOT}/venv/bin/python{,3} - transfer /opt/kin-mail-console from Host A first"
   exit 1
+fi
+PEER_PY="${OPT_ROOT}/venv/bin/python"
+if [ ! -x "$PEER_PY" ]; then
+  PEER_PY="${OPT_ROOT}/venv/bin/python3"
 fi
 if [ ! -d "${OPT_ROOT}/frontend/dist" ]; then
   fail "Missing ${OPT_ROOT}/frontend/dist"
@@ -115,11 +119,21 @@ chmod 640 "$ENV_FILE"
 
 CERT="${DATA_ROOT}/tls/cert.pem"
 KEY="${DATA_ROOT}/tls/key.pem"
-if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+peer_name="${KIN_PEER_CONSOLE_NAME:-$(hostname -f 2>/dev/null || hostname || true)}"
+peer_ip="${KIN_PEER_CONSOLE_IP:-}"
+need_tls=0
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
+  need_tls=1
+elif [ -n "$peer_ip" ] && command -v openssl >/dev/null 2>&1; then
+  # Self-heal: re-mint when management IP is missing from SAN (old localhost-only cert).
+  if ! openssl x509 -in "$CERT" -noout -text 2>/dev/null | grep -Fq "$peer_ip"; then
+    need_tls=1
+    warn "TLS SAN missing ${peer_ip}; regenerating cert"
+  fi
+fi
+if [ "$need_tls" -eq 0 ]; then
   ok "Existing TLS material retained"
 else
-  peer_name="${KIN_PEER_CONSOLE_NAME:-$(hostname -f 2>/dev/null || hostname || true)}"
-  peer_ip="${KIN_PEER_CONSOLE_IP:-}"
   san="DNS:localhost,IP:127.0.0.1"
   if [ -n "$peer_name" ]; then
     san="${san},DNS:${peer_name}"
@@ -151,7 +165,7 @@ fi
 SECRET_FILE="${DATA_ROOT}/session.secret"
 if [ ! -f "$SECRET_FILE" ]; then
   # Placeholder so the service can start; Host A overwrites with the shared secret.
-  "${OPT_ROOT}/venv/bin/python" - <<PY
+  "$PEER_PY" - <<PY
 import secrets
 from pathlib import Path
 p = Path("${SECRET_FILE}")
@@ -174,8 +188,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # Sync AD console env from kin-mail config when present (no password print).
-if [ -f /etc/kin-mail/config ] && [ -x "${OPT_ROOT}/venv/bin/python" ]; then
-  PYTHONPATH="${OPT_ROOT}/backend" "${OPT_ROOT}/venv/bin/python" - <<'PY' || true
+if [ -f /etc/kin-mail/config ] && [ -x "$PEER_PY" ]; then
+  PYTHONPATH="${OPT_ROOT}/backend" "$PEER_PY" - <<'PY' || true
 import sys
 sys.path.insert(0, "/opt/kin-mail-console/backend")
 from kin_console.ad_settings import load_ad_settings, sync_ad_env_from_kin_config
@@ -210,14 +224,15 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: 
       cluster_net="$(_derive_slash24 "$CLUSTER_VIP_IP")"
     elif [ -n "${SERVER_IP:-}" ]; then
       cluster_net="$(_derive_slash24 "$SERVER_IP")"
-    elif [ -n "${KIN_PEER_CONSOLE_IP:-}" ]; then
-      cluster_net="$(_derive_slash24 "$KIN_PEER_CONSOLE_IP")"
     fi
     for ip in ${KIN_ADMIN_IPS:-}; do
       if ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP' >/dev/null 2>&1; then
         ufw_ok=1
       fi
     done
+  fi
+  if [ -z "$cluster_net" ] && [ -n "${KIN_PEER_CONSOLE_IP:-}" ]; then
+    cluster_net="$(_derive_slash24 "$KIN_PEER_CONSOLE_IP")"
   fi
   if [ -n "$cluster_net" ]; then
     if ufw allow from "$cluster_net" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN' >/dev/null 2>&1; then
@@ -228,7 +243,7 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: 
       exit 1
     fi
   else
-    fail "Could not derive CLUSTER_NET (need CLUSTER_VIP_IP or SERVER_IP); refusing peer console with active UFW and no LAN allow"
+    fail "Could not derive CLUSTER_NET (need CLUSTER_VIP_IP, SERVER_IP, or KIN_PEER_CONSOLE_IP); refusing peer console with active UFW and no LAN allow"
     exit 1
   fi
   if [ "$ufw_ok" -ne 1 ]; then

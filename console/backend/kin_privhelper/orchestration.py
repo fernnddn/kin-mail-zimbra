@@ -1177,10 +1177,41 @@ def build_peer_console_archive(src_opt: Path, dest_tgz: Path) -> None:
         tar.add(src, arcname="kin-mail-console", filter=_filter)
 
 
+async def _peer_console_listen_port(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> int:
+    """Read CONSOLE_PORT from the peer (default 9443)."""
+    cmd = wrap_privileged_remote(
+        "port=9443; "
+        "if [ -f /etc/kin-mail-console/console.env ]; then "
+        "  set -a; . /etc/kin-mail-console/console.env >/dev/null 2>&1 || true; set +a; "
+        "  port=${CONSOLE_PORT:-9443}; "
+        "fi; "
+        "printf '%s' \"$port\""
+    )
+    code, text = await _ssh_run(
+        host, user, password, secrets, cmd, timeout=20, stdin_text=password
+    )
+    if code != 0:
+        return 9443
+    raw = (text or "").strip().splitlines()
+    candidate = (raw[-1] if raw else "").strip()
+    try:
+        port = int(candidate)
+    except ValueError:
+        return 9443
+    if 1 <= port <= 65535:
+        return port
+    return 9443
+
+
 async def _peer_console_reachable_from_here(
     peer_ip: str, *, port: int = 9443, timeout: float = 8.0
 ) -> tuple[bool, str]:
-    """curl peer management IP:9443 from Host A (firewall / bind check)."""
+    """curl peer management IP:port from Host A (firewall / bind check)."""
     ip = (peer_ip or "").strip()
     if not valid_ipv4(ip):
         return False, "peer IP is not a valid IPv4 for remote health"
@@ -1215,6 +1246,18 @@ async def _peer_console_reachable_from_here(
     return True, f"Remote health https://{ip}:{port}/api/health → 200"
 
 
+PEER_USERS_NONEMPTY_CMD = (
+    "set -e; "
+    "test -s /var/lib/kin-mail-console/users.json; "
+    "py=/opt/kin-mail-console/venv/bin/python; "
+    "test -x \"$py\" || py=/opt/kin-mail-console/venv/bin/python3; "
+    "\"$py\" -c \"import json; "
+    "d=json.load(open('/var/lib/kin-mail-console/users.json')); "
+    "u=d.get('users'); "
+    "assert isinstance(u, list) and len(u) >= 1\""
+)
+
+
 async def ensure_peer_console_runtime(
     host: OrchHost,
     user: str,
@@ -1227,6 +1270,7 @@ async def ensure_peer_console_runtime(
     before users.json / identity / completion markers.
     """
     notes: list[str] = []
+    peer_port = await _peer_console_listen_port(host, user, password, secrets)
     health_code, _health_text = await _ssh_run(
         host,
         user,
@@ -1237,7 +1281,9 @@ async def ensure_peer_console_runtime(
         stdin_text=password,
     )
     if health_code == 0:
-        remote_ok, remote_note = await _peer_console_reachable_from_here(host.ip)
+        remote_ok, remote_note = await _peer_console_reachable_from_here(
+            host.ip, port=peer_port
+        )
         if remote_ok:
             notes.append(
                 "Peer console already healthy on :9443; skipping tree transfer."
@@ -1365,7 +1411,10 @@ async def ensure_peer_console_runtime(
             notes.append(act_text.strip()[-2000:])
         return False, notes
 
-    remote_ok, remote_note = await _peer_console_reachable_from_here(peer_ip)
+    peer_port = await _peer_console_listen_port(host, user, password, secrets)
+    remote_ok, remote_note = await _peer_console_reachable_from_here(
+        peer_ip, port=peer_port
+    )
     if not remote_ok:
         notes.append(
             f"Peer console started locally but {remote_note}. "
@@ -1466,6 +1515,27 @@ async def sync_peer_ha_console_state(
     notes.append(users_note)
     if not users_ok:
         return False, notes
+
+    # Self-heal check: refuse markers if the peer still has an empty placeholder
+    # users.json (activate writes [] until this push lands).
+    users_verify, users_verify_text = await _ssh_run(
+        host,
+        user,
+        password,
+        secrets,
+        wrap_privileged_remote(PEER_USERS_NONEMPTY_CMD),
+        timeout=20,
+        stdin_text=password,
+    )
+    if users_verify != 0:
+        notes.append(
+            "Peer users.json is still empty after sync; refusing completion markers. "
+            "Retry peer console sync after confirming this host has a real admin user."
+        )
+        if users_verify_text.strip():
+            notes.append(users_verify_text.strip()[-500:])
+        return False, notes
+    notes.append("Verified peer users.json has at least one console user")
 
     # Cluster identity next, still before any completion marker. Used to run
     # after ha-setup-complete: a failed server-id / license.token push then

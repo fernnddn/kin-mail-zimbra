@@ -250,6 +250,12 @@ class HaSyncWiringTests(unittest.TestCase):
         self.assertLess(runtime_idx, users_idx)
         self.assertLess(users_idx, noop_idx)
         self.assertLess(users_idx, ha_marker_idx)
+        self.assertIn("PEER_USERS_NONEMPTY_CMD", text)
+        sync_body = text[text.find("async def sync_peer_ha_console_state") :]
+        self.assertLess(
+            sync_body.find("push_local_users_to_peer"),
+            sync_body.find("PEER_USERS_NONEMPTY_CMD"),
+        )
         self.assertIn("getent passwd kin-console", text)
         self.assertIn(
             "useradd --system --home /var/lib/kin-mail-console",

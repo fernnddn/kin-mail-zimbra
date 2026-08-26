@@ -36,6 +36,20 @@ else
   bad "activate must force CONSOLE_BIND for remote reachability"
 fi
 
+if grep -q 'venv/bin/python3' "$SCRIPT" \
+  && grep -q 'PEER_PY' "$SCRIPT"; then
+  pass "activate accepts python or python3 venv"
+else
+  bad "activate must accept venv/bin/python3"
+fi
+
+if grep -q 'regenerating cert' "$SCRIPT" \
+  && grep -q 'subjectAltName' "$SCRIPT"; then
+  pass "activate re-mints TLS when peer IP missing from SAN"
+else
+  bad "activate must self-heal TLS SAN for peer IP"
+fi
+
 if grep -q 'subjectAltName' "$SCRIPT" \
   && grep -q 'KIN_PEER_CONSOLE_IP' "$SCRIPT" \
   && grep -q 'KIN_PEER_CONSOLE_NAME' "$SCRIPT"; then

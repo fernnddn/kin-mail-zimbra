@@ -274,13 +274,19 @@ class MailDeployedGateTests(unittest.TestCase):
 
     def test_peer_plan_is_noop_when_already_marked(self) -> None:
         plan = ds.plan_peer_ha_console_state(
-            config_text='TOPOLOGY="2vm"\nMAIL_HOST="mail2.example.test"\n',
+            config_text=(
+                'TOPOLOGY="2vm"\n'
+                'MAIL_HOST="mail2.example.test"\n'
+                'SERVER_IP="192.0.2.14"\n'
+                'MAIL_DOMAIN="example.test"\n'
+            ),
             ha_marker_present=True,
             ha_marker_text="complete 2026-08-21T00:00:00Z\n",
             setup_marker_present=True,
             topology_marker_text="2vm\n",
         )
         self.assertTrue(plan["noop"])
+        self.assertFalse(plan["refuse_incomplete_config"])
         self.assertFalse(plan["write_config"])
         self.assertFalse(plan["write_ha_marker"])
         self.assertFalse(plan["write_setup_marker"])
@@ -289,13 +295,19 @@ class MailDeployedGateTests(unittest.TestCase):
     def test_peer_plan_writes_topology_marker_when_only_that_is_missing(self) -> None:
         """Live backfill: peer already has 2vm config + completion markers."""
         plan = ds.plan_peer_ha_console_state(
-            config_text='TOPOLOGY="2vm"\nMAIL_HOST="mail2.example.test"\n',
+            config_text=(
+                'TOPOLOGY="2vm"\n'
+                'MAIL_HOST="mail2.example.test"\n'
+                'SERVER_IP="192.0.2.14"\n'
+                'MAIL_DOMAIN="example.test"\n'
+            ),
             ha_marker_present=True,
             ha_marker_text="complete 2026-08-21T00:00:00Z\n",
             setup_marker_present=True,
             topology_marker_text="",
         )
         self.assertFalse(plan["noop"])
+        self.assertFalse(plan["refuse_incomplete_config"])
         self.assertFalse(plan["write_config"])
         self.assertFalse(plan["write_ha_marker"])
         self.assertFalse(plan["write_setup_marker"])
@@ -304,15 +316,32 @@ class MailDeployedGateTests(unittest.TestCase):
 
     def test_peer_plan_adds_ha_marker_only_when_topology_already_2vm(self) -> None:
         plan = ds.plan_peer_ha_console_state(
-            config_text='TOPOLOGY="2vm"\n',
+            config_text=(
+                'TOPOLOGY="2vm"\n'
+                'MAIL_HOST="mail2.example.test"\n'
+                'SERVER_IP="192.0.2.14"\n'
+                'MAIL_DOMAIN="example.test"\n'
+            ),
             ha_marker_present=False,
             setup_marker_present=True,
             topology_marker_text="2vm\n",
         )
+        self.assertFalse(plan["refuse_incomplete_config"])
         self.assertFalse(plan["write_config"])
         self.assertTrue(plan["write_ha_marker"])
         self.assertFalse(plan["write_setup_marker"])
         self.assertFalse(plan["write_topology_marker"])
+        self.assertFalse(plan["noop"])
+
+    def test_peer_plan_refuses_incomplete_even_when_topology_already_2vm(self) -> None:
+        plan = ds.plan_peer_ha_console_state(
+            config_text='TOPOLOGY="2vm"\nMAIL_HOST="mail2.example.test"\n',
+            ha_marker_present=False,
+            setup_marker_present=True,
+            topology_marker_text="2vm\n",
+        )
+        self.assertTrue(plan["refuse_incomplete_config"])
+        self.assertFalse(plan["write_config"])
         self.assertFalse(plan["noop"])
 
     def test_check_mode_does_not_write_ha_marker(self) -> None:
