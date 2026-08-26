@@ -322,13 +322,13 @@ else
   bad "unmounted retry must not skip the holder wait or remove fstab while busy"
 fi
 
-# phase2-3: mail2 unmounted, drbd0 already holds the LUKS mapper from a prior
-# successful peer up. Release must drbdadm down before the free-device wait.
+# phase2-3 / resume hardening: mail2 unmounted with DRBD already up must NOT
+# tear down in release (peer may still fail the same task). Skip free-wait and
+# only clean fstab; activate.yml early-down owns re-attach.
 cat >"$STUB/drbdadm" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"${ROOT}/drbdadm.log"
 if [ "\$1" = "status" ]; then
-  if [ -f "${ROOT}/drbd_down" ]; then exit 1; fi
   exit 0
 fi
 if [ "\$1" = "down" ]; then
@@ -340,8 +340,7 @@ EOF
 chmod +x "$STUB/drbdadm"
 cat >"$STUB/fuser" <<EOF
 #!/usr/bin/env bash
-# Busy until DRBD is torn down (simulates sysfs holders: drbd0).
-if [ -f "${ROOT}/drbd_down" ]; then exit 1; fi
+# Would stay busy if release incorrectly waited without skipping.
 exit 0
 EOF
 chmod +x "$STUB/fuser"
@@ -352,12 +351,71 @@ rm -f "$ROOT/drbd_down"
 KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 "$SCRIPT" >/dev/null 2>&1
 stale_drbd_rc=$?
 if [ "$stale_drbd_rc" -eq 0 ] \
-  && grep -q '^down ' "$ROOT/drbdadm.log" \
+  && ! grep -q '^down ' "$ROOT/drbdadm.log" \
+  && grep -q '^status ' "$ROOT/drbdadm.log" \
   && ! grep -Fq "$MARK" "$FSTAB"; then
-  pass "unmounted resume downs stale DRBD before free-device wait"
+  pass "unmounted resume skips free-wait when DRBD is already up"
 else
-  bad "unmounted resume must drbdadm down when resource is still up"
+  bad "unmounted resume must skip free-wait/down when DRBD is already up"
 fi
+
+# wait-backing-only (activate path) must still down an up resource before wait.
+write_fstab
+: >"$ROOT/mnt_state"
+: >"$ROOT/drbdadm.log"
+: >"$ROOT/fail2ban.log"
+rm -f "$ROOT/drbd_down"
+cat >"$STUB/fuser" <<EOF
+#!/usr/bin/env bash
+if [ -f "${ROOT}/drbd_down" ]; then exit 1; fi
+exit 0
+EOF
+chmod +x "$STUB/fuser"
+KIN_RELEASE_WAIT_BACKING_ONLY=1 KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 \
+  "$SCRIPT" >/dev/null 2>&1
+wait_down_rc=$?
+if [ "$wait_down_rc" -eq 0 ] \
+  && grep -q '^down ' "$ROOT/drbdadm.log" \
+  && grep -Fq "$MARK" "$FSTAB"; then
+  pass "wait-backing-only downs up DRBD before free-device wait"
+else
+  bad "wait-backing-only must drbdadm down when resource is still up"
+fi
+
+# Pacemaker-owned clone + unmounted + busy holders: fstab only, no down/wait fail.
+cat >"$STUB/pcs" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "resource" ] && [ "\$2" = "config" ]; then
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$STUB/pcs"
+cat >"$STUB/drbdadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/drbdadm.log"
+exit 1
+EOF
+chmod +x "$STUB/drbdadm"
+cat >"$STUB/fuser" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB/fuser"
+write_fstab
+: >"$ROOT/mnt_state"
+: >"$ROOT/drbdadm.log"
+KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 "$SCRIPT" >/dev/null 2>&1
+pcs_owns_rc=$?
+if [ "$pcs_owns_rc" -eq 0 ] \
+  && ! grep -q '^down ' "$ROOT/drbdadm.log" \
+  && ! grep -Fq "$MARK" "$FSTAB"; then
+  pass "unmounted resume with Pacemaker-owned clone skips free-wait"
+else
+  bad "Pacemaker-owned unmounted resume must skip free-wait and clean fstab"
+fi
+rm -f "$STUB/pcs"
+
 
 cat >"$STUB/drbdadm" <<EOF
 #!/usr/bin/env bash
@@ -420,10 +478,12 @@ fi
 release_yml="../../ansible/roles/drbd_resource/tasks/release_plain_mount.yml"
 if [ -f "$release_yml" ] \
   && grep -q 'KIN_DRBD_BACKING_DISK' "$release_yml" \
-  && grep -q 'KIN_DRBD_RESOURCE_NAME' "$release_yml"; then
-  pass "release_plain_mount passes KIN_DRBD_BACKING_DISK and resource name"
+  && grep -q 'KIN_DRBD_RESOURCE_NAME' "$release_yml" \
+  && grep -q 'KIN_DRBD_PCS_CLONE' "$release_yml" \
+  && grep -q 'KIN_DRBD_PCS_CLONE' "$activate_yml"; then
+  pass "release/activate pass backing disk, resource name, and PCS clone"
 else
-  bad "release_plain_mount must pass KIN_DRBD_BACKING_DISK and KIN_DRBD_RESOURCE_NAME"
+  bad "release/activate must pass KIN_DRBD_BACKING_DISK, RESOURCE_NAME, and PCS_CLONE"
 fi
 
 if [ "$fails" -eq 0 ]; then

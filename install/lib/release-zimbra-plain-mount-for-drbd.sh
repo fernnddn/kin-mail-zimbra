@@ -90,15 +90,55 @@ remove_precluster_fstab() {
 # exists. On a retry the mount is already gone, so SRC cannot be used.
 # Prefer KIN_DRBD_BACKING_DISK when Ansible already resolved the mapper path.
 backing_fuser_dev() {
-  if [ -n "${KIN_DRBD_BACKING_DISK:-}" ] && [ -b "${KIN_DRBD_BACKING_DISK}" ]; then
+  local mapped attempt=0
+  local retries="${KIN_RELEASE_BACKING_RETRIES:-5}"
+  local delay="${KIN_RELEASE_BACKING_DELAY:-1}"
+
+  # Never fall back to DATA_DISK once Ansible set KIN_DRBD_BACKING_DISK:
+  # cryptsetup always holds the raw LUKS partition, so waiting there fails
+  # closed with a misleading holders story under udev lag.
+  if [ -n "${KIN_DRBD_BACKING_DISK:-}" ]; then
+    while [ ! -b "${KIN_DRBD_BACKING_DISK}" ] && [ "$attempt" -lt "$retries" ]; do
+      attempt=$((attempt + 1))
+      sleep "$delay"
+    done
     printf '%s\n' "${KIN_DRBD_BACKING_DISK}"
     return 0
   fi
-  if [ -b "$(luks_mapper_path)" ]; then
-    luks_mapper_path
+  mapped=$(luks_mapper_path)
+  if [ -b "$mapped" ]; then
+    printf '%s\n' "$mapped"
     return 0
   fi
   printf '%s\n' "$DATA_DISK"
+}
+
+pacemaker_owns_drbd_clone() {
+  local pcs_clone="${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}"
+  command -v pcs >/dev/null 2>&1 || return 1
+  pcs resource config "$pcs_clone" >/dev/null 2>&1
+}
+
+drbd_resource_is_up() {
+  local resource="${KIN_DRBD_RESOURCE_NAME:-kin-zimbra}"
+  command -v drbdadm >/dev/null 2>&1 || return 1
+  drbdadm status "$resource" >/dev/null 2>&1
+}
+
+# Unmounted resume: if Pacemaker owns the clone or this node already has the
+# resource up, do not free-wait / tear down here. release runs before activate;
+# tearing down a healthy Secondary then failing the peer leaves both nodes
+# down. activate.yml early-down + wait+up (or pacemaker-owns skip) owns attach.
+release_skip_free_device_wait() {
+  if pacemaker_owns_drbd_clone; then
+    ok "Pacemaker owns ${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}; skip free-device wait"
+    return 0
+  fi
+  if drbd_resource_is_up; then
+    ok "DRBD ${KIN_DRBD_RESOURCE_NAME:-kin-zimbra} is already up; skip free-device wait (activate will re-attach)"
+    return 0
+  fi
+  return 1
 }
 
 # ocf:kin:zimbra stop calls this before zmcontrol stop. The handoff must too:
@@ -199,17 +239,15 @@ PY
 # with "sysfs holders: drbd0" (live Build HA, 26 Aug 2026 phase2-3).
 ensure_backing_not_held_by_drbd() {
   local resource="${KIN_DRBD_RESOURCE_NAME:-kin-zimbra}"
-  local fuser_dev pcs_clone
+  local fuser_dev reason
 
   if [ "${KIN_RELEASE_SKIP_DRBD_DOWN:-0}" = "1" ]; then
     return 0
   fi
 
   fuser_dev=$(backing_fuser_dev)
-  pcs_clone="${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}"
-  if command -v pcs >/dev/null 2>&1 \
-    && pcs resource config "$pcs_clone" >/dev/null 2>&1; then
-    warn "Pacemaker owns ${pcs_clone}; not running drbdadm down during release"
+  if pacemaker_owns_drbd_clone; then
+    warn "Pacemaker owns ${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}; not running drbdadm down"
     return 0
   fi
 
@@ -217,12 +255,23 @@ ensure_backing_not_held_by_drbd() {
     return 0
   fi
 
-  # status rc=0 => resource is up (any role / Diskless). Not up => nothing to drop.
+  # status rc=0 => resource is up. Also force down when status is down but
+  # sysfs still shows orphan drbd* holders after a brutal kill / module leftover.
+  reason=""
   if ! drbdadm status "$resource" >/dev/null 2>&1; then
-    return 0
+    reason=$(backing_device_busy_reason "$fuser_dev" 2>/dev/null || true)
+    case "$reason" in
+      *drbd*)
+        say "Backing busy (${reason}) while DRBD status is down; forcing drbdadm down ${resource}"
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+  else
+    say "DRBD ${resource} still holds ${fuser_dev}; bringing it down before free-device wait"
   fi
 
-  say "DRBD ${resource} still holds ${fuser_dev}; bringing it down before free-device wait"
   if ! drbdadm down "$resource"; then
     warn "drbdadm down ${resource} failed; free-device wait may still fail"
     return 0
@@ -295,6 +344,10 @@ drop_leftover_zimbra_procs() {
 if [ "${KIN_RELEASE_WAIT_BACKING_ONLY:-0}" = "1" ]; then
   drop_zimbra_log_holders
   drop_leftover_zimbra_procs
+  if pacemaker_owns_drbd_clone; then
+    ok "Pacemaker owns ${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}; wait-backing-only is a no-op"
+    exit 0
+  fi
   ensure_backing_not_held_by_drbd
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders; drbdadm up would fail"
@@ -308,6 +361,10 @@ if [ -z "$SRC" ]; then
   ok "${ZIMBRA_DIR} is not mounted; skip stop/umount, still free the backing device"
   drop_zimbra_log_holders
   drop_leftover_zimbra_procs
+  if release_skip_free_device_wait; then
+    remove_precluster_fstab
+    exit 0
+  fi
   ensure_backing_not_held_by_drbd
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders after a prior umount"

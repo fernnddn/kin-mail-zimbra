@@ -201,6 +201,7 @@
     KIN_DRBD_DATA_DISK: "{{ drbd_resource_disk }}"
     KIN_DRBD_BACKING_DISK: "{{ drbd_resource_backing_disk | default(drbd_resource_disk) }}"
     KIN_DRBD_RESOURCE_NAME: "{{ drbd_resource_name }}"
+    KIN_DRBD_PCS_CLONE: "{{ drbd_resource_pcs_clone }}"
     KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
     KIN_FAIL2BAN_JAILS: "{{ drbd_resource_release_dir }}/kin-fail2ban-jails.sh"
   register: drbd_resource_release_result
