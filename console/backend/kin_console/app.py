@@ -62,6 +62,8 @@ def setup_status(request: Request, response: Response) -> dict[str, object]:
     from kin_privhelper.deploy_state import setup_status_payload
 
     payload = setup_status_payload()
+    # UI must match wizard_actor: show login when anonymous wizard is locked.
+    payload["wizard_requires_login"] = auth.wizard_requires_login()
     # 5s wizard poll: sliding-refresh a real session so setup never drops it.
     auth.maybe_refresh_session(request, response)
     return payload

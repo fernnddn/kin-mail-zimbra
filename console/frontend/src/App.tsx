@@ -68,7 +68,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 const POST_DEPLOY_LOGIN_GRACE_MS = 30_000;
 
 function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
-  const { deployed, loading: setupLoading } = useSetup();
+  const { deployed, wizardRequiresLogin, loading: setupLoading } = useSetup();
   const { user, loading: authLoading } = useAuth();
   const [graceElapsed, setGraceElapsed] = useState(false);
   const deployedAtRef = useRef<number | null>(null);
@@ -92,6 +92,10 @@ function RequireAuthIfDeployed({ children }: { children: ReactNode }) {
   }, [deployed]);
 
   if (setupLoading || authLoading) return <LoadingShell text="Checking setup..." />;
+  // Peer / password-file-gone: force login immediately (no post-deploy grace).
+  if (wizardRequiresLogin && !deployed && !user) {
+    return <Navigate to="/login" replace />;
+  }
   if (deployed && !user && graceElapsed) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

@@ -271,6 +271,12 @@ BOOT_PASS=""
 CONSOLE_USER="${KIN_CONSOLE_USER:-admin}"
 if [ -f "$USERS_FILE" ]; then
   ok "users.json already present - password NOT re-printed"
+  if [ ! -f "$INITIAL_PASS_FILE" ]; then
+    # Peer activate stages users without this file (login required). Host A
+    # first-boot normally has it. Missing file → anonymous wizard is locked;
+    # operator must use /login (do not remint - would desync peer password).
+    warn "initial-admin-password missing — console wizard requires login at /login"
+  fi
 elif [ -f "$HASH_FILE" ]; then
   KIN_USERS_FILE="$USERS_FILE" KIN_HASH_FILE="$HASH_FILE" KIN_CONSOLE_USER="$CONSOLE_USER" \
     "${OPT_ROOT}/venv/bin/python" - <<'PY'

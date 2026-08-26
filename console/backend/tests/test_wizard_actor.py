@@ -104,6 +104,38 @@ class WizardActorGateTests(unittest.TestCase):
             self.assertEqual(ctx.exception.status_code, 401)
             self.assertIn("Not authenticated", str(ctx.exception.detail))
 
+    def test_wizard_requires_login_helper_matches_gates(self) -> None:
+        from kin_console import auth
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            initial = tmp / "initial-admin-password"
+            initial.write_text("x\n", encoding="utf-8")
+            missing = tmp / "gone"
+            with (
+                patch("kin_privhelper.deploy_state.is_mail_deployed", return_value=False),
+                patch(
+                    "kin_privhelper.initial_password.INITIAL_PASSWORD_FILE",
+                    initial,
+                ),
+                patch("kin_console.users.load_users", return_value=[object()]),
+            ):
+                self.assertFalse(auth.wizard_requires_login())
+            with (
+                patch("kin_privhelper.deploy_state.is_mail_deployed", return_value=False),
+                patch(
+                    "kin_privhelper.initial_password.INITIAL_PASSWORD_FILE",
+                    missing,
+                ),
+                patch("kin_console.users.load_users", return_value=[object()]),
+            ):
+                self.assertTrue(auth.wizard_requires_login())
+            with (
+                patch("kin_privhelper.deploy_state.is_mail_deployed", return_value=True),
+                patch("kin_console.users.load_users", return_value=[]),
+            ):
+                self.assertTrue(auth.wizard_requires_login())
+
 
 if __name__ == "__main__":
     unittest.main()

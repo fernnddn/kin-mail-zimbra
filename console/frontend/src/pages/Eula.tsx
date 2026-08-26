@@ -7,7 +7,8 @@ import { BrandLockup, Button, Card, CheckRow, Err, Lede, Shell, Skeleton, Title 
 
 export default function EulaPage() {
   const { loading, accepted, title, body, accept } = useEula();
-  const { deployed, installInProgress, loading: setupLoading } = useSetup();
+  const { deployed, installInProgress, wizardRequiresLogin, loading: setupLoading } =
+    useSetup();
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -16,6 +17,9 @@ export default function EulaPage() {
     return <Navigate to="/login" replace />;
   }
   if (!loading && !setupLoading && accepted) {
+    if (wizardRequiresLogin) {
+      return <Navigate to="/login" replace />;
+    }
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
 

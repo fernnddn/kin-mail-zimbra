@@ -16,6 +16,8 @@ type SetupStatus = {
   install_in_progress?: boolean;
   full_install_complete?: boolean;
   ha_setup_complete?: boolean;
+  /** Backend: anonymous wizard blocked (peer / missing initial password). */
+  wizard_requires_login?: boolean;
   marker: string;
   zimbra_tree_present?: boolean;
 };
@@ -28,6 +30,12 @@ type SetupCtx = {
   fullInstallComplete: boolean;
   /** /etc/kin-mail/ha-setup-complete exists (2vm HA apply reached ORCH_DONE). */
   haSetupComplete: boolean;
+  /**
+   * True when wizard APIs require a real session (matches backend
+   * wizard_requires_login). Keeps /login reachable instead of bouncing to
+   * Topology with "Not authenticated".
+   */
+  wizardRequiresLogin: boolean;
   loading: boolean;
   /** Last /api/setup/status failure. Empty after a successful fetch. */
   statusError: string;
@@ -44,6 +52,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
   const [installInProgress, setInstallInProgress] = useState(false);
   const [fullInstallComplete, setFullInstallComplete] = useState(false);
   const [haSetupComplete, setHaSetupComplete] = useState(false);
+  const [wizardRequiresLogin, setWizardRequiresLogin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [statusError, setStatusError] = useState("");
   const loadedOnce = useRef(false);
@@ -55,6 +64,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       setInstallInProgress(Boolean(st.install_in_progress || st.busy));
       setFullInstallComplete(Boolean(st.full_install_complete));
       setHaSetupComplete(Boolean(st.ha_setup_complete));
+      setWizardRequiresLogin(Boolean(st.wizard_requires_login));
       setStatusError("");
       loadedOnce.current = true;
     } catch (err) {
@@ -66,6 +76,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
         setInstallInProgress(false);
         setFullInstallComplete(false);
         setHaSetupComplete(false);
+        setWizardRequiresLogin(false);
         setStatusError(message);
       }
       // After a successful load, keep last known status. A transient 500
@@ -89,6 +100,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       installInProgress,
       fullInstallComplete,
       haSetupComplete,
+      wizardRequiresLogin,
       loading,
       statusError,
       refresh,
@@ -98,6 +110,7 @@ export function SetupProvider({ children }: { children: ReactNode }) {
       installInProgress,
       fullInstallComplete,
       haSetupComplete,
+      wizardRequiresLogin,
       loading,
       statusError,
       refresh,

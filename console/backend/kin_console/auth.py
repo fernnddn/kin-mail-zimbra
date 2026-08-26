@@ -156,6 +156,36 @@ class WizardActor:
     anonymous_setup: bool = False
 
 
+def wizard_requires_login() -> bool:
+    """True when wizard APIs must have a real session (no anonymous setup).
+
+    Host A first-boot: users.json exists AND initial-admin-password still
+    present → False (anonymous wizard OK).
+    Peer / post-first-login: users exist without that file → True.
+    After deploy → True.
+    """
+    from kin_privhelper.deploy_state import is_mail_deployed
+    from kin_privhelper.initial_password import INITIAL_PASSWORD_FILE
+
+    from . import users as users_mod
+
+    try:
+        if is_mail_deployed():
+            return True
+    except OSError:
+        log.warning("is_mail_deployed raised in wizard_requires_login")
+
+    try:
+        existing_users = users_mod.load_users()
+    except (OSError, ValueError, json.JSONDecodeError):
+        existing_users = []
+    try:
+        has_initial = INITIAL_PASSWORD_FILE.is_file()
+    except OSError:
+        has_initial = False
+    return bool(existing_users) and not has_initial
+
+
 def wizard_actor(request: Request, response: Response) -> WizardActor:
     """Allow anonymous wizard access only until mail is genuinely deployed.
 
@@ -169,30 +199,12 @@ def wizard_actor(request: Request, response: Response) -> WizardActor:
     Peer activate stages users.json without minting initial-admin-password;
     those hosts force login so anonymous Super Admin cannot be used there.
     """
-    from kin_privhelper.deploy_state import SETUP_USERNAME, is_mail_deployed
-    from kin_privhelper.initial_password import INITIAL_PASSWORD_FILE
+    from kin_privhelper.deploy_state import SETUP_USERNAME
     from kin_privhelper.rbac import ROLE_SUPER_ADMIN
 
     from . import users as users_mod
 
-    try:
-        deployed = is_mail_deployed()
-    except OSError:
-        log.warning("is_mail_deployed raised; treating host as not deployed")
-        deployed = False
-
-    try:
-        existing_users = users_mod.load_users()
-    except (OSError, ValueError, json.JSONDecodeError):
-        existing_users = []
-
-    # Peer (or any host that already had a first login): users exist and the
-    # one-time bootstrap password file is gone → require a real session.
-    # Host A first-boot still has initial-admin-password → anonymous OK.
-    force_login = bool(deployed) or (
-        bool(existing_users) and not INITIAL_PASSWORD_FILE.is_file()
-    )
-    if force_login:
+    if wizard_requires_login():
         user = require_console_user(request, response)
         return WizardActor(username=user.username, role=user.role, anonymous_setup=False)
 

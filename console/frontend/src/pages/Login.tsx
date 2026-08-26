@@ -55,7 +55,8 @@ const Logo = styled.div`
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
   const { accepted, loading: eulaLoading } = useEula();
-  const { deployed, installInProgress, loading: setupLoading } = useSetup();
+  const { deployed, installInProgress, wizardRequiresLogin, loading: setupLoading } =
+    useSetup();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -64,7 +65,9 @@ export default function LoginPage() {
   if (!setupLoading && !deployed && !eulaLoading && !accepted) {
     return <Navigate to="/eula" replace />;
   }
-  if (!setupLoading && !deployed && !user) {
+  // Anonymous Host A wizard: bounce /login → Topology. If backend already
+  // requires a session (peer / password file gone), stay on login.
+  if (!setupLoading && !deployed && !user && !wizardRequiresLogin) {
     return <Navigate to={wizardHomePath(installInProgress, deployed)} replace />;
   }
   if (!loading && !setupLoading && user) {
