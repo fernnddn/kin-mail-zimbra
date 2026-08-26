@@ -24,6 +24,7 @@ export KIN_MIGRATE_LIB="$PWD/migrate-zimbra-to-drbd-disk.sh"
 export KIN_MIGRATE_SKIP_PS_CHECK=1
 export KIN_MIGRATE_STOP_WAIT_SEC=0
 export KIN_RELEASE_POST_FREE_SLEEP=0
+export KIN_RELEASE_DRBD_DOWN_SLEEP=0
 export KIN_ZMCONTROL_STATUS_TEXT='Host mail.example.test
 	ldap                    Stopped
 	mailbox                 Stopped
@@ -108,6 +109,14 @@ cat >"$STUB/pkill" <<'EOF'
 exit 0
 EOF
 chmod +x "$STUB/pkill"
+
+# Default: resource not up. Resume / busy-DRBD tests override this stub.
+cat >"$STUB/drbdadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/drbdadm.log"
+exit 1
+EOF
+chmod +x "$STUB/drbdadm"
 
 cat >"$STUB/kin-fail2ban-jails" <<EOF
 #!/usr/bin/env bash
@@ -313,6 +322,49 @@ else
   bad "unmounted retry must not skip the holder wait or remove fstab while busy"
 fi
 
+# phase2-3: mail2 unmounted, drbd0 already holds the LUKS mapper from a prior
+# successful peer up. Release must drbdadm down before the free-device wait.
+cat >"$STUB/drbdadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/drbdadm.log"
+if [ "\$1" = "status" ]; then
+  if [ -f "${ROOT}/drbd_down" ]; then exit 1; fi
+  exit 0
+fi
+if [ "\$1" = "down" ]; then
+  touch "${ROOT}/drbd_down"
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$STUB/drbdadm"
+cat >"$STUB/fuser" <<EOF
+#!/usr/bin/env bash
+# Busy until DRBD is torn down (simulates sysfs holders: drbd0).
+if [ -f "${ROOT}/drbd_down" ]; then exit 1; fi
+exit 0
+EOF
+chmod +x "$STUB/fuser"
+write_fstab
+: >"$ROOT/mnt_state"
+: >"$ROOT/drbdadm.log"
+rm -f "$ROOT/drbd_down"
+KIN_RELEASE_FUSER_RETRIES=2 KIN_RELEASE_FUSER_DELAY=0 "$SCRIPT" >/dev/null 2>&1
+stale_drbd_rc=$?
+if [ "$stale_drbd_rc" -eq 0 ] \
+  && grep -q '^down ' "$ROOT/drbdadm.log" \
+  && ! grep -Fq "$MARK" "$FSTAB"; then
+  pass "unmounted resume downs stale DRBD before free-device wait"
+else
+  bad "unmounted resume must drbdadm down when resource is still up"
+fi
+
+cat >"$STUB/drbdadm" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"${ROOT}/drbdadm.log"
+exit 1
+EOF
+chmod +x "$STUB/drbdadm"
 cat >"$STUB/fuser" <<'EOF'
 #!/usr/bin/env bash
 exit 1
@@ -366,10 +418,12 @@ else
   bad "activate.yml must down before wait and re-wait inside up retries"
 fi
 release_yml="../../ansible/roles/drbd_resource/tasks/release_plain_mount.yml"
-if [ -f "$release_yml" ] && grep -q 'KIN_DRBD_BACKING_DISK' "$release_yml"; then
-  pass "release_plain_mount passes KIN_DRBD_BACKING_DISK"
+if [ -f "$release_yml" ] \
+  && grep -q 'KIN_DRBD_BACKING_DISK' "$release_yml" \
+  && grep -q 'KIN_DRBD_RESOURCE_NAME' "$release_yml"; then
+  pass "release_plain_mount passes KIN_DRBD_BACKING_DISK and resource name"
 else
-  bad "release_plain_mount must pass KIN_DRBD_BACKING_DISK like activate"
+  bad "release_plain_mount must pass KIN_DRBD_BACKING_DISK and KIN_DRBD_RESOURCE_NAME"
 fi
 
 if [ "$fails" -eq 0 ]; then

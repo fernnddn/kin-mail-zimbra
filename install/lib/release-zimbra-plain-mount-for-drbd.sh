@@ -193,6 +193,44 @@ PY
   return 1
 }
 
+# release_plain_mount.yml runs before activate.yml's early drbdadm down.
+# On Build HA resume after a peer already reached drbdadm up, /opt/zimbra is
+# unmounted but drbd0 still holds the LUKS mapper; waiting first fails closed
+# with "sysfs holders: drbd0" (live Build HA, 26 Aug 2026 phase2-3).
+ensure_backing_not_held_by_drbd() {
+  local resource="${KIN_DRBD_RESOURCE_NAME:-kin-zimbra}"
+  local fuser_dev pcs_clone
+
+  if [ "${KIN_RELEASE_SKIP_DRBD_DOWN:-0}" = "1" ]; then
+    return 0
+  fi
+
+  fuser_dev=$(backing_fuser_dev)
+  pcs_clone="${KIN_DRBD_PCS_CLONE:-kin-drbd-clone}"
+  if command -v pcs >/dev/null 2>&1 \
+    && pcs resource config "$pcs_clone" >/dev/null 2>&1; then
+    warn "Pacemaker owns ${pcs_clone}; not running drbdadm down during release"
+    return 0
+  fi
+
+  if ! command -v drbdadm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # status rc=0 => resource is up (any role / Diskless). Not up => nothing to drop.
+  if ! drbdadm status "$resource" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  say "DRBD ${resource} still holds ${fuser_dev}; bringing it down before free-device wait"
+  if ! drbdadm down "$resource"; then
+    warn "drbdadm down ${resource} failed; free-device wait may still fail"
+    return 0
+  fi
+  sleep "${KIN_RELEASE_DRBD_DOWN_SLEEP:-2}"
+  return 0
+}
+
 wait_backing_device_free() {
   local fuser_dev="$1"
   local fuser_busy=1
@@ -257,6 +295,7 @@ drop_leftover_zimbra_procs() {
 if [ "${KIN_RELEASE_WAIT_BACKING_ONLY:-0}" = "1" ]; then
   drop_zimbra_log_holders
   drop_leftover_zimbra_procs
+  ensure_backing_not_held_by_drbd
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders; drbdadm up would fail"
   ok "Backing device is free for drbdadm up"
@@ -269,6 +308,7 @@ if [ -z "$SRC" ]; then
   ok "${ZIMBRA_DIR} is not mounted; skip stop/umount, still free the backing device"
   drop_zimbra_log_holders
   drop_leftover_zimbra_procs
+  ensure_backing_not_held_by_drbd
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders after a prior umount"
   remove_precluster_fstab
@@ -316,6 +356,7 @@ if findmnt -n "$ZIMBRA_DIR" >/dev/null 2>&1; then
 fi
 ok "Unmounted ${ZIMBRA_DIR}"
 
+ensure_backing_not_held_by_drbd
 wait_backing_device_free "$(backing_fuser_dev)" \
   || die_release "backing device still has open holders after umount"
 
