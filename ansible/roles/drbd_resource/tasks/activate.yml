@@ -303,8 +303,9 @@
     KIN_MIGRATE_LIB: "{{ drbd_resource_release_dir }}/migrate-zimbra-to-drbd-disk.sh"
     KIN_FAIL2BAN_JAILS: "{{ drbd_resource_release_dir }}/kin-fail2ban-jails.sh"
     KIN_RELEASE_WAIT_BACKING_ONLY: "1"
-    KIN_RELEASE_FUSER_RETRIES: "40"
+    KIN_RELEASE_FUSER_RETRIES: "90"
     KIN_RELEASE_FUSER_DELAY: "1"
+    KIN_RELEASE_NUDGE_EVERY: "5"
     KIN_RELEASE_POST_FREE_SLEEP: "2"
   register: drbd_resource_up_result
   failed_when: false

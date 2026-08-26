@@ -162,37 +162,116 @@ drop_zimbra_log_holders() {
   KIN_FAIL2BAN_JAILS_BEST_EFFORT=1 "$helper" unmounted || true
 }
 
+# Resolve mapper symlink → /dev/dm-N. fuser/udisks often attach to the dm
+# node while /dev/mapper/* looks quiet (live Host A, 26 Aug 2026 phase3).
+backing_realpath() {
+  local path="$1"
+  readlink -f "$path" 2>/dev/null || printf '%s' "$path"
+}
+
+# PIDs with an open FD on this block device (maj:min). Catches holders that
+# fuser misses (udisksd, udev workers, leftover java as root, etc.).
+list_block_fd_holders() {
+  local path="$1"
+  python3 - "$path" <<'PY' 2>/dev/null || true
+import os, stat, sys
+path = sys.argv[1]
+try:
+    st = os.stat(path)
+except OSError:
+    sys.exit(0)
+if not stat.S_ISBLK(st.st_mode):
+    sys.exit(0)
+maj, minu = os.major(st.st_rdev), os.minor(st.st_rdev)
+me = os.getpid()
+found = []
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    p = int(pid)
+    if p in (1, me):
+        continue
+    fd_dir = f"/proc/{pid}/fd"
+    try:
+        fds = os.listdir(fd_dir)
+    except OSError:
+        continue
+    hit = False
+    for fd in fds:
+        fp = f"{fd_dir}/{fd}"
+        try:
+            target = os.readlink(fp)
+        except OSError:
+            continue
+        if target == path or target.endswith("/" + os.path.basename(path)):
+            hit = True
+            break
+        try:
+            fst = os.stat(fp)
+        except OSError:
+            continue
+        if stat.S_ISBLK(fst.st_mode) and os.major(fst.st_rdev) == maj and os.minor(fst.st_rdev) == minu:
+            hit = True
+            break
+    if hit:
+        cmd = ""
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace")[:120]
+        except OSError:
+            pass
+        found.append(f"{pid}:{cmd}" if cmd else str(pid))
+print("\n".join(found))
+PY
+}
+
 # fuser -m alone is not enough after umount: kernel/journal holders and some
 # userspace FDs can leave the mapper EBUSY for drbdadm while fuser -m is quiet
 # (live Build HA, 26 Aug 2026: mail1 "Can not open backing device" on
 # /dev/mapper/kin-zimbra-crypt after a "successful" fuser wait).
 backing_device_busy_reason() {
   local fuser_dev="$1"
-  local real holders open_count mounts
+  local real holders open_count mounts path fd_holders
 
   if [ -z "$fuser_dev" ] || [ ! -e "$fuser_dev" ]; then
     printf '%s\n' "missing backing path ${fuser_dev:-"(empty)"}"
     return 0
   fi
 
+  real=$(backing_realpath "$fuser_dev")
+
   mounts=$(findmnt -n -S "$fuser_dev" 2>/dev/null || true)
+  if [ -z "$mounts" ] && [ "$real" != "$fuser_dev" ]; then
+    mounts=$(findmnt -n -S "$real" 2>/dev/null || true)
+  fi
   if [ -n "$mounts" ]; then
     printf '%s\n' "still mounted: ${mounts}"
     return 0
   fi
 
   if command -v fuser >/dev/null 2>&1; then
-    if fuser "$fuser_dev" >/dev/null 2>&1; then
-      printf '%s\n' "fuser holders on ${fuser_dev}"
-      return 0
-    fi
-    if fuser -m "$fuser_dev" >/dev/null 2>&1; then
-      printf '%s\n' "fuser -m holders on ${fuser_dev}"
-      return 0
-    fi
+    for path in "$fuser_dev" "$real"; do
+      [ -n "$path" ] || continue
+      if fuser "$path" >/dev/null 2>&1; then
+        printf '%s\n' "fuser holders on ${path}"
+        return 0
+      fi
+      if fuser -m "$path" >/dev/null 2>&1; then
+        printf '%s\n' "fuser -m holders on ${path}"
+        return 0
+      fi
+    done
   fi
 
-  real=$(readlink -f "$fuser_dev" 2>/dev/null || printf '%s' "$fuser_dev")
+  fd_holders=$(list_block_fd_holders "$fuser_dev")
+  if [ -z "$fd_holders" ] && [ "$real" != "$fuser_dev" ]; then
+    fd_holders=$(list_block_fd_holders "$real")
+  fi
+  if [ -n "$fd_holders" ]; then
+    printf '%s\n' "proc-fd holders: $(printf '%s' "$fd_holders" | tr '\n' ' ')"
+    return 0
+  fi
+
   if [ -e "$real" ]; then
     holders=$(ls -A "/sys/class/block/$(basename "$real")/holders" 2>/dev/null || true)
     if [ -n "$holders" ]; then
@@ -231,6 +310,72 @@ PY
   fi
 
   return 1
+}
+
+# activate.yml reuses the holder wait without stop/umount (retry / Diskless
+# leftover). Mail is already down at that point; dropping jails is idempotent.
+drop_leftover_zimbra_procs() {
+  # Best-effort: JVM/mailboxd under uid zimbra can hold mapper FDs after a
+  # "Stopped" status or a prior botched handoff. Hard gate remains
+  # wait_backing_device_free.
+  pkill -u zimbra 2>/dev/null || true
+  sleep "${KIN_RELEASE_PKILL_SLEEP:-1}"
+}
+
+# Best-effort: drop known re-openers that leave dmsetup open count=1 with no
+# fuser line (live Host A mail.gits-it.site, 26 Aug 2026 phase3-1).
+nudge_backing_holders() {
+  local fuser_dev="$1"
+  local real line pid
+  real=$(backing_realpath "$fuser_dev")
+
+  drop_zimbra_log_holders
+  drop_leftover_zimbra_procs
+
+  # udisksd / udev blkid probes reopen the just-unmounted LUKS mapper.
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet udisks2.service 2>/dev/null; then
+      systemctl stop udisks2.service >/dev/null 2>&1 || true
+    fi
+  fi
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --stop-exec-queue >/dev/null 2>&1 || true
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+  fi
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    pid=${line%%:*}
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$pid" -eq 1 ] && continue
+    [ "$pid" -eq "$$" ] && continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done <<EOF
+$(list_block_fd_holders "$fuser_dev")
+$( [ "$real" != "$fuser_dev" ] && list_block_fd_holders "$real" )
+EOF
+  sleep "${KIN_RELEASE_NUDGE_KILL_SLEEP:-1}"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    pid=${line%%:*}
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$pid" -eq 1 ] && continue
+    [ "$pid" -eq "$$" ] && continue
+    kill -KILL "$pid" 2>/dev/null || true
+  done <<EOF
+$(list_block_fd_holders "$fuser_dev")
+$( [ "$real" != "$fuser_dev" ] && list_block_fd_holders "$real" )
+EOF
+
+  sync 2>/dev/null || true
+  if command -v blockdev >/dev/null 2>&1; then
+    blockdev --flushbufs "$fuser_dev" 2>/dev/null || true
+    [ "$real" != "$fuser_dev" ] && blockdev --flushbufs "$real" 2>/dev/null || true
+  fi
 }
 
 # release_plain_mount.yml runs before activate.yml's early drbdadm down.
@@ -284,9 +429,11 @@ wait_backing_device_free() {
   local fuser_dev="$1"
   local fuser_busy=1
   local fuser_attempt=0
-  local fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-40}"
+  local fuser_retries="${KIN_RELEASE_FUSER_RETRIES:-90}"
   local fuser_delay="${KIN_RELEASE_FUSER_DELAY:-1}"
+  local nudge_every="${KIN_RELEASE_NUDGE_EVERY:-5}"
   local reason=""
+  local real=""
 
   if command -v udevadm >/dev/null 2>&1; then
     udevadm settle --timeout=10 >/dev/null 2>&1 || true
@@ -294,6 +441,10 @@ wait_backing_device_free() {
   sync 2>/dev/null || true
 
   [ -n "$fuser_dev" ] || return 0
+  real=$(backing_realpath "$fuser_dev")
+
+  # First nudge immediately after umount - udisks/udev race is most common.
+  nudge_backing_holders "$fuser_dev"
 
   while [ "$fuser_attempt" -lt "$fuser_retries" ]; do
     if ! reason=$(backing_device_busy_reason "$fuser_dev"); then
@@ -301,13 +452,28 @@ wait_backing_device_free() {
       break
     fi
     fuser_attempt=$((fuser_attempt + 1))
+    if [ $((fuser_attempt % nudge_every)) -eq 0 ]; then
+      warn "backing still busy (${reason}); nudging holders (attempt ${fuser_attempt}/${fuser_retries})"
+      nudge_backing_holders "$fuser_dev"
+    fi
     sleep "$fuser_delay"
   done
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --start-exec-queue >/dev/null 2>&1 || true
+  fi
   if [ "$fuser_busy" -eq 1 ]; then
     warn "backing still busy after ${fuser_attempt} checks: ${reason}"
     if command -v fuser >/dev/null 2>&1; then
       fuser -vm "$fuser_dev" 2>&1 | sed 's/^/    /' || true
       fuser -v "$fuser_dev" 2>&1 | sed 's/^/    /' || true
+      if [ -n "$real" ] && [ "$real" != "$fuser_dev" ]; then
+        fuser -vm "$real" 2>&1 | sed 's/^/    /' || true
+        fuser -v "$real" 2>&1 | sed 's/^/    /' || true
+      fi
+    fi
+    list_block_fd_holders "$fuser_dev" 2>/dev/null | sed 's/^/    proc-fd /' || true
+    if [ -n "$real" ] && [ "$real" != "$fuser_dev" ]; then
+      list_block_fd_holders "$real" 2>/dev/null | sed 's/^/    proc-fd /' || true
     fi
     findmnt -S "$fuser_dev" 2>&1 | sed 's/^/    /' || true
     lsblk -o NAME,TYPE,MOUNTPOINT,FSTYPE "$fuser_dev" 2>&1 | sed 's/^/    /' || true
@@ -330,16 +496,6 @@ fi
 if [ "$(id -u)" -ne 0 ]; then
   die_release "Run as root"
 fi
-
-# activate.yml reuses the holder wait without stop/umount (retry / Diskless
-# leftover). Mail is already down at that point; dropping jails is idempotent.
-drop_leftover_zimbra_procs() {
-  # Best-effort: JVM/mailboxd under uid zimbra can hold mapper FDs after a
-  # "Stopped" status or a prior botched handoff. Hard gate remains
-  # wait_backing_device_free.
-  pkill -u zimbra 2>/dev/null || true
-  sleep 1
-}
 
 if [ "${KIN_RELEASE_WAIT_BACKING_ONLY:-0}" = "1" ]; then
   drop_zimbra_log_holders

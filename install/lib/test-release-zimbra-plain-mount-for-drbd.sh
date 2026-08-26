@@ -25,6 +25,9 @@ export KIN_MIGRATE_SKIP_PS_CHECK=1
 export KIN_MIGRATE_STOP_WAIT_SEC=0
 export KIN_RELEASE_POST_FREE_SLEEP=0
 export KIN_RELEASE_DRBD_DOWN_SLEEP=0
+export KIN_RELEASE_PKILL_SLEEP=0
+export KIN_RELEASE_NUDGE_KILL_SLEEP=0
+export KIN_RELEASE_NUDGE_EVERY=2
 export KIN_ZMCONTROL_STATUS_TEXT='Host mail.example.test
 	ldap                    Stopped
 	mailbox                 Stopped
@@ -104,6 +107,18 @@ exit 0
 EOF
 chmod +x "$STUB/udevadm"
 
+cat >"$STUB/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB/systemctl"
+
+cat >"$STUB/blockdev" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB/blockdev"
+
 cat >"$STUB/pkill" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -121,8 +136,13 @@ chmod +x "$STUB/drbdadm"
 cat >"$STUB/kin-fail2ban-jails" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"${ROOT}/fail2ban.log"
-if [ -s "${ROOT}/su.log" ] && grep -q zmcontrol "${ROOT}/su.log"; then
-  echo late >>"${ROOT}/fail2ban-late"
+# Only the first drop must precede zmcontrol stop. Later nudge() re-drops are
+# intentional after umount (holders can reopen the mapper).
+if [ ! -f "${ROOT}/fail2ban-seen" ]; then
+  touch "${ROOT}/fail2ban-seen"
+  if [ -s "${ROOT}/su.log" ] && grep -q zmcontrol "${ROOT}/su.log"; then
+    echo late >>"${ROOT}/fail2ban-late"
+  fi
 fi
 exit 0
 EOF
@@ -178,7 +198,7 @@ printf '%s\n' "$DATA" >"$ROOT/mnt_state"
 : >"$ROOT/su.log"
 : >"$ROOT/umount.log"
 : >"$ROOT/fail2ban.log"
-rm -f "$ROOT/fail2ban-late"
+rm -f "$ROOT/fail2ban-late" "$ROOT/fail2ban-seen"
 if "$SCRIPT" >/dev/null \
   && grep -q 'zmcontrol stop' "$ROOT/su.log" \
   && grep -q umount "$ROOT/umount.log" \
@@ -199,6 +219,7 @@ write_fstab
 printf '%s\n' "/dev/mapper/kin-zimbra-crypt" >"$ROOT/mnt_state"
 : >"$ROOT/su.log"
 : >"$ROOT/umount.log"
+rm -f "$ROOT/fail2ban-seen"
 if "$SCRIPT" >/dev/null \
   && grep -q 'zmcontrol stop' "$ROOT/su.log" \
   && grep -q umount "$ROOT/umount.log" \
