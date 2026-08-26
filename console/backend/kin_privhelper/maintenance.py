@@ -374,6 +374,139 @@ async def _https_code(url: str) -> tuple[str, int]:
     return body, code
 
 
+def https_probe_ok(http_code: str | int) -> bool:
+    """VIP / webmail is healthy enough for a Master move settle check.
+
+    Exact 200 is too strict: Zimbra/nginx often answers 301/302 before the
+    mailbox UI, and some probes return other 2xx. Treat any 2xx/3xx as OK.
+    """
+    try:
+        code = int(str(http_code).strip() or "0")
+    except ValueError:
+        return False
+    return 200 <= code < 400
+
+
+async def wait_drbd_uptodate(*, timeout_sec: int | None = None) -> tuple[bool, list[str]]:
+    """Poll until both DRBD replicas are UpToDate (or timeout)."""
+    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+    logs: list[str] = []
+    deadline = asyncio.get_event_loop().time() + limit
+    while True:
+        st = await gather_status()
+        pct = st.get("drbd_sync_percent")
+        uptodate = bool(st["drbd_uptodate"])
+        if pct is None:
+            logs.append(f"drbd_uptodate={uptodate}")
+        else:
+            logs.append(f"drbd_uptodate={uptodate} sync={pct:.1f}%")
+        if uptodate:
+            logs.append("DRBD both replicas UpToDate")
+            return True, logs
+        if asyncio.get_event_loop().time() >= deadline:
+            logs.append(f"TIMEOUT waiting for DRBD UpToDate after {limit}s")
+            return False, logs
+        await asyncio.sleep(FAILBACK_POLL_SEC)
+
+
+def _stack_on_target(st: dict[str, Any], target: str) -> bool:
+    """True when Promoted + VIP + Zimbra are all on target (no dual Promoted)."""
+    if bool(st.get("promoted_conflict")):
+        return False
+    promoted = st.get("promoted")
+    vip_node = st.get("vip_node")
+    zimbra_node = st.get("zimbra_node")
+    return (
+        bool(promoted)
+        and hosts_match(str(promoted), target)
+        and bool(vip_node)
+        and hosts_match(str(vip_node), target)
+        and bool(zimbra_node)
+        and hosts_match(str(zimbra_node), target)
+    )
+
+
+async def wait_failback_settled(
+    target: str,
+    *,
+    timeout_sec: int | None = None,
+) -> tuple[bool, list[str]]:
+    """Wait until Promoted + VIP (+ Zimbra) are on target after a ban.
+
+    HTTPS on the VIP is preferred but not a hard fail once the Pacemaker stack
+    has been on the target: OCF already ran zmcontrol, and a console-host curl
+    to the VIP can fail for lab firewall/routing reasons even when mail works.
+    """
+    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
+    logs: list[str] = []
+    deadline = asyncio.get_event_loop().time() + limit
+    vip_ip = ""
+    stack_ok_streak = 0
+    while True:
+        st = await gather_status()
+        vip_ip = str(st.get("vip_ip") or vip_ip or "")
+        promoted = st.get("promoted")
+        vip_node = st.get("vip_node")
+        zimbra_node = st.get("zimbra_node")
+        dual = bool(st.get("promoted_conflict"))
+        last = (
+            f"promoted={promoted} vip_node={vip_node} zimbra_node={zimbra_node} "
+            f"dual_promoted={dual}"
+        )
+        logs.append(last)
+        stack_ok = _stack_on_target(st, target)
+        https_ok = True
+        https_body = ""
+        if vip_ip and stack_ok:
+            https_body, _c = await _https_code(f"https://{vip_ip}/")
+            https_ok = https_probe_ok(https_body)
+            logs.append(f"https://{vip_ip}/ -> HTTP {https_body}")
+        if stack_ok:
+            stack_ok_streak += 1
+        else:
+            stack_ok_streak = 0
+
+        if stack_ok and https_ok and not dual:
+            dual_ok = True
+            if ASSERT_SCRIPT.is_file():
+                c, out, err = await _capture([str(ASSERT_SCRIPT)])
+                dual_txt = (out + err).strip()
+                dual_ok = c == 0 and "NO_DUAL_PRIMARY_OK" in dual_txt
+                logs.append(dual_txt or f"dual-primary assert exit {c}")
+            if dual_ok:
+                logs.append(f"Master settled on {target}")
+                return True, logs
+
+        # Stack has been stable on target across polls; HTTPS still unhappy.
+        # Accept settle so we do not leave a temporary ban forever.
+        if stack_ok and stack_ok_streak >= 3 and not dual:
+            dual_ok = True
+            if ASSERT_SCRIPT.is_file():
+                c, out, err = await _capture([str(ASSERT_SCRIPT)])
+                dual_txt = (out + err).strip()
+                dual_ok = c == 0 and "NO_DUAL_PRIMARY_OK" in dual_txt
+                logs.append(dual_txt or f"dual-primary assert exit {c}")
+            if dual_ok:
+                logs.append(
+                    f"Master settled on {target} (stack OK; VIP HTTPS probe "
+                    f"was HTTP {https_body or 'n/a'} - accepting without hard HTTPS fail)"
+                )
+                return True, logs
+
+        if asyncio.get_event_loop().time() >= deadline:
+            # Last chance: if the stack is already on target, do not report a
+            # hard timeout that leaves operators with a stuck ban.
+            if stack_ok and not dual:
+                logs.append(
+                    f"TIMEOUT soft-accept: stack already on {target} after {limit}s "
+                    f"({last}; HTTPS {https_body or 'n/a'})"
+                )
+                return True, logs
+            logs.append(f"TIMEOUT waiting for Master on {target} after {limit}s: {last}")
+            return False, logs
+        await asyncio.sleep(FAILBACK_POLL_SEC)
+
+
 def zimbra_started_on(crm: str, node: str) -> bool:
     for line in crm.splitlines():
         if "kin-zimbra" in line and "Started" in line and node in line:
@@ -700,74 +833,6 @@ async def wait_exit_healthy(target: str) -> tuple[bool, list[str]]:
                 logs.append(dual_txt)
             return False, logs
         await asyncio.sleep(RESYNC_POLL_SEC)
-
-
-async def wait_drbd_uptodate(*, timeout_sec: int | None = None) -> tuple[bool, list[str]]:
-    """Poll until both DRBD replicas are UpToDate (or timeout)."""
-    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
-    logs: list[str] = []
-    deadline = asyncio.get_event_loop().time() + limit
-    while True:
-        st = await gather_status()
-        pct = st.get("drbd_sync_percent")
-        uptodate = bool(st["drbd_uptodate"])
-        if pct is None:
-            logs.append(f"drbd_uptodate={uptodate}")
-        else:
-            logs.append(f"drbd_uptodate={uptodate} sync={pct:.1f}%")
-        if uptodate:
-            logs.append("DRBD both replicas UpToDate")
-            return True, logs
-        if asyncio.get_event_loop().time() >= deadline:
-            logs.append(f"TIMEOUT waiting for DRBD UpToDate after {limit}s")
-            return False, logs
-        await asyncio.sleep(FAILBACK_POLL_SEC)
-
-
-async def wait_failback_settled(
-    target: str,
-    *,
-    timeout_sec: int | None = None,
-) -> tuple[bool, list[str]]:
-    """Wait until Promoted + VIP (+ Zimbra) are on target after a ban."""
-    limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
-    logs: list[str] = []
-    deadline = asyncio.get_event_loop().time() + limit
-    vip_ip = ""
-    while True:
-        st = await gather_status()
-        vip_ip = str(st.get("vip_ip") or vip_ip or "")
-        promoted = st.get("promoted")
-        vip_node = st.get("vip_node")
-        zimbra_node = st.get("zimbra_node")
-        dual = bool(st.get("promoted_conflict"))
-        last = (
-            f"promoted={promoted} vip_node={vip_node} zimbra_node={zimbra_node} "
-            f"dual_promoted={dual}"
-        )
-        logs.append(last)
-        promoted_ok = bool(promoted) and hosts_match(str(promoted), target)
-        vip_ok = bool(vip_node) and hosts_match(str(vip_node), target)
-        zimbra_ok = bool(zimbra_node) and hosts_match(str(zimbra_node), target)
-        https_ok = True
-        if vip_ip and promoted_ok and vip_ok:
-            body, _c = await _https_code(f"https://{vip_ip}/")
-            https_ok = body == "200"
-            logs.append(f"https://{vip_ip}/ → HTTP {body}")
-        if promoted_ok and vip_ok and zimbra_ok and https_ok and not dual:
-            dual_ok = True
-            if ASSERT_SCRIPT.is_file():
-                c, out, err = await _capture([str(ASSERT_SCRIPT)])
-                dual_txt = (out + err).strip()
-                dual_ok = c == 0 and "NO_DUAL_PRIMARY_OK" in dual_txt
-                logs.append(dual_txt or f"dual-primary assert exit {c}")
-            if dual_ok:
-                logs.append(f"Master settled on {target}")
-                return True, logs
-        if asyncio.get_event_loop().time() >= deadline:
-            logs.append(f"TIMEOUT waiting for Master on {target} after {limit}s: {last}")
-            return False, logs
-        await asyncio.sleep(FAILBACK_POLL_SEC)
 
 
 async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
@@ -1108,6 +1173,29 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             for line in settle_logs:
                 yield await _emit(line)
             if not settled:
+                # If the stack already landed on the target despite settle
+                # reporting false, clear the temporary ban so the cluster is
+                # not left with a sticky constraint.
+                st_now = await gather_status()
+                if _stack_on_target(st_now, target):
+                    yield await _emit(
+                        f"Settle reported incomplete, but stack is already on {target}; "
+                        f"clearing temporary ban on {DRBD_CLONE}"
+                    )
+                    c_clr, out_clr, err_clr = await _capture(
+                        ["pcs", "resource", "clear", DRBD_CLONE],
+                        timeout=120,
+                    )
+                    if out_clr:
+                        yield await _emit(out_clr)
+                    if err_clr:
+                        yield await _emit(err_clr, err=True)
+                    if c_clr == 0 and hosts_match(
+                        str((await gather_status()).get("promoted") or ""), target
+                    ):
+                        yield await _emit(f"Master move to {target} complete (recovered)")
+                        yield proto.event_done(0)
+                        return
                 yield await _emit(
                     "Failback did not settle on the target. Ban may still be in "
                     f"place on {current}. Do not issue a second ban; capture pcs "

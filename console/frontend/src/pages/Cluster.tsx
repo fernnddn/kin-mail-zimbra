@@ -1204,7 +1204,7 @@ export default function ClusterPage() {
             setMessage(
               code === 0
                 ? `Master moved to ${target}. Mail VIP should be on that node.`
-                : `Master move to ${target} did not finish - see the log below.`,
+                : `Master move to ${target} did not finish - see the log below. If a temporary ban is still set, on either mail node run: pcs resource clear kin-drbd-clone`,
             );
           } else {
             setMessage(code === 0 ? `${target} left maintenance.` : `Exit maintenance not fully verified for ${target}.`);

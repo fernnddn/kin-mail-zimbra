@@ -716,5 +716,59 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class FailbackSettleHttpsTests(unittest.IsolatedAsyncioTestCase):
+    def test_https_probe_ok_accepts_redirects(self) -> None:
+        from kin_privhelper.maintenance import https_probe_ok
+
+        self.assertTrue(https_probe_ok("200"))
+        self.assertTrue(https_probe_ok("301"))
+        self.assertTrue(https_probe_ok(302))
+        self.assertFalse(https_probe_ok("000"))
+        self.assertFalse(https_probe_ok("503"))
+
+    async def test_settle_soft_accepts_when_stack_on_target_despite_https(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from kin_privhelper.maintenance import wait_failback_settled
+
+        target = "mail2.example.test"
+        st = {
+            "promoted": target,
+            "promoted_names": [target],
+            "promoted_conflict": False,
+            "vip_node": target,
+            "zimbra_node": target,
+            "vip_ip": "192.0.2.16",
+        }
+        polls = 0
+
+        async def gather_side() -> dict:
+            nonlocal polls
+            polls += 1
+            return dict(st)
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(side_effect=gather_side),
+            ),
+            patch(
+                "kin_privhelper.maintenance._https_code",
+                new=AsyncMock(return_value=("000", 7)),
+            ),
+            patch(
+                "kin_privhelper.maintenance.ASSERT_SCRIPT",
+                new=type("P", (), {"is_file": lambda self: False})(),
+            ),
+            patch("kin_privhelper.maintenance.FAILBACK_POLL_SEC", 0),
+            patch("kin_privhelper.maintenance.FAILBACK_TIMEOUT_SEC", 30),
+        ):
+            ok, logs = await wait_failback_settled(target)
+
+        self.assertTrue(ok)
+        self.assertTrue(any("accepting without hard HTTPS fail" in ln for ln in logs))
+        self.assertGreaterEqual(polls, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
