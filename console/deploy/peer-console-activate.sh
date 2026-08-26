@@ -136,12 +136,17 @@ else
   ok "Generated self-signed cert (SAN=${san})"
 fi
 
-# Peer activate: never mint users.json / initial-admin-password. Host A pushes them.
+# Peer activate: never mint an admin password / initial-admin-password.
+# Write an empty users.json so FastAPI startup can bind :9443; Host A pushes
+# the real credential store immediately after activate returns.
 USERS_FILE="${DATA_ROOT}/users.json"
 if [ -f "$USERS_FILE" ]; then
   ok "users.json present (will be overwritten by Host A sync if needed)"
 else
-  ok "No users.json yet - Host A will push after activate (no local admin mint)"
+  printf '%s\n' '{"version":1,"users":[]}' >"$USERS_FILE"
+  chmod 600 "$USERS_FILE"
+  chown "${SVC_USER}:${SVC_USER}" "$USERS_FILE"
+  ok "Empty users.json placeholder (Host A pushes admin next; no local mint)"
 fi
 SECRET_FILE="${DATA_ROOT}/session.secret"
 if [ ! -f "$SECRET_FILE" ]; then
@@ -158,37 +163,77 @@ PY
 fi
 chown -R "${SVC_USER}:${SVC_USER}" "$DATA_ROOT"
 
+# Peer must listen on all interfaces so Host A / admin can reach :9443.
+if [ -f "$ENV_FILE" ]; then
+  if grep -q '^CONSOLE_BIND=' "$ENV_FILE"; then
+    sed -i 's/^CONSOLE_BIND=.*/CONSOLE_BIND=0.0.0.0/' "$ENV_FILE"
+  else
+    printf 'CONSOLE_BIND=0.0.0.0\n' >>"$ENV_FILE"
+  fi
+  ok "CONSOLE_BIND=0.0.0.0 for peer console"
+fi
+
+# Sync AD console env from kin-mail config when present (no password print).
+if [ -f /etc/kin-mail/config ] && [ -x "${OPT_ROOT}/venv/bin/python" ]; then
+  PYTHONPATH="${OPT_ROOT}/backend" "${OPT_ROOT}/venv/bin/python" - <<'PY' || true
+import sys
+sys.path.insert(0, "/opt/kin-mail-console/backend")
+from kin_console.ad_settings import load_ad_settings, sync_ad_env_from_kin_config
+path = sync_ad_env_from_kin_config()
+cfg = load_ad_settings()
+print(f"ad_env={path} enabled={cfg.enabled} url_set={bool(cfg.ldap_url)}")
+PY
+  ok "Console AD env synced (passwords not printed)"
+fi
+
 # Light firewall: open console port without full apply/dead-man.
+_derive_slash24() {
+  # $1 = IPv4 → a.b.c.0/24
+  local ip="$1" _a _rest _b _c
+  _a=${ip%%.*}
+  _rest=${ip#*.}
+  _b=${_rest%%.*}
+  _rest=${_rest#*.}
+  _c=${_rest%%.*}
+  printf '%s.%s.%s.0/24' "$_a" "$_b" "$_c"
+}
+
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
   say "Ensure UFW allows console port ${CONSOLE_PORT}"
   cluster_net=""
+  ufw_ok=0
   if [ -f /etc/kin-mail/config ]; then
     # shellcheck disable=SC1091
     set -a; . /etc/kin-mail/config; set +a
+    # Prefer VIP /24; fall back to this node's SERVER_IP (MAIL_HOST_IP is not a config key).
     if [ -n "${CLUSTER_VIP_IP:-}" ]; then
-      _a=${CLUSTER_VIP_IP%%.*}
-      _rest=${CLUSTER_VIP_IP#*.}
-      _b=${_rest%%.*}
-      _rest=${_rest#*.}
-      _c=${_rest%%.*}
-      cluster_net="${_a}.${_b}.${_c}.0/24"
-    elif [ -n "${MAIL_HOST_IP:-}" ]; then
-      _a=${MAIL_HOST_IP%%.*}
-      _rest=${MAIL_HOST_IP#*.}
-      _b=${_rest%%.*}
-      _rest=${_rest#*.}
-      _c=${_rest%%.*}
-      cluster_net="${_a}.${_b}.${_c}.0/24"
+      cluster_net="$(_derive_slash24 "$CLUSTER_VIP_IP")"
+    elif [ -n "${SERVER_IP:-}" ]; then
+      cluster_net="$(_derive_slash24 "$SERVER_IP")"
+    elif [ -n "${KIN_PEER_CONSOLE_IP:-}" ]; then
+      cluster_net="$(_derive_slash24 "$KIN_PEER_CONSOLE_IP")"
     fi
     for ip in ${KIN_ADMIN_IPS:-}; do
-      ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP' >/dev/null 2>&1 || true
+      if ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP' >/dev/null 2>&1; then
+        ufw_ok=1
+      fi
     done
   fi
   if [ -n "$cluster_net" ]; then
-    ufw allow from "$cluster_net" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN' >/dev/null 2>&1 || true
-    ok "UFW console rules ensured for ${cluster_net}"
+    if ufw allow from "$cluster_net" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN' >/dev/null 2>&1; then
+      ufw_ok=1
+      ok "UFW console rules ensured for ${cluster_net}"
+    else
+      fail "UFW allow for ${CONSOLE_PORT} from ${cluster_net} failed"
+      exit 1
+    fi
   else
-    warn "Could not derive CLUSTER_NET; ensure UFW already allows ${CONSOLE_PORT} from admin/LAN"
+    fail "Could not derive CLUSTER_NET (need CLUSTER_VIP_IP or SERVER_IP); refusing peer console with active UFW and no LAN allow"
+    exit 1
+  fi
+  if [ "$ufw_ok" -ne 1 ]; then
+    fail "UFW is active but no console allow rule was applied for port ${CONSOLE_PORT}"
+    exit 1
   fi
 fi
 

@@ -1337,7 +1337,12 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         "KIN_PEER_STATE_BEGIN\nHA=0\nSETUP=0\nCFG=1\nTOPO=0\nKIN_PEER_STATE_END\n"
         "KIN_PEER_HA_BEGIN\nKIN_PEER_HA_END\n"
         "KIN_PEER_TOPO_BEGIN\nKIN_PEER_TOPO_END\n"
-        'KIN_PEER_CFG_BEGIN\nTOPOLOGY="1vm"\nKIN_PEER_CFG_END\n'
+        'KIN_PEER_CFG_BEGIN\n'
+        'TOPOLOGY="1vm"\n'
+        'MAIL_HOST="mail2.example.test"\n'
+        'SERVER_IP="192.0.2.14"\n'
+        'MAIL_DOMAIN="example.test"\n'
+        "KIN_PEER_CFG_END\n"
     )
 
     async def test_users_push_failure_writes_no_peer_marker(self) -> None:
@@ -1687,12 +1692,20 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=(0, "")),
             ) as ssh,
             patch(
+                "kin_privhelper.orchestration._peer_console_reachable_from_here",
+                new=AsyncMock(return_value=(True, "remote ok")),
+            ),
+            patch(
                 "kin_privhelper.orchestration._scp_put",
                 new=AsyncMock(return_value=(0, "")),
             ) as scp,
             patch(
                 "kin_privhelper.orchestration.build_peer_console_archive",
             ) as build,
+            patch(
+                "kin_privhelper.orchestration._push_peer_deploy_tree",
+                new=AsyncMock(return_value=(0, "")),
+            ) as deploy,
         ):
             ok, notes = await ensure_peer_console_runtime(host, "kin", "pw", [])
 
@@ -1701,6 +1714,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         ssh.assert_awaited()
         scp.assert_not_awaited()
         build.assert_not_called()
+        deploy.assert_not_awaited()
 
 
 class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):

@@ -500,18 +500,28 @@ def plan_peer_ha_console_state(
     only when the file is missing (peer_os_prep normally already created it).
     The world-readable topology marker is written whenever it is missing or
     not already 2vm, even if config and completion markers are already right.
+
+    Refuses a TOPOLOGY-only skeleton when the peer config is missing required
+    identity keys (SERVER_IP / MAIL_HOST / MAIL_DOMAIN) - callers must stage a
+    full peer config first (Build HA peer_os_prep or add-host attach).
     """
     from .apply_config import ensure_topology_2vm, format_config, parse_config
 
     values = parse_config(config_text or "")
     new_values, config_changed = ensure_topology_2vm(values)
+    required = ("SERVER_IP", "MAIL_HOST", "MAIL_DOMAIN")
+    incomplete = not all(str(new_values.get(k) or "").strip() for k in required)
+    refuse_incomplete = bool(config_changed and incomplete)
     write_ha = not (ha_marker_present and marker_already_complete(ha_marker_text))
     write_setup = not setup_marker_present
     write_topo = _normalize_topology(_first_nonempty_line(topology_marker_text)) != "2vm"
     stamp = _complete_stamp()
     return {
-        "write_config": config_changed,
-        "config_body": format_config(new_values) if config_changed else "",
+        "write_config": bool(config_changed and not refuse_incomplete),
+        "config_body": (
+            format_config(new_values) if config_changed and not refuse_incomplete else ""
+        ),
+        "refuse_incomplete_config": refuse_incomplete,
         "write_ha_marker": write_ha,
         "write_setup_marker": write_setup,
         "write_topology_marker": write_topo,
@@ -523,6 +533,7 @@ def plan_peer_ha_console_state(
             and not write_ha
             and not write_setup
             and not write_topo
+            and not refuse_incomplete
         ),
     }
 

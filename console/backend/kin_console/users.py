@@ -164,7 +164,12 @@ def get_user(username: str) -> ConsoleUser | None:
 
 
 def ensure_users_store() -> None:
-    """Migrate legacy admin.hash → users.json; rewrite missing auth_type fields."""
+    """Migrate legacy admin.hash → users.json; rewrite missing auth_type fields.
+
+    An existing empty users.json (peer-console activate before Host A pushes
+    credentials) is allowed so the service can bind :9443; login stays
+    fail-closed until users are written.
+    """
     path = users_file()
     if path.is_file():
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -181,6 +186,8 @@ def ensure_users_store() -> None:
             if needs:
                 save_users(users)
             return
+        # Empty store is intentional on peer activate; do not raise.
+        return
     if auth.password_hash_exists():
         legacy_hash = auth.load_password_hash()
         bootstrap_user = settings.console_user.strip() or "admin"

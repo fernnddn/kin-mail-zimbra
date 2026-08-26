@@ -530,10 +530,98 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
             yield proto.event_done(exit_code)
             return
 
-        # Promote console topology back to 2vm with the new peer identity.
+        # Stage a full peer /etc/kin-mail/config BEFORE console sync / markers.
+        # sync_peer_ha_console_state refuses TOPOLOGY-only skeletons.
+        from .apply_config import parse_config
+        from .orchestration import (
+            _push_peer_install_files,
+            _ssh_run,
+            build_peer_install_payload,
+        )
+
+        peer_host = OrchHost(plan.new_name, plan.new_ip, "mail2")
+        conf_path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+        try:
+            primary_values = parse_config(
+                conf_path.read_text(encoding="utf-8") if conf_path.is_file() else ""
+            )
+        except OSError as exc:
+            yield await _emit(
+                f"Could not read survivor config for peer staging: {exc}",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+
+        ip_code, ip_text = await _ssh_run(
+            peer_host,
+            ssh_user,
+            ssh_pass,
+            secrets,
+            "ip -4 -o addr show scope global",
+            timeout=20,
+            stdin_text=ssh_pass,
+        )
+        if ip_code != 0:
+            yield await _emit(
+                f"Could not read peer addresses for NET_IFACE (exit {ip_code})",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+        stage_code, stage_lines, payload = build_peer_install_payload(
+            primary=primary_values,
+            peer=peer_host,
+            ip_addr_text=ip_text,
+            cloudflare_text=None,
+        )
+        for line in stage_lines:
+            yield await _emit(line, err=stage_code != 0)
+        if stage_code != 0 or not payload.get("body"):
+            yield await _emit(
+                "Refusing peer console sync without a full peer config body.",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+        push_code, push_text = await _push_peer_install_files(
+            peer_host, ssh_user, ssh_pass, secrets, payload
+        )
+        if push_code != 0:
+            yield await _emit(
+                f"Failed to stage peer /etc/kin-mail/config (exit {push_code}): "
+                f"{push_text or 'no detail'}",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+        yield await _emit(
+            f"Staged peer config SERVER_IP={payload.get('SERVER_IP')} "
+            f"MAIL_HOST={payload.get('MAIL_HOST')}"
+        )
+
+        # Same peer console path as Build HA: install :9443 on the new peer.
+        # Promote local TOPOLOGY=2vm / ha-setup-complete only AFTER peer sync
+        # succeeds so a failed peer console leaves attach_peer_eligible True
+        # for retry (survivor stays 1vm).
+        yield await _emit("Deploying admin console to the new peer (:9443)")
+        peer_ok, peer_notes = await sync_peer_ha_console_state(
+            peer_host, ssh_user, ssh_pass, secrets
+        )
+        for note in peer_notes:
+            yield await _emit(note, err=not peer_ok)
+        if not peer_ok:
+            yield await _emit(
+                "Add-host playbook succeeded but peer console deploy failed. "
+                "Survivor markers were not promoted (still 1vm) so Add Second "
+                "Server can be retried after fixing the peer.",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
+
         try:
             text = ""
-            conf_path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
             if conf_path.is_file():
                 text = conf_path.read_text(encoding="utf-8")
             values = parse_config(text)
@@ -551,24 +639,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
             )
         except OSError as exc:
             yield await _emit(
-                f"add-host ansible succeeded but console config update failed: {exc}",
-                err=True,
-            )
-            yield proto.event_done(1)
-            return
-
-        # Same peer console path as Build HA: install :9443 on the new peer.
-        peer_host = OrchHost(plan.new_name, plan.new_ip, "mail2")
-        yield await _emit("Deploying admin console to the new peer (:9443)")
-        peer_ok, peer_notes = await sync_peer_ha_console_state(
-            peer_host, ssh_user, ssh_pass, secrets
-        )
-        for note in peer_notes:
-            yield await _emit(note, err=not peer_ok)
-        if not peer_ok:
-            yield await _emit(
-                "Add-host playbook succeeded but peer console deploy failed. "
-                "Retry Add Second Server (or sync peer console) after fixing the peer.",
+                f"peer console OK but local console config update failed: {exc}",
                 err=True,
             )
             yield proto.event_done(1)

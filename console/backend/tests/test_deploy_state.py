@@ -243,13 +243,33 @@ class MailDeployedGateTests(unittest.TestCase):
             ha_marker_present=False,
             setup_marker_present=False,
         )
-        self.assertTrue(plan["write_config"])
-        self.assertIn('TOPOLOGY="2vm"', plan["config_body"])
+        # Empty peer must not get a TOPOLOGY-only skeleton config.
+        self.assertTrue(plan["refuse_incomplete_config"])
+        self.assertFalse(plan["write_config"])
+        self.assertEqual(plan["config_body"], "")
         self.assertTrue(plan["write_ha_marker"])
         self.assertTrue(plan["write_setup_marker"])
         self.assertTrue(plan["write_topology_marker"])
         self.assertEqual(plan["topology_marker_body"], "2vm\n")
         self.assertTrue(plan["ha_marker_body"].startswith("complete "))
+        self.assertFalse(plan["noop"])
+
+    def test_peer_plan_writes_config_when_peer_has_identity_keys(self) -> None:
+        plan = ds.plan_peer_ha_console_state(
+            config_text=(
+                'TOPOLOGY="1vm"\n'
+                'MAIL_HOST="mail2.example.test"\n'
+                'SERVER_IP="192.0.2.14"\n'
+                'MAIL_DOMAIN="example.test"\n'
+            ),
+            ha_marker_present=False,
+            setup_marker_present=False,
+        )
+        self.assertFalse(plan["refuse_incomplete_config"])
+        self.assertTrue(plan["write_config"])
+        self.assertIn('TOPOLOGY="2vm"', plan["config_body"])
+        self.assertIn('SERVER_IP="192.0.2.14"', plan["config_body"])
+        self.assertTrue(plan["write_ha_marker"])
         self.assertFalse(plan["noop"])
 
     def test_peer_plan_is_noop_when_already_marked(self) -> None:

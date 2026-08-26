@@ -262,12 +262,24 @@ class HaSyncWiringTests(unittest.TestCase):
             / "kin_privhelper"
             / "add_host.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("sync_peer_ha_console_state", text)
+        # Order inside cmd_add_host (ignore top-level imports / comments).
+        body = text[text.find("async def cmd_add_host") :]
+        self.assertIn("await sync_peer_ha_console_state", body)
+        self.assertIn("build_peer_install_payload(", body)
         self.assertLess(
-            text.find("mail-add-host.yml"),
-            text.find("sync_peer_ha_console_state"),
+            body.find("mail-add-host.yml"),
+            body.find("build_peer_install_payload("),
         )
-        self.assertIn("Deploying admin console to the new peer", text)
+        self.assertLess(
+            body.find("build_peer_install_payload("),
+            body.find("await sync_peer_ha_console_state"),
+        )
+        self.assertLess(
+            body.find("await sync_peer_ha_console_state"),
+            body.find("mark_ha_setup_complete()"),
+        )
+        self.assertIn("Deploying admin console to the new peer", body)
+        self.assertIn("Survivor markers were not promoted", body)
 
     def test_forward_mutation_uses_password_sudo_wrapper(self) -> None:
         text = (

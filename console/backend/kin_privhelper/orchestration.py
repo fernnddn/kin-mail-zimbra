@@ -1113,6 +1113,24 @@ def peer_console_opt_root() -> Path:
     return Path(os.environ.get("KIN_MAIL_CONSOLE_OPT", "/opt/kin-mail-console"))
 
 
+PEER_CONSOLE_HEALTH_CMD = (
+    "set -e; "
+    "test -x /opt/kin-mail-console/venv/bin/python "
+    "-o -x /opt/kin-mail-console/venv/bin/python3; "
+    "test -d /opt/kin-mail-console/frontend/dist; "
+    "systemctl is-active --quiet kin-mail-privhelperd.service; "
+    "systemctl is-active --quiet kin-mail-console.service; "
+    "port=9443; "
+    "if [ -f /etc/kin-mail-console/console.env ]; then "
+    "  . /etc/kin-mail-console/console.env >/dev/null 2>&1 || true; "
+    "  port=${CONSOLE_PORT:-9443}; "
+    "fi; "
+    "code=$(curl -sk -o /dev/null -w '%{http_code}' "
+    "https://127.0.0.1:${port}/api/health || true); "
+    "test \"$code\" = 200"
+)
+
+
 def build_peer_console_archive(src_opt: Path, dest_tgz: Path) -> None:
     """Tar Host A's installed /opt/kin-mail-console for the peer."""
     src = src_opt.resolve()
@@ -1129,9 +1147,29 @@ def build_peer_console_archive(src_opt: Path, dest_tgz: Path) -> None:
         if name.startswith("/") or ".." in Path(name).parts:
             return None
         parts = Path(name).parts
-        if "node_modules" in parts or "__pycache__" in parts:
+        skip_dirs = {
+            "node_modules",
+            "__pycache__",
+            ".git",
+            ".venv",
+        }
+        if any(p in skip_dirs for p in parts):
             return None
-        if name.endswith((".pyc", ".pyo")):
+        base = Path(name).name
+        if base.endswith((".pyc", ".pyo", ".retry")):
+            return None
+        if base.endswith((".pem", ".key")) and "deploy" not in parts:
+            return None
+        if base in (
+            ".env",
+            "id_rsa",
+            "id_ed25519",
+            "users.json",
+            "session.secret",
+            "lab.yml",
+        ):
+            return None
+        if base.endswith(".local.yml"):
             return None
         return info
 
@@ -1139,16 +1177,42 @@ def build_peer_console_archive(src_opt: Path, dest_tgz: Path) -> None:
         tar.add(src, arcname="kin-mail-console", filter=_filter)
 
 
-PEER_CONSOLE_HEALTH_CMD = (
-    "set -e; "
-    "test -x /opt/kin-mail-console/venv/bin/python "
-    "-o -x /opt/kin-mail-console/venv/bin/python3; "
-    "test -d /opt/kin-mail-console/frontend/dist; "
-    "systemctl is-active --quiet kin-mail-console.service; "
-    "code=$(curl -sk -o /dev/null -w '%{http_code}' "
-    "https://127.0.0.1:9443/api/health || true); "
-    "test \"$code\" = 200"
-)
+async def _peer_console_reachable_from_here(
+    peer_ip: str, *, port: int = 9443, timeout: float = 8.0
+) -> tuple[bool, str]:
+    """curl peer management IP:9443 from Host A (firewall / bind check)."""
+    ip = (peer_ip or "").strip()
+    if not valid_ipv4(ip):
+        return False, "peer IP is not a valid IPv4 for remote health"
+    curl = shutil.which("curl")
+    if not curl:
+        return False, "curl not installed on this host for remote peer health"
+    url = f"https://{ip}:{port}/api/health"
+    proc = await asyncio.create_subprocess_exec(
+        curl,
+        "-sk",
+        "--connect-timeout",
+        "5",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return False, f"remote health timed out for {url}"
+    code = (out_b or b"").decode("utf-8", errors="replace").strip()
+    if int(proc.returncode or 0) != 0 or code != "200":
+        err = (err_b or b"").decode("utf-8", errors="replace").strip()
+        detail = err or f"http_code={code or 'none'}"
+        return False, f"peer :{port} not reachable from this host ({detail})"
+    return True, f"Remote health https://{ip}:{port}/api/health → 200"
 
 
 async def ensure_peer_console_runtime(
@@ -1159,8 +1223,8 @@ async def ensure_peer_console_runtime(
 ) -> tuple[bool, list[str]]:
     """Install /opt/kin-mail-console on the peer and start :9443 if needed.
 
-    Idempotent: skips transfer when health already passes. Must run before
-    users.json / identity / completion markers.
+    Idempotent: skips transfer when local+remote health already pass. Must run
+    before users.json / identity / completion markers.
     """
     notes: list[str] = []
     health_code, _health_text = await _ssh_run(
@@ -1173,10 +1237,17 @@ async def ensure_peer_console_runtime(
         stdin_text=password,
     )
     if health_code == 0:
+        remote_ok, remote_note = await _peer_console_reachable_from_here(host.ip)
+        if remote_ok:
+            notes.append(
+                "Peer console already healthy on :9443; skipping tree transfer."
+            )
+            notes.append(remote_note)
+            return True, notes
         notes.append(
-            "Peer console already healthy on :9443; skipping tree transfer."
+            f"Peer localhost health OK but {remote_note}; "
+            "re-running activate to repair firewall/bind."
         )
-        return True, notes
 
     src_opt = peer_console_opt_root()
     activate_src = peer_console_activate_src()
@@ -1192,6 +1263,18 @@ async def ensure_peer_console_runtime(
             "Bootstrap the console on this host before Build HA."
         )
         return False, notes
+
+    # Peer ops from B need install scripts under /opt/kin-mail-deploy.
+    deploy_code, deploy_text = await _push_peer_deploy_tree(
+        host, user, password, secrets
+    )
+    if deploy_code != 0:
+        notes.append(
+            f"Could not sync /opt/kin-mail-deploy to the peer (exit {deploy_code}): "
+            f"{deploy_text or 'no detail'}"
+        )
+        return False, notes
+    notes.append("Synced /opt/kin-mail-deploy install tree to the peer")
 
     local_tgz = WORK_DIR / "peer-console.tgz"
     try:
@@ -1225,18 +1308,43 @@ async def ensure_peer_console_runtime(
     def _sh_single(value: str) -> str:
         return "'" + value.replace("'", "'\"'\"'") + "'"
 
+    # Atomic swap: extract aside, stop units, swap, activate. Keep .bak until
+    # activate health passes so a mid-failure can restore.
     extract_and_activate = wrap_privileged_remote(
         "set -e; "
-        "mkdir -p /opt; "
-        "rm -rf /opt/kin-mail-console; "
-        f"tar -C /opt -xzf {remote_tgz}; "
+        f"[ ! -L {remote_tgz} ] || {{ echo 'refusing: {remote_tgz} is a symlink' >&2; exit 1; }}; "
+        f"[ ! -L {remote_activate} ] || {{ echo 'refusing: {remote_activate} is a symlink' >&2; exit 1; }}; "
+        "rm -rf /opt/kin-mail-console.new /tmp/kin-mail-console-extract; "
+        "mkdir -p /tmp/kin-mail-console-extract; "
+        f"tar -C /tmp/kin-mail-console-extract -xzf {remote_tgz}; "
+        "test -d /tmp/kin-mail-console-extract/kin-mail-console; "
+        "mv /tmp/kin-mail-console-extract/kin-mail-console /opt/kin-mail-console.new; "
+        "rm -rf /tmp/kin-mail-console-extract; "
         f"rm -f {remote_tgz}; "
+        "systemctl stop kin-mail-console.service 2>/dev/null || true; "
+        "systemctl stop kin-mail-privhelperd.service 2>/dev/null || true; "
+        "rm -rf /opt/kin-mail-console.bak; "
+        "if [ -d /opt/kin-mail-console ]; then "
+        "  mv /opt/kin-mail-console /opt/kin-mail-console.bak; "
+        "fi; "
+        "mv /opt/kin-mail-console.new /opt/kin-mail-console; "
         f"install -m 755 {remote_activate} /opt/kin-mail-console/deploy/peer-console-activate.sh; "
         f"rm -f {remote_activate}; "
         "export KIN_PEER_CONSOLE_ACTIVATE=1; "
         f"export KIN_PEER_CONSOLE_NAME={_sh_single(peer_name)}; "
         f"export KIN_PEER_CONSOLE_IP={_sh_single(peer_ip)}; "
-        "/opt/kin-mail-console/deploy/peer-console-activate.sh"
+        "if /opt/kin-mail-console/deploy/peer-console-activate.sh; then "
+        "  rm -rf /opt/kin-mail-console.bak; "
+        "else "
+        "  rc=$?; "
+        "  if [ -d /opt/kin-mail-console.bak ]; then "
+        "    rm -rf /opt/kin-mail-console; "
+        "    mv /opt/kin-mail-console.bak /opt/kin-mail-console; "
+        "    systemctl start kin-mail-privhelperd.service 2>/dev/null || true; "
+        "    systemctl start kin-mail-console.service 2>/dev/null || true; "
+        "  fi; "
+        "  exit $rc; "
+        "fi"
     )
     # Activate can apt-install + restart services; allow several minutes.
     act_code, act_text = await _ssh_run(
@@ -1251,12 +1359,21 @@ async def ensure_peer_console_runtime(
     if act_code != 0:
         notes.append(
             f"Peer console activate failed (exit {act_code}). "
-            "No auto-retry, no auto-rollback."
+            "No auto-retry, no auto-rollback beyond restoring the previous tree."
         )
         if act_text.strip():
             notes.append(act_text.strip()[-2000:])
         return False, notes
+
+    remote_ok, remote_note = await _peer_console_reachable_from_here(peer_ip)
+    if not remote_ok:
+        notes.append(
+            f"Peer console started locally but {remote_note}. "
+            "Fail closed: fix UFW/bind on the peer, then retry."
+        )
+        return False, notes
     notes.append("Installed and activated console on the peer (:9443)")
+    notes.append(remote_note)
     return True, notes
 
 
@@ -1317,6 +1434,13 @@ async def sync_peer_ha_console_state(
         setup_marker_present=bool(probe.get("setup_present")),
         topology_marker_text=str(probe.get("topology_text") or ""),
     )
+    if plan.get("refuse_incomplete_config"):
+        notes.append(
+            "Peer /etc/kin-mail/config is missing SERVER_IP/MAIL_HOST/MAIL_DOMAIN; "
+            "refusing to write a TOPOLOGY-only skeleton. Stage a full peer config "
+            "(Build HA peer prep, or Add Second Server attach config push), then retry."
+        )
+        return False, notes
 
     # Full console on Mail B before users/identity/markers. Used to only sync
     # state files; Mail B never ran bootstrap, so :9443 was Host A only.

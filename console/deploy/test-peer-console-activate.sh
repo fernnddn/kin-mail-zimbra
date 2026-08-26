@@ -14,11 +14,26 @@ else
 fi
 
 if grep -q 'KIN_PEER_CONSOLE_ACTIVATE' "$SCRIPT" \
-  && grep -q 'No users.json yet' "$SCRIPT" \
+  && grep -q 'Empty users.json placeholder' "$SCRIPT" \
+  && grep -q 'version.:1' "$SCRIPT" \
   && ! grep -q 'token_urlsafe(18)' "$SCRIPT"; then
   pass "activate requires flag and does not mint admin password"
 else
   bad "activate must gate on KIN_PEER_CONSOLE_ACTIVATE and skip admin mint"
+fi
+
+if grep -q 'SERVER_IP' "$SCRIPT" \
+  && grep -q '_derive_slash24' "$SCRIPT" \
+  && ! grep -q 'elif \[ -n "${MAIL_HOST_IP' "$SCRIPT"; then
+  pass "UFW LAN derives from SERVER_IP / VIP (not MAIL_HOST_IP)"
+else
+  bad "activate UFW must use SERVER_IP, not MAIL_HOST_IP"
+fi
+
+if grep -q 'CONSOLE_BIND=0.0.0.0' "$SCRIPT"; then
+  pass "activate forces CONSOLE_BIND=0.0.0.0"
+else
+  bad "activate must force CONSOLE_BIND for remote reachability"
 fi
 
 if grep -q 'subjectAltName' "$SCRIPT" \
