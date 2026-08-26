@@ -164,11 +164,13 @@ def wizard_actor(request: Request, response: Response) -> WizardActor:
     leftover /opt/zimbra tree from a failed installer is not enough, and a
     2-server host that has only finished single-node install is not enough.
 
-    If any console user already exists (peer activate after Host A staged
-    users.json), never allow anonymous Super Admin — force login even before
-    ha-setup-complete lands.
+    Host A bootstrap always mints users.json + initial-admin-password. That
+    must NOT force login - the wizard UI is anonymous until deploy finishes.
+    Peer activate stages users.json without minting initial-admin-password;
+    those hosts force login so anonymous Super Admin cannot be used there.
     """
     from kin_privhelper.deploy_state import SETUP_USERNAME, is_mail_deployed
+    from kin_privhelper.initial_password import INITIAL_PASSWORD_FILE
     from kin_privhelper.rbac import ROLE_SUPER_ADMIN
 
     from . import users as users_mod
@@ -184,12 +186,18 @@ def wizard_actor(request: Request, response: Response) -> WizardActor:
     except (OSError, ValueError, json.JSONDecodeError):
         existing_users = []
 
-    if deployed or existing_users:
+    # Peer (or any host that already had a first login): users exist and the
+    # one-time bootstrap password file is gone → require a real session.
+    # Host A first-boot still has initial-admin-password → anonymous OK.
+    force_login = bool(deployed) or (
+        bool(existing_users) and not INITIAL_PASSWORD_FILE.is_file()
+    )
+    if force_login:
         user = require_console_user(request, response)
         return WizardActor(username=user.username, role=user.role, anonymous_setup=False)
 
-    # Pre-deploy with empty users store: prefer a real session if present,
-    # else synthetic setup identity (Host A first-boot only).
+    # Pre-deploy Host A (bootstrap users may already exist): prefer a real
+    # session if present, else synthetic setup identity.
     uname = current_username(request)
     if uname:
         record = users_mod.get_user(uname)
