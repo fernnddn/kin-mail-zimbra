@@ -36,7 +36,10 @@ def canonical_payload(payload: dict[str, Any]) -> bytes:
 
 
 def parse_license_string(token: str) -> tuple[dict[str, Any], bytes, bytes]:
-    text = (token or "").strip()
+    # Drop all whitespace so a terminal-wrapped or double-pasted token still
+    # verifies. A stray newline in the middle is the most common real-world
+    # failure mode when an operator hand-selects a long license string.
+    text = "".join((token or "").split())
     if "." not in text:
         raise ValueError("license is not a signed payload.signature string")
     payload_b64, sig_b64 = text.rsplit(".", 1)
@@ -194,14 +197,18 @@ def license_view(token: str, server_id: str, *, now: datetime | None = None) -> 
 def sign_payload(payload: dict[str, Any], private_key: Any) -> str:
     """Used by the generator and tests. private_key is Ed25519PrivateKey."""
     clean = validate_payload(payload)
-    to_sign = {
-        "expires_at": payload.get("expires_at"),
-        "issued_at": payload["issued_at"],
-        "seats": int(payload["seats"]),
-        "server_id": clean["server_id"],
-        "type": clean["type"],
-    }
-    raw = canonical_payload(to_sign)
+    # Sign the cleaned, canonical field values - never the raw caller input -
+    # so issued_at/expires_at normalizations cannot drift from what verify
+    # re-derives after JSON round-trip.
+    raw = canonical_payload(
+        {
+            "expires_at": clean["expires_at"],
+            "issued_at": clean["issued_at"],
+            "seats": clean["seats"],
+            "server_id": clean["server_id"],
+            "type": clean["type"],
+        }
+    )
     sig = private_key.sign(raw)
     return (
         base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")

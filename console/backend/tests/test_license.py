@@ -45,6 +45,15 @@ class LicenseVerifyTests(unittest.TestCase):
         self.assertFalse(state["provisioning_blocked"])
         self.assertIsNone(state["expires_at"])
 
+    def test_whitespace_inside_token_still_verifies(self) -> None:
+        token = self._token()
+        wrapped = token[:40] + "\n  " + token[40:80] + "\t" + token[80:]
+        state = verify_license(
+            wrapped, server_id=self.server_id, now=self.now, public_key=self.pub
+        )
+        self.assertEqual(state["status"], "active")
+        self.assertEqual(state["seats"], 32)
+
     def test_tampered_payload_is_rejected(self) -> None:
         token = self._token()
         payload_b64, sig_b64 = token.split(".", 1)

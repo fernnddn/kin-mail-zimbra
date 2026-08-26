@@ -217,7 +217,9 @@ async def _set_firewall(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     from kin_console.license import verify_license
 
-    token = str(args.get("token") or "").strip()
+    # Collapse whitespace the same way verify does, so what we store matches
+    # what Settings pasted (including accidental newlines from a wrapped copy).
+    token = "".join(str(args.get("token") or "").split())
     sid = read_server_id() or ensure_server_id()
     try:
         verified = verify_license(token, server_id=sid)

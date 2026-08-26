@@ -223,7 +223,7 @@ export default function SettingsPage() {
     try {
       await api("/api/settings/license", {
         method: "POST",
-        body: JSON.stringify({ token: licenseToken.trim() }),
+        body: JSON.stringify({ token: licenseToken.replace(/\s+/g, "") }),
       });
       setLicenseToken("");
       await refresh();
