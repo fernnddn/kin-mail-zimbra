@@ -95,6 +95,19 @@ class PeerInstallConfigTests(unittest.TestCase):
         self.assertEqual(out["PEER_HOST_NAME"], "mail.example.test")
         self.assertEqual(out["TOPOLOGY"], "2vm")
 
+    def test_fills_missing_dns_upstream_defaults(self) -> None:
+        primary = dict(_PRIMARY)
+        primary.pop("DNS_UPSTREAM_1", None)
+        primary.pop("DNS_UPSTREAM_2", None)
+        out = peer_install_config(
+            primary,
+            peer_host="mail2.example.test",
+            peer_ip="192.0.2.14",
+            peer_iface="ens34",
+        )
+        self.assertEqual(out["DNS_UPSTREAM_1"], "1.1.1.1")
+        self.assertEqual(out["DNS_UPSTREAM_2"], "8.8.8.8")
+
     def test_peer_drops_external_test_address(self) -> None:
         primary = dict(_PRIMARY)
         primary["EXTERNAL_TEST_ADDRESS"] = "ops@example.test"

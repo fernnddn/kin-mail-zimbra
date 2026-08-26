@@ -374,6 +374,12 @@ def peer_install_config(
     # T2 against an operator mailbox is a primary healthcheck. On mail2 it
     # FAILs the 90-minute peer install when the address rejects the new host.
     out["EXTERNAL_TEST_ADDRESS"] = ""
+    # Blank peer VMs often lack working system DNS; keep primary upstreams
+    # (defaults 1.1.1.1 / 8.8.8.8) so 01-preflight can repair resolv.conf.
+    if not str(out.get("DNS_UPSTREAM_1") or "").strip():
+        out["DNS_UPSTREAM_1"] = "1.1.1.1"
+    if not str(out.get("DNS_UPSTREAM_2") or "").strip():
+        out["DNS_UPSTREAM_2"] = "8.8.8.8"
     return out
 
 

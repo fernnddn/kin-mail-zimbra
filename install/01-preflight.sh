@@ -66,7 +66,17 @@ done
 [ -d /opt/zimbra ] && { warn "/opt/zimbra already exists - this is not a clean host"; } || ok "/opt/zimbra absent"
 
 # --- 4. outbound reachability for installation -------------------------------
+# Blank VMs often have a broken system resolver while dig @$DNS_UPSTREAM works.
+# Repair that before curl checks so HA peer install does not FAIL as "unreachable".
 echo; say "4. Outbound access needed to INSTALL"
+# shellcheck disable=SC1091
+. ./lib/ensure-outbound-dns.sh
+if kin_ensure_outbound_dns; then
+  ok "System DNS can resolve public names (upstream ${DNS_UPSTREAM_1:-1.1.1.1} / ${DNS_UPSTREAM_2:-8.8.8.8})"
+else
+  warn "System DNS still broken after repair attempt - outbound checks may FAIL as unreachable"
+  warn "Set nameserver ${DNS_UPSTREAM_1:-1.1.1.1} (and ${DNS_UPSTREAM_2:-8.8.8.8}) in resolv.conf / netplan, then re-run"
+fi
 for u in "https://github.com" "http://archive.ubuntu.com" "https://repo.zimbra.com"; do
   code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$u" 2>/dev/null)
   if [ -n "$code" ] && [ "$code" != "000" ]; then
