@@ -103,6 +103,12 @@ exit 0
 EOF
 chmod +x "$STUB/udevadm"
 
+cat >"$STUB/pkill" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB/pkill"
+
 cat >"$STUB/kin-fail2ban-jails" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"${ROOT}/fail2ban.log"
@@ -351,11 +357,19 @@ else
 fi
 if [ -f "$activate_yml" ] \
   && grep -q 'KIN_RELEASE_WAIT_BACKING_ONLY' "$activate_yml" \
+  && grep -q 'KIN_DRBD_UP_RETRY' "$activate_yml" \
+  && grep -q 'Tear down any existing DRBD resource before metadata or attach' "$activate_yml" \
   && grep -q 'drbd_resource_meta_disk_stat' "$activate_yml" \
   && grep -q 'Peer DRBD role is already Primary' "$activate_yml"; then
-  pass "activate.yml waits for a free backing device before drbdadm up"
+  pass "activate.yml downs first, then wait+up in one retry loop"
 else
-  bad "activate.yml must reuse the holder wait before drbdadm up"
+  bad "activate.yml must down before wait and re-wait inside up retries"
+fi
+release_yml="../../ansible/roles/drbd_resource/tasks/release_plain_mount.yml"
+if [ -f "$release_yml" ] && grep -q 'KIN_DRBD_BACKING_DISK' "$release_yml"; then
+  pass "release_plain_mount passes KIN_DRBD_BACKING_DISK"
+else
+  bad "release_plain_mount must pass KIN_DRBD_BACKING_DISK like activate"
 fi
 
 if [ "$fails" -eq 0 ]; then

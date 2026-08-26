@@ -246,8 +246,17 @@ fi
 
 # activate.yml reuses the holder wait without stop/umount (retry / Diskless
 # leftover). Mail is already down at that point; dropping jails is idempotent.
+drop_leftover_zimbra_procs() {
+  # Best-effort: JVM/mailboxd under uid zimbra can hold mapper FDs after a
+  # "Stopped" status or a prior botched handoff. Hard gate remains
+  # wait_backing_device_free.
+  pkill -u zimbra 2>/dev/null || true
+  sleep 1
+}
+
 if [ "${KIN_RELEASE_WAIT_BACKING_ONLY:-0}" = "1" ]; then
   drop_zimbra_log_holders
+  drop_leftover_zimbra_procs
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders; drbdadm up would fail"
   ok "Backing device is free for drbdadm up"
@@ -259,6 +268,7 @@ SRC=$(current_src)
 if [ -z "$SRC" ]; then
   ok "${ZIMBRA_DIR} is not mounted; skip stop/umount, still free the backing device"
   drop_zimbra_log_holders
+  drop_leftover_zimbra_procs
   wait_backing_device_free "$(backing_fuser_dev)" \
     || die_release "backing device still has open holders after a prior umount"
   remove_precluster_fstab
@@ -297,8 +307,7 @@ if ! wait_none_running; then
 fi
 # Leftover java/mailboxd under uid zimbra can hold mapper FDs after a "Stopped"
 # status line. Best-effort; wait_backing_device_free is the hard gate.
-pkill -u zimbra 2>/dev/null || true
-sleep 1
+drop_leftover_zimbra_procs
 ok "Zimbra is stopped"
 
 umount_retry "$ZIMBRA_DIR" || die_release "umount ${ZIMBRA_DIR} failed"
