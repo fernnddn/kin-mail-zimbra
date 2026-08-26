@@ -377,7 +377,13 @@ async def push_local_users_to_peer(
             "the peer would not receive the admin credential."
         )
     try:
-        body = users_json_text(load_users())
+        loaded = load_users()
+        if not loaded:
+            return False, (
+                "This node's console users.json has no users; "
+                "refusing to push an empty store to the peer."
+            )
+        body = users_json_text(loaded)
     except (OSError, ValueError, json.JSONDecodeError):
         return False, (
             "This node's console users.json could not be read; "

@@ -106,12 +106,15 @@ def attach_peer_eligible(
     promoted: str | None = None,
     package_stub: bool = False,
 ) -> bool:
-    """True only for a real one-node survivor HA, not a fresh single deploy.
+    """True for attach-to-survivor, or finish peer-console after ansible joined.
 
-    Greenfield Add Second Server (1vm with no live VIP/Promoted, or Debian
-    package stub Pacemaker) must use Build HA / run_ha_orchestration.
-    Attach (mail-add-host) is only for after Remove Host when VIP + Promoted
-    still exist on exactly one live mail node.
+    Classic attach: TOPOLOGY=1vm, exactly one live Pacemaker mail node, VIP +
+    Promoted on the survivor (after Remove Host).
+
+    Finish path: TOPOLOGY still 1vm but Pacemaker already has two nodes (ansible
+    succeeded, peer console / local markers failed). Operator can retry Add
+    Second Server to sync console + promote markers without re-running
+    mail-add-host.yml.
     """
     topo = (topology or "").strip().lower()
     if topo not in ("1vm", "1"):
@@ -119,11 +122,21 @@ def attach_peer_eligible(
     if package_stub:
         return False
     online = [str(n).strip() for n in (live_nodes or []) if str(n).strip()]
-    if len(online) != 1:
-        return False
     if not (vip_ip or "").strip():
         return False
-    return bool(vip_node) or bool(promoted)
+    if not (bool(vip_node) or bool(promoted)):
+        return False
+    if len(online) == 1:
+        return True
+    if len(online) == 2:
+        return True
+    return False
+
+
+def attach_finish_only(live_nodes: list[str] | None) -> bool:
+    """True when ansible already joined the peer (2 live nodes); skip playbook."""
+    online = [str(n).strip() for n in (live_nodes or []) if str(n).strip()]
+    return len(online) == 2
 
 
 def plan_add_host(
@@ -192,10 +205,33 @@ def plan_add_host(
         errors.append("cluster VIP must not equal the survivor node address")
 
     online = [n for n in (live_nodes or []) if n]
-    if len(online) != 1:
+    finish_only = len(online) == 2
+    if len(online) == 0:
         errors.append(
-            "add-host requires exactly one live Pacemaker mail node "
+            "add-host requires a live Pacemaker mail node "
             f"(found {len(online)}: {', '.join(online) or 'none'})"
+        )
+    elif len(online) > 2:
+        errors.append(
+            "add-host expects 1 live node (fresh attach) or 2 (finish peer console); "
+            f"found {len(online)}: {', '.join(online)}"
+        )
+    elif finish_only:
+        from .remove_host import names_match
+
+        if peer_name and not any(names_match(n, peer_name) for n in online):
+            errors.append(
+                f"finish path: {peer_name} is not in the Pacemaker nodelist "
+                f"({', '.join(online)})"
+            )
+        if surv_name and not any(names_match(n, surv_name) for n in online):
+            errors.append(
+                f"finish path: survivor {surv_name} is not in the Pacemaker nodelist "
+                f"({', '.join(online)})"
+            )
+        notes.append(
+            "Pacemaker already has two mail nodes; skipping mail-add-host.yml and "
+            "finishing peer console deploy + survivor TOPOLOGY=2vm markers only."
         )
     elif surv_name and online[0].split(".")[0].lower() != surv_name.split(".")[0].lower():
         # Allow FQDN vs short mismatch via short compare.
@@ -221,10 +257,11 @@ def plan_add_host(
                 f"Promoted is {promoted}, not this survivor; move Master here first"
             )
 
-    notes.append(
-        "Attach blank peer via mail-add-host: packages/fencing on the new host, "
-        "pcs node add, DRBD peer rewrite, then full sync while this host stays Primary"
-    )
+    if not finish_only:
+        notes.append(
+            "Attach blank peer via mail-add-host: packages/fencing on the new host, "
+            "pcs node add, DRBD peer rewrite, then full sync while this host stays Primary"
+        )
     return AddHostPlan(
         survivor_name=surv_name,
         survivor_ip=surv_ip,
@@ -386,9 +423,10 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         package_stub=bool(st.get("package_stub")),
     ):
         yield await _emit(
-            "Refusing add-host: this console is not a live one-node HA survivor. "
-            "For a fresh single-server deploy, use Add Second Server / Build HA pair "
-            "(ha_orchestration), not attach peer.",
+            "Refusing add-host: not a live HA survivor attach (or finish) target. "
+            "Need TOPOLOGY=1vm with VIP+Promoted, and either 1 live node (fresh "
+            "attach) or 2 live nodes (finish peer console after ansible). "
+            "For greenfield, use Build HA pair / ha_orchestration.",
             err=True,
         )
         yield proto.event_done(1)
@@ -480,55 +518,69 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         return
 
     try:
-        inv = render_add_host_inventory(plan)
-        secrets = [p for p in (root_pass, kin_pass, hacluster_pass, chap_pass) if p]
-        if any(s and s in inv for s in secrets):
-            yield await _emit("internal error: inventory would contain a secret", err=True)
-            yield proto.event_done(1)
-            return
+        finish_only = attach_finish_only(live_nodes)
+        if finish_only:
+            yield await _emit(
+                "Finish path: Pacemaker already has two nodes — skipping "
+                "mail-add-host.yml; deploying peer console + promoting survivor markers."
+            )
+        else:
+            inv = render_add_host_inventory(plan)
+            secrets = [p for p in (root_pass, kin_pass, hacluster_pass, chap_pass) if p]
+            if any(s and s in inv for s in secrets):
+                yield await _emit("internal error: inventory would contain a secret", err=True)
+                yield proto.event_done(1)
+                return
 
-        _write_work_files(inv)
-        inv_path = WORK_DIR / "inventory.yml"
-        play = _playbook_path("playbooks/mail-add-host.yml")
-        ansible_playbook = _ansible_bin()
+            _write_work_files(inv)
+            inv_path = WORK_DIR / "inventory.yml"
+            play = _playbook_path("playbooks/mail-add-host.yml")
+            ansible_playbook = _ansible_bin()
+            ssh_user, ssh_pass = "kin", kin_pass
+            for user, pwd in ssh_password_candidates(kin_pass, root_pass):
+                if pwd:
+                    ssh_user, ssh_pass = user, pwd
+                    break
+            ansible_env = {
+                "HOME": str(WORK_DIR),
+                "KIN_ANSIBLE_USER": ssh_user,
+                "KIN_ANSIBLE_PASSWORD": ssh_pass,
+                "KIN_ANSIBLE_BECOME_PASSWORD": ssh_pass,
+                "KIN_HACLUSTER_PASSWORD": hacluster_pass,
+                "KIN_CHAP_PASSWORD": chap_pass,
+                "KIN_MAIL_DEPLOY_DIR": kin_mail_deploy_dir(),
+                "ANSIBLE_CONFIG": str(WORK_DIR / "ansible.cfg"),
+                "ANSIBLE_HOST_KEY_CHECKING": "False",
+                "ANSIBLE_RETRY_FILES_ENABLED": "False",
+                "ANSIBLE_LOCAL_TEMP": str(WORK_DIR / ".ansible" / "tmp"),
+            }
+            argv = [ansible_playbook, "-i", str(inv_path), str(play)]
+            yield await _emit(
+                f"ansible-playbook mail-add-host.yml new={plan.new_name} survivor={plan.survivor_name}"
+            )
+            exit_code = 1
+            async for ev in _stream_redacted(
+                argv,
+                cwd=ANSIBLE_DIR,
+                extra_env=ansible_env,
+                secrets=secrets,
+                transcript=DEPLOY_LAST_LOG,
+            ):
+                if ev.get("type") == "done":
+                    exit_code = int(ev.get("exit_code") if ev.get("exit_code") is not None else 1)
+                else:
+                    yield ev
+            if exit_code != 0:
+                yield await _emit(f"add-host playbook failed (exit {exit_code})", err=True)
+                yield proto.event_done(exit_code)
+                return
+
+        secrets = [p for p in (root_pass, kin_pass, hacluster_pass, chap_pass) if p]
         ssh_user, ssh_pass = "kin", kin_pass
         for user, pwd in ssh_password_candidates(kin_pass, root_pass):
             if pwd:
                 ssh_user, ssh_pass = user, pwd
                 break
-        ansible_env = {
-            "HOME": str(WORK_DIR),
-            "KIN_ANSIBLE_USER": ssh_user,
-            "KIN_ANSIBLE_PASSWORD": ssh_pass,
-            "KIN_ANSIBLE_BECOME_PASSWORD": ssh_pass,
-            "KIN_HACLUSTER_PASSWORD": hacluster_pass,
-            "KIN_CHAP_PASSWORD": chap_pass,
-            "KIN_MAIL_DEPLOY_DIR": kin_mail_deploy_dir(),
-            "ANSIBLE_CONFIG": str(WORK_DIR / "ansible.cfg"),
-            "ANSIBLE_HOST_KEY_CHECKING": "False",
-            "ANSIBLE_RETRY_FILES_ENABLED": "False",
-            "ANSIBLE_LOCAL_TEMP": str(WORK_DIR / ".ansible" / "tmp"),
-        }
-        argv = [ansible_playbook, "-i", str(inv_path), str(play)]
-        yield await _emit(
-            f"ansible-playbook mail-add-host.yml new={plan.new_name} survivor={plan.survivor_name}"
-        )
-        exit_code = 1
-        async for ev in _stream_redacted(
-            argv,
-            cwd=ANSIBLE_DIR,
-            extra_env=ansible_env,
-            secrets=secrets,
-            transcript=DEPLOY_LAST_LOG,
-        ):
-            if ev.get("type") == "done":
-                exit_code = int(ev.get("exit_code") if ev.get("exit_code") is not None else 1)
-            else:
-                yield ev
-        if exit_code != 0:
-            yield await _emit(f"add-host playbook failed (exit {exit_code})", err=True)
-            yield proto.event_done(exit_code)
-            return
 
         # Stage a full peer /etc/kin-mail/config BEFORE console sync / markers.
         # sync_peer_ha_console_state refuses TOPOLOGY-only skeletons.
@@ -603,7 +655,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         # Same peer console path as Build HA: install :9443 on the new peer.
         # Promote local TOPOLOGY=2vm / ha-setup-complete only AFTER peer sync
         # succeeds so a failed peer console leaves attach_peer_eligible True
-        # for retry (survivor stays 1vm).
+        # for retry (survivor stays 1vm; with 2 pcs nodes finish_only applies).
         yield await _emit("Deploying admin console to the new peer (:9443)")
         peer_ok, peer_notes = await sync_peer_ha_console_state(
             peer_host, ssh_user, ssh_pass, secrets
@@ -612,9 +664,9 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
             yield await _emit(note, err=not peer_ok)
         if not peer_ok:
             yield await _emit(
-                "Add-host playbook succeeded but peer console deploy failed. "
-                "Survivor markers were not promoted (still 1vm) so Add Second "
-                "Server can be retried after fixing the peer.",
+                "Peer console deploy failed. Survivor markers were not promoted "
+                "(still 1vm). Retry Add Second Server — with two Pacemaker nodes "
+                "it finishes console sync only (does not re-run mail-add-host).",
                 err=True,
             )
             yield proto.event_done(1)
@@ -639,7 +691,8 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
             )
         except OSError as exc:
             yield await _emit(
-                f"peer console OK but local console config update failed: {exc}",
+                f"peer console OK but local console config update failed: {exc}. "
+                "Retry Add Second Server (finish path) to promote survivor markers.",
                 err=True,
             )
             yield proto.event_done(1)
@@ -663,6 +716,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
             "survivor": plan.survivor_name,
             "new_name": plan.new_name,
             "new_ip": plan.new_ip,
+            "finish_only": finish_only,
         }
         yield await _emit("ADD_HOST_JSON:" + json.dumps(result, separators=(",", ":")))
         yield await _emit(

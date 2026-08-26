@@ -1508,7 +1508,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls[0].kwargs.get("owner"), "kin-console")
             self.assertEqual(calls[0].kwargs.get("group"), "kin-console")
 
-    async def test_session_secret_push_failure_is_not_fatal(self) -> None:
+    async def test_session_secret_push_failure_is_fatal(self) -> None:
         import tempfile
         from pathlib import Path
         from unittest.mock import AsyncMock, patch
@@ -1567,11 +1567,9 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             ):
                 ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
 
-        # A session.secret push failure must not fail the whole HA build -
-        # unlike server-id/license.token, it only affects login-cookie
-        # continuity across a future VIP failover.
-        self.assertTrue(ok)
+        self.assertFalse(ok)
         self.assertTrue(any("Could not write session.secret" in n for n in notes))
+        self.assertTrue(any("Fail closed" in n for n in notes))
 
     async def test_no_local_license_token_skips_that_push(self) -> None:
         import tempfile

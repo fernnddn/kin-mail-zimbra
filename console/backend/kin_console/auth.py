@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -162,6 +163,10 @@ def wizard_actor(request: Request, response: Response) -> WizardActor:
     or legacy mailboxd running), always requires a normal console session. A
     leftover /opt/zimbra tree from a failed installer is not enough, and a
     2-server host that has only finished single-node install is not enough.
+
+    If any console user already exists (peer activate after Host A staged
+    users.json), never allow anonymous Super Admin — force login even before
+    ha-setup-complete lands.
     """
     from kin_privhelper.deploy_state import SETUP_USERNAME, is_mail_deployed
     from kin_privhelper.rbac import ROLE_SUPER_ADMIN
@@ -174,11 +179,17 @@ def wizard_actor(request: Request, response: Response) -> WizardActor:
         log.warning("is_mail_deployed raised; treating host as not deployed")
         deployed = False
 
-    if deployed:
+    try:
+        existing_users = users_mod.load_users()
+    except (OSError, ValueError, json.JSONDecodeError):
+        existing_users = []
+
+    if deployed or existing_users:
         user = require_console_user(request, response)
         return WizardActor(username=user.username, role=user.role, anonymous_setup=False)
 
-    # Pre-deploy: prefer a real session if present, else synthetic setup identity.
+    # Pre-deploy with empty users store: prefer a real session if present,
+    # else synthetic setup identity (Host A first-boot only).
     uname = current_username(request)
     if uname:
         record = users_mod.get_user(uname)

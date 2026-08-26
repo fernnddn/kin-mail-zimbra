@@ -53,14 +53,33 @@ class AttachPeerEligibleTests(unittest.TestCase):
             )
         )
 
-    def test_two_nodes_not_eligible(self) -> None:
-        self.assertFalse(
+    def test_two_nodes_finish_eligible(self) -> None:
+        """Ansible joined peer but survivor still 1vm — finish peer console."""
+        self.assertTrue(
             attach_peer_eligible(
                 topology="1vm",
                 live_nodes=["mail.example.test", "mail2.example.test"],
                 vip_ip="192.0.2.16",
                 vip_node="mail.example.test",
                 promoted="mail.example.test",
+                package_stub=False,
+            )
+        )
+        from kin_privhelper.add_host import attach_finish_only
+
+        self.assertTrue(
+            attach_finish_only(["mail.example.test", "mail2.example.test"])
+        )
+        self.assertFalse(attach_finish_only(["mail.example.test"]))
+
+    def test_three_nodes_not_eligible(self) -> None:
+        self.assertFalse(
+            attach_peer_eligible(
+                topology="1vm",
+                live_nodes=["a", "b", "c"],
+                vip_ip="192.0.2.16",
+                vip_node="a",
+                promoted="a",
                 package_stub=False,
             )
         )
@@ -104,9 +123,18 @@ class PlanAddHostTests(unittest.TestCase):
         self.assertEqual(plan.errors, ())
         self.assertEqual(plan.new_name, "mail3.example.test")
 
-    def test_refuse_two_live_nodes(self) -> None:
+    def test_finish_path_two_live_nodes(self) -> None:
+        plan = self._ok(
+            new_name="mail2.example.test",
+            new_ip="192.0.2.14",
+            live_nodes=["mail.example.test", "mail2.example.test"],
+        )
+        self.assertEqual(plan.errors, ())
+        self.assertTrue(any("skipping mail-add-host" in n for n in plan.notes))
+
+    def test_finish_path_refuses_unknown_peer(self) -> None:
         plan = self._ok(live_nodes=["mail.example.test", "mail2.example.test"])
-        self.assertTrue(any("exactly one live" in e for e in plan.errors))
+        self.assertTrue(any("not in the Pacemaker nodelist" in e for e in plan.errors))
 
     def test_refuse_new_equals_vip(self) -> None:
         plan = self._ok(new_ip="192.0.2.16")

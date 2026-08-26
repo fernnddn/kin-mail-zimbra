@@ -168,11 +168,17 @@ def ensure_users_store() -> None:
 
     An existing empty users.json (peer-console activate before Host A pushes
     credentials) is allowed so the service can bind :9443; login stays
-    fail-closed until users are written.
+    fail-closed until users are written. Corrupt JSON is treated as empty
+    (logged) so a truncated peer push cannot crash systemd forever.
     """
     path = users_file()
     if path.is_file():
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            log = __import__("logging").getLogger("kin_console.users")
+            log.warning("users.json unreadable (%s); treating as empty store", exc)
+            return
         users = _parse_users(raw if isinstance(raw, dict) else {})
         if users:
             # Persist auth_type / ad_username keys for older files.

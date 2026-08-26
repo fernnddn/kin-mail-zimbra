@@ -15,6 +15,7 @@ join_mode=check - per-node package/hardening/TLS install against the wizard
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -1348,6 +1349,70 @@ async def ensure_peer_console_runtime(
         )
         return False, notes
 
+    # Stage real users.json + session.secret before activate starts :9443 so the
+    # peer never offers anonymous wizard on a LAN-reachable empty store.
+    remote_users = "/tmp/kin-mail-peer-users.json"
+    remote_secret = "/tmp/kin-mail-peer-session.secret"
+    try:
+        from kin_console.users import load_users, users_json_text
+
+        local_users = load_users()
+        if not local_users:
+            notes.append(
+                "Local console users.json is empty; refusing peer activate that "
+                "would start without an admin credential."
+            )
+            return False, notes
+        users_body = users_json_text(local_users)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        notes.append(f"Could not read local users.json for peer staging: {exc}")
+        return False, notes
+    users_tmp = _write_secure_temp(users_body)
+    try:
+        u_code, u_text = await _scp_put(
+            host, user, password, secrets, users_tmp, remote_users, timeout=30
+        )
+    finally:
+        try:
+            users_tmp.unlink()
+        except OSError:
+            pass
+    if u_code != 0:
+        notes.append(
+            f"Could not stage users.json on the peer (exit {u_code}): {u_text}"
+        )
+        return False, notes
+
+    try:
+        from kin_console.auth import ensure_session_secret
+        from kin_console.settings import settings as console_settings
+
+        ensure_session_secret()
+        secret_body = console_settings.session_secret_file.read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError as exc:
+        notes.append(f"Could not read local session.secret for peer staging: {exc}")
+        return False, notes
+    if not secret_body:
+        notes.append("Local session.secret is empty; refusing peer activate.")
+        return False, notes
+    secret_tmp = _write_secure_temp(secret_body + "\n")
+    try:
+        s_code, s_text = await _scp_put(
+            host, user, password, secrets, secret_tmp, remote_secret, timeout=30
+        )
+    finally:
+        try:
+            secret_tmp.unlink()
+        except OSError:
+            pass
+    if s_code != 0:
+        notes.append(
+            f"Could not stage session.secret on the peer (exit {s_code}): {s_text}"
+        )
+        return False, notes
+
     peer_name = (host.name or "").strip()
     peer_ip = (host.ip or "").strip()
 
@@ -1360,6 +1425,8 @@ async def ensure_peer_console_runtime(
         "set -e; "
         f"[ ! -L {remote_tgz} ] || {{ echo 'refusing: {remote_tgz} is a symlink' >&2; exit 1; }}; "
         f"[ ! -L {remote_activate} ] || {{ echo 'refusing: {remote_activate} is a symlink' >&2; exit 1; }}; "
+        f"[ ! -L {remote_users} ] || {{ echo 'refusing: {remote_users} is a symlink' >&2; exit 1; }}; "
+        f"[ ! -L {remote_secret} ] || {{ echo 'refusing: {remote_secret} is a symlink' >&2; exit 1; }}; "
         "rm -rf /opt/kin-mail-console.new /tmp/kin-mail-console-extract; "
         "mkdir -p /tmp/kin-mail-console-extract; "
         f"tar -C /tmp/kin-mail-console-extract -xzf {remote_tgz}; "
@@ -1707,12 +1774,13 @@ async def _push_peer_identity_files(
         local_session_secret = settings.session_secret_file.read_text(encoding="utf-8").strip()
     except OSError as exc:
         notes.append(
-            f"Could not read local session.secret ({exc}); the peer keeps its own. "
-            "VIP failover will require a fresh login until this is retried."
+            f"Could not read local session.secret ({exc}); refusing peer identity "
+            "sync so both consoles keep a shared cookie signing key."
         )
-        return True
+        return False
     if not local_session_secret:
-        return True
+        notes.append("Local session.secret is empty; refusing peer identity sync.")
+        return False
     code, _text = await _push_peer_text_file(
         host,
         user,
@@ -1726,16 +1794,11 @@ async def _push_peer_identity_files(
         group="kin-console",
     )
     if code != 0:
-        # Best-effort, unlike server-id/license.token above: this only
-        # affects login-cookie continuity across a future VIP failover, not
-        # cluster identity or license correctness. Not worth failing the
-        # whole HA build over.
         notes.append(
-            f"Could not write session.secret on the peer (exit {code}); the "
-            "peer keeps its own. VIP failover will require a fresh login "
-            "until this is retried."
+            f"Could not write session.secret on the peer (exit {code}). "
+            "Fail closed so A/B login cookies stay consistent; retry peer sync."
         )
-        return True
+        return False
     notes.append(
         "Synced session.secret to the peer (shared cookie signing if both "
         "consoles are used; mail VIP failover does not move the Host A console)"

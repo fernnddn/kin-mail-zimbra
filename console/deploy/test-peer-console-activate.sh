@@ -43,11 +43,18 @@ else
   bad "activate must accept venv/bin/python3"
 fi
 
-if grep -q 'regenerating cert' "$SCRIPT" \
-  && grep -q 'subjectAltName' "$SCRIPT"; then
-  pass "activate re-mints TLS when peer IP missing from SAN"
+if grep -q 'kin-mail-peer-users.json' "$SCRIPT" \
+  && grep -q 'Installed staged users.json' "$SCRIPT"; then
+  pass "activate installs Host A staged users before listen"
 else
-  bad "activate must self-heal TLS SAN for peer IP"
+  bad "activate must install staged users.json before binding :9443"
+fi
+
+if grep -qE 'IP\( Address\)\?:' "$SCRIPT" \
+  || grep -q 'IP( Address)?' "$SCRIPT"; then
+  pass "TLS SAN check matches exact IP token"
+else
+  bad "activate TLS SAN self-heal must match exact IP, not substring"
 fi
 
 if grep -q 'subjectAltName' "$SCRIPT" \

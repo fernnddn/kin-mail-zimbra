@@ -285,7 +285,9 @@ class HaSyncWiringTests(unittest.TestCase):
             body.find("mark_ha_setup_complete()"),
         )
         self.assertIn("Deploying admin console to the new peer", body)
-        self.assertIn("Survivor markers were not promoted", body)
+        self.assertIn("finish peer console", body.lower())
+        self.assertIn("attach_finish_only", text)
+        self.assertIn("Finish path:", body)
 
     def test_forward_mutation_uses_password_sudo_wrapper(self) -> None:
         text = (

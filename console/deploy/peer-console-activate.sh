@@ -125,8 +125,9 @@ need_tls=0
 if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
   need_tls=1
 elif [ -n "$peer_ip" ] && command -v openssl >/dev/null 2>&1; then
-  # Self-heal: re-mint when management IP is missing from SAN (old localhost-only cert).
-  if ! openssl x509 -in "$CERT" -noout -text 2>/dev/null | grep -Fq "$peer_ip"; then
+  # Self-heal: re-mint when management IP is missing from SAN (exact IP token).
+  if ! openssl x509 -in "$CERT" -noout -ext subjectAltName 2>/dev/null \
+    | grep -Eoq "(^|[,[:space:]])IP( Address)?:${peer_ip}([,[:space:]]|$)"; then
     need_tls=1
     warn "TLS SAN missing ${peer_ip}; regenerating cert"
   fi
@@ -151,10 +152,17 @@ else
 fi
 
 # Peer activate: never mint an admin password / initial-admin-password.
-# Write an empty users.json so FastAPI startup can bind :9443; Host A pushes
-# the real credential store immediately after activate returns.
+# Prefer Host A staged users/secret under /tmp (scp'd before activate) so the
+# service never listens on LAN with an empty store + anonymous wizard.
 USERS_FILE="${DATA_ROOT}/users.json"
-if [ -f "$USERS_FILE" ]; then
+STAGED_USERS="/tmp/kin-mail-peer-users.json"
+STAGED_SECRET="/tmp/kin-mail-peer-session.secret"
+if [ -f "$STAGED_USERS" ]; then
+  [ ! -L "$STAGED_USERS" ] || { fail "refusing: ${STAGED_USERS} is a symlink"; exit 1; }
+  install -m 600 -o "${SVC_USER}" -g "${SVC_USER}" "$STAGED_USERS" "$USERS_FILE"
+  rm -f "$STAGED_USERS"
+  ok "Installed staged users.json from Host A (before listen)"
+elif [ -f "$USERS_FILE" ]; then
   ok "users.json present (will be overwritten by Host A sync if needed)"
 else
   printf '%s\n' '{"version":1,"users":[]}' >"$USERS_FILE"
@@ -163,7 +171,12 @@ else
   ok "Empty users.json placeholder (Host A pushes admin next; no local mint)"
 fi
 SECRET_FILE="${DATA_ROOT}/session.secret"
-if [ ! -f "$SECRET_FILE" ]; then
+if [ -f "$STAGED_SECRET" ]; then
+  [ ! -L "$STAGED_SECRET" ] || { fail "refusing: ${STAGED_SECRET} is a symlink"; exit 1; }
+  install -m 600 -o "${SVC_USER}" -g "${SVC_USER}" "$STAGED_SECRET" "$SECRET_FILE"
+  rm -f "$STAGED_SECRET"
+  ok "Installed staged session.secret from Host A"
+elif [ ! -f "$SECRET_FILE" ]; then
   # Placeholder so the service can start; Host A overwrites with the shared secret.
   "$PEER_PY" - <<PY
 import secrets
