@@ -127,13 +127,19 @@ class PlanAddHostTests(unittest.TestCase):
         plan = self._ok(
             new_name="mail2.example.test",
             new_ip="192.0.2.14",
+            retired_name="mail-old.example.test",
+            retired_ip="192.0.2.99",
             live_nodes=["mail.example.test", "mail2.example.test"],
         )
         self.assertEqual(plan.errors, ())
         self.assertTrue(any("skipping mail-add-host" in n for n in plan.notes))
 
     def test_finish_path_refuses_unknown_peer(self) -> None:
-        plan = self._ok(live_nodes=["mail.example.test", "mail2.example.test"])
+        plan = self._ok(
+            retired_name="mail-old.example.test",
+            retired_ip="192.0.2.99",
+            live_nodes=["mail.example.test", "mail2.example.test"],
+        )
         self.assertTrue(any("not in the Pacemaker nodelist" in e for e in plan.errors))
 
     def test_refuse_new_equals_vip(self) -> None:
