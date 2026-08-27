@@ -1231,6 +1231,10 @@ export default function ClusterPage() {
             code === 0 ? "done" : "failed",
             code === 0 ? undefined : `exit ${code}`,
           );
+          // These messages say "see the log below", but the log lives on the
+          // Activity tab - so on the Status tab they pointed at nothing. Show
+          // the operator the output instead of telling them to go find it.
+          if (code !== 0) setTab("activity");
           void refresh();
         }
       } catch {
@@ -1242,8 +1246,9 @@ export default function ClusterPage() {
         es.close();
         esRef.current = null;
         setBusy(false);
-        setMessage("Lost connection to the maintenance stream.");
+        setMessage("Lost connection to the maintenance stream. The last output is on the Activity log tab.");
         endTaskWith(taskId, "failed", "lost connection to the stream");
+        setTab("activity");
       }
     };
   }
