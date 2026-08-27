@@ -1533,6 +1533,8 @@ export default function ClusterPage() {
     healthy:
       !(cluster.offline || []).includes(name) && !(cluster.stale_peers || []).includes(name),
     ip: ipForNode(name, cluster.node_ips, cluster.local_host),
+    promoted: cluster.promoted === name,
+    vip: cluster.vip_node === name ? cluster.vip_ip || undefined : undefined,
   }));
   const standby = new Set(cluster.standby || []);
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
@@ -1713,7 +1715,7 @@ export default function ClusterPage() {
 
   return (
     <ConsoleChrome subtitle="Cluster">
-      <Page>
+      <Page $wide>
         <PageHeader
           icon={<ClusterIcon />}
           title="Cluster"
@@ -1853,6 +1855,8 @@ export default function ClusterPage() {
               <ClusterTopology
                 topology="2vm"
                 mailNodes={mailTopo}
+                drbdUpToDate={cluster.drbd_uptodate}
+                drbdSyncPercent={cluster.drbd_sync_percent}
                 observability={cluster.observability || { status: "absent" }}
                 ops={ops}
                 busy={busy || probing}

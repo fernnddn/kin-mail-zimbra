@@ -598,9 +598,16 @@ export function FieldLabel({
   );
 }
 
-export const Page = styled.div`
+/** $wide: data-dense pages (Cluster, Monitoring) use the whole screen.
+ *
+ * 960px is right for a form but wastes most of a 1080p display on a dashboard,
+ * which is why the Cluster page needed scrolling for content that had room to
+ * sit side by side. Forms keep the narrow measure - a login box stretched to
+ * 1900px is not an improvement.
+ */
+export const Page = styled.div<{ $wide?: boolean }>`
   padding: 1.5rem 1.5rem 2rem;
-  max-width: 960px;
+  max-width: ${(p) => (p.$wide ? "1680px" : "960px")};
   width: 100%;
   margin: 0 auto;
   animation: kin-page-in ${theme.motion.page} cubic-bezier(0.16, 1, 0.3, 1);

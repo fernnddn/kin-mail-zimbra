@@ -16,6 +16,10 @@ type MailNode = {
   name: string;
   healthy: boolean;
   ip?: string;
+  /** Promoted node serves mail; the other is the replica. */
+  promoted?: boolean;
+  /** Floating mail IP currently answering on this node. */
+  vip?: string;
 };
 
 const Wrap = styled.section`
@@ -91,6 +95,8 @@ function NodeGlyph({
   ip,
   healthy,
   placeholder,
+  role,
+  vip,
 }: {
   x: number;
   y: number;
@@ -99,17 +105,23 @@ function NodeGlyph({
   ip?: string;
   healthy: boolean;
   placeholder?: boolean;
+  role?: string;
+  vip?: string;
 }) {
   const stroke = placeholder ? MUTED : healthy ? OK : DOWN;
   const fill = placeholder ? theme.surface[50] : "#fff";
   const addr = (ip || "").trim();
+  const floating = (vip || "").trim();
+  // The card grows for whatever it actually has to say, so a replica with no
+  // VIP does not leave a block of empty space where the badge would go.
+  const height = 76 + (addr ? 16 : 0) + (role ? 16 : 0);
   return (
     <g>
       <rect
         x={x - 86}
-        y={y - 44}
+        y={y - height / 2}
         width={172}
-        height={addr ? 92 : 76}
+        height={height}
         rx={14}
         fill={fill}
         stroke={stroke}
@@ -117,10 +129,10 @@ function NodeGlyph({
         strokeDasharray={placeholder ? "5 4" : undefined}
         filter={placeholder ? undefined : "url(#topoShadow)"}
       />
-      <circle cx={x - 62} cy={y} r={7} fill={placeholder ? MUTED : stroke} />
+      <circle cx={x - 62} cy={y - height / 2 + 22} r={7} fill={placeholder ? MUTED : stroke} />
       <text
         x={x - 46}
-        y={y - 12}
+        y={y - height / 2 + 18}
         fill={SUB}
         fontSize={10}
         fontWeight={600}
@@ -128,13 +140,39 @@ function NodeGlyph({
       >
         {subtitle.toUpperCase()}
       </text>
-      <text x={x - 46} y={y + 8} fill={INK} fontSize={13} fontWeight={650}>
+      <text x={x - 46} y={y - height / 2 + 38} fill={INK} fontSize={13} fontWeight={650}>
         {title.length > 22 ? `${title.slice(0, 20)}...` : title}
       </text>
       {addr ? (
-        <text x={x - 46} y={y + 26} fill={SUB} fontSize={11}>
+        <text x={x - 46} y={y - height / 2 + 56} fill={SUB} fontSize={11}>
           {addr}
         </text>
+      ) : null}
+      {role ? (
+        <g>
+          <rect
+            x={x - 46}
+            y={y + height / 2 - 26}
+            // Sized from the text so a short "REPLICA" does not sit in a pill
+            // padded out to fit the longest possible label.
+            width={Math.round(
+              (floating ? `${role} - VIP ${floating}` : role).length * 5.9 + 16,
+            )}
+            height={17}
+            rx={8.5}
+            fill={floating ? "rgba(0, 97, 255, 0.10)" : theme.surface[100]}
+          />
+          <text
+            x={x - 38}
+            y={y + height / 2 - 14}
+            fill={floating ? theme.accent : SUB}
+            fontSize={9.5}
+            fontWeight={700}
+            letterSpacing="0.03em"
+          >
+            {floating ? `${role} - VIP ${floating}` : role}
+          </text>
+        </g>
       ) : null}
     </g>
   );
@@ -148,6 +186,8 @@ export function ClusterTopology({
   busy,
   onAdd,
   onRemove,
+  drbdUpToDate,
+  drbdSyncPercent,
 }: {
   topology?: "1vm" | "2vm";
   mailNodes: MailNode[];
@@ -156,6 +196,8 @@ export function ClusterTopology({
   busy?: boolean;
   onAdd: () => void;
   onRemove: () => void;
+  drbdUpToDate?: boolean;
+  drbdSyncPercent?: number | null;
 }) {
   if (topology === "1vm") {
     const node = mailNodes[0] || { name: "This server", healthy: true };
@@ -206,7 +248,18 @@ export function ClusterTopology({
   const canAdd = ops && (observability.can_add ?? obsStatus === "absent");
   const canRemove = ops && (observability.can_remove ?? obsStatus === "unreachable");
 
-  const mailLink = cable(hasLeft && hasRight && left.healthy && right.healthy, hasLeft && hasRight);
+  // The link between the mail nodes IS the DRBD replication, so say what it
+  // is doing rather than just naming the protocol.
+  const drbdLabel = drbdUpToDate
+    ? "DRBD IN SYNC"
+    : typeof drbdSyncPercent === "number"
+      ? `DRBD SYNCING ${drbdSyncPercent.toFixed(0)}%`
+      : "DRBD";
+  const drbdHealthy = Boolean(drbdUpToDate);
+  const mailLink = cable(
+    hasLeft && hasRight && left.healthy && right.healthy && drbdHealthy,
+    hasLeft && hasRight,
+  );
   const leftObs = cable(hasLeft && left.healthy && obsHealthy, obsPresent);
   const rightObs = cable(hasRight && right.healthy && obsHealthy, obsPresent);
 
@@ -254,7 +307,7 @@ export function ClusterTopology({
             strokeDasharray={obsPresent ? undefined : "5 4"}
           />
           <text x={320} y={222} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
-            DRBD
+            {drbdLabel}
           </text>
           <text x={228} y={118} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
             qdevice / SBD
@@ -276,6 +329,8 @@ export function ClusterTopology({
             ip={left.ip}
             healthy={left.healthy}
             placeholder={!hasLeft}
+            role={hasLeft ? (left.promoted ? "SERVING MAIL" : "REPLICA") : undefined}
+            vip={left.promoted ? left.vip : undefined}
           />
           <NodeGlyph
             x={500}
@@ -285,6 +340,8 @@ export function ClusterTopology({
             ip={right.ip}
             healthy={right.healthy}
             placeholder={!hasRight}
+            role={hasRight ? (right.promoted ? "SERVING MAIL" : "REPLICA") : undefined}
+            vip={right.promoted ? right.vip : undefined}
           />
         </svg>
       </SvgWrap>
