@@ -61,6 +61,9 @@ jobs:
       - name: ssh-password-toggle tests
         run: bash install/lib/test-ssh-password-toggle.sh
 
+      - name: host-firewall peer derivation tests
+        run: bash install/lib/test-host-firewall-peers.sh
+
       - name: ensure-outbound-dns helper tests
         run: bash install/lib/test-ensure-outbound-dns.sh
 

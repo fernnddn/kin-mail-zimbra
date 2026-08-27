@@ -454,6 +454,20 @@ function TopologyGlyph() {
   );
 }
 
+function MailServiceGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="2.5" y="5" width="19" height="14" rx="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M3.2 6.6l8.1 5.2a1.3 1.3 0 001.4 0l8.1-5.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function ServerGlyph() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -837,6 +851,32 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
   if (topology !== "2vm") return cards;
 
   const conflict = Boolean(cluster.promoted_conflict);
+  // Mail service, stated plainly. The operator could see DRBD, VIP and quorum
+  // but had no way to tell from this page whether Zimbra itself was actually
+  // serving mail (live Phase 6 QA: the whole stack was down and the page never
+  // said so in as many words).
+  const zNode = (cluster.zimbra_node || "").trim();
+  const zPromoted = (cluster.promoted || "").trim();
+  const zimbraTone: StatusTone = !zNode ? "warn" : zNode === zPromoted ? "ok" : "warn";
+  cards.push(
+    <OverviewCard key="zimbra" $tone={zimbraTone}>
+      <IconChip $tone={zimbraTone}>
+        <MailServiceGlyph />
+      </IconChip>
+      <OverviewBody>
+        <OverviewLabel>Mail service</OverviewLabel>
+        <OverviewValue>{zNode ? "Running" : "Not running"}</OverviewValue>
+        <OverviewSub $tone={zimbraTone}>
+          {!zNode
+            ? "Zimbra is not started on any node - mail is not being delivered"
+            : zNode === zPromoted
+              ? `Zimbra on ${zNode}`
+              : `Zimbra on ${zNode}, but ${zPromoted || "another node"} holds the DRBD Master`}
+        </OverviewSub>
+      </OverviewBody>
+    </OverviewCard>,
+  );
+
   const servingTone: StatusTone = conflict ? "warn" : cluster.promoted ? "ok" : "warn";
   cards.push(
     <OverviewCard key="serving" $tone={servingTone}>

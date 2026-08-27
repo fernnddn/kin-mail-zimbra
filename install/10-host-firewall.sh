@@ -32,10 +32,20 @@ case "${SERVER_IP:-}" in
 ${SERVER_IP}
 EOF
     CLUSTER_NET="${_a}.${_b}.${_c}.0/24"
-    # Conventional KIN Mail lab layout relative to this host's /24 - override via env if different.
-    PEER_A="${KIN_PEER_A_IP:-${_a}.${_b}.${_c}.13}"
-    PEER_B="${KIN_PEER_B_IP:-${_a}.${_b}.${_c}.12}"
-    MON_IP="${KIN_MON_IP:-${_a}.${_b}.${_c}.14}"
+    # Real addresses first: the wizard writes PEER_HOST_IP and
+    # OBSERVABILITY_VM_IP into /etc/kin-mail/config, and SERVER_IP is this
+    # host. The .13/.12/.14 values below are a last-resort guess from an old
+    # lab layout, and on any other deployment they name machines that do not
+    # exist - a live Phase 6 pair on .30/.31/.29 got per-peer corosync, DRBD
+    # and pcsd rules pointing at .13/.12/.14. Nothing broke only because the
+    # /24 LAN rules alongside them still matched; tighten those and the
+    # cluster would have lost its ring on the next apply.
+    PEER_A="${KIN_PEER_A_IP:-${SERVER_IP}}"
+    PEER_B="${KIN_PEER_B_IP:-${PEER_HOST_IP:-}}"
+    MON_IP="${KIN_MON_IP:-${OBSERVABILITY_VM_IP:-}}"
+    # Only guess when the config genuinely has nothing to say.
+    [ -n "$PEER_B" ] || PEER_B="${_a}.${_b}.${_c}.12"
+    [ -n "$MON_IP" ] || MON_IP="${_a}.${_b}.${_c}.14"
     ;;
 esac
 
