@@ -233,6 +233,82 @@ def drbd_sync_percent(status: str) -> float | None:
         return None
 
 
+def parse_quorate(quorum_text: str) -> bool | None:
+    """True/False from `pcs quorum status`, None when it could not be read.
+
+    None matters: `pcs quorum status` fails outright when corosync is down, and
+    "could not tell" must never be rendered as "quorum is fine".
+    """
+    if not (quorum_text or "").strip():
+        return None
+    if re.search(r"Quorate:\s*Yes", quorum_text, flags=re.I):
+        return True
+    if re.search(r"Quorate:\s*No", quorum_text, flags=re.I):
+        return False
+    return None
+
+
+def parse_vote_totals(quorum_text: str) -> tuple[int | None, int | None]:
+    """(total_votes, quorum_needed) from the Votequorum information block."""
+    total = re.search(r"Total votes:\s*(\d+)", quorum_text or "", flags=re.I)
+    needed = re.search(r"Quorum:\s*(\d+)", quorum_text or "", flags=re.I)
+    return (
+        int(total.group(1)) if total else None,
+        int(needed.group(1)) if needed else None,
+    )
+
+
+def quorum_recovery_hint(
+    *,
+    quorate: bool | None,
+    peer_offline: bool,
+    observability_reachable: bool,
+) -> str:
+    """Operator-facing explanation when the cluster has lost quorum.
+
+    The 2-node + qdevice layout carries 3 votes and needs 2. Losing the peer
+    AND the Observability witness at the same time leaves the survivor on 1
+    vote, so `no-quorum-policy=stop` correctly stops mail even though this node
+    is perfectly healthy. That is the right default (it is what prevents
+    split-brain), but the console used to show nothing about it at all - no
+    cause, no way back - so the operator had no idea why a healthy node had
+    stopped serving mail.
+
+    Deliberately returns instructions rather than performing the recovery. With
+    the Observability VM down the SBD fencing LUN is down with it, so forcing
+    quorum here cannot be fenced: if the peer is actually alive behind a
+    network partition, both nodes would go Primary and DRBD would diverge.
+    That call needs a human who can confirm the peer is genuinely dead.
+    """
+    if quorate is not False:
+        return ""
+    if peer_offline and not observability_reachable:
+        return (
+            "Quorum lost: the peer mail node and the Observability witness are "
+            "both unreachable, so this node holds 1 of 3 votes and Pacemaker "
+            "has stopped mail here on purpose. Bring back EITHER the peer or "
+            "the Observability VM and mail restarts on its own. Only if you "
+            "have confirmed the peer is genuinely powered off (not just "
+            "unreachable) run `pcs quorum unblock --force` on this node - with "
+            "Observability down there is no SBD fencing, so doing that while "
+            "the peer is actually alive will split-brain DRBD."
+        )
+    if peer_offline:
+        return (
+            "Quorum lost with the peer mail node unreachable. Check the "
+            "Observability VM is voting, then bring the peer back."
+        )
+    if not observability_reachable:
+        return (
+            "Quorum lost with the Observability witness unreachable. Bring the "
+            "Observability VM back, or re-add it from the Cluster page."
+        )
+    return (
+        "Quorum lost while both peers look reachable - check corosync ring "
+        "connectivity between the nodes."
+    )
+
+
 def qdevice_voting(quorum_text: str) -> bool:
     """True if pcs quorum output shows a live Qdevice with at least one vote."""
     if not re.search(r"Quorate:\s*Yes", quorum_text, flags=re.I):
@@ -694,6 +770,8 @@ async def gather_status() -> dict[str, Any]:
     stale_peers = [n for n in addrs if n not in live]
     fc_ok, fc_lines = await _failcounts(nodes)
     observability = await _observability_snapshot(corosync_txt)
+    quorate = parse_quorate(quorum)
+    votes_total, votes_needed = parse_vote_totals(quorum)
     from .corosync_stub import is_harmless_package_stub_cluster
     from .deploy_state import saved_wizard_topology
 
@@ -721,6 +799,14 @@ async def gather_status() -> dict[str, Any]:
         "drbd_uptodate": drbd_both_uptodate(drbd),
         "drbd_sync_percent": drbd_sync_percent(drbd),
         "qdevice_ok": qdevice_voting(quorum),
+        "quorate": quorate,
+        "votes_total": votes_total,
+        "votes_needed": votes_needed,
+        "quorum_hint": quorum_recovery_hint(
+            quorate=quorate,
+            peer_offline=bool(offline) or bool(stale_peers),
+            observability_reachable=bool(observability.get("reachable")),
+        ),
         "observability": observability,
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
@@ -865,6 +951,12 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield await _emit(f"drbd_sync_percent={st.get('drbd_sync_percent')}")
         yield await _emit(f"qdevice_ok={st['qdevice_ok']}")
         yield await _emit(f"vip={st.get('vip_ip') or '-'} on={st.get('vip_node') or '-'}")
+        yield await _emit(
+            f"quorate={st.get('quorate')} "
+            f"votes={st.get('votes_total')}/{st.get('votes_needed')}"
+        )
+        if st.get("quorum_hint"):
+            yield await _emit(str(st["quorum_hint"]), err=True)
         obs = st.get("observability") or {}
         yield await _emit(
             "observability="
@@ -906,6 +998,10 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "drbd_uptodate": st["drbd_uptodate"],
             "drbd_sync_percent": st.get("drbd_sync_percent"),
             "qdevice_ok": st["qdevice_ok"],
+            "quorate": st.get("quorate"),
+            "votes_total": st.get("votes_total"),
+            "votes_needed": st.get("votes_needed"),
+            "quorum_hint": st.get("quorum_hint") or "",
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),

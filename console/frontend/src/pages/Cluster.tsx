@@ -41,6 +41,10 @@ type ClusterSnap = {
   vip_ip?: string | null;
   vip_node?: string | null;
   qdevice_ok?: boolean;
+  quorate?: boolean | null;
+  votes_total?: number | null;
+  votes_needed?: number | null;
+  quorum_hint?: string;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
   offline?: string[];
@@ -1696,6 +1700,17 @@ export default function ClusterPage() {
           title="Cluster"
           subtitle="Take the peer mail node offline for planned work, or move the Master back after failover. You cannot Enter Maintenance or Remove Host on the server serving this console."
         />
+        {cluster.quorum_hint ? (
+          <WarnBox role="alert">
+            <strong>Mail is stopped on this node: the cluster has lost quorum.</strong>
+            {typeof cluster.votes_total === "number" &&
+            typeof cluster.votes_needed === "number" ? (
+              <> This node holds {cluster.votes_total} of the {cluster.votes_needed} votes
+              it needs.</>
+            ) : null}{" "}
+            {cluster.quorum_hint}
+          </WarnBox>
+        ) : null}
         {cluster.maintenance_active ? (
           <WarnBox>
             A node is in maintenance ({(cluster.standby || []).join(", ") || "unknown"}). Deploy
