@@ -792,6 +792,20 @@ async def cmd_remove_host(args: dict[str, Any] | None = None) -> AsyncIterator[d
                     )
         else:
             yield await _emit("forced path: skipping departing-node uninstall (unreachable)")
+            # The retired node is still fully installed: Zimbra, DRBD metadata,
+            # corosync/pacemaker config and the console all survive on it. If it
+            # is ever powered back on it must NOT be handed to Add Host as-is -
+            # a stale DRBD peer and an old CIB is exactly how a re-add turns
+            # into a split-brain instead of a clean join.
+            yield await _emit(
+                f"IMPORTANT: {target} was removed while unreachable, so nothing "
+                "was uninstalled on it. Before you ever Add Host with that "
+                "machine again, either rebuild the VM from scratch or boot it "
+                "DISCONNECTED from this cluster and run "
+                f"{uninstall_script()} --decommission on it first. Re-adding it "
+                "still installed will not give you a clean node.",
+                err=True,
+            )
 
         if uninstall_warned:
             yield await _emit(
