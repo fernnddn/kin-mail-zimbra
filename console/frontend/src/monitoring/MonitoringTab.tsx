@@ -261,6 +261,7 @@ export function MonitoringTab() {
   const [gauges, setGauges] = useState<Record<string, { label: string; unit: string; value: number | null }>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [unavailable, setUnavailable] = useState(false);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -318,6 +319,7 @@ export function MonitoringTab() {
       );
       if (!alive.current) return;
       setGauges(next);
+      setUnavailable(good.length === 0);
       if (good.length === 0) {
         setError(
           "Metrics are not available on this node yet. They are collected by the " +
@@ -335,10 +337,18 @@ export function MonitoringTab() {
     setLoading(true);
     void load(range);
     // Short windows are live; a year of history does not need re-fetching often.
-    const period = range === "1h" ? 30000 : range === "6h" ? 60000 : 300000;
+    // When there is no Prometheus at all, back right off: polling every 30s
+    // fires a dozen failing requests a minute for as long as the tab is open.
+    const period = unavailable
+      ? 300000
+      : range === "1h"
+        ? 30000
+        : range === "6h"
+          ? 60000
+          : 300000;
     const id = window.setInterval(() => void load(range), period);
     return () => window.clearInterval(id);
-  }, [range, load]);
+  }, [range, load, unavailable]);
 
   if (loading && charts.length === 0 && !error) {
     return (

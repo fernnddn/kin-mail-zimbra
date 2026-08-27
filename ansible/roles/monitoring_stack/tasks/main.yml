@@ -37,11 +37,40 @@
     owner: root
     group: root
     mode: "0644"
-    # A malformed scrape config takes Prometheus down on restart; refuse to
-    # install one the binary itself rejects.
-    validate: promtool check config %s
   notify: restart prometheus
   when: not ansible_check_mode
+  tags: [monitoring, config]
+
+# Validated as a separate step rather than the template's `validate:` so a
+# distribution without promtool degrades to a warning instead of failing the
+# deploy with a confusing "validation command not found". The check still runs
+# BEFORE flush_handlers, so a rejected config can never reach a restart.
+- name: Look for promtool
+  ansible.builtin.stat:
+    path: /usr/bin/promtool
+  register: monitoring_stack_promtool
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Validate the scrape configuration
+  ansible.builtin.command:
+    cmd: /usr/bin/promtool check config {{ monitoring_stack_config }}
+  register: monitoring_stack_promtool_check
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - monitoring_stack_promtool.stat.exists | default(false)
+  tags: [monitoring, config]
+
+- name: Warn when the scrape configuration could not be validated
+  ansible.builtin.debug:
+    msg: >-
+      promtool is not installed, so {{ monitoring_stack_config }} was written
+      without validation. Prometheus will reject a malformed file on restart.
+  when:
+    - not ansible_check_mode
+    - not (monitoring_stack_promtool.stat.exists | default(false))
   tags: [monitoring, config]
 
 - name: Restart node_exporter when its listen address changed
@@ -93,17 +122,36 @@
       http://{{ monitoring_stack_listen }}/api/v1/query?query=up%7Bjob%3D%22node%22%7D
     return_content: true
   register: monitoring_stack_up
+  # Every hop is defaulted: during startup this can answer 503 with a non-JSON
+  # body, and reaching into .json.data then raises an undefined-attribute error
+  # that aborts the play instead of simply retrying.
   until:
-    - monitoring_stack_up.status == 200
-    - (monitoring_stack_up.json.data.result | default([]) | length) > 0
-    - (monitoring_stack_up.json.data.result | default([])
-       | map(attribute='value') | map('last') | select('equalto', '1') | list | length) > 0
+    - (monitoring_stack_up.status | default(0)) == 200
+    - (monitoring_stack_up.json | default({}, true)).get('data', {}).get('result', [])
+      | map(attribute='value') | map('last') | select('equalto', '1') | list | length > 0
   retries: 20
   delay: 3
+  # The uri module hard-fails on a non-2xx, which would abort before `until`
+  # ever retried. Let it report, and judge the outcome in the assert below.
+  failed_when: false
   changed_when: false
-  # An installed-but-empty Prometheus renders an empty Monitoring tab with no
-  # explanation, which is exactly the class of silent failure this release is
-  # trying to remove.
+  when: not ansible_check_mode
+  tags: [monitoring, verify]
+
+# An installed-but-empty Prometheus renders an empty Monitoring tab with no
+# explanation - exactly the silent-failure class this release keeps removing.
+- name: Fail if node metrics never started arriving
+  ansible.builtin.assert:
+    that:
+      - (monitoring_stack_up.status | default(0)) == 200
+      - (monitoring_stack_up.json | default({}, true)).get('data', {}).get('result', [])
+        | map(attribute='value') | map('last') | select('equalto', '1') | list | length > 0
+    fail_msg: >-
+      Prometheus is up but is not scraping node_exporter
+      ({{ monitoring_stack_node_exporter_listen }}). The console Monitoring tab
+      would show empty charts with no explanation. Check
+      `systemctl status {{ monitoring_stack_node_exporter_service }}` and
+      `journalctl -u {{ monitoring_stack_prometheus_service }}` on this node.
   when: not ansible_check_mode
   tags: [monitoring, verify]
 
