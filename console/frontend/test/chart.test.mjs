@@ -114,5 +114,17 @@ chk("hover finds the sample nearest that TIME", C.nearestIndexInDomain(late, 1, 
 chk("hover before the data picks the first sample", C.nearestIndexInDomain(late, 0, dom), 0);
 chk("hover without a domain falls back to index", C.nearestIndexInDomain(late, 0.5, undefined), 1);
 
+// --- peak / low / average (Phase 6 QA asked to see the extremes) -----------
+const st = C.seriesStats([[0, 10], [1, 50], [2, 30]]);
+chk("stats find the extremes and the mean", [st.min, st.max, st.avg], [10, 50, 30]);
+chk("gaps are ignored, not counted as zero",
+  C.seriesStats([[0, 10], [1, null], [2, 30]]), { min: 10, max: 30, avg: 20 });
+chk("an all-gap series has no stats",
+  C.seriesStats([[0, null]]), { min: null, max: null, avg: null });
+chk("an empty series has no stats", C.seriesStats([]), { min: null, max: null, avg: null });
+chk("a flat series reports the same value three times",
+  C.seriesStats([[0, 7], [1, 7]]), { min: 7, max: 7, avg: 7 });
+ok("a zone label is always produced", typeof C.localZoneLabel() === "string" && C.localZoneLabel().length > 0);
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

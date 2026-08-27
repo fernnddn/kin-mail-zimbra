@@ -10,8 +10,10 @@ import {
   formatValue,
   latestValue,
   linePaths,
+  localZoneLabel,
   nearestIndexInDomain,
   pointTimeLabel,
+  seriesStats,
   xFraction,
   timeTicks,
   usageTone,
@@ -148,6 +150,21 @@ const ChartNow = styled.span`
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: ${theme.surface[800]};
+`;
+
+const Stats = styled.div`
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: ${theme.muted};
+
+  b {
+    color: ${theme.surface[700]};
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
 `;
 
 const Axis = styled.div`
@@ -341,6 +358,7 @@ function Chart({ data }: { data: SeriesResp }) {
   const fill = areaPath(points, { width: W, height: H }, bounds, domain);
   const now = latestValue(points);
   const ticks = timeTicks(points, 4, domain);
+  const stats = seriesStats(points);
   const gid = `mon-grad-${data.metric}`;
   const hasData = segments.length > 0;
   const [hover, setHover] = useState<number | null>(null);
@@ -424,6 +442,17 @@ function Chart({ data }: { data: SeriesResp }) {
               </Tick>
             ))}
           </Axis>
+          <Stats>
+            <span>
+              Peak <b>{formatValue(stats.max, data.unit)}</b>
+            </span>
+            <span>
+              Low <b>{formatValue(stats.min, data.unit)}</b>
+            </span>
+            <span>
+              Avg <b>{formatValue(stats.avg, data.unit)}</b>
+            </span>
+          </Stats>
         </Plot>
       ) : (
         <Empty>No samples in this window yet.</Empty>
@@ -542,7 +571,8 @@ export function MonitoringTab() {
           ))}
         </RangeGroup>
         <Hint style={{ margin: 0 }}>
-          Collected on this server and kept for a year. Metrics never leave the appliance.
+          Times shown in {localZoneLabel()}. Collected on this server and kept for a year;
+          metrics never leave the appliance.
         </Hint>
       </Bar>
 

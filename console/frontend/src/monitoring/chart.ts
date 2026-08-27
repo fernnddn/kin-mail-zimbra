@@ -241,6 +241,46 @@ export function pointTimeLabel(ts: number, longRange: boolean): string {
     : time;
 }
 
+/** Peak, low and mean of a series, ignoring gaps. */
+export function seriesStats(points: Point[]): {
+  min: number | null;
+  max: number | null;
+  avg: number | null;
+} {
+  const vals = points.map((p) => p[1]).filter((v): v is number => v !== null);
+  if (vals.length === 0) return { min: null, max: null, avg: null };
+  let min = vals[0];
+  let max = vals[0];
+  let sum = 0;
+  for (const v of vals) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  return { min, max, avg: sum / vals.length };
+}
+
+/** The viewer's timezone, so a chart's clock is never ambiguous.
+ *
+ * Timestamps are rendered in the BROWSER's zone, which is not necessarily the
+ * server's. Saying which one avoids the "these times look wrong" reading when
+ * the two differ.
+ */
+export function localZoneLabel(): string {
+  try {
+    const parts = new Intl.DateTimeFormat([], { timeZoneName: "short" }).formatToParts(new Date());
+    const tz = parts.find((p) => p.type === "timeZoneName");
+    if (tz?.value) return tz.value;
+  } catch {
+    /* fall through */
+  }
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+  } catch {
+    return "local time";
+  }
+}
+
 /** Tone for a percentage gauge: quiet until it actually matters. */
 export function usageTone(percent: number | null, unit: string): "ok" | "warn" | "danger" {
   if (unit !== "percent" || percent === null) return "ok";
