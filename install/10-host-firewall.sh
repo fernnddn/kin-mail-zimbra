@@ -43,9 +43,11 @@ EOF
     PEER_A="${KIN_PEER_A_IP:-${SERVER_IP}}"
     PEER_B="${KIN_PEER_B_IP:-${PEER_HOST_IP:-}}"
     MON_IP="${KIN_MON_IP:-${OBSERVABILITY_VM_IP:-}}"
-    # Only guess when the config genuinely has nothing to say.
-    [ -n "$PEER_B" ] || PEER_B="${_a}.${_b}.${_c}.12"
-    [ -n "$MON_IP" ] || MON_IP="${_a}.${_b}.${_c}.14"
+    # No guessing. An unknown peer stays empty and its per-host rule is simply
+    # skipped: a single-node install has no peer and no witness, and inventing
+    # an address there would put rules for a machine that does not exist into
+    # the live ruleset. Real peers are still covered by the CLUSTER_NET rules
+    # below either way.
     ;;
 esac
 
@@ -173,28 +175,37 @@ apply_rules() {
   ufw allow from "$CLUSTER_NET" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN'
 
   # Cluster / HA - peers + mon only (never any)
+  # allow_from <addr> <port-spec> <proto> <comment>: silently skips an address
+  # the config never supplied, so a single-node install does not get rules for
+  # a peer it does not have.
+  allow_from() {
+    local addr="$1" ports="$2" proto="$3" note="$4"
+    [ -n "$addr" ] || return 0
+    ufw allow from "$addr" to any port "$ports" proto "$proto" comment "$note"
+  }
+
   # Corosync kronosnet
-  ufw allow from "$PEER_A" to any port 5404:5405 proto udp comment 'corosync knet'
-  ufw allow from "$PEER_B" to any port 5404:5405 proto udp comment 'corosync knet'
-  ufw allow from "$MON_IP" to any port 5404:5405 proto udp comment 'corosync/mon'
+  allow_from "$PEER_A" 5404:5405 udp 'corosync knet'
+  allow_from "$PEER_B" 5404:5405 udp 'corosync knet'
+  allow_from "$MON_IP" 5404:5405 udp 'corosync/mon'
   # Also allow whole LAN for corosync in case VIP/host moves - still not internet
-  ufw allow from "$CLUSTER_NET" to any port 5404:5405 proto udp comment 'corosync LAN'
+  allow_from "$CLUSTER_NET" 5404:5405 udp 'corosync LAN'
 
   # DRBD replication (live config uses 7788)
-  ufw allow from "$PEER_A" to any port 7788 proto tcp comment 'DRBD'
-  ufw allow from "$PEER_B" to any port 7788 proto tcp comment 'DRBD'
-  ufw allow from "$CLUSTER_NET" to any port 7788 proto tcp comment 'DRBD LAN'
+  allow_from "$PEER_A" 7788 tcp 'DRBD'
+  allow_from "$PEER_B" 7788 tcp 'DRBD'
+  allow_from "$CLUSTER_NET" 7788 tcp 'DRBD LAN'
 
   # pcsd
-  ufw allow from "$PEER_A" to any port 2224 proto tcp comment 'pcsd'
-  ufw allow from "$PEER_B" to any port 2224 proto tcp comment 'pcsd'
-  ufw allow from "$CLUSTER_NET" to any port 2224 proto tcp comment 'pcsd LAN'
+  allow_from "$PEER_A" 2224 tcp 'pcsd'
+  allow_from "$PEER_B" 2224 tcp 'pcsd'
+  allow_from "$CLUSTER_NET" 2224 tcp 'pcsd LAN'
 
   # qnetd/iSCSI are outbound to mon (default allow outgoing). If this host ever
   # needs inbound from mon for diagnostics, mon is on CLUSTER_NET already.
 
   info "Admin IPs: ${ADMIN_IPS}"
-  info "Cluster net: ${CLUSTER_NET} peers ${PEER_A}/${PEER_B} mon ${MON_IP}"
+  info "Cluster net: ${CLUSTER_NET} peers ${PEER_A}/${PEER_B:-(none)} mon ${MON_IP:-(none)}"
 
   start_deadman
   say "Enabling ufw NOW"

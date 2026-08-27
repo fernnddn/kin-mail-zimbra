@@ -51,13 +51,28 @@ else
   bad "wrong derivation on a different subnet: $got2"
 fi
 
-# With nothing configured it must still produce something usable rather than
-# empty rules, which ufw would reject.
+# A single-node install has no peer and no witness. Those must stay EMPTY so
+# the rule for them is skipped, rather than being invented - a rule naming a
+# machine that does not exist is worse than no rule, and the CLUSTER_NET rules
+# still cover any real peer.
 got3=$(derive 192.0.2.30 "" "")
+if [ "$got3" = "192.0.2.0/24|192.0.2.30||" ]; then
+  pass "an unknown peer/witness stays empty instead of being invented"
+else
+  bad "expected empty peer and mon on a single-node host, got: $got3"
+fi
 case "$got3" in
-  "192.0.2.0/24|192.0.2.30|"*[0-9]"|"*[0-9]) pass "falls back to a guess only when config is silent" ;;
-  *) bad "empty fallback would produce invalid ufw rules: $got3" ;;
+  *192.0.2.12*|*192.0.2.14*) bad "invented a peer address: $got3" ;;
+  *) pass "no fabricated addresses when config is silent" ;;
 esac
+
+# And the script must actually skip an empty address rather than calling ufw
+# with a blank source.
+if grep -q 'allow_from()' ../10-host-firewall.sh   && grep -q '\[ -n "\$addr" \] || return 0' ../10-host-firewall.sh; then
+  pass "per-host rules are skipped when the address is unknown"
+else
+  bad "10-host-firewall.sh does not guard empty addresses"
+fi
 
 if [ "$fails" -eq 0 ]; then
   printf 'All host-firewall peer tests passed\n'
