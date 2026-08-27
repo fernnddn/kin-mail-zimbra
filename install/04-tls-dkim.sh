@@ -242,6 +242,14 @@ verify_tls_ports() {
 
 # --- Cloudflare DNS-01 -------------------------------------------------------
 tls_cloudflare() {
+  # A config file written by an older build has no CF_* keys, and this script
+  # runs under set -u, so referencing them would abort with a bare "unbound
+  # variable" instead of anything an operator can act on. Retrying TLS on a
+  # host deployed by an earlier version is a normal thing to do, so default
+  # them to the same values 00-config.sh writes for a fresh host.
+  : "${CF_CREDS:=/etc/letsencrypt/cloudflare.ini}"
+  : "${CF_PROPAGATION:=40}"
+
   say "1. certbot and Cloudflare plugin"
   apt-get -qq update
   apt-get -y install certbot python3-certbot-dns-cloudflare >/dev/null 2>&1
@@ -254,8 +262,12 @@ tls_cloudflare() {
     ok "Credentials already at ${CF_CREDS}"
   else
     if [ ! -t 0 ]; then
-      fail "TLS_METHOD=cloudflare needs ${CF_CREDS} with a real API token (wizard does not store it)."
-      info "Write dns_cloudflare_api_token = … into that file, or choose Manual DNS-01 in the wizard."
+      fail "TLS_METHOD=cloudflare needs ${CF_CREDS} with a real API token."
+      info "Go back to the console wizard, TLS step, and paste the token there:"
+      info "it writes ${CF_CREDS} for you, mode 600, before this script runs."
+      info "Cloudflare: My Profile -> API Tokens -> Create Token, template"
+      info "'Edit zone DNS', restricted to zone ${MAIL_DOMAIN} only."
+      info "Or choose Manual DNS-01 in the wizard to enter the record by hand."
       exit 1
     fi
     info "Create at Cloudflare: My Profile -> API Tokens -> Create Token"
