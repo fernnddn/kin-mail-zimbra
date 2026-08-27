@@ -368,6 +368,19 @@ esac
 
 [ -b "$FS_DEV" ] || die "data backing ${FS_DEV} is not a block device"
 
+# The mapper being open right now proves nothing about the NEXT boot. On a
+# single-node install this disk holds all of Zimbra, so a crypttab that does
+# not match the header means /opt/zimbra simply never mounts: a very slow boot,
+# a passphrase prompt on the console, and a dead mail server. That is exactly
+# what a stale UUID did to the HA pair (live Phase 6, 27 Aug 2026), and the
+# same disk layout is used here. Prove it now, not on the next reboot.
+if [ "$FS_DEV" != "$DATA_DISK" ]; then
+  if ! boot_reason=$(luks_boot_ready_reason "$DATA_DISK"); then
+    die "this host would NOT reopen ${FS_DEV} after a reboot: ${boot_reason}"
+  fi
+  ok "LUKS will reopen ${FS_DEV} automatically after a reboot"
+fi
+
 FS_MP=$(lsblk -no MOUNTPOINT "$FS_DEV" 2>/dev/null | head -1 | tr -d ' ')
 if [ -n "$FS_MP" ] && [ "$FS_MP" != "$ZIMBRA_DIR" ]; then
   die "${FS_DEV} is already mounted on ${FS_MP}"

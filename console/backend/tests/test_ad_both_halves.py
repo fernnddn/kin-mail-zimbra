@@ -126,3 +126,107 @@ class AdAppliesToBothTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudflareTokenTests(unittest.IsolatedAsyncioTestCase):
+    """The console must be able to supply the Cloudflare API token itself.
+
+    certbot's plugin reads it from a file and 04-tls-dkim.sh refuses to prompt
+    when it has no terminal - which is every console-driven run. Without this
+    the operator had to SSH in and hand-write /etc/letsencrypt/cloudflare.ini,
+    the exact admin access this console exists to replace.
+    """
+
+    def test_validation_rejects_what_is_not_a_token(self) -> None:
+        from kin_privhelper.appliance_settings import cloudflare_token_error as err
+
+        self.assertIsNotNone(err(""))
+        self.assertIsNotNone(err("   "))
+        self.assertIsNotNone(err("PASTE_YOUR_TOKEN_HERE"))
+        self.assertIsNotNone(err("too-short"))
+        self.assertIsNotNone(err("token with spaces in it aaaaaaaaaaaa"))
+        self.assertIsNotNone(err("has\nnewline" + "a" * 30))
+        self.assertIsNotNone(err("a" * 250))
+        self.assertIsNotNone(err("bad$chars!" + "a" * 30))
+
+    def test_a_realistic_token_is_accepted(self) -> None:
+        from kin_privhelper.appliance_settings import cloudflare_token_error as err
+
+        self.assertIsNone(err("Xy9_-.ABCdef0123456789ABCdef0123456789xy"))
+
+    async def test_token_is_written_root_only_and_never_echoed(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper import appliance_settings as aps
+
+        token = "Xy9_-.ABCdef0123456789ABCdef0123456789xy"
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "letsencrypt" / "cloudflare.ini"
+            with (
+                patch.object(aps, "CF_CREDS_PATH", dest),
+                patch.object(os, "chown", lambda *a, **k: None),
+            ):
+                events = [
+                    ev async for ev in aps._set_cloudflare_token({"token": token})
+                ]
+            body = dest.read_text(encoding="utf-8")
+            self.assertEqual(body, f"dns_cloudflare_api_token = {token}\n")
+            self.assertEqual(dest.stat().st_mode & 0o777, 0o600)
+
+        text = "".join(str(e.get("data") or "") for e in events)
+        code = next(e.get("exit_code") for e in events if e.get("type") == "done")
+        self.assertEqual(code, 0)
+        # The token must not appear anywhere in the output, not even truncated.
+        self.assertNotIn(token, text)
+        self.assertNotIn(token[:12], text)
+
+    async def test_a_bad_token_is_refused_without_writing(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper import appliance_settings as aps
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "cloudflare.ini"
+            with patch.object(aps, "CF_CREDS_PATH", dest):
+                events = [ev async for ev in aps._set_cloudflare_token({"token": "nope"})]
+            self.assertFalse(dest.exists(), "must not create the file for a bad token")
+        code = next(e.get("exit_code") for e in events if e.get("type") == "done")
+        self.assertEqual(code, 2)
+
+    def test_the_installer_still_fails_closed_without_a_token(self) -> None:
+        # Storing it from the console is an addition, not a replacement for the
+        # non-interactive guard in the installer.
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3]
+        tls = (root / "install/04-tls-dkim.sh").read_text(encoding="utf-8")
+        self.assertIn("if [ ! -t 0 ]", tls)
+        self.assertIn("$CF_CREDS", tls)
+
+    def test_every_component_agrees_on_the_credentials_path(self) -> None:
+        """The console writes the token; certbot reads it. If these three
+        drift, the console would store it somewhere nothing ever reads."""
+        from pathlib import Path
+
+        from kin_privhelper.appliance_settings import CF_CREDS_PATH
+
+        root = Path(__file__).resolve().parents[3]
+        expected = "/etc/letsencrypt/cloudflare.ini"
+        self.assertEqual(str(CF_CREDS_PATH), expected)
+        # The installer's own definition.
+        self.assertIn(
+            f'CF_CREDS="{expected}"',
+            (root / "install/00-config.sh").read_text(encoding="utf-8"),
+        )
+        # And the value the wizard writes into /etc/kin-mail/config.
+        self.assertIn(
+            f'"CF_CREDS": "{expected}"',
+            (root / "console/backend/kin_privhelper/apply_config.py").read_text(
+                encoding="utf-8"
+            ),
+        )

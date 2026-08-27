@@ -1041,6 +1041,36 @@ async def api_settings_ad(
     return {"ok": True, "ad": load_ad_settings().public_summary()}
 
 
+class CloudflareTokenBody(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/settings/cloudflare-token")
+async def api_settings_cloudflare_token(
+    body: CloudflareTokenBody,
+    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+) -> dict[str, object]:
+    """Store the Cloudflare API token so DNS-01 can issue and renew unattended.
+
+    certbot reads it from a file and 04-tls-dkim.sh will not prompt when it has
+    no terminal, which is every console-driven run - so without this the
+    operator had to SSH in and hand-write /etc/letsencrypt/cloudflare.ini.
+    The token is never written to the wizard draft and never echoed back.
+    """
+    _require_settings(user)
+    result = await _collect_privhelper(
+        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+        user.username,
+        args={"section": "cloudflare_token", "token": body.token},
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or result.get("log") or "Could not store the token"),
+        )
+    return {"ok": True}
+
+
 @app.post("/api/settings/license")
 async def api_settings_license(
     body: LicenseApplyBody,

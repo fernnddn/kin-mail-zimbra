@@ -8,6 +8,7 @@ comes from applying a signed license (which writes CONTRACTED_SEATS).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -100,6 +101,10 @@ async def cmd_apply_appliance_settings(
         async for ev in _set_firewall(args):
             yield ev
         return
+    if section == "cloudflare_token":
+        async for ev in _set_cloudflare_token(args):
+            yield ev
+        return
     if section == "license":
         async for ev in _set_license(args):
             yield ev
@@ -142,7 +147,11 @@ async def cmd_apply_appliance_settings(
         )
         yield proto.event_done(0)
         return
-    yield _emit("section must be seats, ad, firewall, license, tls_status, tls_renew, or status", err=True)
+    yield _emit(
+        "section must be seats, ad, firewall, cloudflare_token, license, "
+        "tls_status, tls_renew, or status",
+        err=True,
+    )
     yield proto.event_done(2)
 
 
@@ -256,6 +265,70 @@ async def _set_ad(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     else:
         yield _emit("Zimbra now authenticates against the same directory")
     yield proto.event_done(hybrid_code)
+
+
+CF_CREDS_PATH = Path("/etc/letsencrypt/cloudflare.ini")
+
+
+def cloudflare_token_error(token: str) -> str | None:
+    """Reject anything that clearly is not a Cloudflare API token."""
+    body = (token or "").strip()
+    if not body:
+        return "Paste the Cloudflare API token."
+    if any(c.isspace() for c in body):
+        return "That token contains spaces or line breaks - paste just the token."
+    if "PASTE" in body.upper():
+        return "That is still the placeholder text, not a real token."
+    # Cloudflare tokens are 40 URL-safe characters today; accept a range rather
+    # than pinning an exact length, but catch an obviously truncated paste.
+    if len(body) < 20:
+        return "That token looks too short - copy the whole value."
+    if len(body) > 200:
+        return "That does not look like a Cloudflare API token."
+    if not re.fullmatch(r"[A-Za-z0-9_\-\.]+", body):
+        return "That token has characters a Cloudflare API token does not use."
+    return None
+
+
+async def _set_cloudflare_token(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+    """Write /etc/letsencrypt/cloudflare.ini so DNS-01 can run unattended.
+
+    certbot's Cloudflare plugin reads the token from a file, and 04-tls-dkim.sh
+    refuses to prompt for it when it has no terminal - which is every run
+    driven from this console. Without somewhere to put the token, choosing
+    Cloudflare meant the operator had to SSH in and hand-write the file, which
+    is precisely the admin access this console exists to replace.
+
+    The token never touches the wizard draft: it goes straight to a root-owned
+    0600 file, the same treatment as the host provisioning passwords.
+    """
+    token = str(args.get("token") or "").strip()
+    problem = cloudflare_token_error(token)
+    if problem:
+        yield _emit(problem, err=True)
+        yield proto.event_done(2)
+        return
+    try:
+        CF_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Create with the final mode rather than widening it afterwards, so the
+        # token is never briefly world-readable on disk.
+        fd = os.open(
+            str(CF_CREDS_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        try:
+            os.write(fd, f"dns_cloudflare_api_token = {token}\n".encode())
+        finally:
+            os.close(fd)
+        os.chmod(CF_CREDS_PATH, 0o600)
+        os.chown(CF_CREDS_PATH, 0, 0)
+    except OSError as exc:
+        yield _emit(f"Could not write {CF_CREDS_PATH}: {exc}", err=True)
+        yield proto.event_done(1)
+        return
+    # Never echo the token back, not even a prefix.
+    yield _emit(f"Cloudflare API token stored at {CF_CREDS_PATH} (root only, mode 600)")
+    yield _emit("Certificate issuance and automatic renewal can now run unattended.")
+    yield proto.event_done(0)
 
 
 async def _set_firewall(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
