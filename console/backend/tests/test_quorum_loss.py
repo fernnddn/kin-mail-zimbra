@@ -115,3 +115,72 @@ class QuorumHintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SurviveAlonePolicyTests(unittest.TestCase):
+    """The appliance must keep delivering mail on the last node standing.
+
+    Operator decision (27 Aug 2026): if the peer AND the Observability witness
+    are both gone, host A must keep serving rather than stopping. That is
+    no-quorum-policy=ignore, set by the sbd_stonith role once fencing is armed.
+    The console must then describe the situation as degraded-but-serving, not
+    as an outage.
+    """
+
+    def test_parses_the_live_policy(self) -> None:
+        from kin_privhelper.maintenance import parse_no_quorum_policy
+
+        self.assertEqual(
+            parse_no_quorum_policy("Cluster Properties:\n no-quorum-policy: ignore\n"),
+            "ignore",
+        )
+        self.assertEqual(parse_no_quorum_policy(" no-quorum-policy=stop"), "stop")
+        self.assertEqual(parse_no_quorum_policy("stonith-enabled: true"), "")
+        self.assertEqual(parse_no_quorum_policy(""), "")
+
+    def test_alone_with_ignore_reads_as_still_serving(self) -> None:
+        hint = quorum_recovery_hint(
+            quorate=False,
+            peer_offline=True,
+            observability_reachable=False,
+            no_quorum_policy="ignore",
+        )
+        low = hint.lower()
+        self.assertIn("keeps running", low)
+        # It must NOT tell the operator mail has stopped, and must not send
+        # them to a forced override they no longer need.
+        self.assertNotIn("has stopped mail", low)
+        self.assertNotIn("unblock", low)
+        # But it must still say redundancy and fencing are gone.
+        self.assertIn("no failover target", low)
+        self.assertIn("fencing", low)
+
+    def test_stop_policy_still_reports_the_outage_and_the_override(self) -> None:
+        hint = quorum_recovery_hint(
+            quorate=False,
+            peer_offline=True,
+            observability_reachable=False,
+            no_quorum_policy="stop",
+        )
+        low = hint.lower()
+        self.assertIn("stopped mail", low)
+        self.assertIn("unblock", low)
+
+    def test_default_argument_keeps_the_conservative_wording(self) -> None:
+        # An older node whose `pcs property` could not be read must not be
+        # described as "still serving" when we cannot prove it is.
+        hint = quorum_recovery_hint(
+            quorate=False, peer_offline=True, observability_reachable=False
+        )
+        self.assertIn("stopped mail", hint.lower())
+
+    def test_ansible_sets_the_policy_where_fencing_is_armed(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3]
+        stonith = (root / "ansible/roles/sbd_stonith/tasks/stonith.yml").read_text()
+        defaults = (root / "ansible/roles/sbd_stonith/defaults/main.yml").read_text()
+        self.assertIn("no-quorum-policy={{ sbd_stonith_no_quorum_policy }}", stonith)
+        self.assertIn("sbd_stonith_no_quorum_policy: ignore", defaults)
+        # The trade-off must stay documented next to the value.
+        self.assertIn("after-sb-2pri", defaults)

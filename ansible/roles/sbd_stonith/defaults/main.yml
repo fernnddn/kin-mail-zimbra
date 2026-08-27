@@ -23,6 +23,31 @@ sbd_stonith_power_timeout: 150
 # Keep Pacemaker's stonith-timeout at least power_timeout (and >= 2*msgwait).
 sbd_stonith_cluster_timeout: 150s
 sbd_stonith_resource_name: sbd
+# -----------------------------------------------------------------------------
+# APPLIANCE AVAILABILITY POLICY - deliberate, read before changing.
+# -----------------------------------------------------------------------------
+# 2 mail nodes (1 vote each) + qdevice (1 vote) = 3 votes, quorum needs 2.
+# If the peer mail node AND the Observability witness go down together, the
+# survivor holds 1 vote and is not quorate. With no-quorum-policy=stop
+# Pacemaker then stops mail on a node that is otherwise perfectly healthy.
+#
+# For this product that is the wrong trade: a single surviving mail server must
+# keep delivering mail even when it is the last thing standing. So the policy
+# is "ignore" - Pacemaker keeps running (and can take over) resources in a
+# non-quorate partition.
+#
+# What that costs, stated honestly: if the peer is actually ALIVE but cut off
+# from this node and from the witness at the same time, both sides can go
+# Primary. That is real split-brain. It is contained, not silent - the DRBD
+# resource sets `after-sb-2pri disconnect`, so DRBD refuses to auto-merge two
+# diverged Primaries and waits for an operator instead of quietly discarding
+# writes. A partition that isolates the two nodes from each other AND from the
+# witness while both stay up generally means the network is down for clients
+# too, so the availability win is real and the exposure is small.
+#
+# Set this back to "stop" for a deployment that must prefer consistency over
+# availability (a shared-nothing pair on genuinely independent networks).
+sbd_stonith_no_quorum_policy: ignore
 sbd_stonith_default_path: /etc/default/sbd
 sbd_stonith_dropin_dir: /etc/systemd/system/sbd.service.d
 # Observability rebuild only. Greenfield HA build must stay skip-on-existing.

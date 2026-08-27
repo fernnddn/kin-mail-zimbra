@@ -45,6 +45,7 @@ type ClusterSnap = {
   votes_total?: number | null;
   votes_needed?: number | null;
   quorum_hint?: string;
+  no_quorum_policy?: string;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
   offline?: string[];
@@ -1702,7 +1703,11 @@ export default function ClusterPage() {
         />
         {cluster.quorum_hint ? (
           <WarnBox role="alert">
-            <strong>Mail is stopped on this node: the cluster has lost quorum.</strong>
+            <strong>
+              {cluster.no_quorum_policy === "ignore"
+                ? "Running without redundancy: this node is serving mail alone."
+                : "Mail is stopped on this node: the cluster has lost quorum."}
+            </strong>
             {typeof cluster.votes_total === "number" &&
             typeof cluster.votes_needed === "number" ? (
               <> This node holds {cluster.votes_total} of the {cluster.votes_needed} votes

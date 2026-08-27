@@ -258,11 +258,18 @@ def parse_vote_totals(quorum_text: str) -> tuple[int | None, int | None]:
     )
 
 
+def parse_no_quorum_policy(text: str) -> str:
+    """`pcs property` value of no-quorum-policy, lowercased ('' when absent)."""
+    m = re.search(r"no-quorum-policy[=:]\s*(\S+)", text or "", flags=re.I)
+    return m.group(1).strip().lower() if m else ""
+
+
 def quorum_recovery_hint(
     *,
     quorate: bool | None,
     peer_offline: bool,
     observability_reachable: bool,
+    no_quorum_policy: str = "",
 ) -> str:
     """Operator-facing explanation when the cluster has lost quorum.
 
@@ -282,6 +289,23 @@ def quorum_recovery_hint(
     """
     if quorate is not False:
         return ""
+    # With no-quorum-policy=ignore the appliance deliberately keeps serving on
+    # the last node standing, so this is informational, not an outage.
+    if (no_quorum_policy or "").lower() == "ignore":
+        if peer_offline and not observability_reachable:
+            return (
+                "Running alone: the peer mail node and the Observability witness "
+                "are both unreachable, so this node holds 1 of 3 votes. Mail "
+                "keeps running here on purpose (no-quorum-policy=ignore). "
+                "Bring back either the peer or the Observability VM to restore "
+                "redundancy - until then there is no failover target and no "
+                "SBD fencing."
+            )
+        return (
+            "Running without quorum on purpose (no-quorum-policy=ignore). Mail "
+            "keeps serving here, but redundancy is degraded until the missing "
+            "cluster members come back."
+        )
     if peer_offline and not observability_reachable:
         return (
             "Quorum lost: the peer mail node and the Observability witness are "
@@ -772,6 +796,8 @@ async def gather_status() -> dict[str, Any]:
     observability = await _observability_snapshot(corosync_txt)
     quorate = parse_quorate(quorum)
     votes_total, votes_needed = parse_vote_totals(quorum)
+    _cp, props_text, _ep = await _capture(["pcs", "property"])
+    no_quorum_policy = parse_no_quorum_policy(props_text)
     from .corosync_stub import is_harmless_package_stub_cluster
     from .deploy_state import saved_wizard_topology
 
@@ -802,10 +828,12 @@ async def gather_status() -> dict[str, Any]:
         "quorate": quorate,
         "votes_total": votes_total,
         "votes_needed": votes_needed,
+        "no_quorum_policy": no_quorum_policy,
         "quorum_hint": quorum_recovery_hint(
             quorate=quorate,
             peer_offline=bool(offline) or bool(stale_peers),
             observability_reachable=bool(observability.get("reachable")),
+            no_quorum_policy=no_quorum_policy,
         ),
         "observability": observability,
         "failcount_ok": fc_ok,
@@ -1002,6 +1030,7 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "votes_total": st.get("votes_total"),
             "votes_needed": st.get("votes_needed"),
             "quorum_hint": st.get("quorum_hint") or "",
+            "no_quorum_policy": st.get("no_quorum_policy") or "",
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),

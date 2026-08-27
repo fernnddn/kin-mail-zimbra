@@ -48,6 +48,20 @@
   changed_when: false
   tags: [sbd, stonith, pcs]
 
+# Set here, not only in cluster_setup: cluster_setup applies it once at cluster
+# formation and only while fencing does not yet exist, so on every later run
+# (and on any cluster formed before this policy existed) the value was never
+# revisited. Fencing being armed is exactly the point where the final
+# availability policy belongs. See sbd_stonith_no_quorum_policy in defaults for
+# why "ignore" is the deliberate choice for this appliance.
+- name: Keep mail serving on the last surviving node (no-quorum-policy)
+  ansible.builtin.command:
+    cmd: pcs property set no-quorum-policy={{ sbd_stonith_no_quorum_policy }}
+  run_once: true
+  when: not ansible_check_mode
+  changed_when: false
+  tags: [sbd, stonith, pcs]
+
 - name: Set stonith-timeout above msgwait
   ansible.builtin.command:
     cmd: pcs property set stonith-timeout={{ sbd_stonith_cluster_timeout }}
