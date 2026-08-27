@@ -6,6 +6,8 @@ import { useAuth } from "./auth";
 import { useSetup } from "./setup";
 import { theme } from "./styles/theme";
 import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
+import { TaskCenter } from "./tasks/TaskCenter";
+import { deriveAlerts, type Alert, type AlertSnap } from "./tasks/alerts";
 
 const Frame = styled.div`
   min-height: 100vh;
@@ -173,6 +175,31 @@ export function ConsoleChrome({
   const navigate = useNavigate();
   const isSuper = user?.role === "kin_super_admin";
   const [menuOpen, setMenuOpen] = useState(false);
+  // Header alerts are global: a problem must be visible from any page, not
+  // only when the operator happens to open the Cluster health dropdown.
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  useEffect(() => {
+    if (!user || setupMode) {
+      setAlerts([]);
+      return;
+    }
+    let stop = false;
+    const load = () => {
+      api<{ cluster?: AlertSnap }>("/api/cluster/status")
+        .then((res) => {
+          if (!stop) setAlerts(deriveAlerts(res.cluster));
+        })
+        .catch(() => {
+          // A failed poll must not blank real alerts, and must not spam.
+        });
+    };
+    load();
+    const id = window.setInterval(load, 30000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [user, setupMode]);
   const [license, setLicense] = useState<{
     status?: string;
     type?: string;
@@ -235,6 +262,7 @@ export function ConsoleChrome({
         {!setupMode ? (
           <Right>
             {hint}
+            {user ? <TaskCenter alerts={alerts} /> : null}
             {user ? (
               <>
                 <UserButton

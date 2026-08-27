@@ -27,6 +27,7 @@ import ZpushStep from "./wizard/steps/ZpushStep";
 import { DeploySessionProvider } from "./wizard/DeploySession";
 import { isHaOrchestrationLog } from "./wizard/deployPipeline";
 import { Lede, Shell, Spinner } from "./ui";
+import { TaskProvider } from "./tasks/TaskProvider";
 
 function LoadingShell({ text }: { text: string }) {
   return (
@@ -123,6 +124,7 @@ export default function App() {
     <SetupProvider>
       <EulaProvider>
         <AuthProvider>
+          <TaskProvider>
           <Routes>
             <Route path="/eula" element={<EulaPage />} />
             <Route
@@ -227,6 +229,7 @@ export default function App() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="*" element={<HomeRedirect />} />
           </Routes>
+          </TaskProvider>
         </AuthProvider>
       </EulaProvider>
     </SetupProvider>

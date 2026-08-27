@@ -25,6 +25,7 @@ import {
   WarnBox,
 } from "../ui";
 import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
+import { useTasks } from "../tasks/TaskProvider";
 
 type ClusterSnap = {
   local_host?: string;
@@ -1063,6 +1064,7 @@ export default function ClusterPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const ops = isOpsRole(user?.role);
+  const { startTask, endTaskWith } = useTasks();
   const [cluster, setCluster] = useState<ClusterSnap>({});
   const [log, setLog] = useState("");
   const [message, setMessage] = useState("");
@@ -1149,8 +1151,17 @@ export default function ClusterPage() {
     }
   }
 
+  const TASK_TITLES: Record<string, string> = {
+    preflight: "Pre-flight check",
+    enter: "Enter maintenance",
+    exit: "Exit maintenance",
+    cleanup: "Clear fail-counts",
+    failback: "Move Master",
+  };
+
   function runStream(op: "preflight" | "enter" | "exit" | "cleanup" | "failback", target: string) {
     esRef.current?.close();
+    const taskId = startTask(TASK_TITLES[op] || op, target || undefined);
     setBusy(true);
     setMessage("");
     setLog("");
@@ -1214,6 +1225,11 @@ export default function ClusterPage() {
           } else {
             setMessage(code === 0 ? `${target} left maintenance.` : `Exit maintenance not fully verified for ${target}.`);
           }
+          endTaskWith(
+            taskId,
+            code === 0 ? "done" : "failed",
+            code === 0 ? undefined : `exit ${code}`,
+          );
           void refresh();
         }
       } catch {
@@ -1226,6 +1242,7 @@ export default function ClusterPage() {
         esRef.current = null;
         setBusy(false);
         setMessage("Lost connection to the maintenance stream.");
+        endTaskWith(taskId, "failed", "lost connection to the stream");
       }
     };
   }
