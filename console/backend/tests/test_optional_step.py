@@ -57,3 +57,32 @@ class OptionalStepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandoffToolingTests(unittest.TestCase):
+    """fuser must actually exist on the node before the DRBD handoff runs.
+
+    Every fuser call in release-zimbra-plain-mount-for-drbd.sh is guarded with
+    `command -v`, so on an image without psmisc the entire fuser detection path
+    was skipped in silence. The live Phase 3 failure dump proves it happened:
+    it jumped straight from "still busy" to lsblk without one fuser line.
+    """
+
+    def test_psmisc_is_installed_before_the_handoff(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3]
+        defaults = (root / "ansible/roles/drbd_install/defaults/main.yml").read_text()
+        self.assertIn("psmisc", defaults)
+
+    def test_the_handoff_still_works_without_fuser(self) -> None:
+        # psmisc is an improvement, not a new hard dependency: an image that
+        # somehow lacks it must still reach the proc-fd and mount-namespace
+        # scans rather than failing outright.
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[3]
+        script = (root / "install/lib/release-zimbra-plain-mount-for-drbd.sh").read_text()
+        self.assertIn("command -v fuser", script)
+        self.assertIn("list_mountns_holders", script)
+        self.assertIn("list_block_fd_holders", script)

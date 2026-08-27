@@ -3,6 +3,14 @@
 # Do NOT install linbit PPA / drbd-dkms on the live MX path unless re-evaluated.
 drbd_install_packages:
   - drbd-utils
+  # psmisc ships fuser. The plain-mount handoff guards every fuser call with
+  # `command -v`, so on an image without psmisc that whole detection path was
+  # silently skipped - visible in the live Phase 3 failure dump, which jumped
+  # straight from "still busy" to lsblk with not one fuser line. The handoff
+  # no longer depends on it (there is a /proc/*/fd scan and a mount-namespace
+  # scan now), but losing a real detector and the best diagnostic output to a
+  # missing 400 KB package is not a trade worth making.
+  - psmisc
 drbd_install_forbid_packages:
   - drbd-dkms
 drbd_install_module: drbd
