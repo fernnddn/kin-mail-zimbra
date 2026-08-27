@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { theme } from "../styles/theme";
 import { Dropdown } from "../ui";
 import { useTasks } from "./TaskProvider";
-import { formatElapsed, taskBadgeTone, taskElapsedMs, type Task } from "./taskStore";
+import {
+  dropdownTasks,
+  formatElapsed,
+  hasMoreThanDropdown,
+  taskBadgeTone,
+  taskElapsedMs,
+  type Task,
+} from "./taskStore";
 import { activeAlertCount, type Alert } from "./alerts";
 
 const spin = keyframes`to { transform: rotate(360deg); }`;
@@ -145,8 +153,29 @@ const Empty = styled.p`
   color: ${theme.muted};
 `;
 
+const SeeAll = styled.button`
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid ${theme.line};
+  background: transparent;
+  color: ${theme.accent};
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 650;
+  padding: 0.55rem 0.85rem;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: ${theme.surface[50]};
+  }
+`;
+
 const Scroll = styled.div`
-  max-height: 22rem;
+  /* Capped so a burst of tasks cannot run the panel off the screen; the
+     rest is one click away on the full page. */
+  max-height: 15rem;
   overflow-y: auto;
 `;
 
@@ -211,6 +240,7 @@ function TaskRow({ task, now }: { task: Task; now: number }) {
 
 export function TaskCenter({ alerts }: { alerts: Alert[] }) {
   const { tasks, clearDone } = useTasks();
+  const navigate = useNavigate();
   const [tasksOpen, setTasksOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -222,6 +252,8 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
     return () => window.clearInterval(id);
   }, [running]);
 
+  const visible = dropdownTasks(tasks, now);
+  const more = hasMoreThanDropdown(tasks, now);
   const tone = taskBadgeTone(tasks);
   const runningN = tasks.filter((t) => t.state === "running").length;
   const failedN = tasks.filter((t) => t.state === "failed").length;
@@ -289,6 +321,15 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
               ))
             )}
           </Scroll>
+          <SeeAll
+            type="button"
+            onClick={() => {
+              setAlertsOpen(false);
+              navigate("/activity#alerts");
+            }}
+          >
+            See all alerts
+          </SeeAll>
         </Dropdown>
       </Wrap>
 
@@ -317,12 +358,27 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
             ) : null}
           </PanelHead>
           <Scroll>
-            {tasks.length === 0 ? (
-              <Empty>No tasks yet this session.</Empty>
+            {visible.length === 0 ? (
+              <Empty>
+                {tasks.length
+                  ? "Nothing running. Older tasks are on the Tasks and alerts page."
+                  : "No tasks yet this session."}
+              </Empty>
             ) : (
-              tasks.map((t) => <TaskRow key={t.id} task={t} now={now} />)
+              visible.map((t) => <TaskRow key={t.id} task={t} now={now} />)
             )}
           </Scroll>
+          {tasks.length ? (
+            <SeeAll
+              type="button"
+              onClick={() => {
+                setTasksOpen(false);
+                navigate("/activity");
+              }}
+            >
+              {more ? `See all ${tasks.length} tasks` : "See all tasks"}
+            </SeeAll>
+          ) : null}
         </Dropdown>
       </Wrap>
     </>

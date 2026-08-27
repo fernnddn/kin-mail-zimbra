@@ -31,6 +31,34 @@ export type Task = {
 /** Newest first, and never unbounded: a long session must not grow forever. */
 export const TASK_HISTORY_LIMIT = 25;
 
+/** A finished task older than this drops out of the header dropdown.
+ *
+ * The dropdown answers "what is happening now"; yesterday's completed jobs
+ * belong on the full page, not in a list the operator has to scroll past.
+ */
+export const TASK_STALE_MS = 24 * 60 * 60 * 1000;
+
+/** How many rows the header dropdown shows before "See all" takes over. */
+export const TASK_DROPDOWN_LIMIT = 6;
+
+/** Still running, or finished recently enough to still be worth surfacing. */
+export function isRecent(task: Task, now: number = Date.now()): boolean {
+  if (task.state === "running") return true;
+  return now - (task.endedAt ?? task.startedAt) <= TASK_STALE_MS;
+}
+
+/** What the header dropdown shows: running first, then recent, capped. */
+export function dropdownTasks(tasks: Task[], now: number = Date.now()): Task[] {
+  const running = tasks.filter((t) => t.state === "running");
+  const recent = tasks.filter((t) => t.state !== "running" && isRecent(t, now));
+  return [...running, ...recent].slice(0, TASK_DROPDOWN_LIMIT);
+}
+
+/** True when the full page would show more than the dropdown does. */
+export function hasMoreThanDropdown(tasks: Task[], now: number = Date.now()): boolean {
+  return tasks.length > dropdownTasks(tasks, now).length;
+}
+
 let seq = 0;
 
 export function nextTaskId(): string {

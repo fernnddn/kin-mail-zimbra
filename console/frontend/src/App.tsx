@@ -28,6 +28,8 @@ import { DeploySessionProvider } from "./wizard/DeploySession";
 import { isHaOrchestrationLog } from "./wizard/deployPipeline";
 import { Lede, Shell, Spinner } from "./ui";
 import { TaskProvider } from "./tasks/TaskProvider";
+import { AlertProvider } from "./tasks/AlertProvider";
+import ActivityCenterPage from "./pages/ActivityCenter";
 
 function LoadingShell({ text }: { text: string }) {
   return (
@@ -125,6 +127,7 @@ export default function App() {
       <EulaProvider>
         <AuthProvider>
           <TaskProvider>
+          <AlertProvider>
           <Routes>
             <Route path="/eula" element={<EulaPage />} />
             <Route
@@ -190,6 +193,16 @@ export default function App() {
               }
             />
             <Route
+              path="/activity"
+              element={
+                <RequireEula>
+                  <RequireAuth>
+                    <ActivityCenterPage />
+                  </RequireAuth>
+                </RequireEula>
+              }
+            />
+            <Route
               path="/settings"
               element={
                 <RequireEula>
@@ -229,6 +242,7 @@ export default function App() {
             <Route path="/" element={<HomeRedirect />} />
             <Route path="*" element={<HomeRedirect />} />
           </Routes>
+          </AlertProvider>
           </TaskProvider>
         </AuthProvider>
       </EulaProvider>

@@ -67,5 +67,28 @@ chk("format seconds", S.formatElapsed(45000), "45s");
 chk("format minutes", S.formatElapsed(125000), "2m 5s");
 chk("format whole minutes", S.formatElapsed(120000), "2m");
 
+// --- dropdown vs full page (Phase 5 QA: stale tasks cluttered the dropdown) --
+const DAY = 24 * 60 * 60 * 1000;
+const fin = (id, endedAt) => ({ id, title: id, state: "done", startedAt: 0, endedAt });
+const now = 10 * DAY;
+
+chk("a running task is always recent", S.isRecent(mk("r", "running"), now), true);
+chk("a task finished an hour ago is recent", S.isRecent(fin("a", now - 3600e3), now), true);
+chk("a task finished yesterday is stale", S.isRecent(fin("b", now - DAY - 1), now), false);
+chk("exactly one day old is still recent", S.isRecent(fin("c", now - DAY), now), true);
+
+const spread = [mk("run", "running"), fin("fresh", now - 1000), fin("old", now - 3 * DAY)];
+chk("dropdown hides stale tasks", S.dropdownTasks(spread, now).map((t) => t.id), ["run", "fresh"]);
+chk("dropdown puts running first", S.dropdownTasks([fin("f", now), mk("r", "running")], now)[0].id, "r");
+chk("full page still has everything", spread.length, 3);
+chk("more-than-dropdown is true when a stale task exists", S.hasMoreThanDropdown(spread, now), true);
+chk("more-than-dropdown is false when all fit", S.hasMoreThanDropdown([mk("r", "running")], now), false);
+
+// A long burst must not spill out of the dropdown.
+let burst = [];
+for (let i = 0; i < 12; i++) burst = S.addTask(burst, fin(`b${i}`, now - 1000));
+chk("dropdown is capped", S.dropdownTasks(burst, now).length, S.TASK_DROPDOWN_LIMIT);
+chk("capped dropdown reports more available", S.hasMoreThanDropdown(burst, now), true);
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);
