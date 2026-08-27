@@ -233,6 +233,33 @@ def drbd_sync_percent(status: str) -> float | None:
         return None
 
 
+def parse_promoted_ban_flag(ban_help: str) -> str:
+    """Which flag `pcs resource ban` uses to mean "the Promoted role".
+
+    pcs renamed this between the two releases this product runs on:
+    Ubuntu 22.04 ships pcs 0.10, which only knows --master; pcs 0.11
+    (Ubuntu 24.04) renamed it to --promoted and dropped --master. Hardcoding
+    --promoted made Move Master fail outright on 22.04 with "option --promoted
+    not recognized", leaving the cluster untouched (live Phase 5 QA).
+
+    Prefer --promoted when the local pcs advertises it, fall back to --master,
+    and default to --master when the help text cannot be read at all, since
+    that is what the currently deployed release ships.
+    """
+    text = ban_help or ""
+    if "--promoted" in text:
+        return "--promoted"
+    if "--master" in text:
+        return "--master"
+    return "--master"
+
+
+async def promoted_ban_flag() -> str:
+    """Ask the local pcs which promoted-role flag it accepts."""
+    _c, out, err = await _capture(["pcs", "resource", "ban", "--help"], timeout=20)
+    return parse_promoted_ban_flag(f"{out}\n{err}")
+
+
 def parse_quorate(quorum_text: str) -> bool | None:
     """True/False from `pcs quorum status`, None when it could not be read.
 
@@ -656,8 +683,22 @@ def _failcount_query_absent(text: str) -> bool:
     )
 
 
-async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:
+async def _failcounts(nodes: list[str]) -> tuple[bool, list[str], list[str]]:
+    """(all_zero, human lines, unreadable entries).
+
+    A query we could not READ is not evidence of a failure COUNT. Treating the
+    two the same is what made a brand-new cluster report "fail-count nonzero"
+    with nothing wrong, and since preflight gates on this, it blocked Enter
+    Maintenance and Remove Host on a healthy pair (live Phase 5 QA).
+
+    FAILCOUNT_RESOURCES lists the clone and the group as well as the
+    primitives, and crm_failcount does not answer for every one of those on
+    every Pacemaker build - so unreadable is the normal case, not an anomaly.
+    Unreadable entries are reported separately and do not fail the check; only
+    a value that was genuinely read and is non-zero does.
+    """
     lines: list[str] = []
+    unreadable: list[str] = []
     ok = True
     for node in nodes:
         for res in FAILCOUNT_RESOURCES:
@@ -668,18 +709,18 @@ async def _failcounts(nodes: list[str]) -> tuple[bool, list[str]]:
             if c != 0 and _failcount_query_absent(text):
                 continue
             if c != 0:
-                ok = False
-                lines.append(f"  {res}@{node} fail-count=query-failed:{c}")
+                unreadable.append(f"{res}@{node}: exit {c}")
+                lines.append(f"  {res}@{node} fail-count=unreadable (exit {c})")
                 continue
             val = parse_failcount_value(text)
             if val is None:
-                ok = False
-                lines.append(f"  {res}@{node} fail-count=unparsed:{text[:80]}")
+                unreadable.append(f"{res}@{node}: {text[:60]}")
+                lines.append(f"  {res}@{node} fail-count=unreadable")
                 continue
             lines.append(f"  {res}@{node} fail-count={val}")
             if val != 0:
                 ok = False
-    return ok, lines
+    return ok, lines, unreadable
 
 
 def try_lock_maintenance(path: Path | None = None) -> IO[str] | None:
@@ -792,7 +833,7 @@ async def gather_status() -> dict[str, Any]:
     addrs = parse_corosync_ring_addrs(corosync_txt) if corosync_txt else {}
     live = set(nodes) | set(offline)
     stale_peers = [n for n in addrs if n not in live]
-    fc_ok, fc_lines = await _failcounts(nodes)
+    fc_ok, fc_lines, fc_unreadable = await _failcounts(nodes)
     observability = await _observability_snapshot(corosync_txt)
     quorate = parse_quorate(quorum)
     votes_total, votes_needed = parse_vote_totals(quorum)
@@ -838,6 +879,7 @@ async def gather_status() -> dict[str, Any]:
         "observability": observability,
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
+        "failcount_unreadable": fc_unreadable,
         "vip_ip": _config_vip_ip(),
         "vip_node": vip_node,
         "package_stub": package_stub,
@@ -869,7 +911,23 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
     )
     rec("drbd_uptodate", bool(st["drbd_uptodate"]), "both replicas UpToDate" if st["drbd_uptodate"] else "DRBD is not UpToDate/UpToDate")
     rec("qdevice_voting", bool(st["qdevice_ok"]), "qdevice reachable and voting" if st["qdevice_ok"] else "qdevice missing, offline, or not voting")
-    rec("failcount_zero", bool(st["failcount_ok"]), "; ".join(st["failcount_lines"]) or "no fail-count records")
+    # Detail names any entry we could not read, so an operator seeing this
+    # pass on a cluster with unreadable entries knows why, instead of the check
+    # silently failing on them.
+    _fc_unreadable = st.get("failcount_unreadable") or []
+    rec(
+        "failcount_zero",
+        bool(st["failcount_ok"]),
+        "; ".join(st["failcount_lines"]) or "no fail-count records",
+    )
+    if _fc_unreadable:
+        logs.append(
+            "[INFO] fail-count could not be read for "
+            f"{len(_fc_unreadable)} entr{'y' if len(_fc_unreadable) == 1 else 'ies'} "
+            f"({'; '.join(_fc_unreadable[:4])}). Not treated as a failure: "
+            "crm_failcount does not answer for clones and groups on every "
+            "Pacemaker build."
+        )
 
     # Peer that must keep serving (currently Promoted), plus the other node Online.
     promoted = st["promoted"]
@@ -1271,11 +1329,12 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
                 yield proto.event_done(1)
                 return
 
+            ban_flag = await promoted_ban_flag()
             yield await _emit(
-                f"pcs resource ban {DRBD_CLONE} {current} --promoted"
+                f"pcs resource ban {DRBD_CLONE} {current} {ban_flag}"
             )
             c, out, err = await _capture(
-                ["pcs", "resource", "ban", DRBD_CLONE, current, "--promoted"],
+                ["pcs", "resource", "ban", DRBD_CLONE, current, ban_flag],
                 timeout=120,
             )
             if out:

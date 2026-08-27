@@ -556,6 +556,9 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
             joined = " ".join(argv)
             if "kin-assert-no-dual-primary" in joined:
                 return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:4] == ["pcs", "resource", "ban", "--help"]:
+                # pcs 0.11 advertises --promoted.
+                return 0, "Usage: pcs resource ban <resource id> [node] [--promoted]\n", ""
             if argv[:3] == ["pcs", "resource", "ban"]:
                 return 0, "ban ok\n", ""
             if argv[:3] == ["pcs", "resource", "clear"]:
@@ -624,7 +627,11 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
         ):
             events = await self._run(target)
 
-        ban = [c for c in calls if c[:3] == ["pcs", "resource", "ban"]]
+        ban = [
+            c
+            for c in calls
+            if c[:3] == ["pcs", "resource", "ban"] and "--help" not in c
+        ]
         clear = [c for c in calls if c[:3] == ["pcs", "resource", "clear"]]
         self.assertEqual(len(ban), 1)
         self.assertEqual(ban[0][3:], ["kin-drbd-clone", current, "--promoted"])
