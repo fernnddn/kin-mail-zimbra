@@ -187,23 +187,42 @@ export function parseInstallProgress(log: string): InstallProgress {
 
 /** Per-playbook checkpoints from privhelper HA orchestration (Slice 2). */
 export function parseHaOrchProgress(log: string): InstallProgress {
-  const startRe = /\[(\d+)\/(\d+)\] START (\S+):\s*(.+)$/gm;
+  // SKIP and FINISH must advance the bar too, not just START.
+  //
+  // A step that is skipped before its START line never emitted one, so a
+  // START-only parser freezes. live_join_check (step 13/13) is skipped ahead
+  // of START on EVERY join_mode=apply run, which is why a completely healthy
+  // Build HA pair sat on "12/13" until ORCH_DONE flipped it to complete
+  // (live Phase 4-1, 26 Aug 2026). That was not a race - it happened every
+  // single time.
+  //
+  // FAIL is deliberately not here: the failure branch below wants the index of
+  // the step that failed, which its own START already provided.
+  // [ \t]* not \s*: \s swallows the newline, so a bare "[12/13] FINISH step"
+  // line would eat the whole NEXT line as its label and hide that step.
+  const eventRe = /\[(\d+)\/(\d+)\] (START|SKIP|FINISH) ([^\s:]+):?[ \t]*(.*)$/gm;
   let current = 0;
   let total = 0;
   let label = "Starting...";
   let script = "";
   let m: RegExpExecArray | null;
-  while ((m = startRe.exec(log)) !== null) {
-    current = Number(m[1]);
-    total = Number(m[2]);
-    script = m[3];
-    label = m[4].replace(/\s+proof=.*$/, "").trim() || script;
-  }
-  if (!total) {
-    const skip = /\[(\d+)\/(\d+)\] SKIP /.exec(log);
-    if (skip) {
-      current = Number(skip[1]);
-      total = Number(skip[2]);
+  while ((m = eventRe.exec(log)) !== null) {
+    const index = Number(m[1]);
+    const seenTotal = Number(m[2]);
+    const kind = m[3];
+    const stepId = m[4];
+    const rest = (m[5] || "").replace(/\s+proof=.*$/, "").trim();
+    if (seenTotal) total = seenTotal;
+    // Never let a later line drag the bar backwards.
+    if (index < current) continue;
+    current = index;
+    script = stepId;
+    if (kind === "START") {
+      label = rest || stepId;
+    } else if (kind === "SKIP") {
+      label = `${stepId} (skipped)`;
+    } else {
+      label = `${stepId} done`;
     }
   }
   const failed =

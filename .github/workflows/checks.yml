@@ -312,6 +312,19 @@ jobs:
           npm ci
           npx tsc --noEmit
 
+      # parseHaOrchProgress drives the only progress an operator sees during a
+      # 20+ minute Build HA pair, and it has had two separate freezing bugs
+      # (START-only advancement, and \s* swallowing a newline). Pin it down.
+      - name: Frontend unit tests
+        working-directory: console/frontend
+        run: |
+          set -euo pipefail
+          if [ ! -f test/deployPipeline.test.mjs ]; then
+            echo "ERROR: frontend tests missing - refusing silent pass"
+            exit 1
+          fi
+          npm test
+
       - name: Frontend production build
         working-directory: console/frontend
         run: |
