@@ -480,6 +480,10 @@ class AdSettingsBody(BaseModel):
     search_bind_dn: str = Field(default="", max_length=512)
     bind_dn_template: str = Field(default="", max_length=512)
     search_bind_password: str = Field(default="", max_length=256)
+    # 06-hybrid-auth.sh verifies a real bind before it repoints Zimbra's
+    # authentication, so both halves need this account, not just the wizard.
+    test_user: str = Field(default="", max_length=256)
+    test_pass: str = Field(default="", max_length=256)
 
 
 class LicenseApplyBody(BaseModel):
@@ -1023,6 +1027,8 @@ async def api_settings_ad(
             "search_bind_dn": body.search_bind_dn,
             "bind_dn_template": body.bind_dn_template,
             "search_bind_password": body.search_bind_password,
+            "test_user": body.test_user,
+            "test_pass": body.test_pass,
         },
     )
     if not result.get("ok"):

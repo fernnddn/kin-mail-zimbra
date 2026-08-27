@@ -146,6 +146,8 @@ export default function SettingsPage() {
   const [searchBindDn, setSearchBindDn] = useState("");
   const [bindDnTemplate, setBindDnTemplate] = useState("");
   const [bindPassword, setBindPassword] = useState("");
+  const [adTestUser, setAdTestUser] = useState("");
+  const [adTestPass, setAdTestPass] = useState("");
   const [bindPasswordSet, setBindPasswordSet] = useState(false);
   const [tls, setTls] = useState<TlsState>({});
   const [busy, setBusy] = useState("");
@@ -205,9 +207,12 @@ export default function SettingsPage() {
           search_bind_dn: searchBindDn,
           bind_dn_template: bindDnTemplate,
           search_bind_password: bindPassword,
+          test_user: adTestUser,
+          test_pass: adTestPass,
         }),
       });
       setBindPassword("");
+      setAdTestPass("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save directory settings");
@@ -415,6 +420,27 @@ export default function SettingsPage() {
               placeholder="EXAMPLE\\%u"
               disabled={!adEnabled}
             />
+            <Label htmlFor="adtu">Directory test account</Label>
+            <Input
+              id="adtu"
+              value={adTestUser}
+              onChange={(e) => setAdTestUser(e.target.value)}
+              placeholder="a real directory username"
+              disabled={!adEnabled}
+            />
+            <Label htmlFor="adtp">Directory test password</Label>
+            <PasswordInput
+              id="adtp"
+              value={adTestPass}
+              onChange={(e) => setAdTestPass(e.target.value)}
+              autoComplete="new-password"
+              disabled={!adEnabled}
+            />
+            <Hint>
+              Saving with directory sign-in on also repoints Zimbra at the same directory. That
+              step verifies a real bind first, so it needs one working account. Leave both blank to
+              keep what is already stored.
+            </Hint>
             <Button type="submit" variant="primary" loading={busy === "ad"}>
               Save directory settings
             </Button>

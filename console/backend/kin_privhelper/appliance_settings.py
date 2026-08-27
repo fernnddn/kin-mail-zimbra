@@ -36,6 +36,10 @@ FIREWALL_CANDIDATES = (
     "install/10-host-firewall.sh",
     "10-host-firewall.sh",
 )
+HYBRID_AUTH_CANDIDATES = (
+    "install/06-hybrid-auth.sh",
+    "06-hybrid-auth.sh",
+)
 TLS_CANDIDATES = (
     "install/04-tls-dkim.sh",
     "04-tls-dkim.sh",
@@ -59,6 +63,18 @@ def parse_admin_ips(raw: str) -> list[str]:
         if token not in items:
             items.append(token)
     return items
+
+
+def _config_value(key: str) -> str:
+    """One key out of /etc/kin-mail/config, or "" when absent/unreadable."""
+    try:
+        from .apply_config import CONF_FILE, parse_config
+
+        if not CONF_FILE.is_file():
+            return ""
+        return str(parse_config(CONF_FILE.read_text(encoding="utf-8")).get(key) or "").strip()
+    except OSError:
+        return ""
 
 
 def _license_state(token: str, server_id: str) -> dict[str, Any]:
@@ -176,10 +192,70 @@ async def _set_ad(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     pw = str(args.get("search_bind_password") or "")
     if pw:
         updates["AD_SEARCH_BIND_PASSWORD"] = pw
+    # 06-hybrid-auth.sh refuses to run without a directory account it can bind
+    # as a real user, so Settings has to be able to supply them too. Blank
+    # means "leave what is stored", same as the bind password.
+    test_user = str(args.get("test_user") or "").strip()
+    test_pass = str(args.get("test_pass") or "")
+    if test_user:
+        updates["AD_TEST_USER"] = test_user
+    if test_pass:
+        updates["AD_TEST_PASS"] = test_pass
     code, lines = update_config_keys(updates)
     for line in lines:
         yield _emit(line, err=code != 0)
-    yield proto.event_done(code)
+    if code != 0:
+        yield proto.event_done(code)
+        return
+
+    if not enabled:
+        yield _emit(
+            "Directory sign-in is off. Console falls back to local accounts; "
+            "Zimbra's own directory settings are left untouched."
+        )
+        yield proto.event_done(0)
+        return
+
+    # Writing the config only configures the CONSOLE. Zimbra authenticates
+    # through its own zimbraAuthLdap* domain attributes, which are set by
+    # 06-hybrid-auth.sh via zmprov - so without this the operator would enable
+    # AD, see console sign-in start working, and have no idea mail sign-in was
+    # still purely local (live Phase 6 QA asked for both halves to work).
+    missing = [
+        k
+        for k in ("AD_TEST_USER", "AD_TEST_PASS")
+        if not str(_config_value(k) or "").strip()
+    ]
+    if missing:
+        yield _emit(
+            "Console sign-in is configured. Zimbra was NOT reconfigured: "
+            f"{' and '.join(missing)} is not set, and 06-hybrid-auth.sh needs a "
+            "real directory account to verify the bind before it changes mail "
+            "authentication. Fill in the directory test account and save again.",
+            err=True,
+        )
+        yield proto.event_done(0)
+        return
+
+    script = resolve_under_deploy(HYBRID_AUTH_CANDIDATES, "06-hybrid-auth.sh")
+    yield _emit(f"Applying directory settings to Zimbra via {script}")
+    from .commands import _stream_subprocess
+
+    hybrid_code = 0
+    async for ev in _stream_subprocess([str(script)]):
+        if ev.get("type") == "done":
+            hybrid_code = int(ev.get("exit_code") or 0)
+        else:
+            yield ev
+    if hybrid_code != 0:
+        yield _emit(
+            f"Zimbra directory setup exited {hybrid_code}. Console sign-in is "
+            "configured, but mail sign-in is unchanged - see the output above.",
+            err=True,
+        )
+    else:
+        yield _emit("Zimbra now authenticates against the same directory")
+    yield proto.event_done(hybrid_code)
 
 
 async def _set_firewall(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
