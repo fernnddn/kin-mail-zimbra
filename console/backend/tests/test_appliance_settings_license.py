@@ -134,3 +134,59 @@ class SetSeatsInvalidLicenseTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HumanLicenseErrorTests(unittest.TestCase):
+    """Every verify_license failure used to collapse into one dead-end string.
+
+    A truncated paste, a license issued for the peer node, and a genuinely bad
+    signature all read as "That license is not valid. Ask KIN for a new signed
+    license.", so the operator had no way to tell which had happened (live
+    Phase 4-1, 26 Aug 2026). Order matters: the structural errors contain the
+    word "signature" but are not cryptographic failures.
+    """
+
+    def _msg(self, raw: str) -> str:
+        from kin_console.app import _human_license_error
+
+        return _human_license_error(raw)
+
+    def test_malformed_paste_is_not_reported_as_a_bad_signature(self) -> None:
+        msg = self._msg("license is not a signed payload.signature string")
+        self.assertIn("incomplete", msg.lower())
+        self.assertNotIn("new signed license", msg.lower())
+
+    def test_truncated_signature_reads_as_truncated(self) -> None:
+        self.assertIn("truncated", self._msg("license signature is the wrong length").lower())
+
+    def test_server_id_mismatch_is_distinct_and_mentions_ha(self) -> None:
+        msg = self._msg(
+            "license is for a different Email Server ID: this server_id is A, "
+            "the license was issued for B"
+        )
+        low = msg.lower()
+        self.assertIn("email server id", low)
+        self.assertIn("ha pair", low)
+
+    def test_real_signature_failure_still_says_signature(self) -> None:
+        msg = self._msg("license signature is not valid")
+        self.assertIn("signature", msg.lower())
+
+    def test_canonical_failure_is_its_own_message(self) -> None:
+        msg = self._msg("license payload is not in canonical form")
+        self.assertIn("integrity", msg.lower())
+
+    def test_expired_still_wins_over_signature_wording(self) -> None:
+        self.assertIn("expired", self._msg("license has expired").lower())
+
+    def test_each_cause_maps_to_a_distinct_message(self) -> None:
+        causes = [
+            "license is not a signed payload.signature string",
+            "license signature is the wrong length",
+            "license is for a different Email Server ID",
+            "license signature is not valid",
+            "license payload is not in canonical form",
+            "license has expired",
+        ]
+        msgs = [self._msg(c) for c in causes]
+        self.assertEqual(len(set(msgs)), len(msgs), f"messages collapsed: {msgs}")

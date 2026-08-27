@@ -224,7 +224,26 @@ async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     try:
         verified = verify_license(token, server_id=sid)
     except ValueError as exc:
-        yield _emit(str(exc), err=True)
+        detail = str(exc)
+        # Name both IDs. "different Email Server ID" alone gave the operator no
+        # way to see WHICH id the license carries, so a license issued for the
+        # peer node (or for an id captured before a rebuild regenerated it)
+        # was indistinguishable from a bad signature (live Phase 4-1).
+        if "different email server id" in detail.lower():
+            issued_for = ""
+            try:
+                from kin_console.license import parse_license_string
+
+                payload, _raw, _sig = parse_license_string(token)
+                issued_for = str(payload.get("server_id") or "").strip()
+            except ValueError:
+                issued_for = ""
+            if issued_for:
+                detail = (
+                    f"{detail}: this server_id is {sid}, "
+                    f"the license was issued for {issued_for}"
+                )
+        yield _emit(detail, err=True)
         yield proto.event_done(2)
         return
     # Write CONTRACTED_SEATS first, license.token second. A verified token on

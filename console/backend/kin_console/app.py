@@ -1056,17 +1056,60 @@ async def api_settings_license(
 
 
 def _human_license_error(text: str) -> str:
+    """Map a verify_license ValueError to an actionable operator message.
+
+    Every branch used to collapse into "That license is not valid. Ask KIN for
+    a new signed license.", which is a dead end: a truncated paste, a license
+    issued for the other HA node, and a genuinely bad signature all looked
+    identical, with no way to tell which (live Phase 4-1, 26 Aug 2026). Order
+    matters here - "license is not a signed payload.signature string" contains
+    the word "signature" but means "the paste is malformed", so the structural
+    cases must be tested BEFORE the signature case.
+    """
     low = text.lower()
-    if "signature" in low:
-        return "That license is not valid. Ask KIN for a new signed license."
-    if "different email server" in low or "server id" in low:
-        return "That license belongs to a different Email Server ID."
-    if "canonical" in low:
-        return "That license is not valid. Ask KIN for a new signed license."
+    # Structural / paste problems first - these all contain "signature" or
+    # "payload" but are not cryptographic failures.
+    if "not a signed payload" in low or "missing payload or signature" in low:
+        return (
+            "That license text is incomplete. Copy the whole license string, "
+            "including the dot and everything after it, and paste it again."
+        )
+    if "wrong length" in low:
+        return (
+            "That license text looks truncated. Copy the whole license string "
+            "and paste it again."
+        )
+    if "not json" in low or "must be an object" in low or "base64" in low or "invalid base" in low:
+        return (
+            "That license text is corrupted. Re-copy it from the license file "
+            "without adding line breaks."
+        )
+    # Server identity: the single most common real cause on an HA pair, where
+    # the license must match the Email Server ID of the node the VIP is
+    # serving right now.
+    if "different email server" in low or "server_id" in low or "server id" in low:
+        return (
+            "That license was issued for a different Email Server ID. Check the "
+            "Email Server ID shown on this page and ask KIN to reissue the "
+            "license for exactly that ID. On an HA pair both nodes must share "
+            "one Email Server ID."
+        )
     if "expired" in low:
         return "That license has expired. Ask KIN for a renewed license."
-    if "trial" in low or "subscription" in low:
-        return "That license is not valid for this install. Ask KIN for a new signed license."
+    if "canonical" in low:
+        return (
+            "That license failed its integrity check (payload was modified "
+            "after signing). Ask KIN for a freshly signed license."
+        )
+    if "signature is not valid" in low or "signature" in low:
+        return (
+            "That license signature does not match this build's KIN signing "
+            "key. Ask KIN for a license signed with the current key."
+        )
+    if "seats" in low:
+        return "That license has an invalid seat count. Ask KIN to reissue it."
+    if "incomplete" in low or "unexpected fields" in low or "license type" in low:
+        return "That license payload is malformed. Ask KIN to reissue it."
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "License was not accepted.")
     if line.startswith("SETTINGS_JSON:") or line.startswith("LICENSE_JSON:"):
         return "License was not accepted."
