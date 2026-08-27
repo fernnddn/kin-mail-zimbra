@@ -683,7 +683,9 @@ def _failcount_query_absent(text: str) -> bool:
     )
 
 
-async def _failcounts(nodes: list[str]) -> tuple[bool, list[str], list[str]]:
+async def _failcounts(
+    nodes: list[str],
+) -> tuple[bool, list[str], list[str], list[str]]:
     """(all_zero, human lines, unreadable entries).
 
     A query we could not READ is not evidence of a failure COUNT. Treating the
@@ -699,6 +701,7 @@ async def _failcounts(nodes: list[str]) -> tuple[bool, list[str], list[str]]:
     """
     lines: list[str] = []
     unreadable: list[str] = []
+    nonzero: list[str] = []
     ok = True
     for node in nodes:
         for res in FAILCOUNT_RESOURCES:
@@ -720,7 +723,8 @@ async def _failcounts(nodes: list[str]) -> tuple[bool, list[str], list[str]]:
             lines.append(f"  {res}@{node} fail-count={val}")
             if val != 0:
                 ok = False
-    return ok, lines, unreadable
+                nonzero.append(f"{res} on {node} (fail-count={val})")
+    return ok, lines, unreadable, nonzero
 
 
 def try_lock_maintenance(path: Path | None = None) -> IO[str] | None:
@@ -833,7 +837,7 @@ async def gather_status() -> dict[str, Any]:
     addrs = parse_corosync_ring_addrs(corosync_txt) if corosync_txt else {}
     live = set(nodes) | set(offline)
     stale_peers = [n for n in addrs if n not in live]
-    fc_ok, fc_lines, fc_unreadable = await _failcounts(nodes)
+    fc_ok, fc_lines, fc_unreadable, fc_nonzero = await _failcounts(nodes)
     observability = await _observability_snapshot(corosync_txt)
     quorate = parse_quorate(quorum)
     votes_total, votes_needed = parse_vote_totals(quorum)
@@ -880,6 +884,7 @@ async def gather_status() -> dict[str, Any]:
         "failcount_ok": fc_ok,
         "failcount_lines": fc_lines,
         "failcount_unreadable": fc_unreadable,
+        "failcount_nonzero": fc_nonzero,
         "vip_ip": _config_vip_ip(),
         "vip_node": vip_node,
         "package_stub": package_stub,
@@ -915,10 +920,21 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
     # pass on a cluster with unreadable entries knows why, instead of the check
     # silently failing on them.
     _fc_unreadable = st.get("failcount_unreadable") or []
+    # Detail names ONLY the offending resources. Joining all twelve lines
+    # produced a wall of "fail-count=0" that the UI then truncated, so the
+    # operator could see the check had failed but not which resource caused it
+    # (live Phase 5 QA).
+    _fc_nonzero = st.get("failcount_nonzero") or []
     rec(
         "failcount_zero",
         bool(st["failcount_ok"]),
-        "; ".join(st["failcount_lines"]) or "no fail-count records",
+        (
+            "; ".join(_fc_nonzero)
+            + ". Clear it from the Cluster page (Cluster Healthy menu -> Clear"
+            " stale fail-counts) once you have checked why it failed."
+        )
+        if _fc_nonzero
+        else ("all resources report fail-count=0" if st["failcount_lines"] else "no fail-count records"),
     )
     if _fc_unreadable:
         logs.append(
