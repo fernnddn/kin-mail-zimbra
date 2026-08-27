@@ -121,19 +121,80 @@ ensure_luks_keyfile() {
   return 0
 }
 
+# The line this deployment needs, given the CURRENT header on the disk.
+luks_crypttab_line() {
+  printf '%s UUID=%s %s luks,discard' "$1" "$2" "$3"
+}
+
+# True when crypttab already names this mapper with THIS disk's LUKS UUID.
+luks_crypttab_matches() {
+  local tab="$1" name="$2" uuid="$3"
+  [ -f "$tab" ] || return 1
+  awk -v n="$name" -v u="UUID=$uuid" '$1 == n && $2 == u { found = 1 } END { exit found ? 0 : 1 }' \
+    "$tab" 2>/dev/null
+}
+
 ensure_luks_crypttab() {
   local disk="$1"
-  local uuid tab name key
+  local uuid tab name key tmp
   tab=$(luks_crypttab_path)
   name=$(luks_mapper_name)
   key=$(luks_keyfile_path)
   uuid=$(cryptsetup luksUUID "$disk" 2>/dev/null || true)
   [ -n "$uuid" ] || return 1
   touch "$tab" || return 1
-  if grep -qE "^${name}[[:space:]]" "$tab" 2>/dev/null; then
+
+  if luks_crypttab_matches "$tab" "$name" "$uuid"; then
     return 0
   fi
-  printf '%s UUID=%s %s luks,discard\n' "$name" "$uuid" "$key" >>"$tab" || return 1
+
+  # A line for this mapper naming a DIFFERENT UUID is worse than no line at
+  # all, and this used to return early on the name alone and leave it. After
+  # the disk is re-LUKS-formatted (rebuilt VM, wiped data disk) the old UUID
+  # no longer exists, so at boot systemd-cryptsetup waits for a device that
+  # will never appear - a very slow boot, then a passphrase prompt, then no
+  # mapper. DRBD can then never attach its backing device and Pacemaker
+  # retries it to INFINITY, which is exactly how a "successful" deploy came
+  # back from a reboot with the whole stack dead (live Phase 6, 27 Aug 2026).
+  tmp="${tab}.kin.$$"
+  if grep -qE "^${name}[[:space:]]" "$tab" 2>/dev/null; then
+    grep -vE "^${name}[[:space:]]" "$tab" >"$tmp" 2>/dev/null || : >"$tmp"
+  else
+    cat "$tab" >"$tmp" 2>/dev/null || : >"$tmp"
+  fi
+  luks_crypttab_line "$name" "$uuid" "$key" >>"$tmp" || { rm -f "$tmp"; return 1; }
+  # Keep the original mode/owner; crypttab is read by early boot.
+  chmod --reference="$tab" "$tmp" 2>/dev/null || chmod 0644 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$tab" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# Would this host bring the mapper back on its own after a reboot?
+# Prints one reason per problem and returns 1 when any is found.
+luks_boot_ready_reason() {
+  local disk="$1"
+  local tab name key uuid
+  tab=$(luks_crypttab_path)
+  name=$(luks_mapper_name)
+  key=$(luks_keyfile_path)
+  uuid=$(cryptsetup luksUUID "$disk" 2>/dev/null || true)
+  if [ -z "$uuid" ]; then
+    printf '%s\n' "no LUKS header on ${disk}"
+    return 1
+  fi
+  if [ ! -s "$key" ]; then
+    printf '%s\n' "keyfile ${key} is missing or empty"
+    return 1
+  fi
+  if ! luks_crypttab_matches "$tab" "$name" "$uuid"; then
+    printf '%s\n' \
+      "${tab} has no line for ${name} with UUID=${uuid} (a stale UUID here means the mapper never reappears after a reboot)"
+    return 1
+  fi
+  if ! cryptsetup luksDump "$disk" >/dev/null 2>&1; then
+    printf '%s\n' "cannot read the LUKS header on ${disk}"
+    return 1
+  fi
   return 0
 }
 
@@ -283,6 +344,17 @@ done
 if [ ! -b "$BACKING" ]; then
   printf '%s\n' "ensure-zimbra-data-luks: backing ${BACKING} is not a block device (checked ${_backing_attempt} times)" >&2
   exit 1
+fi
+# Nothing so far proves this host can bring the mapper back BY ITSELF. The
+# whole cluster hangs off that: without the mapper, DRBD cannot attach its
+# backing device and Pacemaker retries the resource to INFINITY. Prove it at
+# deploy time instead of discovering it on the next reboot.
+if [ "$BACKING" != "$DATA_DISK" ]; then
+  if ! _boot_reason=$(luks_boot_ready_reason "$DATA_DISK"); then
+    printf '%s\n' "ensure-zimbra-data-luks: this node would NOT reopen ${BACKING} after a reboot: ${_boot_reason}" >&2
+    exit 1
+  fi
+  printf 'KIN_LUKS_BOOT_READY=1\n'
 fi
 printf 'KIN_LUKS_BACKING=%s\n' "$BACKING"
 exit 0

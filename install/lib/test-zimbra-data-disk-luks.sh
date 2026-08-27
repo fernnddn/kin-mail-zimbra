@@ -179,9 +179,114 @@ else
   bad "ansible LUKS wiring missing (res template, luks.yml, or pacemaker drop-in)"
 fi
 
-if [ "$fails" -ne 0 ]; then
-  printf 'FAILED %s checks\n' "$fails"
-  exit 1
+
+# =============================================================================
+# Phase 6: a stale crypttab UUID left the mapper closed after a reboot.
+#
+# ensure_luks_crypttab used to return early if ANY line named this mapper,
+# regardless of which UUID it carried. After the data disk is re-LUKS-formatted
+# (rebuilt VM), the old UUID no longer exists, so at boot systemd-cryptsetup
+# waits for a device that will never appear - slow boot, passphrase prompt, no
+# mapper - and DRBD can then never attach, so Pacemaker retries it to INFINITY.
+# =============================================================================
+CT_ROOT=$(mktemp -d)
+trap 'rm -rf "$CT_ROOT"' EXIT
+
+ct_setup() {
+  mkdir -p "$CT_ROOT/bin"
+  cat >"$CT_ROOT/bin/cryptsetup" <<'CS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  luksUUID) printf '%s\n' "${KIN_TEST_LUKS_UUID:-NEW-UUID-1111}" ;;
+  luksDump) exit 0 ;;
+  *) exit 0 ;;
+esac
+CS
+  chmod +x "$CT_ROOT/bin/cryptsetup"
+}
+ct_setup
+
+ct_run() {
+  KIN_LUKS_SOURCE_ONLY=1 \
+  KIN_LUKS_CRYPTTAB="$CT_ROOT/crypttab" \
+  KIN_LUKS_KEYFILE="$CT_ROOT/keyfile" \
+  KIN_LUKS_MAPPER_NAME=kin-zimbra-crypt \
+  KIN_TEST_LUKS_UUID="${1:-NEW-UUID-1111}" \
+  PATH="$CT_ROOT/bin:$PATH" \
+  bash -c '. ./zimbra-data-disk-luks.sh; '"$2"''
+}
+
+printf 'seed\n' >"$CT_ROOT/keyfile"
+
+# A crypttab carrying the PREVIOUS install's UUID must be corrected.
+printf 'kin-zimbra-crypt UUID=OLD-UUID-9999 %s luks,discard\n' "$CT_ROOT/keyfile" >"$CT_ROOT/crypttab"
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if grep -q 'UUID=NEW-UUID-1111' "$CT_ROOT/crypttab" && ! grep -q 'OLD-UUID-9999' "$CT_ROOT/crypttab"; then
+  pass "a stale crypttab UUID is replaced, not left in place"
+else
+  bad "stale UUID survived: $(cat "$CT_ROOT/crypttab")"
 fi
-printf 'All zimbra-data-disk-luks helper tests passed\n'
-exit 0
+if [ "$(grep -c '^kin-zimbra-crypt ' "$CT_ROOT/crypttab")" = "1" ]; then
+  pass "exactly one line for the mapper after the repair"
+else
+  bad "duplicate mapper lines: $(cat "$CT_ROOT/crypttab")"
+fi
+
+# Other entries must survive untouched.
+: >"$CT_ROOT/crypttab"
+printf 'other-vol UUID=KEEP-ME none luks\n' >>"$CT_ROOT/crypttab"
+printf 'kin-zimbra-crypt UUID=OLD-UUID-9999 %s luks,discard\n' "$CT_ROOT/keyfile" >>"$CT_ROOT/crypttab"
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if grep -q 'other-vol UUID=KEEP-ME' "$CT_ROOT/crypttab"; then
+  pass "unrelated crypttab entries are preserved"
+else
+  bad "clobbered an unrelated entry: $(cat "$CT_ROOT/crypttab")"
+fi
+
+# A correct entry must be left exactly as it is (idempotent).
+before=$(cat "$CT_ROOT/crypttab")
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if [ "$(cat "$CT_ROOT/crypttab")" = "$before" ]; then
+  pass "a matching entry is left untouched"
+else
+  bad "rewrote an already-correct crypttab"
+fi
+
+# An empty crypttab just gets the line.
+: >"$CT_ROOT/crypttab"
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if grep -q '^kin-zimbra-crypt UUID=NEW-UUID-1111 ' "$CT_ROOT/crypttab"; then
+  pass "an empty crypttab gets the entry"
+else
+  bad "no entry written to an empty crypttab"
+fi
+
+# --- boot readiness -----------------------------------------------------------
+if ct_run NEW-UUID-1111 'luks_boot_ready_reason /dev/sdb1' >/dev/null 2>&1; then
+  pass "boot readiness passes once crypttab and keyfile agree"
+else
+  bad "boot readiness should pass on a correct host"
+fi
+
+printf 'kin-zimbra-crypt UUID=OLD-UUID-9999 %s luks,discard\n' "$CT_ROOT/keyfile" >"$CT_ROOT/crypttab"
+out=$(ct_run NEW-UUID-1111 'luks_boot_ready_reason /dev/sdb1' 2>&1) && rc=0 || rc=1
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stale UUID'; then
+  pass "a stale UUID is reported as not reboot-safe"
+else
+  bad "stale UUID not detected: rc=$rc out=$out"
+fi
+
+: >"$CT_ROOT/keyfile"
+out=$(ct_run NEW-UUID-1111 'luks_boot_ready_reason /dev/sdb1' 2>&1) && rc=0 || rc=1
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'keyfile'; then
+  pass "an empty keyfile is reported as not reboot-safe"
+else
+  bad "empty keyfile not detected: rc=$rc out=$out"
+fi
+
+if [ "$fails" -eq 0 ]; then
+  printf 'All zimbra-data-disk-luks helper tests passed\n'
+  exit 0
+fi
+printf '%s failure(s)\n' "$fails"
+exit 1
