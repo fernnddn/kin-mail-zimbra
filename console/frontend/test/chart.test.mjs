@@ -24,7 +24,22 @@ chk("percent rounds sensibly", [C.formatValue(42.4, "percent"), C.formatValue(3.
 chk("missing value is a dash", C.formatValue(null, "percent"), "-");
 chk("undefined value is a dash", C.formatValue(undefined, "percent"), "-");
 chk("NaN is a dash", C.formatValue(NaN, "percent"), "-");
-chk("bytes/sec scales", C.formatValue(1536, "bytes_per_sec"), "1.5 KB/s");
+// Throughput is quoted in BITS per second with a lower-case b: 1.5 KB/s of
+// traffic is 12.3 Kbps, and calling it "1.5 KB/s" is a different quantity.
+chk("throughput converts bytes to bits", C.formatValue(1536, "bytes_per_sec"), "12.3 Kbps");
+chk("1 MB/s reads as 8.4 Mbps", C.formatValue(1024 * 1024, "bytes_per_sec"), "8.4 Mbps");
+chk("bits use lower-case b", /[KMG]bps$/.test(C.formatValue(5e6, "bytes_per_sec")), true);
+chk("tiny throughput stays in bps", C.formatBitsPerSecond(120), "120 bps");
+chk("throughput scales to Gbps", C.formatBitsPerSecond(2.5e9), "2.5 Gbps");
+chk("zero throughput", C.formatBitsPerSecond(0), "0 bps");
+
+// Hover: the operator wants Grafana-style "value at this time".
+chk("nearest index at the left edge", C.nearestIndex([[0, 1], [1, 2], [2, 3]], 0), 0);
+chk("nearest index at the right edge", C.nearestIndex([[0, 1], [1, 2], [2, 3]], 1), 2);
+chk("nearest index clamps past the edges", C.nearestIndex([[0, 1], [1, 2]], 9), 1);
+chk("nearest index on an empty series", C.nearestIndex([], 0.5), -1);
+chk("hover label is time only on a short range", /^\d{1,2}:\d{2}/.test(C.pointTimeLabel(1.7e9, false)), true);
+chk("hover label adds the date on a long range", C.pointTimeLabel(1.7e9, true).length > C.pointTimeLabel(1.7e9, false).length, true);
 chk("small bytes stay bytes", C.formatBytes(512), "512 B");
 chk("big bytes scale to GB", C.formatBytes(3 * 1024 ** 3), "3.0 GB");
 chk("uptime in days", C.formatValue(200000, "seconds"), "2d 7h");

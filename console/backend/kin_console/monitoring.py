@@ -13,6 +13,7 @@ what node_exporter calls things.
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -203,6 +204,143 @@ def _get(path: str, params: dict[str, str]) -> dict[str, Any]:
         return json.loads(raw.decode("utf-8", "replace"))
     except ValueError as exc:
         raise MonitoringError("Prometheus returned a non-JSON body") from exc
+
+
+# ---------------------------------------------------------------------------
+# Host facts, read straight from the kernel.
+#
+# The operator wants the concrete numbers next to the trends: how many cores
+# and which CPU, how many GB of RAM are in use out of how many, how much of the
+# mail volume and the system disk is left. node_exporter only exposes the CPU
+# model behind a non-default flag and only from 1.4, and jammy ships 1.3 - so
+# reading /proc and statvfs here is both simpler and always right. Prometheus
+# stays responsible for history.
+# ---------------------------------------------------------------------------
+
+MAIL_MOUNT = "/opt/zimbra"
+SYSTEM_MOUNT = "/"
+
+
+def parse_cpu_model(cpuinfo: str) -> str:
+    for line in (cpuinfo or "").splitlines():
+        if line.lower().startswith("model name"):
+            _k, _sep, val = line.partition(":")
+            return val.strip()
+    # ARM and some VMs have no model name; fall back to whatever identifies it.
+    for key in ("hardware", "processor"):
+        for line in (cpuinfo or "").splitlines():
+            if line.lower().startswith(key):
+                _k, _sep, val = line.partition(":")
+                if val.strip() and not val.strip().isdigit():
+                    return val.strip()
+    return ""
+
+
+def parse_cpu_counts(cpuinfo: str) -> tuple[int, int]:
+    """(logical threads, physical cores). Cores falls back to threads."""
+    threads = 0
+    physical: set[tuple[str, str]] = set()
+    phys_id = ""
+    for line in (cpuinfo or "").splitlines():
+        low = line.lower()
+        if low.startswith("processor"):
+            threads += 1
+        elif low.startswith("physical id"):
+            phys_id = line.partition(":")[2].strip()
+        elif low.startswith("core id"):
+            physical.add((phys_id, line.partition(":")[2].strip()))
+    cores = len(physical) or threads
+    return threads, cores
+
+
+def parse_meminfo(meminfo: str) -> dict[str, int]:
+    """kB values from /proc/meminfo, as bytes."""
+    out: dict[str, int] = {}
+    for line in (meminfo or "").splitlines():
+        key, _sep, rest = line.partition(":")
+        parts = rest.split()
+        if not parts:
+            continue
+        try:
+            out[key.strip()] = int(parts[0]) * 1024
+        except ValueError:
+            continue
+    return out
+
+
+def memory_usage(meminfo: str) -> dict[str, Any]:
+    m = parse_meminfo(meminfo)
+    total = m.get("MemTotal", 0)
+    # MemAvailable is the kernel's own estimate and is what "used" should be
+    # derived from - MemFree alone counts cache as used and reads alarmingly.
+    available = m.get("MemAvailable", m.get("MemFree", 0))
+    used = max(0, total - available)
+    return {
+        "total_bytes": total,
+        "used_bytes": used,
+        "available_bytes": available,
+        "percent": round(used / total * 100, 1) if total else None,
+    }
+
+
+def disk_usage(path: str) -> dict[str, Any] | None:
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    total = st.f_blocks * st.f_frsize
+    # f_bavail, not f_bfree: the reserved blocks are not usable space.
+    free = st.f_bavail * st.f_frsize
+    used = max(0, total - free)
+    if not total:
+        return None
+    return {
+        "mount": path,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "percent": round(used / total * 100, 1),
+    }
+
+
+def parse_uptime(uptime_text: str) -> float | None:
+    try:
+        return float((uptime_text or "").split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def host_facts() -> dict[str, Any]:
+    cpuinfo = _read("/proc/cpuinfo")
+    threads, cores = parse_cpu_counts(cpuinfo)
+    loads: list[float] = []
+    try:
+        loads = [round(v, 2) for v in os.getloadavg()]
+    except OSError:
+        loads = []
+    return {
+        "cpu": {
+            "model": parse_cpu_model(cpuinfo),
+            "threads": threads,
+            "cores": cores,
+            "load": loads,
+        },
+        "memory": memory_usage(_read("/proc/meminfo")),
+        "disks": [
+            d
+            for d in (disk_usage(MAIL_MOUNT), disk_usage(SYSTEM_MOUNT))
+            if d is not None
+        ],
+        "uptime_seconds": parse_uptime(_read("/proc/uptime")),
+    }
 
 
 def fetch_range(metric: str, range_name: str, *, now: float) -> list[dict[str, Any]]:

@@ -13,7 +13,9 @@ export function formatValue(value: number | null | undefined, unit: string): str
     case "percent":
       return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
     case "bytes_per_sec":
-      return `${formatBytes(value)}/s`;
+      // Network throughput is quoted in bits per second, with a lower-case b:
+      // 1 MB/s of traffic is 8 Mbps, and showing "MBps" for it is simply wrong.
+      return formatBitsPerSecond(value * 8);
     case "seconds":
       return formatDuration(value);
     default:
@@ -32,6 +34,25 @@ export function formatBytes(bytes: number): string {
     i += 1;
   }
   return `${v.toFixed(Math.abs(v) >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+/** bits/s -> "12.4 Mbps". Lower-case b: these are bits, not bytes. */
+export function formatBitsPerSecond(bits: number): string {
+  const abs = Math.abs(bits);
+  if (abs < 1000) return `${bits.toFixed(0)} bps`;
+  const units = ["Kbps", "Mbps", "Gbps", "Tbps"];
+  let v = bits / 1000;
+  let i = 0;
+  while (Math.abs(v) >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i += 1;
+  }
+  return `${v.toFixed(Math.abs(v) >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+/** Bytes as a size, for RAM and disks (binary units, upper-case B). */
+export function formatSize(bytes: number): string {
+  return formatBytes(bytes);
 }
 
 export function formatDuration(seconds: number): string {
@@ -125,6 +146,23 @@ export function timeTicks(points: Point[], count = 4): { at: number; label: stri
     });
   }
   return out;
+}
+
+/** Index of the sample nearest a 0..1 position across the chart width. */
+export function nearestIndex(points: Point[], fraction: number): number {
+  if (points.length === 0) return -1;
+  if (points.length === 1) return 0;
+  const clamped = Math.max(0, Math.min(1, fraction));
+  return Math.round(clamped * (points.length - 1));
+}
+
+/** Time label for a hovered sample, in the viewer's locale. */
+export function pointTimeLabel(ts: number, longRange: boolean): string {
+  const d = new Date(ts * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return longRange
+    ? `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`
+    : time;
 }
 
 /** Tone for a percentage gauge: quiet until it actually matters. */

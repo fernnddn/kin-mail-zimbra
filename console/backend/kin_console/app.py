@@ -1155,6 +1155,24 @@ def monitoring_catalogue(
     }
 
 
+@app.get("/api/monitoring/host")
+async def monitoring_host(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """CPU model/cores, RAM in bytes, per-mount disk usage, uptime.
+
+    Read from /proc and statvfs rather than Prometheus: node_exporter only
+    exposes the CPU model behind a non-default flag from 1.4 onwards, and this
+    product runs on jammy's 1.3. These are also point-in-time facts, not
+    history, so a scrape round-trip buys nothing.
+    """
+    import asyncio
+
+    from . import monitoring
+
+    return await asyncio.to_thread(monitoring.host_facts)
+
+
 @app.get("/api/monitoring/series")
 async def monitoring_series(
     metric: str,

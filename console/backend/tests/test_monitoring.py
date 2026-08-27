@@ -135,3 +135,97 @@ class BindingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostFactTests(unittest.TestCase):
+    """Phase 5 QA: the operator wants the concrete numbers, not just trends -
+    how many cores and which CPU, GB of RAM used out of total, GB left on the
+    mail volume and the system disk, and uptime."""
+
+    CPUINFO = """processor\t: 0
+vendor_id\t: GenuineIntel
+model name\t: Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz
+physical id\t: 0
+core id\t\t: 0
+processor\t: 1
+model name\t: Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz
+physical id\t: 0
+core id\t\t: 0
+processor\t: 2
+model name\t: Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz
+physical id\t: 0
+core id\t\t: 1
+processor\t: 3
+model name\t: Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz
+physical id\t: 0
+core id\t\t: 1
+"""
+
+    MEMINFO = """MemTotal:       16316412 kB
+MemFree:          210484 kB
+MemAvailable:    8123456 kB
+Buffers:          123456 kB
+"""
+
+    def test_cpu_model_and_counts(self) -> None:
+        self.assertEqual(
+            m.parse_cpu_model(self.CPUINFO),
+            "Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz",
+        )
+        threads, cores = m.parse_cpu_counts(self.CPUINFO)
+        self.assertEqual(threads, 4)
+        # Hyper-threaded: 4 threads sharing 2 physical cores.
+        self.assertEqual(cores, 2)
+
+    def test_cpu_without_model_name_does_not_return_a_number(self) -> None:
+        # ARM /proc/cpuinfo has no "model name"; "processor : 0" must not be
+        # mistaken for one.
+        arm = "processor\t: 0\nBogoMIPS\t: 50.00\nHardware\t: BCM2835\n"
+        self.assertEqual(m.parse_cpu_model(arm), "BCM2835")
+        self.assertEqual(m.parse_cpu_model(""), "")
+
+    def test_cores_fall_back_to_threads_without_topology(self) -> None:
+        plain = "processor\t: 0\nprocessor\t: 1\n"
+        self.assertEqual(m.parse_cpu_counts(plain), (2, 2))
+
+    def test_memory_used_is_derived_from_available(self) -> None:
+        mem = m.memory_usage(self.MEMINFO)
+        self.assertEqual(mem["total_bytes"], 16316412 * 1024)
+        self.assertEqual(mem["available_bytes"], 8123456 * 1024)
+        # Used must come off MemAvailable, not MemFree - counting cache as used
+        # reads alarmingly high and is wrong.
+        self.assertEqual(mem["used_bytes"], (16316412 - 8123456) * 1024)
+        self.assertAlmostEqual(mem["percent"], 50.2, places=0)
+
+    def test_memory_without_available_falls_back_to_free(self) -> None:
+        mem = m.memory_usage("MemTotal: 1000 kB\nMemFree: 400 kB\n")
+        self.assertEqual(mem["available_bytes"], 400 * 1024)
+        self.assertEqual(mem["used_bytes"], 600 * 1024)
+
+    def test_empty_meminfo_is_safe(self) -> None:
+        mem = m.memory_usage("")
+        self.assertEqual(mem["total_bytes"], 0)
+        self.assertIsNone(mem["percent"])
+
+    def test_disk_usage_reports_used_and_free(self) -> None:
+        d = m.disk_usage("/")
+        self.assertIsNotNone(d)
+        assert d is not None
+        self.assertEqual(d["used_bytes"] + d["free_bytes"], d["total_bytes"])
+        self.assertGreaterEqual(d["percent"], 0)
+        self.assertLessEqual(d["percent"], 100)
+
+    def test_disk_usage_of_a_missing_mount_is_none(self) -> None:
+        self.assertIsNone(m.disk_usage("/definitely/not/a/mount/point"))
+
+    def test_uptime(self) -> None:
+        self.assertEqual(m.parse_uptime("123456.78 987654.32"), 123456.78)
+        self.assertIsNone(m.parse_uptime(""))
+        self.assertIsNone(m.parse_uptime("garbage"))
+
+    def test_host_facts_shape_is_stable(self) -> None:
+        # Must not raise on a host with no /proc (the dev machine).
+        facts = m.host_facts()
+        self.assertEqual(set(facts), {"cpu", "memory", "disks", "uptime_seconds"})
+        self.assertEqual(set(facts["cpu"]), {"model", "threads", "cores", "load"})
+        self.assertIsInstance(facts["disks"], list)
