@@ -1,0 +1,122 @@
+---
+- name: Install Prometheus and node_exporter
+  ansible.builtin.apt:
+    name: "{{ monitoring_stack_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: not ansible_check_mode
+  tags: [monitoring, packages]
+
+- name: Bind Prometheus to loopback with a one-year retention
+  ansible.builtin.template:
+    src: prometheus.default.j2
+    dest: /etc/default/prometheus
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart prometheus
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Bind node_exporter to loopback
+  ansible.builtin.template:
+    src: node-exporter.default.j2
+    dest: /etc/default/prometheus-node-exporter
+    owner: root
+    group: root
+    mode: "0644"
+  register: monitoring_stack_node_exporter_cfg
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Write the Prometheus scrape configuration
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring_stack_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+    # A malformed scrape config takes Prometheus down on restart; refuse to
+    # install one the binary itself rejects.
+    validate: promtool check config %s
+  notify: restart prometheus
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Restart node_exporter when its listen address changed
+  ansible.builtin.systemd:
+    name: "{{ monitoring_stack_node_exporter_service }}"
+    state: restarted
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - monitoring_stack_node_exporter_cfg is defined
+    - monitoring_stack_node_exporter_cfg.changed | default(false)
+  tags: [monitoring, service]
+
+- name: Enable and start node_exporter
+  ansible.builtin.systemd:
+    name: "{{ monitoring_stack_node_exporter_service }}"
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+  tags: [monitoring, service]
+
+- name: Enable and start Prometheus
+  ansible.builtin.systemd:
+    name: "{{ monitoring_stack_prometheus_service }}"
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+  tags: [monitoring, service]
+
+- name: Apply any pending restart before verifying
+  ansible.builtin.meta: flush_handlers
+  tags: [monitoring, verify]
+
+- name: Wait for the Prometheus HTTP API to answer on loopback
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_stack_listen }}/-/ready"
+    status_code: [200]
+  register: monitoring_stack_ready
+  until: monitoring_stack_ready.status == 200
+  retries: 20
+  delay: 3
+  changed_when: false
+  when: not ansible_check_mode
+  tags: [monitoring, verify]
+
+- name: Verify node metrics are actually being scraped
+  ansible.builtin.uri:
+    url: >-
+      http://{{ monitoring_stack_listen }}/api/v1/query?query=up%7Bjob%3D%22node%22%7D
+    return_content: true
+  register: monitoring_stack_up
+  until:
+    - monitoring_stack_up.status == 200
+    - (monitoring_stack_up.json.data.result | default([]) | length) > 0
+    - (monitoring_stack_up.json.data.result | default([])
+       | map(attribute='value') | map('last') | select('equalto', '1') | list | length) > 0
+  retries: 20
+  delay: 3
+  changed_when: false
+  # An installed-but-empty Prometheus renders an empty Monitoring tab with no
+  # explanation, which is exactly the class of silent failure this release is
+  # trying to remove.
+  when: not ansible_check_mode
+  tags: [monitoring, verify]
+
+- name: Confirm Prometheus is not listening on a routable address
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      ss -lntH 'sport = :9090' | awk '{print $4}'
+    executable: /bin/bash
+  register: monitoring_stack_bind
+  changed_when: false
+  failed_when: >-
+    monitoring_stack_bind.stdout | trim | length > 0
+    and not (monitoring_stack_bind.stdout is search('127\.0\.0\.1:9090'))
+  when: not ansible_check_mode
+  tags: [monitoring, verify]

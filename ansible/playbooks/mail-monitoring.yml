@@ -1,0 +1,16 @@
+---
+# Built-in metrics for the console Monitoring tab (Prometheus + node_exporter).
+#
+# Both bind to 127.0.0.1 and are proxied by the console, so this adds no new
+# listening port and no second login. Safe to re-run: it is package install
+# plus config plus a verify.
+#
+#   ansible-playbook playbooks/mail-monitoring.yml --check
+
+- name: Install built-in monitoring on the mail nodes
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: monitoring_stack
+      tags: [monitoring]

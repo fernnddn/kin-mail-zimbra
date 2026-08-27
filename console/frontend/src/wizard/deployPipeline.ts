@@ -48,6 +48,10 @@ export const HA_ORCH_STAGES: readonly InstallStage[] = [
   { script: "mail_pacemaker_agents", label: "mail-pacemaker.yml tags=agents (OCF scripts)" },
   { script: "mail_pacemaker_stack", label: "mail-pacemaker.yml stack (constraints, VIP, hostname remap)" },
   {
+    script: "mail_monitoring",
+    label: "mail-monitoring.yml (built-in Prometheus metrics for the console)",
+  },
+  {
     script: "live_join_check",
     label: "dry-run mail-drbd + mail-pacemaker against the live Pacemaker pair",
   },

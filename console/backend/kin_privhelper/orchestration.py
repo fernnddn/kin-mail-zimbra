@@ -446,6 +446,17 @@ STEPS: tuple[Step, ...] = (
         skip_tags=("agents",),
         cluster_join=True,
     ),
+    # Built-in metrics for the console Monitoring tab. Last of the applying
+    # steps on purpose: it is additive, it touches no cluster state, and a
+    # package-install hiccup here must never be able to strand a half-built
+    # HA pair.
+    Step(
+        "mail_monitoring",
+        "mail-monitoring.yml (built-in Prometheus metrics for the console)",
+        "playbooks/mail-monitoring.yml",
+        "ansible",
+        check_on_join_check=True,
+    ),
     Step(
         "live_join_check",
         "dry-run mail-drbd + mail-pacemaker against the live Pacemaker pair",

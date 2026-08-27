@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: KIN
+  description: Built-in Prometheus + node_exporter for the console Monitoring tab
+  license: proprietary
+  min_ansible_version: "2.14"
+dependencies: []

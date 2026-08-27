@@ -1,0 +1,26 @@
+# Managed by Ansible role monitoring_stack (KIN Mail built-in monitoring).
+# Bound to 127.0.0.1 only - the console proxies this; it is never exposed.
+global:
+  scrape_interval: {{ monitoring_stack_scrape_interval }}
+  evaluation_interval: {{ monitoring_stack_scrape_interval }}
+  external_labels:
+    cluster: kin-mail
+
+scrape_configs:
+  - job_name: node
+    static_configs:
+      - targets:
+{% for target in monitoring_stack_targets %}
+          - "{{ target }}"
+{% endfor %}
+    relabel_configs:
+      # Loopback scrape would label every series "127.0.0.1"; show the real
+      # hostname instead so a saved chart still says which node it came from.
+      - source_labels: [__address__]
+        regex: ".*"
+        target_label: instance
+        replacement: "{{ inventory_hostname }}"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["{{ monitoring_stack_listen }}"]

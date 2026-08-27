@@ -1,0 +1,35 @@
+---
+# Built-in metrics for the console Monitoring tab.
+#
+# Prometheus and node_exporter both bind to 127.0.0.1 ONLY. The console proxies
+# them on the port the operator is already authenticated to, so Monitoring is a
+# tab in the console rather than a second web UI with its own port and its own
+# login. Nothing here should ever be exposed to the network directly.
+monitoring_stack_packages:
+  - prometheus
+  - prometheus-node-exporter
+
+monitoring_stack_prometheus_service: prometheus
+monitoring_stack_node_exporter_service: prometheus-node-exporter
+monitoring_stack_config: /etc/prometheus/prometheus.yml
+
+# Operator asked for "now to 1 year" of trend data. node_exporter at a 15s
+# scrape is roughly 1-2 GB/year for a 2-node pair, which fits the 100 GB OS
+# disk with room to spare.
+monitoring_stack_retention: 1y
+monitoring_stack_retention_size: 8GB
+monitoring_stack_scrape_interval: 15s
+
+monitoring_stack_listen: 127.0.0.1:9090
+monitoring_stack_node_exporter_listen: 127.0.0.1:9100
+
+# Each node scrapes ITSELF ONLY, over loopback.
+#
+# Scraping the peer would mean binding node_exporter to a routable address and
+# opening 9100 between the mail nodes - new network exposure and a new firewall
+# rule on an appliance whose whole point is a locked-down perimeter. Every node
+# keeps a full year of its own history either way, and the console the operator
+# reaches through the VIP is by definition the node serving mail. Peer metrics
+# are a deliberate follow-up, not an oversight.
+monitoring_stack_targets:
+  - "{{ monitoring_stack_node_exporter_listen }}"

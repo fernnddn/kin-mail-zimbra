@@ -1141,6 +1141,78 @@ async def api_settings_firewall(
     return {"ok": True}
 
 
+@app.get("/api/monitoring/catalogue")
+def monitoring_catalogue(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """What the Monitoring tab can chart, and over which windows."""
+    from . import monitoring
+
+    return {
+        "metrics": monitoring.catalogue_public(),
+        "ranges": list(monitoring.RANGES),
+        "default_range": monitoring.DEFAULT_RANGE,
+    }
+
+
+@app.get("/api/monitoring/series")
+async def monitoring_series(
+    metric: str,
+    range: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Time series for one catalogued metric.
+
+    Proxied so Prometheus itself stays bound to 127.0.0.1 and the operator
+    never has a second port or a second login. The browser passes a metric
+    NAME, never PromQL.
+    """
+    import asyncio
+    import time
+
+    from . import monitoring
+
+    window = range or monitoring.DEFAULT_RANGE
+    if not monitoring.known_metric(metric):
+        raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
+    if window not in monitoring.RANGES:
+        raise HTTPException(status_code=400, detail=f"Unknown range: {window}")
+    try:
+        series = await asyncio.to_thread(
+            monitoring.fetch_range, metric, window, now=time.time()
+        )
+    except monitoring.MonitoringError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"range": window, **monitoring.metric_meta(metric), "series": series}
+
+
+@app.get("/api/monitoring/overview")
+async def monitoring_overview(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Current value of every catalogued metric, for the gauge row."""
+    import asyncio
+
+    from . import monitoring
+
+    async def one(name: str) -> tuple[str, object]:
+        try:
+            return name, await asyncio.to_thread(monitoring.fetch_instant, name)
+        except monitoring.MonitoringError:
+            # One dead metric must not blank the whole dashboard.
+            return name, []
+
+    pairs = await asyncio.gather(*(one(n) for n in monitoring.CATALOGUE))
+    values = dict(pairs)
+    available = any(values[n] for n in values)
+    return {
+        "available": available,
+        "metrics": [
+            {**monitoring.metric_meta(n), "values": values[n]} for n in monitoring.CATALOGUE
+        ],
+    }
+
+
 @app.get("/api/cluster/status")
 async def cluster_status(
     user: ConsoleUser = Depends(auth.require_console_user),
