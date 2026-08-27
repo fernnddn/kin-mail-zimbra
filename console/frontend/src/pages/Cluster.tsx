@@ -1093,6 +1093,26 @@ export default function ClusterPage() {
   const [pendingObsAdd, setPendingObsAdd] = useState(false);
   const [pendingCleanup, setPendingCleanup] = useState(false);
   const [pendingFailback, setPendingFailback] = useState<string | null>(null);
+  // The Activity log is a running record, not a scratch buffer: every action
+  // appends to it under a timestamped header so the operator can scroll back
+  // and see where something went wrong. Capped so a long session cannot grow
+  // without bound.
+  const logRef = useRef("");
+  const LOG_LIMIT = 200000;
+  const appendLog = useCallback((text: string) => {
+    const next = logRef.current + text;
+    logRef.current =
+      next.length > LOG_LIMIT ? next.slice(next.length - LOG_LIMIT) : next;
+    setLog(logRef.current);
+  }, []);
+  const logHeader = useCallback(
+    (title: string, target?: string) => {
+      const when = new Date().toLocaleTimeString();
+      const who = target ? ` ${target}` : "";
+      appendLog(`\n=== ${title}${who} - ${when} ===\n`);
+    },
+    [appendLog],
+  );
   const esRef = useRef<EventSource | null>(null);
   const probeRef = useRef<EventSource | null>(null);
   const refreshInFlightRef = useRef(false);
@@ -1106,7 +1126,13 @@ export default function ClusterPage() {
     try {
       const st = await api<StatusResp>("/api/cluster/status");
       setCluster(st.cluster || {});
-      if (!esRef.current) setLog(st.log || "");
+      // Only seed the transcript on a cold start. A status poll overwriting it
+      // every few seconds is what made the Activity log look like it reset
+      // itself and lose the record of what just happened.
+      if (!esRef.current && !logRef.current) {
+        logRef.current = st.log || "";
+        setLog(logRef.current);
+      }
       setLastUpdated(Date.now());
     } finally {
       refreshInFlightRef.current = false;
@@ -1163,9 +1189,10 @@ export default function ClusterPage() {
   function runStream(op: "preflight" | "enter" | "exit" | "cleanup" | "failback", target: string) {
     esRef.current?.close();
     const taskId = startTask(TASK_TITLES[op] || op, target || undefined);
+    logHeader(TASK_TITLES[op] || op, target);
     setBusy(true);
     setMessage("");
-    setLog("");
+    // header appended below instead of wiping the record
     if (op === "preflight") {
       setPreflight(null);
       setPreflightTarget(target);
@@ -1183,13 +1210,13 @@ export default function ClusterPage() {
         const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
         if (data.type === "stdout" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "stderr" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "error") {
           buf += `[error] ${data.message || ""}\n`;
-          setLog(buf);
+          appendLog(`[error] ${data.message || ""}\n`);
         } else if (data.type === "done") {
           es.close();
           esRef.current = null;
@@ -1215,13 +1242,13 @@ export default function ClusterPage() {
             setMessage(
               code === 0
                 ? "Cleared stale Pacemaker fail-counts."
-                : "Could not clear fail-counts - see the log below.",
+                : "Could not clear fail-counts - the output is on the Activity log tab.",
             );
           } else if (op === "failback") {
             setMessage(
               code === 0
                 ? `Master moved to ${target}. Mail VIP should be on that node.`
-                : `Master move to ${target} did not finish - see the log below. If a temporary ban is still set, on either mail node run: pcs resource clear kin-drbd-clone`,
+                : `Master move to ${target} did not finish - the output is on the Activity log tab. If a temporary ban is still set, on either mail node run: pcs resource clear kin-drbd-clone`,
             );
           } else {
             setMessage(code === 0 ? `${target} left maintenance.` : `Exit maintenance not fully verified for ${target}.`);
@@ -1231,10 +1258,10 @@ export default function ClusterPage() {
             code === 0 ? "done" : "failed",
             code === 0 ? undefined : `exit ${code}`,
           );
-          // These messages say "see the log below", but the log lives on the
-          // Activity tab - so on the Status tab they pointed at nothing. Show
-          // the operator the output instead of telling them to go find it.
-          if (code !== 0) setTab("activity");
+          // Deliberately does NOT jump to the Activity log. Being thrown onto
+          // another tab loses the place you were working from, and the Activity
+          // log is a running record you go and read - not somewhere to be sent.
+          // The message below names the tab instead.
           void refresh();
         }
       } catch {
@@ -1248,7 +1275,6 @@ export default function ClusterPage() {
         setBusy(false);
         setMessage("Lost connection to the maintenance stream. The last output is on the Activity log tab.");
         endTaskWith(taskId, "failed", "lost connection to the stream");
-        setTab("activity");
       }
     };
   }
@@ -1302,8 +1328,9 @@ export default function ClusterPage() {
     esRef.current?.close();
     setBusy(true);
     setMessage("");
-    setLog("");
+    // header appended below instead of wiping the record
     setTab("activity");
+    logHeader("Remove host");
     const qs = new URLSearchParams({
       action: "remove_host",
       op: "apply",
@@ -1317,13 +1344,13 @@ export default function ClusterPage() {
         const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
         if (data.type === "stdout" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "stderr" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "error") {
           buf += `[error] ${data.message || ""}\n`;
-          setLog(buf);
+          appendLog(`[error] ${data.message || ""}\n`);
         } else if (data.type === "done") {
           es.close();
           esRef.current = null;
@@ -1398,8 +1425,9 @@ export default function ClusterPage() {
     esRef.current?.close();
     setBusy(true);
     setMessage("");
-    setLog("");
+    // header appended below instead of wiping the record
     setTab("activity");
+    logHeader("Remove Observability");
     const qs = new URLSearchParams({
       action: "remove_observability",
       op: "apply",
@@ -1412,13 +1440,13 @@ export default function ClusterPage() {
         const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
         if (data.type === "stdout" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "stderr" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "error") {
           buf += `[error] ${data.message || ""}\n`;
-          setLog(buf);
+          appendLog(`[error] ${data.message || ""}\n`);
         } else if (data.type === "done") {
           es.close();
           esRef.current = null;
@@ -1451,8 +1479,9 @@ export default function ClusterPage() {
     esRef.current?.close();
     setBusy(true);
     setMessage("");
-    setLog("");
+    // header appended below instead of wiping the record
     setTab("activity");
+    logHeader("Add Observability");
     setPendingObsAdd(false);
     setAddOpen(false);
     const qs = new URLSearchParams({
@@ -1467,13 +1496,13 @@ export default function ClusterPage() {
         const data = JSON.parse(ev.data) as { type?: string; data?: string; exit_code?: number; message?: string };
         if (data.type === "stdout" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "stderr" && data.data) {
           buf += data.data;
-          setLog(buf);
+          appendLog(data.data);
         } else if (data.type === "error") {
           buf += `[error] ${data.message || ""}\n`;
-          setLog(buf);
+          appendLog(`[error] ${data.message || ""}\n`);
         } else if (data.type === "done") {
           es.close();
           esRef.current = null;

@@ -5,7 +5,7 @@ import { theme } from "../styles/theme";
 import { Dropdown } from "../ui";
 import { useTasks } from "./TaskProvider";
 import { formatElapsed, taskBadgeTone, taskElapsedMs, type Task } from "./taskStore";
-import type { Alert } from "./alerts";
+import { activeAlertCount, type Alert } from "./alerts";
 
 const spin = keyframes`to { transform: rotate(360deg); }`;
 
@@ -25,13 +25,14 @@ const IconBtn = styled.button<{ $tone: "running" | "failed" | "done" | "idle" }>
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  /* Operator's scheme: in progress = orange, failed = red, finished = blue. */
   color: ${(p) =>
     p.$tone === "failed"
       ? theme.danger
       : p.$tone === "running"
-        ? theme.accent
+        ? theme.warn
         : p.$tone === "done"
-          ? theme.ok
+          ? theme.accent
           : theme.surface[500]};
   transition: background ${theme.motion.fast};
 
@@ -54,7 +55,7 @@ const Badge = styled.span<{ $tone: "running" | "failed" | "done" }>`
   padding: 0 0.25rem;
   border-radius: ${theme.radius.full};
   background: ${(p) =>
-    p.$tone === "failed" ? theme.danger : p.$tone === "running" ? theme.accent : theme.ok};
+    p.$tone === "failed" ? theme.danger : p.$tone === "running" ? theme.warn : theme.accent};
   color: #fff;
   font-size: 0.65rem;
   font-weight: 700;
@@ -67,16 +68,17 @@ const Spinner = styled.span`
   height: 0.85rem;
   border-radius: ${theme.radius.full};
   border: 2px solid ${theme.surface[300]};
-  border-top-color: ${theme.accent};
+  border-top-color: ${theme.warn};
   animation: ${spin} 800ms linear infinite;
   flex-shrink: 0;
 `;
 
-const Dot = styled.span<{ $tone: "done" | "failed" }>`
+const Dot = styled.span<{ $tone: "done" | "failed" | "warn" }>`
   width: 0.55rem;
   height: 0.55rem;
   border-radius: ${theme.radius.full};
-  background: ${(p) => (p.$tone === "failed" ? theme.danger : theme.ok)};
+  background: ${(p) =>
+    p.$tone === "failed" ? theme.danger : p.$tone === "warn" ? theme.warn : theme.accent};
   flex-shrink: 0;
 `;
 
@@ -120,11 +122,12 @@ const RowBody = styled.div`
   flex: 1;
 `;
 
-const RowTitle = styled.p`
+const RowTitle = styled.p<{ $resolved?: boolean }>`
   margin: 0;
   font-size: 0.82rem;
   font-weight: 600;
-  color: ${theme.surface[800]};
+  color: ${(p) => (p.$resolved ? theme.muted : theme.surface[800])};
+  text-decoration: ${(p) => (p.$resolved ? "line-through" : "none")};
 `;
 
 const RowDetail = styled.p<{ $danger?: boolean }>`
@@ -230,8 +233,18 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
       <Wrap>
         <IconBtn
           type="button"
-          $tone={alerts.length ? (alerts.some((a) => a.severity === "danger") ? "failed" : "running") : "idle"}
-          aria-label={alerts.length ? `${alerts.length} cluster alert(s)` : "No cluster alerts"}
+          $tone={
+            activeAlertCount(alerts)
+              ? alerts.some((a) => a.severity === "danger")
+                ? "failed"
+                : "running"
+              : "idle"
+          }
+          aria-label={
+            activeAlertCount(alerts)
+              ? `${activeAlertCount(alerts)} cluster alert(s)`
+              : "No cluster alerts"
+          }
           aria-haspopup="menu"
           aria-expanded={alertsOpen}
           onClick={() => {
@@ -240,9 +253,9 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
           }}
         >
           <BellIcon />
-          {alerts.length ? (
+          {activeAlertCount(alerts) ? (
             <Badge $tone={alerts.some((a) => a.severity === "danger") ? "failed" : "running"}>
-              {alerts.length}
+              {activeAlertCount(alerts)}
             </Badge>
           ) : null}
         </IconBtn>
@@ -254,10 +267,23 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
             ) : (
               alerts.map((a) => (
                 <Row key={a.id}>
-                  <Dot $tone={a.severity === "danger" ? "failed" : "done"} style={{ marginTop: "0.28rem" }} />
+                  <Dot
+                    $tone={
+                      a.severity === "danger"
+                        ? "failed"
+                        : a.severity === "resolved"
+                          ? "done"
+                          : "warn"
+                    }
+                    style={{ marginTop: "0.28rem" }}
+                  />
                   <RowBody>
-                    <RowTitle>{a.title}</RowTitle>
-                    {a.detail ? <RowDetail $danger={a.severity === "danger"}>{a.detail}</RowDetail> : null}
+                    <RowTitle $resolved={a.severity === "resolved"}>{a.title}</RowTitle>
+                    {a.severity === "resolved" ? (
+                      <RowDetail>Cleared</RowDetail>
+                    ) : a.detail ? (
+                      <RowDetail $danger={a.severity === "danger"}>{a.detail}</RowDetail>
+                    ) : null}
                   </RowBody>
                 </Row>
               ))

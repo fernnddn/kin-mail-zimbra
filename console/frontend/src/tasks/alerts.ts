@@ -6,8 +6,46 @@
  * health dropdown.
  */
 
-export type AlertSeverity = "warn" | "danger";
-export type Alert = { id: string; title: string; detail?: string; severity: AlertSeverity };
+export type AlertSeverity = "warn" | "danger" | "resolved";
+export type Alert = {
+  id: string;
+  title: string;
+  detail?: string;
+  severity: AlertSeverity;
+  /** Set when this alert has cleared and is being shown as resolved. */
+  resolvedAt?: number;
+};
+
+/** How long a cleared alert stays visible, struck through, before it goes. */
+export const RESOLVED_ALERT_LINGER_MS = 5 * 60 * 1000;
+
+/** Merge a fresh derivation with what was on screen a moment ago.
+ *
+ * A poll that clears an alert used to make the row vanish mid-read, and a
+ * flapping condition made rows appear and disappear - the operator saw exactly
+ * that and could not tell whether anything was actually wrong. A cleared alert
+ * now stays, marked resolved, until it has been settled for a while.
+ */
+export function mergeAlerts(
+  previous: Alert[],
+  fresh: Alert[],
+  now: number = Date.now(),
+): Alert[] {
+  const freshIds = new Set(fresh.map((a) => a.id));
+  const out: Alert[] = fresh.map((a) => ({ ...a, resolvedAt: undefined }));
+  for (const old of previous) {
+    if (freshIds.has(old.id)) continue;
+    const since = old.resolvedAt ?? now;
+    if (now - since > RESOLVED_ALERT_LINGER_MS) continue;
+    out.push({ ...old, severity: "resolved", resolvedAt: since });
+  }
+  return out;
+}
+
+/** Only unresolved alerts count towards the header badge. */
+export function activeAlertCount(alerts: Alert[]): number {
+  return alerts.filter((a) => a.severity !== "resolved").length;
+}
 
 export type AlertSnap = {
   topology?: string;

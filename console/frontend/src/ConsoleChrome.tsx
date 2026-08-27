@@ -7,7 +7,7 @@ import { useSetup } from "./setup";
 import { theme } from "./styles/theme";
 import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
 import { TaskCenter } from "./tasks/TaskCenter";
-import { deriveAlerts, type Alert, type AlertSnap } from "./tasks/alerts";
+import { deriveAlerts, mergeAlerts, type Alert, type AlertSnap } from "./tasks/alerts";
 
 const Frame = styled.div`
   min-height: 100vh;
@@ -29,6 +29,12 @@ const Top = styled.header`
   border-bottom: 1px solid color-mix(in srgb, ${theme.line} 60%, transparent);
   background: ${theme.bgElev};
   flex-shrink: 0;
+  /* Stays put while the page scrolls: the account menu, the alert bell and the
+     task list are needed from anywhere on a long page, and the task list in
+     particular is what tells you a job is still running. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
 `;
 
 const BrandBlock = styled.div`
@@ -187,7 +193,9 @@ export function ConsoleChrome({
     const load = () => {
       api<{ cluster?: AlertSnap }>("/api/cluster/status")
         .then((res) => {
-          if (!stop) setAlerts(deriveAlerts(res.cluster));
+          if (stop) return;
+          const fresh = deriveAlerts(res.cluster);
+          setAlerts((prev) => mergeAlerts(prev, fresh));
         })
         .catch(() => {
           // A failed poll must not blank real alerts, and must not spam.

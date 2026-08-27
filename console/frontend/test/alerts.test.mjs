@@ -13,7 +13,7 @@ execFileSync(
    `--outfile=${bundle}`, "--log-level=error"],
   { stdio: "inherit" },
 );
-const { deriveAlerts } = await import(pathToFileURL(bundle).href);
+const { deriveAlerts, mergeAlerts, activeAlertCount, RESOLVED_ALERT_LINGER_MS } = await import(pathToFileURL(bundle).href);
 rmSync(out, { recursive: true, force: true });
 
 let pass = 0, fail = 0;
@@ -78,6 +78,28 @@ chk("both down surfaces quorum + node + observability",
   ids({ ...healthy, offline: ["b"], observability: { status: "unreachable" },
         quorum_hint: "Running alone", no_quorum_policy: "ignore" }),
   ["nodes-down", "observability", "quorum"]);
+
+// --- resolved-alert merge (Phase 5 QA: alerts flickered in and out) --------
+const A = (id, sev = "warn") => ({ id, title: id, severity: sev });
+let merged = mergeAlerts([A("drbd")], [], 1000);
+chk("a cleared alert stays, marked resolved", merged.map((a) => [a.id, a.severity]), [["drbd", "resolved"]]);
+chk("a resolved alert does not count towards the badge", activeAlertCount(merged), 0);
+chk("active alerts do count", activeAlertCount([A("x"), A("y", "danger")]), 2);
+
+// It must not linger forever, and the clock starts when it first cleared.
+const stamped = mergeAlerts([A("drbd")], [], 1000);
+const stillThere = mergeAlerts(stamped, [], 1000 + RESOLVED_ALERT_LINGER_MS - 1);
+chk("still shown just inside the linger window", stillThere.length, 1);
+const gone = mergeAlerts(stamped, [], 1000 + RESOLVED_ALERT_LINGER_MS + 1);
+chk("dropped once the linger window passes", gone.length, 0);
+
+// A flapping alert must go back to active, not stay struck through.
+const back = mergeAlerts(stamped, [A("drbd")], 2000);
+chk("a returning alert becomes active again", back.map((a) => [a.id, a.severity]), [["drbd", "warn"]]);
+chk("a returning alert clears its resolved stamp", back[0].resolvedAt, undefined);
+
+chk("fresh alerts pass through unchanged", mergeAlerts([], [A("a"), A("b", "danger")], 1).map((a) => a.id), ["a", "b"]);
+chk("nothing in, nothing out", mergeAlerts([], [], 1), []);
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);
