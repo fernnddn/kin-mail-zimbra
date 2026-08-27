@@ -1,6 +1,15 @@
 # Managed by Ansible role monitoring_stack (KIN Mail built-in monitoring).
 # --web.listen-address on loopback: Monitoring is a console tab, never a port.
+#
+# config.file and storage.tsdb.path are deliberately absent: Debian patches the
+# compiled-in defaults to /etc/prometheus/prometheus.yml and
+# /var/lib/prometheus/metrics2/ (debian/patches/0005-Default-settings.patch),
+# and ExecStart is a bare `/usr/bin/prometheus $ARGS`, so naming them here would
+# only risk drifting from the packaged layout.
+#
+# --web.enable-lifecycle is deliberately NOT set: it exposes /-/reload and
+# /-/quit, and we reload by restarting the unit. /-/ready, which the verify
+# step uses, needs no such flag.
 ARGS="--web.listen-address={{ monitoring_stack_listen }} \
 --storage.tsdb.retention.time={{ monitoring_stack_retention }} \
---storage.tsdb.retention.size={{ monitoring_stack_retention_size }} \
---web.enable-lifecycle"
+--storage.tsdb.retention.size={{ monitoring_stack_retention_size }}"

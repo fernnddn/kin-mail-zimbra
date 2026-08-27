@@ -30,6 +30,46 @@
   when: not ansible_check_mode
   tags: [monitoring, config]
 
+# See the drop-in template for why: a private mount namespace on a unit that
+# starts after /opt/zimbra is mounted can pin the DRBD backing device and block
+# a later failover.
+- name: Keep the monitoring units out of a private mount namespace
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ monitoring_stack_prometheus_service }}"
+    - "{{ monitoring_stack_node_exporter_service }}"
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Install the no-private-mount-namespace drop-ins
+  ansible.builtin.template:
+    src: no-private-tmp.conf.j2
+    dest: "/etc/systemd/system/{{ item }}.service.d/10-kin-no-private-tmp.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - "{{ monitoring_stack_prometheus_service }}"
+    - "{{ monitoring_stack_node_exporter_service }}"
+  register: monitoring_stack_dropins
+  notify: restart prometheus
+  when: not ansible_check_mode
+  tags: [monitoring, config]
+
+- name: Reload systemd so the drop-ins take effect
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - monitoring_stack_dropins is defined
+    - monitoring_stack_dropins.changed | default(false)
+  tags: [monitoring, config]
+
 - name: Write the Prometheus scrape configuration
   ansible.builtin.template:
     src: prometheus.yml.j2
@@ -80,8 +120,8 @@
     daemon_reload: true
   when:
     - not ansible_check_mode
-    - monitoring_stack_node_exporter_cfg is defined
-    - monitoring_stack_node_exporter_cfg.changed | default(false)
+    - (monitoring_stack_node_exporter_cfg.changed | default(false))
+      or (monitoring_stack_dropins.changed | default(false))
   tags: [monitoring, service]
 
 - name: Enable and start node_exporter

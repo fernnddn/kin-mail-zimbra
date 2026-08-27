@@ -1,0 +1,19 @@
+# Managed by Ansible role monitoring_stack (KIN Mail built-in monitoring).
+#
+# PrivateTmp=yes gives a unit its own MOUNT NAMESPACE, which holds a snapshot of
+# the mount table taken when the unit started. This service starts after
+# Pacemaker has already mounted /opt/zimbra from /dev/drbd0, so its namespace
+# would carry a copy of that mount.
+#
+# That is the exact failure that blocked this product's deploy repeatedly: a
+# mount surviving in another namespace keeps the DRBD/LUKS device open with
+# open count >= 1 while findmnt, fuser, /proc/*/fd and sysfs holders are all
+# clean, so `drbdadm secondary` during a failover cannot release the backing
+# device. Mount propagation usually tears the copy down with the host unmount,
+# but "usually" is not a property to bet a failover on, and a metrics daemon
+# bound to loopback gains almost nothing from a private /tmp.
+#
+# Remove this drop-in only if you have proven on a live pair that a failover
+# still demotes cleanly with PrivateTmp on.
+[Service]
+PrivateTmp=no

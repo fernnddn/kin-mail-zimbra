@@ -346,6 +346,11 @@ class Step:
     # Cluster-join playbooks. join_mode=check never applies these to a
     # non-member peer - live_join_check dry-runs them against the live pair.
     cluster_join: bool = False
+    # Additive extras that touch no cluster state. A failure here is reported
+    # loudly but must not abort a Build HA pair that has otherwise succeeded:
+    # losing the metrics charts is not a reason to leave an operator with a
+    # half-built pair and no mail.
+    optional: bool = False
 
 
 # Proven HA orchestration order. remote_install is the OS+Zimbra step on the new
@@ -456,6 +461,7 @@ STEPS: tuple[Step, ...] = (
         "playbooks/mail-monitoring.yml",
         "ansible",
         check_on_join_check=True,
+        optional=True,
     ),
     Step(
         "live_join_check",
@@ -2758,6 +2764,17 @@ async def cmd_run_ha_orchestration(
                 exit_code = _event_exit_code(ev)
             else:
                 yield ev
+        if exit_code != 0 and step.optional:
+            yield emit_line(
+                f"[{index}/{total}] FAIL {step.step_id} playbook={play.name} "
+                f"exit={exit_code} - continuing: this step is additive and "
+                "touches no cluster state. The HA pair is unaffected; re-run "
+                f"{play.name} on its own to fix it.",
+                err=True,
+            )
+            exit_code = 0
+            yield emit_line(f"[{index}/{total}] FINISH {step.step_id}")
+            continue
         if exit_code != 0:
             failed_step = step.step_id
             yield emit_line(
