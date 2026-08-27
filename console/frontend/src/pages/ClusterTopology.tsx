@@ -87,9 +87,20 @@ function cable(healthy: boolean, present: boolean): string {
   return healthy ? OK : DOWN;
 }
 
+// Fixed card geometry. Everything else (connector endpoints, label chips) is
+// derived from these, so a card can never grow into a line again.
+const CARD_W = 200;
+const CARD_H = 104;
+const OBS_H = 84;
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
 function NodeGlyph({
-  x,
-  y,
+  cx,
+  cy,
+  height,
   title,
   subtitle,
   ip,
@@ -98,8 +109,9 @@ function NodeGlyph({
   role,
   vip,
 }: {
-  x: number;
-  y: number;
+  cx: number;
+  cy: number;
+  height: number;
   title: string;
   subtitle: string;
   ip?: string;
@@ -112,68 +124,81 @@ function NodeGlyph({
   const fill = placeholder ? theme.surface[50] : "#fff";
   const addr = (ip || "").trim();
   const floating = (vip || "").trim();
-  // The card grows for whatever it actually has to say, so a replica with no
-  // VIP does not leave a block of empty space where the badge would go.
-  const height = 76 + (addr ? 16 : 0) + (role ? 16 : 0);
+  const left = cx - CARD_W / 2;
+  const top = cy - height / 2;
+  // One consistent left margin for every line of text in the card.
+  const textX = left + 20;
+  const badge = floating ? `${role} - VIP ${floating}` : role || "";
+
   return (
     <g>
       <rect
-        x={x - 86}
-        y={y - height / 2}
-        width={172}
+        x={left}
+        y={top}
+        width={CARD_W}
         height={height}
-        rx={14}
+        rx={12}
         fill={fill}
         stroke={stroke}
         strokeWidth={placeholder ? 1.25 : 1.6}
         strokeDasharray={placeholder ? "5 4" : undefined}
         filter={placeholder ? undefined : "url(#topoShadow)"}
       />
-      <circle cx={x - 62} cy={y - height / 2 + 22} r={7} fill={placeholder ? MUTED : stroke} />
-      <text
-        x={x - 46}
-        y={y - height / 2 + 18}
-        fill={SUB}
-        fontSize={10}
-        fontWeight={600}
-        letterSpacing="0.04em"
-      >
+      <circle cx={left + 12} cy={top + 17} r={4.5} fill={placeholder ? MUTED : stroke} />
+      <text x={textX} y={top + 21} fill={SUB} fontSize={9} fontWeight={700} letterSpacing="0.06em">
         {subtitle.toUpperCase()}
       </text>
-      <text x={x - 46} y={y - height / 2 + 38} fill={INK} fontSize={13} fontWeight={650}>
-        {title.length > 22 ? `${title.slice(0, 20)}...` : title}
+      <text x={textX} y={top + 42} fill={INK} fontSize={13} fontWeight={650}>
+        {truncate(title, 24)}
       </text>
       {addr ? (
-        <text x={x - 46} y={y - height / 2 + 56} fill={SUB} fontSize={11}>
+        <text x={textX} y={top + 60} fill={SUB} fontSize={11}>
           {addr}
         </text>
       ) : null}
-      {role ? (
+      {badge ? (
         <g>
           <rect
-            x={x - 46}
-            y={y + height / 2 - 26}
-            // Sized from the text so a short "REPLICA" does not sit in a pill
-            // padded out to fit the longest possible label.
-            width={Math.round(
-              (floating ? `${role} - VIP ${floating}` : role).length * 5.9 + 16,
-            )}
+            x={textX - 6}
+            y={top + height - 28}
+            width={Math.min(CARD_W - 2 * (textX - left) + 12, badge.length * 5.6 + 14)}
             height={17}
             rx={8.5}
             fill={floating ? "rgba(0, 97, 255, 0.10)" : theme.surface[100]}
           />
           <text
-            x={x - 38}
-            y={y + height / 2 - 14}
+            x={textX}
+            y={top + height - 16}
             fill={floating ? theme.accent : SUB}
-            fontSize={9.5}
+            fontSize={9}
             fontWeight={700}
             letterSpacing="0.03em"
           >
-            {floating ? `${role} - VIP ${floating}` : role}
+            {badge}
           </text>
         </g>
       ) : null}
+    </g>
+  );
+}
+
+/** A label that sits ON its connector, with a chip so the line never crosses it. */
+function LineLabel({ x, y, text }: { x: number; y: number; text: string }) {
+  const w = text.length * 5.4 + 16;
+  return (
+    <g>
+      <rect x={x - w / 2} y={y - 9} width={w} height={18} rx={9} fill="#fff" />
+      <text
+        x={x}
+        y={y + 3.5}
+        textAnchor="middle"
+        fill={SUB}
+        fontSize={9}
+        fontWeight={700}
+        letterSpacing="0.04em"
+      >
+        {text}
+      </text>
     </g>
   );
 }
@@ -208,7 +233,7 @@ export function ClusterTopology({
           <Caption>Single mail server. Add a second server when you are ready for HA.</Caption>
         </Head>
         <SvgWrap>
-          <svg viewBox="0 0 640 160" width="100%" height="auto" role="img">
+          <svg viewBox="0 0 760 172" width="100%" height="auto" role="img">
             <title>Single-server topology</title>
             <defs>
               <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
@@ -216,8 +241,9 @@ export function ClusterTopology({
               </filter>
             </defs>
             <NodeGlyph
-              x={320}
-              y={80}
+              cx={380}
+              cy={86}
+              height={OBS_H}
               title={node.name}
               subtitle="Mail"
               ip={node.ip}
@@ -270,51 +296,55 @@ export function ClusterTopology({
         <Caption>DRBD between mail nodes. qdevice and SBD through Observability.</Caption>
       </Head>
       <SvgWrap>
-        <svg viewBox="0 0 640 300" width="100%" height="auto" role="img">
+        <svg viewBox="0 0 760 344" width="100%" height="auto" role="img">
           <title>Cluster topology</title>
           <defs>
             <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
               <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(15,23,42,0.12)" />
             </filter>
           </defs>
+
+          {/* Connectors run between card EDGES, never under a card: obs bottom
+              centre down to each mail card's top centre, and a straight
+              horizontal DRBD link between the two mail cards. */}
           <line
-            x1={140}
-            y1={232}
-            x2={500}
-            y2={232}
+            x1={250}
+            y1={250}
+            x2={510}
+            y2={250}
             stroke={mailLink}
-            strokeWidth={1.5}
+            strokeWidth={1.75}
             strokeLinecap="round"
           />
           <line
-            x1={140}
-            y1={232}
-            x2={320}
-            y2={58}
+            x1={380}
+            y1={62 + OBS_H / 2}
+            x2={150}
+            y2={250 - CARD_H / 2}
             stroke={leftObs}
             strokeWidth={1.5}
             strokeLinecap="round"
             strokeDasharray={obsPresent ? undefined : "5 4"}
           />
           <line
-            x1={500}
-            y1={232}
-            x2={320}
-            y2={58}
+            x1={380}
+            y1={62 + OBS_H / 2}
+            x2={610}
+            y2={250 - CARD_H / 2}
             stroke={rightObs}
             strokeWidth={1.5}
             strokeLinecap="round"
             strokeDasharray={obsPresent ? undefined : "5 4"}
           />
-          <text x={320} y={222} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
-            {drbdLabel}
-          </text>
-          <text x={228} y={118} textAnchor="middle" fill={SUB} fontSize={9} fontWeight={600}>
-            qdevice / SBD
-          </text>
+
+          <LineLabel x={380} y={250} text={drbdLabel} />
+          <LineLabel x={265} y={(62 + OBS_H / 2 + 250 - CARD_H / 2) / 2} text="QDEVICE + SBD" />
+          <LineLabel x={495} y={(62 + OBS_H / 2 + 250 - CARD_H / 2) / 2} text="QDEVICE + SBD" />
+
           <NodeGlyph
-            x={320}
-            y={58}
+            cx={380}
+            cy={62}
+            height={OBS_H}
             title={obsLabel}
             subtitle="Observability"
             ip={observability.ip}
@@ -322,8 +352,9 @@ export function ClusterTopology({
             placeholder={!obsPresent}
           />
           <NodeGlyph
-            x={140}
-            y={232}
+            cx={150}
+            cy={250}
+            height={CARD_H}
             title={left.name}
             subtitle="Mail"
             ip={left.ip}
@@ -333,8 +364,9 @@ export function ClusterTopology({
             vip={left.promoted ? left.vip : undefined}
           />
           <NodeGlyph
-            x={500}
-            y={232}
+            cx={610}
+            cy={250}
+            height={CARD_H}
             title={right.name}
             subtitle="Mail"
             ip={right.ip}
