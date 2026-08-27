@@ -260,6 +260,20 @@ async def promoted_ban_flag() -> str:
     return parse_promoted_ban_flag(f"{out}\n{err}")
 
 
+def flag_not_recognized(text: str) -> bool:
+    """True when pcs rejected the flag itself rather than the operation.
+
+    pcs answers an unknown option with "option --promoted not recognized" and
+    then dumps its top-level usage, which is what the operator saw.
+    """
+    low = (text or "").lower()
+    return "not recognized" in low or "unrecognized" in low or "no such option" in low
+
+
+def other_ban_flag(flag: str) -> str:
+    return "--master" if flag == "--promoted" else "--promoted"
+
+
 def parse_quorate(quorum_text: str) -> bool | None:
     """True/False from `pcs quorum status`, None when it could not be read.
 
@@ -1353,6 +1367,19 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
                 ["pcs", "resource", "ban", DRBD_CLONE, current, ban_flag],
                 timeout=120,
             )
+            # Belt and braces: if pcs rejected the FLAG (not the operation),
+            # the help probe guessed wrong for this build - try the other
+            # spelling once rather than failing a move that would have worked.
+            # Nothing has been changed at this point, so the retry is safe.
+            if c != 0 and flag_not_recognized(f"{out}\n{err}"):
+                ban_flag = other_ban_flag(ban_flag)
+                yield await _emit(
+                    f"pcs rejected that option; retrying with {ban_flag}"
+                )
+                c, out, err = await _capture(
+                    ["pcs", "resource", "ban", DRBD_CLONE, current, ban_flag],
+                    timeout=120,
+                )
             if out:
                 yield await _emit(out)
             if err:

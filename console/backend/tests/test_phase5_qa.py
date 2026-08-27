@@ -224,3 +224,46 @@ class DaemonArgPassthroughTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(seen.get("token"), "payload.signature")
         self.assertEqual(events, [])
+
+
+class BanFlagFallbackTests(unittest.TestCase):
+    """The help probe is a guess; pcs rejecting the flag is proof.
+
+    pcs 0.10 may answer `pcs resource ban --help` with its top-level usage,
+    which advertises neither spelling - exactly how the operator's log looked
+    when --promoted was rejected. If the probe guesses wrong, the ban must be
+    retried with the other spelling rather than failing a move that would have
+    worked. Nothing is changed before the retry, so it is safe.
+    """
+
+    def test_detects_a_rejected_flag(self) -> None:
+        from kin_privhelper.maintenance import flag_not_recognized
+
+        self.assertTrue(flag_not_recognized("option --promoted not recognized"))
+        self.assertTrue(flag_not_recognized("Error: unrecognized option '--master'"))
+        self.assertTrue(flag_not_recognized("no such option: --promoted"))
+
+    def test_does_not_mistake_a_real_failure_for_a_bad_flag(self) -> None:
+        from kin_privhelper.maintenance import flag_not_recognized
+
+        # A genuine operational failure must NOT trigger a retry loop.
+        self.assertFalse(flag_not_recognized("Error: resource 'kin-drbd-clone' not found"))
+        self.assertFalse(flag_not_recognized("Error: unable to connect to the cluster"))
+        self.assertFalse(flag_not_recognized(""))
+
+    def test_the_other_flag_is_the_other_spelling(self) -> None:
+        from kin_privhelper.maintenance import other_ban_flag
+
+        self.assertEqual(other_ban_flag("--promoted"), "--master")
+        self.assertEqual(other_ban_flag("--master"), "--promoted")
+
+    def test_top_level_usage_falls_back_to_master(self) -> None:
+        # What pcs 0.10 actually printed in the operator's log.
+        from kin_privhelper.maintenance import parse_promoted_ban_flag
+
+        usage = (
+            "Usage: pcs [-f file] [-h] [commands]...\n"
+            "Options:\n  -h, --help  Display usage and exit.\n"
+            "  --force  Override checks and errors\n"
+        )
+        self.assertEqual(parse_promoted_ban_flag(usage), "--master")
