@@ -768,7 +768,16 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertIn("Dead-man stays armed", driver)
         self.assertNotIn("elapsed without cancel", driver)
         tls = (repo / "install/04-tls-dkim.sh").read_text(encoding="utf-8")
-        self.assertIn("wizard does not store it", tls)
+        # What is worth pinning here is the behaviour, not one sentence: a
+        # console-driven run has no TTY, so 04 must refuse with guidance instead
+        # of blocking on ask_secret forever. Assert the guard, and that the
+        # message names where the token is actually entered. The old assertion
+        # pinned prose that had gone stale - it still told the operator to SSH
+        # in and hand-write the file, long after the TLS step started writing it.
+        self.assertIn("if [ ! -t 0 ]; then", tls)
+        self.assertIn("needs ${CF_CREDS} with a real API token", tls)
+        self.assertIn("console wizard, TLS step", tls)
+        self.assertNotIn("wizard does not store it", tls)
         self.assertIn("kin_ha_peer_install", tls)
         self.assertIn("not creating a DKIM key", tls)
         health = (repo / "install/05-healthcheck.sh").read_text(encoding="utf-8")
