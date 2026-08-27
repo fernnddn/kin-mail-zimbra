@@ -166,3 +166,61 @@ class PreflightDetailTests(unittest.IsolatedAsyncioTestCase):
         joined = "\n".join(logs)
         self.assertIn("could not be read", joined)
         self.assertIn("kin-drbd-clone@a", joined)
+
+
+class DaemonArgPassthroughTests(unittest.IsolatedAsyncioTestCase):
+    """Applying a valid license failed with "That license text is incomplete".
+
+    The daemon's audit-label block popped "token" and "search_bind_password"
+    out of args before dispatching, so the handler received an empty token and
+    an Active Directory bind password was silently discarded. args are never
+    written to the audit log - _audit_line only ever gets a username, a command
+    string, a result and an exit code - so the redaction protected nothing and
+    only broke the two features (live Phase 5 QA).
+    """
+
+    def test_daemon_does_not_strip_secrets_from_args(self) -> None:
+        from pathlib import Path
+
+        src = Path(
+            __file__
+        ).resolve().parents[1] / "kin_privhelper" / "daemon.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertNotIn('args.pop("token", None)', text)
+        self.assertNotIn('args.pop("search_bind_password", None)', text)
+
+    def test_audit_line_never_receives_args(self) -> None:
+        import inspect
+
+        from kin_privhelper import daemon
+
+        sig = inspect.signature(daemon._audit_line)
+        self.assertEqual(
+            list(sig.parameters), ["username", "cmd", "result", "exit_code"]
+        )
+
+    async def test_a_valid_token_reaches_the_handler_intact(self) -> None:
+        """End-to-end through cmd_apply_appliance_settings: the section
+        dispatcher must hand _set_license exactly what it was given."""
+        from unittest.mock import AsyncMock, patch
+
+        import kin_privhelper.commands  # noqa: F401
+        from kin_privhelper import appliance_settings
+
+        seen: dict[str, object] = {}
+
+        async def fake_set_license(args):
+            seen.update(args)
+            if False:
+                yield {}
+
+        with patch.object(appliance_settings, "_set_license", fake_set_license):
+            events = [
+                ev
+                async for ev in appliance_settings.cmd_apply_appliance_settings(
+                    {"section": "license", "token": "payload.signature"}
+                )
+            ]
+
+        self.assertEqual(seen.get("token"), "payload.signature")
+        self.assertEqual(events, [])

@@ -378,10 +378,16 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         elif cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS:
             section = str(args.get("section") or "")[:24]
             audit_cmd = f"{cmd}:{section}"
-            if section in ("ad", "license"):
-                args = dict(args)
-                args.pop("search_bind_password", None)
-                args.pop("token", None)
+            # This block builds the AUDIT LABEL only. It used to also pop
+            # "token" and "search_bind_password" out of args to keep them out
+            # of the audit log - but _audit_line is only ever given a username,
+            # a command string, a result and an exit code: args are never
+            # logged, here or anywhere else. So the pops protected nothing and
+            # instead deleted the values before the handler ran. Applying a
+            # license failed with "That license text is incomplete" because
+            # _set_license received an empty token, and an Active Directory
+            # bind password was silently discarded the same way
+            # (live Phase 5 QA). Never mutate args for logging's sake.
         elif cmd == proto.CMD_MUTATE_CONSOLE_USERS:
             mop = str(args.get("op") or "")[:16]
             tgt = str(args.get("username") or "")[:80]
