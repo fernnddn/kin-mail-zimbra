@@ -240,18 +240,12 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          lab_plays=(
-            playbooks/mail-os-hardening.yml
-            playbooks/mail-cluster-setup.yml
-            playbooks/mail-drbd.yml
-            playbooks/mail-fencing.yml
-            playbooks/mail-qdevice.yml
-            playbooks/mail-pacemaker.yml
-            playbooks/mail-zpush.yml
-            playbooks/mon-iscsi-target.yml
-            playbooks/mon-qnetd.yml
-          )
-          if [ ${#lab_plays[@]} -eq 0 ]; then
+          # Discovered, not listed. A hand-maintained list silently stopped
+          # covering mail-monitoring.yml and both observability playbooks the
+          # moment they were added, which is exactly when a syntax error is
+          # most likely.
+          plays=(playbooks/*.yml)
+          if [ ${#plays[@]} -eq 0 ]; then
             echo "ERROR: no ansible playbooks found - refusing silent pass"
             exit 1
           fi
@@ -265,11 +259,16 @@ jobs:
               echo "FAILED  $play"; fail=1
             fi
           }
-          for p in "${lab_plays[@]}"; do
-            check inventory/lab.example.yml "$p"
+          for p in "${plays[@]}"; do
+            # add-host / remove-host describe hosts the lab inventory does not
+            # have; everything else dry-runs against the lab example.
+            case "$p" in
+              *mail-add-host.yml)    check inventory/add-host.example.yml "$p" ;;
+              *mail-remove-host.yml) check inventory/remove-host.example.yml "$p" ;;
+              *)                     check inventory/lab.example.yml "$p" ;;
+            esac
           done
-          check inventory/add-host.example.yml playbooks/mail-add-host.yml
-          check inventory/remove-host.example.yml playbooks/mail-remove-host.yml
+          echo "checked ${#plays[@]} playbook(s)"
           exit $fail
 
       # Relaxed profile, warnings do not fail. Catches broken YAML; skips
