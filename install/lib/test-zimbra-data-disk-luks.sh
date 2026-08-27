@@ -261,6 +261,47 @@ else
   bad "no entry written to an empty crypttab"
 fi
 
+# Edge cases that would corrupt a real /etc/crypttab.
+# A crypttab whose last line has no newline: appending directly glues our entry
+# onto the previous one and destroys BOTH. A stale entry indented with spaces
+# is still a valid crypttab line, and an anchored "^name" regex misses it, so
+# the dead UUID would survive next to the new one and systemd would try it
+# first - the original Phase 6 failure all over again.
+printf 'other UUID=KEEP none luks' >"$CT_ROOT/crypttab"   # deliberately no newline
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if [ "$(grep -c '^other UUID=KEEP none luks$' "$CT_ROOT/crypttab")" = "1" ] \
+  && [ "$(grep -c '^kin-zimbra-crypt UUID=NEW-UUID-1111' "$CT_ROOT/crypttab")" = "1" ]; then
+  pass "a crypttab with no trailing newline is not corrupted"
+else
+  bad "entries were glued together: $(cat "$CT_ROOT/crypttab")"
+fi
+
+printf '  kin-zimbra-crypt UUID=OLD-UUID-9999 %s luks\n' "$CT_ROOT/keyfile" >"$CT_ROOT/crypttab"
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if ! grep -q 'OLD-UUID-9999' "$CT_ROOT/crypttab" \
+  && [ "$(grep -cE '^[[:space:]]*kin-zimbra-crypt ' "$CT_ROOT/crypttab")" = "1" ]; then
+  pass "a stale entry indented with spaces is removed, not left beside the new one"
+else
+  bad "indented stale entry survived: $(cat "$CT_ROOT/crypttab")"
+fi
+
+printf '#kin-zimbra-crypt UUID=OLD-UUID-9999 /k luks\n' >"$CT_ROOT/crypttab"
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if [ "$(grep -c '^#kin-zimbra-crypt' "$CT_ROOT/crypttab")" = "1" ]; then
+  pass "a commented-out entry is left alone"
+else
+  bad "clobbered a commented line: $(cat "$CT_ROOT/crypttab")"
+fi
+
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+ct_run NEW-UUID-1111 'ensure_luks_crypttab /dev/sdb1' >/dev/null 2>&1
+if [ "$(grep -c '^kin-zimbra-crypt ' "$CT_ROOT/crypttab")" = "1" ] \
+  && [ "$(tail -c1 "$CT_ROOT/crypttab" | wc -l | tr -d ' ')" = "1" ]; then
+  pass "repeated runs leave one entry and a newline-terminated file"
+else
+  bad "duplicated on re-run: $(cat "$CT_ROOT/crypttab")"
+fi
+
 # --- boot readiness -----------------------------------------------------------
 if ct_run NEW-UUID-1111 'luks_boot_ready_reason /dev/sdb1' >/dev/null 2>&1; then
   pass "boot readiness passes once crypttab and keyfile agree"

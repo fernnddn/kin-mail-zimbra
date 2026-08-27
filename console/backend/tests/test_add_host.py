@@ -54,7 +54,7 @@ class AttachPeerEligibleTests(unittest.TestCase):
         )
 
     def test_two_nodes_finish_eligible(self) -> None:
-        """Ansible joined peer but survivor still 1vm — finish peer console."""
+        """Ansible joined peer but survivor still 1vm - finish peer console."""
         self.assertTrue(
             attach_peer_eligible(
                 topology="1vm",

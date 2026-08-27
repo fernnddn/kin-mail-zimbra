@@ -521,7 +521,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         finish_only = attach_finish_only(live_nodes)
         if finish_only:
             yield await _emit(
-                "Finish path: Pacemaker already has two nodes — skipping "
+                "Finish path: Pacemaker already has two nodes - skipping "
                 "mail-add-host.yml; deploying peer console + promoting survivor markers."
             )
         else:
@@ -665,7 +665,7 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
         if not peer_ok:
             yield await _emit(
                 "Peer console deploy failed. Survivor markers were not promoted "
-                "(still 1vm). Retry Add Second Server — with two Pacemaker nodes "
+                "(still 1vm). Retry Add Second Server - with two Pacemaker nodes "
                 "it finishes console sync only (does not re-run mail-add-host).",
                 err=True,
             )

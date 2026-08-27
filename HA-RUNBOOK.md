@@ -22,7 +22,7 @@ skips if the cluster is already running. Never `pcs cluster destroy` against thi
 | Backup | `backup.<MAIL_DOMAIN>` | `<BACKUP_IP>` | Backup repo + Grafana `:3000`. Scratch restore target. |
 | Cluster VIP | Pacemaker `kin-vip` | **`<CLUSTER_VIP_IP>/24`** on `<NET_IFACE>` | FortiGate NAT targets this, **not** Host A `<HOST_A_IP>`. |
 
-There is **no** Pacemaker “preferred production node.” ha-build-15 removed the
+There is **no** Pacemaker "preferred production node." ha-build-15 removed the
 prefer-A=50 location pin (it caused automatic failback after the 14 fence test).
 `resource-stickiness=1000` / `promoted-resource-stickiness=1000` keep whoever is
 Promoted until that node is down or an operator moves it. Resting state as of
@@ -34,7 +34,7 @@ Promoted until that node is down or an operator moves it. Resting state as of
 > refuses until you migrate onto the data partition - **§13**.  
 > **Console:** `https://<HOST_A_IP>:9443` and `https://<HOST_B_IP>:9443` after
 > Build HA (or Add Second Server). Console is **not** on the VIP. Mail stays
-> VIP-only. If Host A is down, open the console on Host B’s management IP.
+> VIP-only. If Host A is down, open the console on Host B's management IP.
 
 ### Expectation: measured downtime, not zero-downtime
 
@@ -187,7 +187,7 @@ systemctl is-active fail2ban      # must stay active on BOTH nodes
 ```
 
 Promoted: `sshd, zimbra-auth, zpush-auth`. Unpromoted: `sshd` only. If Unpromoted
-fail2ban is **failed**, see section 10 - do not “fix” it by pointing jails at
+fail2ban is **failed**, see section 10 - do not "fix" it by pointing jails at
 unmounted `/opt/zimbra` logs.
 
 ---
@@ -277,7 +277,7 @@ stayed on A the whole time).
 | Observability VM power-off / disk grow | Operator - **must** disarm SBD first (section 7) |
 | Changing SBD timeouts | Operator - see section 5 (dangerous if incomplete) |
 
-Do **not** assume “VIP is live for all users” just because `kin-vip` is Started.
+Do **not** assume "VIP is live for all users" just because `kin-vip` is Started.
 
 ---
 
@@ -291,7 +291,7 @@ Pacemaker on the victim can start, then see `We were allegedly just fenced` and
 **not** to delete it.
 
 Official pattern (SUSE HA / ClusterLabs): delay SBD (and thus Pacemaker) on boot
-until ~**msgwait** has elapsed. ha-build-14 Stage 1: B’s kernel was pingable ~25s
+until ~**msgwait** has elapsed. ha-build-14 Stage 1: B's kernel was pingable ~25s
 after kill; `SBD_DELAY_START` held Pacemaker until fence completed (~81s). That is
 the mechanism working.
 
@@ -364,7 +364,7 @@ move (proven: A standby, B stayed Promoted, VIP 200). Entering the Promoted node
 | `peer_zmcontrol` | `kin-zimbra Started <peer>` in `crm_mon` (SSH `zmcontrol` on the peer is not always possible from the console host) |
 | `no_dual_primary` | Live `kin-assert-no-dual-primary.sh` → `NO_DUAL_PRIMARY_OK` |
 
-**“Safe to proceed”** means every check above is OK on **real command output**, not
+**"Safe to proceed"** means every check above is OK on **real command output**, not
 a UI inference. Run **Check** on that node; Enter stays disabled until it passes.
 
 ### Enter / Exit
@@ -379,7 +379,7 @@ Exit: `pcs node unstandby <target>`, then the console **waits** (up to 180s) unt
 3. fail-count 0
 4. `NO_DUAL_PRIMARY_OK`
 
-Only then is Exit reported done. `unstandby` plus “still mid-resync” is **incomplete**,
+Only then is Exit reported done. `unstandby` plus "still mid-resync" is **incomplete**,
 not success. A non-zero Exit means the node is Online again but verification failed -
 do not assume it is a healthy Secondary.
 
@@ -578,7 +578,7 @@ v1.9.3. Custom keys live in this repo (`monitoring/zabbix/`).
 |---|---|---|
 | Zabbix Server | Observability `<OBSERVABILITY_IP>` | `http://<OBSERVABILITY_IP>:8080/` (not Grafana) |
 | Grafana | **Backup** `<BACKUP_IP>` (not Observability) | `https://<BACKUP_IP>:3000/` |
-| Dashboard | Grafana uid `kin-mail-ha` | “KIN Mail HA” |
+| Dashboard | Grafana uid `kin-mail-ha` | "KIN Mail HA" |
 | Datasource | `kinsight-zabbix` | Zabbix API `http://<OBSERVABILITY_IP>:8080/api_jsonrpc.php` |
 
 Hosts: `obser`, `mail.<MAIL_DOMAIN>`, `mail2.<MAIL_DOMAIN>`, `backup.<MAIL_DOMAIN>`
@@ -598,7 +598,7 @@ Backup: **KIN Mail Backup**. All: **Linux by Zabbix agent**.
 
 Agent `Timeout` on mail nodes is **30s** so the mailbox listing can finish.
 
-Grafana panels that must show real data (not just “service up”): Mail B CPU idle,
+Grafana panels that must show real data (not just "service up"): Mail B CPU idle,
 `KIN DRBD replication OK` (`kin.drbd.ok`), Active mailboxes, Contracted seats.
 
 ---
@@ -642,7 +642,7 @@ on that node; do not leave it watching `/opt/zimbra/log` while unmounted.
 5. **Console on both mail nodes** - `:9443` on `<HOST_A_IP>` and `<HOST_B_IP>`
    after Build HA / Add Second Server (not on the VIP). If A is down, use B.
 6. **Grafana is not on Observability** - it is on Backup `<BACKUP_IP>`. Probing `<OBSERVABILITY_IP>:3000`
-   will look like “Grafana disappeared.”
+   will look like "Grafana disappeared."
 7. **Scratch Zimbra on Backup** remains installed but **must stay stopped** so it
    does not listen as `mail.<MAIL_DOMAIN>` on `:443`/`:25`.
 8. **`pcs stonith sbd status` from B** may show A as N/A (pcsd 401). Check from A

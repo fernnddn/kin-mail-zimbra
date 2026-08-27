@@ -157,12 +157,18 @@ ensure_luks_crypttab() {
   # retries it to INFINITY, which is exactly how a "successful" deploy came
   # back from a reboot with the whole stack dead (live Phase 6, 27 Aug 2026).
   tmp="${tab}.kin.$$"
-  if grep -qE "^${name}[[:space:]]" "$tab" 2>/dev/null; then
-    grep -vE "^${name}[[:space:]]" "$tab" >"$tmp" 2>/dev/null || : >"$tmp"
-  else
-    cat "$tab" >"$tmp" 2>/dev/null || : >"$tmp"
-  fi
-  luks_crypttab_line "$name" "$uuid" "$key" >>"$tmp" || { rm -f "$tmp"; return 1; }
+  # Drop every existing entry for this mapper with awk, not grep -E "^name".
+  # A line indented with spaces is a valid crypttab entry and awk's field
+  # split sees it, but the anchored regex did not, so a stale indented line
+  # survived next to the new one and systemd would still try the dead UUID
+  # first. A commented line keeps its "#" in $1, so it is left alone.
+  #
+  # awk print also terminates every record, which normalises a crypttab whose
+  # last line has no newline. Appending to such a file directly would glue our
+  # entry onto the previous one and corrupt both.
+  awk -v n="$name" '$1 != n { print }' "$tab" >"$tmp" 2>/dev/null || : >"$tmp"
+  { luks_crypttab_line "$name" "$uuid" "$key"; printf '\n'; } >>"$tmp" \
+    || { rm -f "$tmp"; return 1; }
   # Keep the original mode/owner; crypttab is read by early boot.
   chmod --reference="$tab" "$tmp" 2>/dev/null || chmod 0644 "$tmp" 2>/dev/null || true
   mv "$tmp" "$tab" || { rm -f "$tmp"; return 1; }

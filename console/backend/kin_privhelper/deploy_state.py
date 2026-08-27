@@ -511,8 +511,8 @@ def plan_peer_ha_console_state(
     new_values, config_changed = ensure_topology_2vm(values)
     required = ("SERVER_IP", "MAIL_HOST", "MAIL_DOMAIN")
     incomplete = not all(str(new_values.get(k) or "").strip() for k in required)
-    # Refuse whenever identity keys are missing — even if TOPOLOGY is already
-    # 2vm — so we never stamp ha-setup-complete onto a skeleton peer config.
+    # Refuse whenever identity keys are missing - even if TOPOLOGY is already
+    # 2vm - so we never stamp ha-setup-complete onto a skeleton peer config.
     refuse_incomplete = incomplete
     write_ha = not (ha_marker_present and marker_already_complete(ha_marker_text))
     write_setup = not setup_marker_present
