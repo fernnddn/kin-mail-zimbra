@@ -1201,7 +1201,19 @@ async def monitoring_series(
         )
     except monitoring.MonitoringError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"range": window, **monitoring.metric_meta(metric), "series": series}
+    seconds, step = monitoring.range_window(window)
+    end = time.time()
+    return {
+        "range": window,
+        # The window the operator asked for. The chart's x-axis must span this,
+        # not just whatever samples came back - otherwise two cards showing the
+        # same 6 hours can end up with completely different time axes.
+        "start": end - seconds,
+        "end": end,
+        "step": step,
+        **monitoring.metric_meta(metric),
+        "series": series,
+    }
 
 
 @app.get("/api/monitoring/overview")

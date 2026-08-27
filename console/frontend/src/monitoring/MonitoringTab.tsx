@@ -10,8 +10,9 @@ import {
   formatValue,
   latestValue,
   linePaths,
-  nearestIndex,
+  nearestIndexInDomain,
   pointTimeLabel,
+  xFraction,
   timeTicks,
   usageTone,
   yBounds,
@@ -19,7 +20,15 @@ import {
 } from "./chart";
 
 type Series = { instance: string; points: Point[] };
-type SeriesResp = { metric: string; label: string; unit: string; range: string; series: Series[] };
+type SeriesResp = {
+  metric: string;
+  label: string;
+  unit: string;
+  range: string;
+  start?: number;
+  end?: number;
+  series: Series[];
+};
 type CatalogueResp = { metrics: { metric: string; label: string; unit: string }[]; ranges: string[]; default_range: string };
 
 const RANGE_LABELS: Record<string, string> = {
@@ -323,17 +332,24 @@ const Crosshair = styled.div<{ $left: number }>`
 function Chart({ data }: { data: SeriesResp }) {
   const series = data.series[0];
   const points = series?.points || [];
+  const domain =
+    typeof data.start === "number" && typeof data.end === "number"
+      ? { start: data.start, end: data.end }
+      : undefined;
   const bounds = yBounds(points, data.unit);
-  const segments = linePaths(points, { width: W, height: H }, bounds);
-  const fill = areaPath(points, { width: W, height: H }, bounds);
+  const segments = linePaths(points, { width: W, height: H }, bounds, domain);
+  const fill = areaPath(points, { width: W, height: H }, bounds, domain);
   const now = latestValue(points);
-  const ticks = timeTicks(points, 4);
+  const ticks = timeTicks(points, 4, domain);
   const gid = `mon-grad-${data.metric}`;
   const hasData = segments.length > 0;
   const [hover, setHover] = useState<number | null>(null);
   const longRange = data.range === "7d" || data.range === "30d" || data.range === "1y";
-  const hoverIdx = hover === null ? -1 : nearestIndex(points, hover);
+  const hoverIdx = hover === null ? -1 : nearestIndexInDomain(points, hover, domain);
   const hoverPoint = hoverIdx >= 0 ? points[hoverIdx] : null;
+  const hoverAt = hoverPoint
+    ? (xFraction(hoverPoint[0], domain) ?? hoverIdx / Math.max(1, points.length - 1))
+    : 0;
 
   return (
     <Card>
@@ -353,8 +369,8 @@ function Chart({ data }: { data: SeriesResp }) {
         >
           {hoverPoint ? (
             <>
-              <Crosshair $left={hoverIdx / Math.max(1, points.length - 1)} />
-              <Tip $left={hoverIdx / Math.max(1, points.length - 1)}>
+              <Crosshair $left={hoverAt} />
+              <Tip $left={hoverAt}>
                 <strong>{formatValue(hoverPoint[1], data.unit)}</strong>
                 {"  "}
                 {pointTimeLabel(hoverPoint[0], longRange)}

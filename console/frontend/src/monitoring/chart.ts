@@ -83,13 +83,40 @@ export function yBounds(points: Point[], unit: string): [number, number] {
 
 export type Geometry = { width: number; height: number };
 
+/** The time window the chart covers, in epoch seconds. */
+export type Domain = { start: number; end: number };
+
+/** Horizontal position of a timestamp, 0..1 across the requested window.
+ *
+ * Positioning by timestamp rather than by array index is what keeps every card
+ * on the same axis: a series that only has the last few minutes of samples now
+ * draws in the last few minutes of the chart instead of being stretched across
+ * the whole width (live Phase 5 QA - the memory card showed a four-minute axis
+ * next to a CPU card showing six hours).
+ */
+export function xFraction(ts: number, domain?: Domain): number | null {
+  if (!domain) return null;
+  const span = domain.end - domain.start;
+  if (span <= 0) return null;
+  return Math.max(0, Math.min(1, (ts - domain.start) / span));
+}
+
 /** Map a series to SVG path segments, breaking the line wherever data is null. */
-export function linePaths(points: Point[], geo: Geometry, bounds: [number, number]): string[] {
+export function linePaths(
+  points: Point[],
+  geo: Geometry,
+  bounds: [number, number],
+  domain?: Domain,
+): string[] {
   const [lo, hi] = bounds;
   const span = hi - lo || 1;
   const n = points.length;
   if (n === 0) return [];
-  const x = (i: number) => (n === 1 ? geo.width / 2 : (i / (n - 1)) * geo.width);
+  const x = (i: number) => {
+    const frac = xFraction(points[i][0], domain);
+    if (frac !== null) return frac * geo.width;
+    return n === 1 ? geo.width / 2 : (i / (n - 1)) * geo.width;
+  };
   const y = (v: number) => geo.height - ((v - lo) / span) * geo.height;
 
   const out: string[] = [];
@@ -109,8 +136,13 @@ export function linePaths(points: Point[], geo: Geometry, bounds: [number, numbe
 }
 
 /** Filled area under the first contiguous run, for the soft gradient. */
-export function areaPath(points: Point[], geo: Geometry, bounds: [number, number]): string {
-  const segments = linePaths(points, geo, bounds);
+export function areaPath(
+  points: Point[],
+  geo: Geometry,
+  bounds: [number, number],
+  domain?: Domain,
+): string {
+  const segments = linePaths(points, geo, bounds, domain);
   if (segments.length === 0) return "";
   const first = segments[0];
   const coords = first.replace(/[ML]/g, " ").trim().split(/\s+/);
@@ -128,10 +160,33 @@ export function latestValue(points: Point[]): number | null {
   return null;
 }
 
-/** Tick labels along the time axis, in the viewer's locale. */
-export function timeTicks(points: Point[], count = 4): { at: number; label: string }[] {
-  if (points.length < 2) return [];
+/** Tick labels along the time axis, in the viewer's locale.
+ *
+ * Derived from the requested window when one is given, so every card on the
+ * page reads the same axis whether or not its series covers all of it.
+ */
+export function timeTicks(
+  points: Point[],
+  count = 4,
+  domain?: Domain,
+): { at: number; label: string }[] {
   const out: { at: number; label: string }[] = [];
+  if (domain && domain.end > domain.start) {
+    const spanSec = domain.end - domain.start;
+    const longRange = spanSec > 3 * 86400;
+    for (let i = 0; i < count; i++) {
+      const at = i / (count - 1);
+      const d = new Date((domain.start + at * spanSec) * 1000);
+      out.push({
+        at,
+        label: longRange
+          ? d.toLocaleDateString([], { month: "short", day: "numeric" })
+          : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      });
+    }
+    return out;
+  }
+  if (points.length < 2) return [];
   const spanSec = points[points.length - 1][0] - points[0][0];
   const longRange = spanSec > 3 * 86400;
   for (let i = 0; i < count; i++) {
@@ -146,6 +201,27 @@ export function timeTicks(points: Point[], count = 4): { at: number; label: stri
     });
   }
   return out;
+}
+
+/** Index of the sample nearest a 0..1 position, honouring the time domain. */
+export function nearestIndexInDomain(
+  points: Point[],
+  fraction: number,
+  domain?: Domain,
+): number {
+  if (points.length === 0) return -1;
+  if (!domain || domain.end <= domain.start) return nearestIndex(points, fraction);
+  const want = domain.start + Math.max(0, Math.min(1, fraction)) * (domain.end - domain.start);
+  let best = 0;
+  let bestGap = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const gap = Math.abs(points[i][0] - want);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+  return best;
 }
 
 /** Index of the sample nearest a 0..1 position across the chart width. */

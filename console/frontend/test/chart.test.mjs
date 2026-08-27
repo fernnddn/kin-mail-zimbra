@@ -89,5 +89,30 @@ chk("danger at 90%", C.usageTone(95, "percent"), "danger");
 chk("non-percent units are never alarmed", C.usageTone(99999, "bytes_per_sec"), "ok");
 chk("null is not alarmed", C.usageTone(null, "percent"), "ok");
 
+// --- time domain (Phase 5 QA: cards showed different axes for one window) ---
+const dom = { start: 1000, end: 5000 };
+chk("start of window maps to 0", C.xFraction(1000, dom), 0);
+chk("end of window maps to 1", C.xFraction(5000, dom), 1);
+chk("midpoint maps to 0.5", C.xFraction(3000, dom), 0.5);
+chk("outside the window is clamped", [C.xFraction(0, dom), C.xFraction(9999, dom)], [0, 1]);
+chk("no domain means no fraction", C.xFraction(3000, undefined), null);
+chk("a zero-width window is rejected", C.xFraction(1, { start: 5, end: 5 }), null);
+
+// A series covering only the last quarter must draw in the last quarter,
+// not be stretched across the whole card.
+const late = [[4000, 1], [4500, 2], [5000, 3]];
+const seg = C.linePaths(late, { width: 100, height: 50 }, [0, 10], dom);
+ok("a late-starting series starts late", seg[0].startsWith("M75.00,"));
+ok("...and still ends at the right edge", seg[0].includes("L100.00,"));
+
+// Ticks come from the window, so every card reads the same axis.
+const t = C.timeTicks([[4000, 1]], 4, dom);
+chk("ticks span the window even with one sample", [t.length, t[0].at, t[3].at], [4, 0, 1]);
+chk("ticks still fall back to the data with no domain", C.timeTicks([[0, 1], [60, 2]], 2).length, 2);
+
+chk("hover finds the sample nearest that TIME", C.nearestIndexInDomain(late, 1, dom), 2);
+chk("hover before the data picks the first sample", C.nearestIndexInDomain(late, 0, dom), 0);
+chk("hover without a domain falls back to index", C.nearestIndexInDomain(late, 0.5, undefined), 1);
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);
