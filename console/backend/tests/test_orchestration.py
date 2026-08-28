@@ -1840,3 +1840,119 @@ class EnsureSshPasswordDoneLeakTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DrbdLinkTuningTests(unittest.TestCase):
+    """The Phase 7 collapse started at the replication link's own defaults."""
+
+    def _repo(self):
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[3]
+
+    def test_the_keepalive_deadline_is_not_half_a_second(self) -> None:
+        res = (
+            self._repo()
+            / "ansible/roles/drbd_resource/templates/kin-zimbra.res.j2"
+        ).read_text(encoding="utf-8")
+        # ping-timeout is in tenths of a second and defaults to 5. On a shared
+        # virtual switch that deadline is missed under load, and every miss
+        # tears down replication: "PingAck did not arrive in time", logged
+        # every three minutes on the live 2-host pair.
+        self.assertIn("ping-timeout {{ drbd_resource_ping_timeout }}", res)
+        self.assertIn("ping-int {{ drbd_resource_ping_int }}", res)
+
+    def test_resync_cannot_take_the_whole_link(self) -> None:
+        res = (
+            self._repo()
+            / "ansible/roles/drbd_resource/templates/kin-zimbra.res.j2"
+        ).read_text(encoding="utf-8")
+        # The fixed `syncer { rate }` had no ceiling and DRBD 8.4 leaves its
+        # rate controller off, so resync ran flat out on the NIC that also
+        # carries corosync and the SBD iSCSI session.
+        # Anchored to a directive line. The first version of this matched the
+        # words anywhere and tripped on the comment above that explains what
+        # `syncer { rate }` used to do.
+        import re
+
+        self.assertIsNone(
+            re.search(r"^\s*syncer\s*\{", res, re.M),
+            "the deprecated syncer section is back",
+        )
+        self.assertIsNotNone(
+            re.search(r"^\s*c-max-rate\s+\{\{ drbd_resource_sync_rate \}\};", res, re.M)
+        )
+        self.assertIsNotNone(
+            re.search(r"^\s*resync-rate\s+\{\{ drbd_resource_sync_rate \}\};", res, re.M)
+        )
+
+    def test_drbd_timings_satisfy_the_documented_ordering(self) -> None:
+        import yaml
+
+        defaults = yaml.safe_load(
+            (self._repo() / "ansible/roles/drbd_resource/defaults/main.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        # DRBD requires timeout < connect-int and timeout < ping-int. timeout
+        # is in tenths of a second, the other two in whole seconds, so this is
+        # easy to get wrong and drbdadm only complains at attach time.
+        timeout_s = defaults["drbd_resource_timeout"] / 10
+        self.assertLess(timeout_s, defaults["drbd_resource_connect_int"])
+        self.assertLess(timeout_s, defaults["drbd_resource_ping_int"])
+        self.assertGreater(defaults["drbd_resource_ping_timeout"] / 10, 1.0)
+
+    def test_an_unparsable_tuning_falls_back_instead_of_losing_the_deploy(self) -> None:
+        tasks = (
+            self._repo() / "ansible/roles/drbd_resource/tasks/resource_file.yml"
+        ).read_text(encoding="utf-8")
+        # A definition drbdadm will not read leaves the node with no
+        # replication, so it is validated before anything uses it - but one
+        # unrecognised tuning parameter must not cost the whole deploy.
+        self.assertIn("drbdadm dump {{ drbd_resource_name }}", tasks)
+        self.assertIn("drbd_resource_tuning: minimal", tasks)
+        self.assertIn("drbdadm adjust {{ drbd_resource_name }}", tasks)
+
+    def test_corosync_does_not_call_a_busy_link_a_dead_node(self) -> None:
+        import yaml
+
+        defaults = yaml.safe_load(
+            (self._repo() / "ansible/roles/cluster_setup/defaults/main.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        form = (
+            self._repo() / "ansible/roles/cluster_setup/tasks/form.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("totem token={{ cluster_setup_token_ms }}", form)
+        self.assertGreaterEqual(defaults["cluster_setup_token_ms"], 5000)
+        # Must stay well under SBD_WATCHDOG_TIMEOUT, or a node's own watchdog
+        # fires before the cluster has noticed it is gone.
+        sbd = yaml.safe_load(
+            (self._repo() / "ansible/roles/sbd_stonith/defaults/main.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        total_ms = defaults["cluster_setup_token_ms"] + defaults["cluster_setup_consensus_ms"]
+        self.assertLess(total_ms / 1000, sbd["sbd_stonith_watchdog_timeout"])
+
+    def test_the_sbd_lun_session_fails_faster_than_the_watchdog(self) -> None:
+        import yaml
+
+        iscsi = yaml.safe_load(
+            (self._repo() / "ansible/roles/iscsi_initiator/defaults/main.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        sbd = yaml.safe_load(
+            (self._repo() / "ansible/roles/sbd_stonith/defaults/main.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        # open-iscsi ships replacement_timeout=120: I/O to the SBD LUN blocks
+        # for two minutes before erroring, long past the 35s watchdog, so a
+        # network blip became a self-fence instead of a stall.
+        self.assertLess(
+            iscsi["iscsi_initiator_replacement_timeout"],
+            sbd["sbd_stonith_watchdog_timeout"],
+        )

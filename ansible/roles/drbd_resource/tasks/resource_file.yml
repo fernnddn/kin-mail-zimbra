@@ -45,13 +45,52 @@
   when: not ansible_check_mode
   tags: [drbd, resource, config]
 
+# If drbdadm will not parse the tuned definition, fall back to the ceiling
+# alone rather than losing the deploy. The rate cap is the part that stops
+# resync starving corosync and the SBD LUN; the controller is the refinement.
+- name: Note that the tuned definition was rejected, and fall back
+  ansible.builtin.set_fact:
+    drbd_resource_tuning: minimal
+  when:
+    - not ansible_check_mode
+    - drbd_resource_dump is not skipped
+    - drbd_resource_dump.rc != 0
+  tags: [drbd, resource, config]
+
+- name: Re-deploy the resource definition without the rate controller
+  ansible.builtin.template:
+    src: kin-zimbra.res.j2
+    dest: "{{ drbd_resource_res_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - drbd_resource_tuning == 'minimal'
+  tags: [drbd, resource, config]
+
+- name: Parse the fallback definition
+  ansible.builtin.command:
+    cmd: drbdadm dump {{ drbd_resource_name }}
+  register: drbd_resource_dump_fallback
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - drbd_resource_tuning == 'minimal'
+  tags: [drbd, resource, config]
+
 - name: Fail loudly when drbdadm rejects the resource definition
   ansible.builtin.assert:
     that:
-      - drbd_resource_dump.rc == 0
+      - >-
+        (drbd_resource_dump.rc == 0)
+        or (drbd_resource_dump_fallback.rc | default(1) == 0)
     fail_msg: >-
       drbdadm cannot parse {{ drbd_resource_res_path }}:
-      {{ (drbd_resource_dump.stderr | default('')) | trim }}.
+      {{ (drbd_resource_dump_fallback.stderr
+          | default(drbd_resource_dump.stderr | default(''))) | trim }}.
       Refusing to continue - a definition drbdadm will not read leaves the
       node with no replication at all, which is worse than stopping here.
   when:

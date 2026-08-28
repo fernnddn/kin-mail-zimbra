@@ -23,11 +23,18 @@ resource {{ drbd_resource_name }} {
     # the link is busy instead of holding a fixed rate. c-max-rate is the
     # ceiling it may not cross; c-min-rate is the floor that keeps a resync
     # making progress while the application writes.
+{% if drbd_resource_tuning == 'full' %}
     c-plan-ahead {{ drbd_resource_c_plan_ahead }};
     c-fill-target {{ drbd_resource_c_fill_target }};
     c-min-rate {{ drbd_resource_c_min_rate }};
     c-max-rate {{ drbd_resource_sync_rate }};
     resync-rate {{ drbd_resource_sync_rate }};
+{% else %}
+    # Fallback: this drbdadm would not parse the rate-controller settings, so
+    # only the rate ceiling is applied. Lower than before and therefore still
+    # an improvement, but without the controller it is a fixed rate again.
+    resync-rate {{ drbd_resource_sync_rate }};
+{% endif %}
   }
   net {
     after-sb-0pri discard-zero-changes;

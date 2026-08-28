@@ -41,7 +41,11 @@ COROSYNC_CONF = Path("/etc/corosync/corosync.conf")
 RESYNC_TIMEOUT_SEC = int(os.environ.get("KIN_MAINT_RESYNC_TIMEOUT", "180"))
 RESYNC_POLL_SEC = 5
 # Controlled Master move (ban -> clear). Zimbra OCF start timeout is 600s.
-FAILBACK_TIMEOUT_SEC = int(os.environ.get("KIN_FAILBACK_TIMEOUT", "900"))
+# Must outlive the resource-level timeouts underneath it, or the console gives
+# up and rolls back a move that Pacemaker was still completing. kin-zimbra
+# alone has op start timeout=600s, and promote plus the filesystem plus the VIP
+# come on top of that.
+FAILBACK_TIMEOUT_SEC = int(os.environ.get("KIN_FAILBACK_TIMEOUT", "1200"))
 FAILBACK_POLL_SEC = 5
 DRBD_CLONE = os.environ.get("KIN_DRBD_CLONE", "kin-drbd-clone")
 MAINT_LOCK_PATH = Path(

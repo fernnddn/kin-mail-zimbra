@@ -25,6 +25,9 @@ drbd_resource_protocol: C
 # session, and the DRBD keepalive on the very same NIC. 40M leaves headroom
 # for all three. Raise it only on a dedicated replication network.
 drbd_resource_sync_rate: 40M
+# Set to 'minimal' by resource_file.yml when drbdadm refuses the full set.
+# A deploy must never be lost to one unrecognised tuning parameter.
+drbd_resource_tuning: full
 drbd_resource_c_plan_ahead: 20
 drbd_resource_c_fill_target: 10M
 drbd_resource_c_min_rate: 4M
