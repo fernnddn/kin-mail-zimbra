@@ -5,21 +5,50 @@
 # NEVER use meta-disk internal on a populated data device.
 resource {{ drbd_resource_name }} {
   protocol {{ drbd_resource_protocol }};
-  syncer {
-    rate {{ drbd_resource_sync_rate }};
-  }
   startup {
     wfc-timeout 60;
     degr-wfc-timeout 30;
   }
   disk {
     on-io-error detach;
+    # Resync used to be a fixed `syncer { rate }` with no ceiling on how much
+    # of the link it would take. DRBD 8.4 leaves c-plan-ahead at 0, so that
+    # fixed rate ran flat out. Replication here shares one NIC with corosync,
+    # the iSCSI session to the SBD LUN, and Zimbra itself, so a resync at
+    # ~80%% of line rate starves all three: the keepalive PingAck misses its
+    # deadline, DRBD drops the connection, and reconnecting starts another
+    # resync. That loop feeds itself and never converges.
+    #
+    # c-plan-ahead turns on DRBD's own rate controller, which backs off when
+    # the link is busy instead of holding a fixed rate. c-max-rate is the
+    # ceiling it may not cross; c-min-rate is the floor that keeps a resync
+    # making progress while the application writes.
+    c-plan-ahead {{ drbd_resource_c_plan_ahead }};
+    c-fill-target {{ drbd_resource_c_fill_target }};
+    c-min-rate {{ drbd_resource_c_min_rate }};
+    c-max-rate {{ drbd_resource_sync_rate }};
+    resync-rate {{ drbd_resource_sync_rate }};
   }
   net {
     after-sb-0pri discard-zero-changes;
     after-sb-1pri discard-secondary;
     after-sb-2pri disconnect;
     rr-conflict disconnect;
+    # DRBD's defaults assume a quiet, dedicated replication link. These are
+    # VMs on a shared virtual switch, and the stock ping-timeout is 5 -
+    # five tenths of a second for the peer to answer a keepalive. Under any
+    # load that deadline is missed routinely, and every miss tears down
+    # replication ("PingAck did not arrive in time"), which is what the
+    # 2-host Phase 7 run logged every three minutes until it collapsed.
+    #
+    # Units differ on purpose: ping-int and connect-int are seconds,
+    # timeout and ping-timeout are tenths of a second. DRBD requires
+    # timeout < connect-int and timeout < ping-int, so timeout stays at 6s
+    # against 10s neighbours.
+    ping-int {{ drbd_resource_ping_int }};
+    ping-timeout {{ drbd_resource_ping_timeout }};
+    connect-int {{ drbd_resource_connect_int }};
+    timeout {{ drbd_resource_timeout }};
   }
   on {{ drbd_resource_node_a_name }} {
     device    {{ drbd_resource_device }};

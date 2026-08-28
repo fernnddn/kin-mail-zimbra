@@ -10,6 +10,7 @@
       pcs cluster setup {{ cluster_setup_name }}
       {{ groups['mail_nodes'][0] }} addr={{ hostvars[groups['mail_nodes'][0]].ansible_host }}
       {{ groups['mail_nodes'][1] }} addr={{ hostvars[groups['mail_nodes'][1]].ansible_host }}
+      totem token={{ cluster_setup_token_ms }} consensus={{ cluster_setup_consensus_ms }}
   # SAFETY: never check_mode: false - this writes corosync.conf + authkey.
   # Never --overwrite / --force / pcs cluster destroy.
   run_once: true

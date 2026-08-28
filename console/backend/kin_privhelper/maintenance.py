@@ -14,8 +14,10 @@ import os
 import re
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, IO
+from xml.etree import ElementTree
 
 from . import protocol as proto
 
@@ -158,6 +160,64 @@ def parse_offline_nodes(pcs_nodes: str) -> list[str]:
             if tok not in found:
                 found.append(tok)
     return found
+
+
+def parse_maintenance_mode(props_text: str) -> bool:
+    """Is the whole cluster in Pacemaker maintenance-mode?
+
+    Nothing read this before, and its absence is why the Phase 7 run was
+    unreadable: in maintenance-mode Pacemaker stops acting on resources but
+    reports no failures, so the console showed Zimbra stopped everywhere, the
+    VIP routed nowhere, and fail-count "Clear" - three true statements that
+    together look like an unexplained outage rather than a cluster that was
+    told to keep its hands off.
+    """
+    for line in props_text.splitlines():
+        stripped = line.strip()
+        if not stripped.lower().startswith("maintenance-mode"):
+            continue
+        _, _, value = stripped.partition(":")
+        if not value:
+            _, _, value = stripped.partition("=")
+        return value.strip().strip('"').lower() in ("true", "on", "yes", "1")
+    return False
+
+
+# `pcs resource ban` writes a location constraint whose id starts with
+# "cli-ban-"; `pcs resource clear` removes exactly those. Anything else in the
+# constraints section is a deliberate part of the design and must be left be.
+_BAN_ID_PREFIX = "cli-ban-"
+
+
+def parse_ban_constraints(cib_constraints_xml: str) -> list[dict[str, str]]:
+    """Temporary bans left in the CIB by an interrupted Move Master.
+
+    A ban is a -INFINITY location rule. If a move is cut short between the ban
+    and the clear - the helper is restarted, the node is fenced, the browser
+    is closed - it survives in the CIB and quietly forbids promotion for good.
+    The cluster then has no Primary and no error to show for it.
+    """
+    out: list[dict[str, str]] = []
+    if not cib_constraints_xml.strip():
+        return out
+    try:
+        root = ElementTree.fromstring(cib_constraints_xml)
+    except ElementTree.ParseError:
+        return out
+    for el in root.iter("rsc_location"):
+        ident = el.get("id") or ""
+        if not ident.startswith(_BAN_ID_PREFIX):
+            continue
+        out.append(
+            {
+                "id": ident,
+                "resource": el.get("rsc") or "",
+                "node": el.get("node") or "",
+                "role": el.get("role") or "",
+                "score": el.get("score") or "",
+            }
+        )
+    return out
 
 
 def parse_promoted_names(crm: str) -> list[str]:
@@ -857,6 +917,13 @@ async def gather_status() -> dict[str, Any]:
     votes_total, votes_needed = parse_vote_totals(quorum)
     _cp, props_text, _ep = await _capture(["pcs", "property"])
     no_quorum_policy = parse_no_quorum_policy(props_text)
+    maintenance_mode = parse_maintenance_mode(props_text)
+    # cibadmin rather than `pcs constraint`, whose subcommand spelling moved
+    # between pcs 0.10 and 0.11. The CIB scope is the same on both.
+    _cc, cib_constraints, _ec = await _capture(
+        ["cibadmin", "--query", "--scope", "constraints"]
+    )
+    bans = parse_ban_constraints(cib_constraints if _cc == 0 else "")
     from .corosync_stub import is_harmless_package_stub_cluster
     from .deploy_state import saved_wizard_topology
 
@@ -888,6 +955,8 @@ async def gather_status() -> dict[str, Any]:
         "votes_total": votes_total,
         "votes_needed": votes_needed,
         "no_quorum_policy": no_quorum_policy,
+        "maintenance_mode": maintenance_mode,
+        "bans": bans,
         "quorum_hint": quorum_recovery_hint(
             quorate=quorate,
             peer_offline=bool(offline) or bool(stale_peers),
@@ -926,7 +995,7 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
     rec(
         "pacemaker_nodes",
         bool(st["nodes"]),
-        f"nodes={st['nodes'] or 'none'} standby={st['standby']}",
+        f"nodes={st['nodes'] or 'none'} standby={st.get('standby') or []}",
     )
     rec("drbd_uptodate", bool(st["drbd_uptodate"]), "both replicas UpToDate" if st["drbd_uptodate"] else "DRBD is not UpToDate/UpToDate")
     rec("qdevice_voting", bool(st["qdevice_ok"]), "qdevice reachable and voting" if st["qdevice_ok"] else "qdevice missing, offline, or not voting")
@@ -968,7 +1037,7 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
             break
     rec("peer_online", peer is not None, f"peer={peer}" if peer else "no peer in nodelist")
 
-    if target in st["standby"]:
+    if target in (st.get("standby") or []):
         rec("not_already_standby", False, f"{target} is already in standby")
     else:
         rec("not_already_standby", True, f"{target} is not in standby")
@@ -979,14 +1048,45 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
     https_detail = "skipped (no serving node)"
     zm_detail = "skipped"
     if serving:
-        addr = st["addrs"].get(serving) or serving
+        addr = (st.get("addrs") or {}).get(serving) or serving
         body, _c = await _https_code(f"https://{addr}/")
         https_ok = body == "200"
         https_detail = f"https://{addr}/ → HTTP {body}"
-        zm_ok, zm_detail = await _zmcontrol_on(serving, addr, st["raw"]["crm"])
+        zm_ok, zm_detail = await _zmcontrol_on(
+            serving, addr, (st.get("raw") or {}).get("crm", "")
+        )
         zm_detail = zm_detail[:1500]
     rec("peer_https", https_ok, https_detail)
     rec("peer_zmcontrol", zm_ok, zm_detail.splitlines()[0] if zm_detail else "")
+
+    # Two states that stop the cluster acting without reporting any failure.
+    # Both were invisible here before, and both produce the same picture as a
+    # healthy-but-idle cluster: no errors, nothing running.
+    bans = st.get("bans") or []
+    if bans:
+        rec(
+            "no_stale_ban",
+            False,
+            "a temporary ban from an earlier Move Master is still in the CIB: "
+            + "; ".join(
+                f"{b.get('resource')} not allowed on {b.get('node')}"
+                + (f" as {b.get('role')}" if b.get("role") else "")
+                for b in bans
+            )
+            + ". Clear it from the Cluster page before moving the Master.",
+        )
+    else:
+        rec("no_stale_ban", True, "no leftover Move Master bans in the CIB")
+
+    if st.get("maintenance_mode"):
+        rec(
+            "not_maintenance_mode",
+            False,
+            "the cluster is in Pacemaker maintenance-mode, so it will not start "
+            "or move anything. Leave maintenance-mode first.",
+        )
+    else:
+        rec("not_maintenance_mode", True, "cluster is not in maintenance-mode")
 
     if ASSERT_SCRIPT.is_file():
         c, out, err = await _capture([str(ASSERT_SCRIPT)])
@@ -999,7 +1099,7 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
     checks["_all_ok"] = all_ok
     checks["_target"] = target
     checks["_promoted"] = promoted
-    checks["_standby"] = st["standby"]
+    checks["_standby"] = st.get("standby") or []
     return all_ok, logs, checks
 
 
@@ -1037,12 +1137,22 @@ async def wait_exit_healthy(target: str) -> tuple[bool, list[str]]:
         await asyncio.sleep(RESYNC_POLL_SEC)
 
 
-async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
+async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
     args = args or {}
     op = str(args.get("op") or "status").strip().lower()
-    if op not in ("status", "preflight", "enter", "exit", "cleanup", "failback"):
+    if op not in (
+        "status",
+        "preflight",
+        "enter",
+        "exit",
+        "cleanup",
+        "failback",
+        "clearban",
+        "opslog",
+    ):
         yield proto.event_stderr(
-            "op must be status, preflight, enter, exit, cleanup, or failback\n"
+            "op must be status, preflight, enter, exit, cleanup, clearban, "
+            "opslog, or failback\n"
         )
         yield proto.event_done(2)
         return
@@ -1122,6 +1232,12 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),
+            # Distinct from maintenance_active, which means "a node is in
+            # standby". This one means Pacemaker has been told to stop acting
+            # on resources cluster-wide, which looks identical to a dead
+            # cluster from the outside unless it is said out loud.
+            "maintenance_mode": bool(st.get("maintenance_mode")),
+            "bans": st.get("bans") or [],
             "node_ips": node_ips,
             "vip_ip": st.get("vip_ip") or "",
             "vip_node": st.get("vip_node"),
@@ -1131,6 +1247,57 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
         yield proto.event_done(0)
+        return
+
+    if op == "clearban":
+        # Removes only the cli-ban-* location constraints that `pcs resource
+        # ban` writes, which is exactly what `pcs resource clear` targets. A
+        # ban that outlived the Move Master that placed it forbids promotion
+        # for good: no Primary, no mail, and no failure reported anywhere.
+        # Recovering from that used to require SSH.
+        st = await gather_status()
+        bans = st.get("bans") or []
+        if not bans:
+            yield await _emit("No leftover Move Master bans to clear.")
+            yield proto.event_done(0)
+            return
+        resources: list[str] = []
+        for ban in bans:
+            name = str(ban.get("resource") or "").strip()
+            if name and name not in resources:
+                resources.append(name)
+        rc = 0
+        for name in resources:
+            yield await _emit(f"pcs resource clear {name}")
+            c, out, err = await _capture(
+                ["pcs", "resource", "clear", name], timeout=120
+            )
+            if out:
+                yield await _emit(out)
+            if err:
+                yield await _emit(err, err=True)
+            if c != 0:
+                rc = c
+        st_after = await gather_status()
+        left = st_after.get("bans") or []
+        yield await _emit(
+            f"promoted={st_after.get('promoted')} "
+            f"vip_node={st_after.get('vip_node')} "
+            f"bans_remaining={len(left)}"
+        )
+        if left:
+            yield await _emit(
+                "Some bans are still present: "
+                + "; ".join(str(b.get("id") or "?") for b in left),
+                err=True,
+            )
+            rc = rc or 1
+        else:
+            yield await _emit(
+                "Constraints cleared. The cluster can promote a node again; "
+                "give it a minute to settle before checking the Master."
+            )
+        yield proto.event_done(rc)
         return
 
     if op == "cleanup":
@@ -1216,6 +1383,26 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         return
 
     yield await _emit(f"=== maintenance {op} target={target} ===")
+
+    if op == "opslog":
+        # Read-only. Seeds the Activity log so a refresh does not erase what
+        # the last Move Master, maintenance, or cleanup actually did.
+        if not CLUSTER_OPS_LOG.is_file():
+            yield await _emit(
+                "(no cluster operations recorded yet - Move Master, maintenance, "
+                "and constraint clears are written here as they run)"
+            )
+            yield proto.event_done(0)
+            return
+        try:
+            text = CLUSTER_OPS_LOG.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            yield await _emit(f"cannot read {CLUSTER_OPS_LOG}: {exc}", err=True)
+            yield proto.event_done(1)
+            return
+        yield await _emit(text.rstrip("\n") if text.strip() else "(transcript is empty)")
+        yield proto.event_done(0)
+        return
 
     if op == "preflight":
         ok, logs, checks = await run_preflight(target)
@@ -1359,6 +1546,40 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
                 yield proto.event_done(1)
                 return
 
+            # Health gate. Everything above rules out an impossible move; this
+            # rules out a move that is possible but unwise. The Phase 7 2-host
+            # run started here: the target's pre-flight had already failed, the
+            # console showed that failure, and Move Master stayed clickable
+            # anyway. Banning the only working Promoted node so the stack can
+            # land on a node that cannot take it leaves mail down on both.
+            #
+            # This runs after the DRBD wait above, not before, so a move that
+            # merely started while a resync was finishing is not refused for a
+            # condition that had already cleared by the time we would act.
+            yield await _emit(f"Pre-flight check on {target} before moving the Master")
+            pf_ok, pf_logs, pf_checks = await run_preflight(target)
+            for line in pf_logs:
+                yield await _emit(line)
+            if not pf_ok:
+                failed = [
+                    f"{name} ({info.get('detail') or 'no detail'})"
+                    for name, info in pf_checks.items()
+                    if not name.startswith("_") and not info.get("ok")
+                ]
+                yield await _emit(
+                    "Refusing failback: the cluster is not healthy enough to move "
+                    "the Master. Nothing has been changed. Failed: "
+                    + "; ".join(failed),
+                    err=True,
+                )
+                yield await _emit(
+                    "Fix the checks above first. Moving the Master away from a "
+                    "healthy node onto an unhealthy one takes mail down on both.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+
             ban_flag = await promoted_ban_flag()
             yield await _emit(
                 f"pcs resource ban {DRBD_CLONE} {current} {ban_flag}"
@@ -1423,12 +1644,52 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
                         yield await _emit(f"Master move to {target} complete (recovered)")
                         yield proto.event_done(0)
                         return
+                # The move failed and the stack is not on the target, so the
+                # ban we placed is now pointing -INFINITY at the node that was
+                # serving mail. Leaving it there means no node is allowed to be
+                # Promoted: DRBD has no Primary, the group cannot start, and
+                # mail is down on both nodes with nothing on screen naming the
+                # constraint that did it. This used to ask the operator to run
+                # `pcs resource clear` by hand, which is exactly the SSH-only
+                # recovery this console exists to remove.
+                #
+                # Clearing is safe here: it only removes the temporary ban this
+                # operation added, putting placement back where it was before we
+                # started. The cluster then settles the Master wherever it can
+                # actually run, which is the state the operator wants to be in
+                # while they work out why the target would not take it.
                 yield await _emit(
-                    "Failback did not settle on the target. Ban may still be in "
-                    f"place on {current}. Do not issue a second ban; capture pcs "
-                    f"status and clear manually when safe: pcs resource clear {DRBD_CLONE}",
-                    err=True,
+                    f"Move did not settle on {target}. Removing the temporary ban "
+                    f"so the cluster is not left unable to promote any node."
                 )
+                c_undo, out_undo, err_undo = await _capture(
+                    ["pcs", "resource", "clear", DRBD_CLONE],
+                    timeout=120,
+                )
+                if out_undo:
+                    yield await _emit(out_undo)
+                if err_undo:
+                    yield await _emit(err_undo, err=True)
+                if c_undo == 0:
+                    st_undo = await gather_status()
+                    yield await _emit(
+                        f"Ban removed. promoted={st_undo.get('promoted')} "
+                        f"vip_node={st_undo.get('vip_node')} "
+                        f"drbd_uptodate={st_undo.get('drbd_uptodate')}"
+                    )
+                    yield await _emit(
+                        f"The Master was not moved to {target}. The cluster is "
+                        "back to the placement it had before this attempt.",
+                        err=True,
+                    )
+                else:
+                    yield await _emit(
+                        f"pcs resource clear failed (exit {c_undo}). A ban on "
+                        f"{current} may still be in place, which stops ANY node "
+                        f"being promoted. Clear it as soon as you can: "
+                        f"pcs resource clear {DRBD_CLONE}",
+                        err=True,
+                    )
                 yield proto.event_done(1)
                 return
 
@@ -1497,3 +1758,71 @@ async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
         yield proto.event_done(0 if ok else 1)
     finally:
         release_maintenance_lock(lock_fh)
+
+
+# Everything the Cluster page runs used to exist only in the browser tab that
+# ran it. A hard refresh, a navigation, or the node itself rebooting mid-move
+# and the transcript was gone - so "what did Move Master actually do?" had no
+# answer anywhere, which is exactly the question the Phase 7 run needed to ask.
+# The status output is a fresh snapshot, not a record, and it is what the
+# Activity log was seeded from.
+CLUSTER_OPS_LOG = Path(
+    os.environ.get("KIN_CLUSTER_OPS_LOG", "/var/log/kin-mail/cluster-ops.log")
+)
+CLUSTER_OPS_LOG_LIMIT = 2_000_000
+_OPS_LOGGED_OPS = frozenset({"enter", "exit", "cleanup", "failback", "clearban"})
+
+
+def _trim_ops_log(path: Path, limit: int = CLUSTER_OPS_LOG_LIMIT) -> None:
+    """Keep the transcript bounded without losing the most recent runs."""
+    try:
+        if path.stat().st_size <= limit:
+            return
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    keep = text[-(limit // 2):]
+    # Start at a line boundary so the file never opens mid-word.
+    _, sep, rest = keep.partition("\n")
+    try:
+        path.write_text(
+            "=== earlier entries trimmed ===\n" + (rest if sep else keep),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
+def append_cluster_ops_log(text: str, *, path: Path | None = None) -> None:
+    target = CLUSTER_OPS_LOG if path is None else path
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        # A transcript that cannot be written must never take down the
+        # operation it was recording.
+        return
+    _trim_ops_log(target)
+
+
+async def cmd_maintenance(args: dict[str, Any] | None = None) -> Any:
+    """Run a maintenance op, recording mutating ones to a durable transcript."""
+    op = str((args or {}).get("op") or "status").strip()
+    record = op in _OPS_LOGGED_OPS
+    if record:
+        target = str((args or {}).get("target") or "").strip()
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        append_cluster_ops_log(
+            f"\n=== {op}{(' ' + target) if target else ''} - {stamp} ===\n"
+        )
+    async for event in _maintenance_events(args):
+        if record:
+            kind = event.get("type")
+            if kind in ("stdout", "stderr"):
+                append_cluster_ops_log(str(event.get("data") or ""))
+            elif kind == "done":
+                append_cluster_ops_log(
+                    f"=== {op} finished, exit {event.get('exit_code')} ===\n"
+                )
+        yield event

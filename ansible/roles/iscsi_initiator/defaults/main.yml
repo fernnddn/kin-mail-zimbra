@@ -19,3 +19,15 @@ iscsi_initiator_selector_remote: /var/tmp/kin-select-sbd-device.py
 # to an unauthenticated session.
 iscsi_initiator_chap_userid: ""
 iscsi_initiator_chap_password: ""
+
+# Session recovery timing for the SBD LUN, in seconds.
+#
+# open-iscsi ships replacement_timeout=120: when a session drops, I/O to the
+# LUN blocks for two minutes before erroring. SBD's watchdog fires at 35s, so
+# with the stock value a brief network blip on this shared NIC does not cause
+# a recoverable stall - it causes the node to reset itself, which is what the
+# Phase 7 run kept doing. Failing the session fast lets iscsid reconnect and
+# SBD carry on well inside its own deadline.
+iscsi_initiator_replacement_timeout: 15
+iscsi_initiator_noop_interval: 5
+iscsi_initiator_noop_timeout: 5

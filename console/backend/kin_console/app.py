@@ -1279,6 +1279,34 @@ async def monitoring_overview(
     }
 
 
+@app.get("/api/cluster/ops-log")
+async def cluster_ops_log(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Durable transcript of cluster operations, for the Activity log tab.
+
+    /api/cluster/status returns the output of the status probe it just ran,
+    which is a snapshot and not a record: seeding the Activity log from it
+    meant a refresh replaced the Move Master transcript with three lines of
+    current state.
+    """
+    if not command_allowed(user.role, proto.CMD_MAINTENANCE):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAINTENANCE),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAINTENANCE,
+        user.username,
+        args={"op": "opslog"},
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "exit_code": result.get("exit_code"),
+        "log": result.get("log") or "",
+    }
+
+
 @app.get("/api/cluster/status")
 async def cluster_status(
     user: ConsoleUser = Depends(auth.require_console_user),

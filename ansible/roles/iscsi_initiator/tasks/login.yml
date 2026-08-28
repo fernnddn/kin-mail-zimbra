@@ -55,6 +55,25 @@
   no_log: true
   tags: [iscsi, initiator, login]
 
+- name: Set SBD session recovery timeouts on the node record
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ iscsi_initiator_target_iqn }}
+      -p {{ iscsi_initiator_portal }}
+      --op update
+      -n node.session.timeo.replacement_timeout
+      -v {{ iscsi_initiator_replacement_timeout }}
+      -n node.conn[0].timeo.noop_out_interval
+      -v {{ iscsi_initiator_noop_interval }}
+      -n node.conn[0].timeo.noop_out_timeout
+      -v {{ iscsi_initiator_noop_timeout }}
+  # Deliberately before --login so the first session already has them, and
+  # unconditional so a retry repairs the record for the next boot even when a
+  # session is up. The record is what iscsid reads on reconnect.
+  changed_when: true
+  when: not ansible_check_mode
+  tags: [iscsi, initiator, login]
+
 - name: Log in to the SBD iSCSI target
   ansible.builtin.command:
     cmd: >-

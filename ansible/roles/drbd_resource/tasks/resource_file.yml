@@ -35,6 +35,70 @@
   when: not ansible_check_mode
   tags: [drbd, resource, config]
 
+- name: Parse the written resource definition before anything uses it
+  ansible.builtin.command:
+    cmd: drbdadm dump {{ drbd_resource_name }}
+  register: drbd_resource_dump
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [drbd, resource, config]
+
+- name: Fail loudly when drbdadm rejects the resource definition
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_dump.rc == 0
+    fail_msg: >-
+      drbdadm cannot parse {{ drbd_resource_res_path }}:
+      {{ (drbd_resource_dump.stderr | default('')) | trim }}.
+      Refusing to continue - a definition drbdadm will not read leaves the
+      node with no replication at all, which is worse than stopping here.
+  when:
+    - not ansible_check_mode
+    - drbd_resource_dump is not skipped
+  tags: [drbd, resource, config]
+
+# The .res file is read at attach time, so a resource that is already up keeps
+# whatever net/disk options it started with. On a retry - or on a cluster that
+# is live right now with the old unbounded resync - writing the file alone
+# changes nothing until the next restart. adjust applies the new timeouts and
+# rate ceiling to the running resource without interrupting replication.
+- name: Check whether the DRBD resource is already running
+  ansible.builtin.command:
+    cmd: drbdadm status {{ drbd_resource_name }}
+  register: drbd_resource_running
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [drbd, resource, config]
+
+- name: Apply the definition to the running resource
+  ansible.builtin.command:
+    cmd: drbdadm adjust {{ drbd_resource_name }}
+  register: drbd_resource_adjust
+  changed_when: drbd_resource_adjust.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - drbd_resource_running is not skipped
+    - drbd_resource_running.rc == 0
+  tags: [drbd, resource, config]
+
+- name: Report a failed adjust without stopping the run
+  ansible.builtin.debug:
+    msg: >-
+      drbdadm adjust exited {{ drbd_resource_adjust.rc }}:
+      {{ (drbd_resource_adjust.stderr | default('')) | trim }}.
+      The definition on disk is correct and will apply on the next attach;
+      replication was left as it was.
+  when:
+    - drbd_resource_adjust is defined
+    - drbd_resource_adjust is not skipped
+    - drbd_resource_adjust.rc | default(0) != 0
+  tags: [drbd, resource, config]
+
 - name: Check the kin-zimbra resource definition uses external meta
   ansible.builtin.command:
     cmd: grep -E 'meta-disk\s+{{ drbd_resource_meta_disk | regex_escape }}' {{ drbd_resource_res_path }}

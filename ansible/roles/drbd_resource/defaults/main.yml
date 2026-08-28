@@ -19,7 +19,23 @@ drbd_resource_meta_img_size: 256M
 drbd_resource_meta_dir: /var/lib/kin-mail
 drbd_resource_port: 7788
 drbd_resource_protocol: C
-drbd_resource_sync_rate: 100M
+# Ceiling for resync, not a fixed rate: DRBD's own controller (c-plan-ahead)
+# paces itself below this. 100M was ~80%% of a 1 GbE link and, with the
+# controller off, resync took it all - starving corosync, the SBD iSCSI
+# session, and the DRBD keepalive on the very same NIC. 40M leaves headroom
+# for all three. Raise it only on a dedicated replication network.
+drbd_resource_sync_rate: 40M
+drbd_resource_c_plan_ahead: 20
+drbd_resource_c_fill_target: 10M
+drbd_resource_c_min_rate: 4M
+# Seconds.
+drbd_resource_ping_int: 10
+drbd_resource_connect_int: 10
+# Tenths of a second. ping-timeout default is 5 (half a second), far too
+# tight for a shared virtual switch. timeout must stay below ping-int and
+# connect-int above.
+drbd_resource_ping_timeout: 30
+drbd_resource_timeout: 60
 drbd_resource_res_path: /etc/drbd.d/kin-zimbra.res
 # Names are placeholders only. Addresses MUST come from inventory
 # ansible_host (see tasks/resource_file.yml). Empty on purpose: never bake

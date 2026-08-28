@@ -21,3 +21,19 @@ cluster_setup_conf_name: ""
 # cluster start waits ~msgwait and systemd TimeoutStartSec (180s). Retry of a
 # stopped kin-mail pair must outlive that or pcsd returns 0 bytes received.
 cluster_setup_pcs_request_timeout: 300
+
+# Corosync totem timing, in milliseconds.
+#
+# The stock token is 1000ms: a node that goes quiet for about 1.2 seconds is
+# declared lost, and losing a node means fencing it. Replication, the iSCSI
+# session to the SBD LUN, and Zimbra all share one NIC with corosync here, so
+# a second of delay is not an outage, it is a busy link. The Phase 7 2-host
+# run fenced and rebooted on exactly that.
+#
+# 10s is the usual figure for virtualised nodes. It has to stay comfortably
+# under SBD_WATCHDOG_TIMEOUT (35s) so the cluster still notices a dead node
+# before that node's own watchdog fires: token + consensus = 22s here.
+# Raising it slows deliberate failover by a few seconds and nothing else -
+# fencing (msgwait 70s) and the Zimbra start dominate that path anyway.
+cluster_setup_token_ms: 10000
+cluster_setup_consensus_ms: 12000

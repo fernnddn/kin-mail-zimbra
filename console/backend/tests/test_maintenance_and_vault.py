@@ -540,8 +540,32 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
             "qdevice_ok": True,
             "failcount_ok": True,
             "failcount_lines": [],
+            # Move Master now runs the same pre-flight the Check button runs,
+            # so the fake status has to carry what that reads: the addresses it
+            # probes over HTTPS, and the two "cluster is not acting" states.
+            "addrs": {
+                "mail.example.test": "192.0.2.11",
+                "mail2.example.test": "192.0.2.12",
+            },
+            "bans": [],
+            "maintenance_mode": False,
         }
         st.update(overrides)
+        # Built after the overrides so a state that moves zimbra_node also
+        # moves what crm_mon would say. The pre-flight reads this to decide
+        # whether Zimbra is actually up on the node that is serving mail, and
+        # a blank crm would fail that check for the wrong reason.
+        st["raw"] = {
+            "crm": (
+                "  * kin-zimbra\t(ocf:kin:zimbra):\t Started "
+                f"{st['zimbra_node']}\n"
+                if st.get("zimbra_node")
+                else ""
+            ),
+            "pcs_nodes": "",
+            "drbd": "",
+            "quorum": "",
+        }
         return st
 
     async def test_bans_current_then_clears_after_settle(self) -> None:
@@ -570,6 +594,7 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
         settle_states = [
             self._status(),  # initial gate
             self._status(),  # after sync wait (already uptodate)
+            self._status(),  # pre-flight health gate
             # mid settle: still on current
             self._status(),
             # settled on target
@@ -639,6 +664,193 @@ class MaintenanceFailbackOpTests(unittest.IsolatedAsyncioTestCase):
         done = [ev for ev in events if ev.get("type") == "done"]
         self.assertEqual(done[-1].get("exit_code"), 0)
         self.assertTrue(any("Master move to" in str(ev.get("data")) for ev in events))
+
+    async def _run_with(
+        self,
+        *,
+        states: list[dict],
+        capture_side,
+        target: str = "mail.example.test",
+    ) -> tuple[list[dict], list[list[str]]]:
+        """Drive one failback with a scripted status sequence."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        status_iter = iter(states)
+        last = states[-1]
+
+        async def gather_side() -> dict:
+            try:
+                return next(status_iter)
+            except StopIteration:
+                return last
+
+        assert_path = MagicMock()
+        assert_path.is_file.return_value = True
+        assert_path.__str__.return_value = "/usr/local/sbin/kin-assert-no-dual-primary.sh"
+
+        with (
+            patch(
+                "kin_privhelper.maintenance.try_lock_maintenance",
+                return_value=object(),
+            ),
+            patch("kin_privhelper.maintenance.release_maintenance_lock"),
+            patch("kin_privhelper.maintenance.ASSERT_SCRIPT", assert_path),
+            patch(
+                "kin_privhelper.maintenance.resolve_target",
+                new=AsyncMock(return_value=target),
+            ),
+            patch(
+                "kin_privhelper.maintenance._capture",
+                new=AsyncMock(side_effect=capture_side),
+            ),
+            patch(
+                "kin_privhelper.maintenance.gather_status",
+                new=AsyncMock(side_effect=gather_side),
+            ),
+            patch("kin_privhelper.maintenance.FAILBACK_POLL_SEC", 0),
+            patch("kin_privhelper.maintenance.FAILBACK_TIMEOUT_SEC", 0),
+        ):
+            events = [
+                ev
+                async for ev in __import__(
+                    "kin_privhelper.maintenance", fromlist=["cmd_maintenance"]
+                ).cmd_maintenance({"op": "failback", "target": target})
+            ]
+        return events, self._calls
+
+    async def test_refuses_when_the_target_is_not_healthy(self) -> None:
+        """The Phase 7 failure: Move Master ran onto a node whose check failed.
+
+        Nothing may be banned. Banning the only working Promoted node so the
+        stack can land somewhere it cannot run takes mail down on both nodes,
+        and that is precisely what happened live on 28 Aug 2026.
+        """
+        self._calls = []
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            self._calls.append(list(argv))
+            joined = " ".join(argv)
+            if "kin-assert-no-dual-primary" in joined:
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:4] == ["pcs", "resource", "ban", "--help"]:
+                return 0, "Usage: pcs resource ban <resource id> [node] [--promoted]\n", ""
+            if argv[0] == "curl":
+                return 0, "200", ""
+            return 0, "", ""
+
+        # Zimbra is not Started anywhere, so peer_zmcontrol fails.
+        unhealthy = self._status(zimbra_node=None)
+        events, calls = await self._run_with(
+            states=[unhealthy, unhealthy, unhealthy],
+            capture_side=capture_side,
+        )
+        bans = [c for c in calls if c[:3] == ["pcs", "resource", "ban"] and "--help" not in c]
+        self.assertEqual(bans, [], "refused move must not touch the cluster")
+        text = " ".join(str(ev.get("data") or "") for ev in events)
+        self.assertIn("Refusing failback", text)
+        self.assertIn("peer_zmcontrol", text)
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(done[-1].get("exit_code"), 1)
+
+    async def test_refuses_when_a_stale_ban_is_still_in_the_cib(self) -> None:
+        """A ban left by an interrupted move forbids promotion cluster-wide.
+
+        Issuing a second ban on top of it is how you end up with no node
+        allowed to be Promoted at all.
+        """
+        self._calls = []
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            self._calls.append(list(argv))
+            if "kin-assert-no-dual-primary" in " ".join(argv):
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:4] == ["pcs", "resource", "ban", "--help"]:
+                return 0, "Usage: pcs resource ban <resource id> [node] [--promoted]\n", ""
+            if argv[0] == "curl":
+                return 0, "200", ""
+            return 0, "", ""
+
+        stale = self._status(
+            bans=[
+                {
+                    "id": "cli-ban-kin-drbd-clone-on-mail.example.test",
+                    "resource": "kin-drbd-clone",
+                    "node": "mail.example.test",
+                    "role": "Master",
+                    "score": "-INFINITY",
+                }
+            ]
+        )
+        events, calls = await self._run_with(
+            states=[stale, stale, stale], capture_side=capture_side
+        )
+        bans = [c for c in calls if c[:3] == ["pcs", "resource", "ban"] and "--help" not in c]
+        self.assertEqual(bans, [])
+        text = " ".join(str(ev.get("data") or "") for ev in events)
+        self.assertIn("no_stale_ban", text)
+
+    async def test_refuses_in_pacemaker_maintenance_mode(self) -> None:
+        self._calls = []
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            self._calls.append(list(argv))
+            if "kin-assert-no-dual-primary" in " ".join(argv):
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:4] == ["pcs", "resource", "ban", "--help"]:
+                return 0, "Usage: pcs resource ban <resource id> [node] [--promoted]\n", ""
+            if argv[0] == "curl":
+                return 0, "200", ""
+            return 0, "", ""
+
+        frozen = self._status(maintenance_mode=True)
+        events, calls = await self._run_with(
+            states=[frozen, frozen, frozen], capture_side=capture_side
+        )
+        bans = [c for c in calls if c[:3] == ["pcs", "resource", "ban"] and "--help" not in c]
+        self.assertEqual(bans, [])
+        text = " ".join(str(ev.get("data") or "") for ev in events)
+        self.assertIn("not_maintenance_mode", text)
+
+    async def test_a_move_that_never_settles_removes_its_own_ban(self) -> None:
+        """The ban must never outlive the operation that placed it.
+
+        A -INFINITY Promoted ban on the node that was serving mail means no
+        node may be promoted: DRBD has no Primary, the group cannot start, and
+        nothing on screen names the constraint responsible. Telling the
+        operator to SSH in and run `pcs resource clear` is not a fix.
+        """
+        self._calls = []
+
+        async def capture_side(argv: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+            self._calls.append(list(argv))
+            if "kin-assert-no-dual-primary" in " ".join(argv):
+                return 0, "NO_DUAL_PRIMARY_OK\n", ""
+            if argv[:4] == ["pcs", "resource", "ban", "--help"]:
+                return 0, "Usage: pcs resource ban <resource id> [node] [--promoted]\n", ""
+            if argv[:3] == ["pcs", "resource", "ban"]:
+                return 0, "ban ok\n", ""
+            if argv[:3] == ["pcs", "resource", "clear"]:
+                return 0, "clear ok\n", ""
+            if argv[0] == "curl":
+                return 0, "200", ""
+            return 0, "", ""
+
+        # Healthy enough to start, but the stack never lands on the target.
+        healthy = self._status()
+        events, calls = await self._run_with(
+            states=[healthy] * 8, capture_side=capture_side
+        )
+        bans = [c for c in calls if c[:3] == ["pcs", "resource", "ban"] and "--help" not in c]
+        clears = [c for c in calls if c[:3] == ["pcs", "resource", "clear"]]
+        self.assertEqual(len(bans), 1, "the move should have been attempted")
+        self.assertEqual(
+            len(clears), 1, "the ban it placed must be removed when it fails"
+        )
+        text = " ".join(str(ev.get("data") or "") for ev in events)
+        self.assertIn("Removing the temporary ban", text)
+        done = [ev for ev in events if ev.get("type") == "done"]
+        self.assertEqual(done[-1].get("exit_code"), 1)
+
 
     async def test_refuses_when_already_promoted(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -779,3 +991,160 @@ class FailbackSettleHttpsTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BanAndMaintenanceParseTests(unittest.TestCase):
+    def test_maintenance_mode_property(self) -> None:
+        from kin_privhelper.maintenance import parse_maintenance_mode
+
+        self.assertTrue(
+            parse_maintenance_mode("Cluster Properties:\n maintenance-mode: true\n")
+        )
+        self.assertFalse(
+            parse_maintenance_mode("Cluster Properties:\n maintenance-mode: false\n")
+        )
+        self.assertFalse(parse_maintenance_mode("Cluster Properties:\n stonith-enabled: true\n"))
+
+    def test_only_cli_ban_constraints_count(self) -> None:
+        from kin_privhelper.maintenance import parse_ban_constraints
+
+        xml = (
+            "<constraints>"
+            '<rsc_location id="cli-ban-kin-drbd-clone-on-mail1" rsc="kin-drbd-clone"'
+            ' role="Master" node="mail1" score="-INFINITY"/>'
+            '<rsc_location id="location-kin-vip-mail1-100" rsc="kin-vip" node="mail1"'
+            ' score="100"/>'
+            "</constraints>"
+        )
+        bans = parse_ban_constraints(xml)
+        self.assertEqual(len(bans), 1)
+        self.assertEqual(bans[0]["resource"], "kin-drbd-clone")
+        self.assertEqual(bans[0]["node"], "mail1")
+
+    def test_unreadable_cib_is_not_a_ban(self) -> None:
+        from kin_privhelper.maintenance import parse_ban_constraints
+
+        # cibadmin failing must not invent constraints that would then block
+        # every Move Master with an error nobody can act on.
+        self.assertEqual(parse_ban_constraints(""), [])
+        self.assertEqual(parse_ban_constraints("cibadmin: connection failed"), [])
+
+
+class ClusterOpsTranscriptTests(unittest.IsolatedAsyncioTestCase):
+    """The record of what a cluster operation did must outlive the browser tab."""
+
+    async def test_a_failed_move_is_still_on_disk_afterwards(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper import maintenance as m
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "sub" / "cluster-ops.log"
+
+            async def fake_events(args):
+                yield m.proto.event_stdout("Controlled Master move to mail2\n")
+                yield m.proto.event_stderr("Refusing failback: peer_zmcontrol\n")
+                yield m.proto.event_done(1)
+
+            with (
+                patch.object(m, "CLUSTER_OPS_LOG", log),
+                patch.object(m, "_maintenance_events", fake_events),
+            ):
+                events = [
+                    ev
+                    async for ev in m.cmd_maintenance(
+                        {"op": "failback", "target": "mail2.example.test"}
+                    )
+                ]
+
+            self.assertEqual(events[-1]["exit_code"], 1)
+            text = log.read_text(encoding="utf-8")
+            # The parent directory did not exist: a transcript that needs the
+            # operator to mkdir first is a transcript that is never there when
+            # it matters.
+            self.assertIn("failback mail2.example.test", text)
+            self.assertIn("Controlled Master move to mail2", text)
+            self.assertIn("Refusing failback: peer_zmcontrol", text)
+            self.assertIn("finished, exit 1", text)
+
+    async def test_reading_status_is_not_recorded(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from kin_privhelper import maintenance as m
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "cluster-ops.log"
+
+            async def fake_events(args):
+                yield m.proto.event_stdout("CLUSTER_STATUS_JSON:{}\n")
+                yield m.proto.event_done(0)
+
+            with (
+                patch.object(m, "CLUSTER_OPS_LOG", log),
+                patch.object(m, "_maintenance_events", fake_events),
+            ):
+                [ev async for ev in m.cmd_maintenance({"op": "status"})]
+
+            # Status is polled every few seconds. Recording it would bury the
+            # operations the transcript exists to preserve.
+            self.assertFalse(log.exists())
+
+    def test_an_unwritable_transcript_never_breaks_the_operation(self) -> None:
+        from pathlib import Path
+
+        from kin_privhelper.maintenance import append_cluster_ops_log
+
+        # Under a path that cannot be created. Losing the record is bad;
+        # aborting a Master move because of it would be far worse.
+        append_cluster_ops_log("x", path=Path("/proc/definitely/not/here.log"))
+
+    def test_transcript_is_trimmed_but_keeps_the_latest_entries(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from kin_privhelper.maintenance import append_cluster_ops_log
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "ops.log"
+            log.write_text("old\n" * 5000, encoding="utf-8")
+            append_cluster_ops_log("newest line\n", path=log)
+            import kin_privhelper.maintenance as m
+
+            m._trim_ops_log(log, limit=1000)
+            text = log.read_text(encoding="utf-8")
+            self.assertLess(len(text), 2000)
+            self.assertIn("newest line", text)
+            self.assertIn("earlier entries trimmed", text)
+
+
+class SingleHostStatusTests(unittest.IsolatedAsyncioTestCase):
+    """A 1-host install has no Pacemaker, and the Cluster page must still load."""
+
+    async def test_missing_cluster_binaries_do_not_break_status(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from pathlib import Path
+
+        from kin_privhelper import maintenance as m
+
+        # Every cluster tool absent, the way _capture reports it.
+        async def not_installed(argv, timeout: float = 30.0):
+            return 127, "", f"command not found: {argv[0]}\n"
+
+        with (
+            patch.object(m, "_capture", new=AsyncMock(side_effect=not_installed)),
+            patch.object(m, "COROSYNC_CONF", Path("/nonexistent/corosync.conf")),
+        ):
+            st = await m.gather_status()
+
+        # cibadmin and pcs property were both added to this call for the ban
+        # and maintenance-mode checks. On a single-host appliance neither
+        # exists, and inventing a ban there would block every operation with an
+        # error the operator cannot act on.
+        self.assertEqual(st["bans"], [])
+        self.assertFalse(st["maintenance_mode"])
+        self.assertEqual(st["nodes"], [])

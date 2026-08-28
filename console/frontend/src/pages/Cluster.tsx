@@ -50,6 +50,8 @@ type ClusterSnap = {
   no_quorum_policy?: string;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
+  maintenance_mode?: boolean;
+  bans?: ClusterBan[];
   offline?: string[];
   stale_peers?: string[];
   observability?: ObservabilitySnap;
@@ -64,6 +66,15 @@ type StatusResp = {
 };
 
 type PreflightCheck = { ok: boolean; detail: string };
+// A location constraint left behind by `pcs resource ban`, i.e. by a Move
+// Master that did not get to run its clear.
+type ClusterBan = {
+  id?: string;
+  resource?: string;
+  node?: string;
+  role?: string;
+  score?: string;
+};
 
 type RemoveProbe = {
   mode: "graceful" | "forced";
@@ -953,7 +964,16 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
   );
 
   const fcOk = cluster.failcount_ok !== false;
-  const fcTone: StatusTone = cluster.failcount_ok === undefined ? "muted" : fcOk ? "ok" : "warn";
+  // A zero fail-count means no resource has *recorded* a failure. It does not
+  // mean the cluster is well, and in maintenance-mode it means nothing at all
+  // because the monitors that would record one are not running. Phase 7 showed
+  // this card green next to "Zimbra is not started on any node".
+  const fcTone: StatusTone =
+    cluster.failcount_ok === undefined || cluster.maintenance_mode
+      ? "muted"
+      : fcOk
+        ? "ok"
+        : "warn";
   cards.push(
     <OverviewCard key="failcount" $tone={fcTone}>
       <IconChip $tone={fcTone}>
@@ -962,14 +982,22 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
       <OverviewBody>
         <OverviewLabel>Pacemaker fail-count</OverviewLabel>
         <OverviewValue>
-          {cluster.failcount_ok === undefined ? "Unknown" : fcOk ? "Clear" : "Nonzero"}
+          {cluster.maintenance_mode
+            ? "Not monitored"
+            : cluster.failcount_ok === undefined
+              ? "Unknown"
+              : fcOk
+                ? "Clear"
+                : "Nonzero"}
         </OverviewValue>
         <OverviewSub $tone={fcTone}>
-          {cluster.failcount_ok === undefined
-            ? "Not reported yet"
-            : fcOk
-              ? "Self-heal monitors healthy"
-              : "Ops can re-probe after a transient race"}
+          {cluster.maintenance_mode
+            ? "maintenance-mode is on, so monitors are not running"
+            : cluster.failcount_ok === undefined
+              ? "Not reported yet"
+              : fcOk
+                ? "No resource failures recorded"
+                : "Ops can re-probe after a transient race"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -1012,6 +1040,22 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
   }
 
   return cards;
+}
+
+// The tail of a streamed chunk, minus the machine-readable markers the log
+// carries for the parser. This is shown to a person, so it must read as words.
+function lastMeaningfulLine(chunk: string): string {
+  const lines = chunk
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(
+      (l) =>
+        l.length > 0 &&
+        !l.startsWith("PREFLIGHT_JSON:") &&
+        !l.startsWith("CLUSTER_STATUS_JSON:"),
+    );
+  const line = lines[lines.length - 1] || "";
+  return line.length > 160 ? line.slice(0, 157) + "..." : line;
 }
 
 function parseTaggedJson(log: string, prefix: string): Record<string, unknown> | null {
@@ -1111,8 +1155,13 @@ export default function ClusterPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [preflight, setPreflight] = useState<Record<string, PreflightCheck> | null>(null);
-  const [preflightTarget, setPreflightTarget] = useState("");
+  // Keyed by node. A single shared result meant checking the second node
+  // overwrote the first one's, so a failure you had just read was gone as soon
+  // as you looked at the other card - which is how a failed peer check ended
+  // up invisible during the Phase 7 run, right next to an enabled Move Master.
+  const [preflightByNode, setPreflightByNode] = useState<
+    Record<string, Record<string, PreflightCheck>>
+  >({});
   const [tab, setTab] = useState<"status" | "monitoring" | "activity">("status");
   const [healthOpen, setHealthOpen] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
@@ -1132,6 +1181,10 @@ export default function ClusterPage() {
   const [addErr, setAddErr] = useState("");
   const [pendingObsAdd, setPendingObsAdd] = useState(false);
   const [pendingCleanup, setPendingCleanup] = useState(false);
+  // The most recent line the running operation printed. Move Master takes
+  // minutes and wrote everything to a tab you were not on, so from the Status
+  // tab it was an unlabelled spinner for the whole duration.
+  const [liveStep, setLiveStep] = useState("");
   const [pendingFailback, setPendingFailback] = useState<string | null>(null);
   // The Activity log is a running record, not a scratch buffer: every action
   // appends to it under a timestamped header so the operator can scroll back
@@ -1169,8 +1222,22 @@ export default function ClusterPage() {
       // Only seed the transcript on a cold start. A status poll overwriting it
       // every few seconds is what made the Activity log look like it reset
       // itself and lose the record of what just happened.
+      //
+      // Seed it from the durable server-side transcript, not from st.log: that
+      // is the output of this status probe, so after a refresh the Activity log
+      // showed a fresh snapshot where the Move Master that had just run should
+      // have been. The snapshot is the fallback when no transcript exists yet.
       if (!esRef.current && !logRef.current) {
-        logRef.current = st.log || "";
+        let seeded = "";
+        try {
+          const ops = await api<{ log?: string }>(
+            "/api/cluster/ops-log",
+          );
+          seeded = ops.log || "";
+        } catch {
+          /* fall back to the status snapshot below */
+        }
+        logRef.current = seeded || st.log || "";
         setLog(logRef.current);
       }
       setLastUpdated(Date.now());
@@ -1223,19 +1290,27 @@ export default function ClusterPage() {
     enter: "Enter maintenance",
     exit: "Exit maintenance",
     cleanup: "Clear fail-counts",
+    clearban: "Clear stale constraints",
     failback: "Move Master",
   };
 
-  function runStream(op: "preflight" | "enter" | "exit" | "cleanup" | "failback", target: string) {
+  function runStream(
+    op: "preflight" | "enter" | "exit" | "cleanup" | "failback" | "clearban",
+    target: string,
+  ) {
     esRef.current?.close();
     const taskId = startTask(TASK_TITLES[op] || op, target || undefined);
     logHeader(TASK_TITLES[op] || op, target);
     setBusy(true);
     setMessage("");
+    setLiveStep("Starting...");
     // header appended below instead of wiping the record
     if (op === "preflight") {
-      setPreflight(null);
-      setPreflightTarget(target);
+      setPreflightByNode((prev) => {
+        const next = { ...prev };
+        delete next[target];
+        return next;
+      });
     }
     const qs = new URLSearchParams({
       action: "maintenance",
@@ -1251,9 +1326,11 @@ export default function ClusterPage() {
         if (data.type === "stdout" && data.data) {
           buf += data.data;
           appendLog(data.data);
+          setLiveStep(lastMeaningfulLine(data.data) || "");
         } else if (data.type === "stderr" && data.data) {
           buf += data.data;
           appendLog(data.data);
+          setLiveStep(lastMeaningfulLine(data.data) || "");
         } else if (data.type === "error") {
           buf += `[error] ${data.message || ""}\n`;
           appendLog(`[error] ${data.message || ""}\n`);
@@ -1261,6 +1338,7 @@ export default function ClusterPage() {
           es.close();
           esRef.current = null;
           setBusy(false);
+          setLiveStep("");
           const pf = parseTaggedJson(buf, "PREFLIGHT_JSON:");
           if (pf) {
             const checks: Record<string, PreflightCheck> = {};
@@ -1270,14 +1348,19 @@ export default function ClusterPage() {
                 checks[k] = v as PreflightCheck;
               }
             }
-            setPreflight(checks);
-            setPreflightTarget(target);
+            setPreflightByNode((prev) => ({ ...prev, [target]: checks }));
           }
           const code = data.exit_code ?? 1;
           if (op === "preflight") {
             setMessage(code === 0 ? `Pre-flight passed for ${target}.` : `Pre-flight failed for ${target}.`);
           } else if (op === "enter") {
             setMessage(code === 0 ? `${target} is in maintenance.` : `Enter maintenance failed for ${target}.`);
+          } else if (op === "clearban") {
+            setMessage(
+              code === 0
+                ? "Stale Move Master constraints cleared. Give the cluster a minute to promote a node."
+                : "Could not clear the constraints - the output is on the Activity log tab.",
+            );
           } else if (op === "cleanup") {
             setMessage(
               code === 0
@@ -1313,6 +1396,7 @@ export default function ClusterPage() {
         es.close();
         esRef.current = null;
         setBusy(false);
+        setLiveStep("");
         setMessage("Lost connection to the maintenance stream. The last output is on the Activity log tab.");
         endTaskWith(taskId, "failed", "lost connection to the stream");
       }
@@ -1620,7 +1704,7 @@ export default function ClusterPage() {
     const isPromoted = cluster.promoted === node;
     const isOffline = offline.has(node);
     const isLocal = hostsMatch(node, cluster.local_host);
-    const pfForThis = preflightTarget === node ? preflight : null;
+    const pfForThis = preflightByNode[node] || null;
     const pfFailed = pfForThis ? Object.values(pfForThis).some((c) => !c.ok) : false;
     const pfPassed = !!pfForThis && !pfFailed;
     const ip = ipForNode(node, cluster.node_ips, cluster.local_host);
@@ -1726,7 +1810,7 @@ export default function ClusterPage() {
                     <Button
                       type="button"
                       variant="secondary"
-                      disabled={busy || !cluster.drbd_uptodate}
+                      disabled={busy || !cluster.drbd_uptodate || !pfPassed}
                       onClick={() => setPendingFailback(node)}
                     >
                       Move Master here
@@ -1742,8 +1826,8 @@ export default function ClusterPage() {
                 {!isLocal && !isStandby && !pfPassed ? (
                   <CardHint>
                     {pfFailed
-                      ? "All checks must pass before you can enter maintenance."
-                      : "Run Check first to enable Enter Maintenance."}
+                      ? "All checks must pass before you can enter maintenance or move the Master here."
+                      : "Run Check first to enable Enter Maintenance and Move Master here."}
                   </CardHint>
                 ) : null}
                 {canFailback && !cluster.drbd_uptodate ? (
@@ -1816,6 +1900,39 @@ export default function ClusterPage() {
             and mailbox create stay blocked until you exit.
           </WarnBox>
         ) : null}
+        {/* Both of these stop Pacemaker acting while reporting no failure at
+            all, so without saying so the page shows a cluster where nothing
+            runs, nothing is wrong, and nothing explains it. */}
+        {cluster.maintenance_mode ? (
+          <WarnBox>
+            <strong>
+              The cluster is in Pacemaker maintenance-mode, so it will not start,
+              stop, or move anything.
+            </strong>{" "}
+            Resources stay exactly as they are now, including stopped ones, and
+            monitors do not run - which is why nothing is reported as failed.
+            Mail will not recover on its own until maintenance-mode is turned
+            off.
+          </WarnBox>
+        ) : null}
+        {(cluster.bans || []).length ? (
+          <WarnBox>
+            <strong>
+              A temporary ban from an earlier Move Master is still in place.
+            </strong>{" "}
+            {(cluster.bans || [])
+              .map(
+                (b) =>
+                  `${b.resource || "a resource"} is not allowed on ${b.node || "a node"}` +
+                  (b.role ? ` as ${b.role}` : ""),
+              )
+              .join("; ")}
+            . While this is set no node is allowed to take that role, so DRBD has
+            no Primary and mail cannot start anywhere. Use Clear stale
+            constraints below, or on either mail node run: pcs resource clear{" "}
+            {(cluster.bans || [])[0]?.resource || "kin-drbd-clone"}
+          </WarnBox>
+        ) : null}
         <Tabs>
           <TabBtn type="button" $on={tab === "status"} onClick={() => setTab("status")}>
             Status
@@ -1877,6 +1994,19 @@ export default function ClusterPage() {
                       }}
                     >
                       Clear fail-counts (re-probe)
+                    </MenuItem>
+                  ) : null}
+                  {ops && (cluster.bans || []).length ? (
+                    <MenuItem
+                      type="button"
+                      data-danger="true"
+                      disabled={busy}
+                      onClick={() => {
+                        setHealthOpen(false);
+                        runStream("clearban", "");
+                      }}
+                    >
+                      Clear stale constraints (Move Master ban)
                     </MenuItem>
                   ) : null}
                 </Dropdown>
@@ -1963,6 +2093,11 @@ export default function ClusterPage() {
         ) : (
           <LogPane aria-label="Maintenance log">{log || "Status and transition output appears here."}</LogPane>
         )}
+        {busy && liveStep ? (
+          <Hint>
+            <strong>Working:</strong> {liveStep}
+          </Hint>
+        ) : null}
         {message ? <Hint>{message}</Hint> : null}
         <ConfirmModal
           open={pendingCleanup}
