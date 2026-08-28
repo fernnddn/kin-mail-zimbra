@@ -31,3 +31,38 @@
     - cluster_setup_pcs_status_after.rc == 0
   run_once: true
   tags: [cluster, setup, verify]
+
+# The totem timing is only written by `pcs cluster setup`, which runs on a
+# greenfield cluster and nowhere else. A pair formed by an earlier build keeps
+# corosync's stock 1s token, and that is exactly the timing that turned a busy
+# shared NIC into a fenced node during the Phase 7 run. Editing corosync.conf
+# under a live cluster is its own risk, so this reports rather than repairs -
+# but it must not be silent, or "fixed in the repo" reads as "fixed on the box".
+- name: Read the corosync token in force on this node
+  ansible.builtin.command:
+    cmd: corosync-cmapctl -g totem.token
+  register: cluster_setup_live_token
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, setup, verify]
+
+- name: Report a cluster still running the stock corosync token
+  ansible.builtin.debug:
+    msg: >-
+      This cluster's corosync token is
+      {{ (cluster_setup_live_token.stdout | default('')) | trim | default('unknown', true) }},
+      not the {{ cluster_setup_token_ms }}ms this build configures. Only
+      `pcs cluster setup` writes it, so a pair formed by an earlier build keeps
+      the old value. Replication, corosync, and the SBD iSCSI session share one
+      NIC here, and at the stock 1000ms a busy link is read as a dead node and
+      fenced. To apply it, rebuild the pair, or edit totem.token in
+      /etc/corosync/corosync.conf on both nodes and reload corosync during a
+      planned window.
+  when:
+    - not ansible_check_mode
+    - cluster_setup_live_token is not skipped
+    - cluster_setup_live_token.rc == 0
+    - (cluster_setup_token_ms | string) not in (cluster_setup_live_token.stdout | default(''))
+  tags: [cluster, setup, verify]
