@@ -1101,6 +1101,20 @@ function healthLines(cluster: ClusterSnap): HealthLine[] {
       ok: Boolean(cluster.qdevice_ok),
       label: cluster.qdevice_ok ? "qdevice voting" : "qdevice unhealthy",
     },
+    // Neither of these reports a failure anywhere else, so without a line
+    // here the summary can read healthy while Pacemaker is not acting at all.
+    {
+      ok: !cluster.maintenance_mode,
+      label: cluster.maintenance_mode
+        ? "maintenance-mode on: Pacemaker is not managing resources"
+        : "Pacemaker is managing resources",
+    },
+    {
+      ok: !(cluster.bans || []).length,
+      label: (cluster.bans || []).length
+        ? "a Move Master ban is still set: no node may be promoted"
+        : "no leftover Move Master bans",
+    },
     {
       ok: cluster.observability?.status === "healthy",
       label:
@@ -1928,8 +1942,10 @@ export default function ClusterPage() {
               )
               .join("; ")}
             . While this is set no node is allowed to take that role, so DRBD has
-            no Primary and mail cannot start anywhere. Use Clear stale
-            constraints below, or on either mail node run: pcs resource clear{" "}
+            no Primary and mail cannot start anywhere. Open the{" "}
+            <strong>Cluster Needs Attention</strong> menu below and choose{" "}
+            <strong>Clear stale constraints</strong>. On either mail node the
+            equivalent is: pcs resource clear{" "}
             {(cluster.bans || [])[0]?.resource || "kin-drbd-clone"}
           </WarnBox>
         ) : null}

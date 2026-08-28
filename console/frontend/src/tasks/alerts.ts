@@ -60,6 +60,8 @@ export type AlertSnap = {
   qdevice_ok?: boolean;
   failcount_ok?: boolean;
   maintenance_active?: boolean;
+  maintenance_mode?: boolean;
+  bans?: { resource?: string; node?: string; role?: string }[];
   quorum_hint?: string;
   no_quorum_policy?: string;
   observability?: { status?: string };
@@ -159,6 +161,31 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
       title: "A node is in maintenance",
       detail: (cluster.standby || []).join(", ") || undefined,
       severity: "warn",
+    });
+  }
+
+  // The two states that stop Pacemaker acting while reporting nothing wrong.
+  // They are the reason a cluster can sit with mail down and every other
+  // indicator green, so they belong in front of the operator, not buried.
+  if (cluster.maintenance_mode) {
+    out.push({
+      id: "maintenance_mode",
+      title: "Pacemaker is in maintenance-mode",
+      detail:
+        "Resources will not start, stop, or move, and monitors are not running. " +
+        "Mail cannot recover on its own until this is turned off.",
+      severity: "danger",
+    });
+  }
+
+  if ((cluster.bans || []).length) {
+    out.push({
+      id: "stale_ban",
+      title: "A Move Master ban is still set",
+      detail:
+        "No node is allowed to take that role, so DRBD has no Primary and mail " +
+        "cannot start. Clear it from the Cluster page.",
+      severity: "danger",
     });
   }
 

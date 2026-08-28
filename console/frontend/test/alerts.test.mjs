@@ -101,5 +101,37 @@ chk("a returning alert clears its resolved stamp", back[0].resolvedAt, undefined
 chk("fresh alerts pass through unchanged", mergeAlerts([], [A("a"), A("b", "danger")], 1).map((a) => a.id), ["a", "b"]);
 chk("nothing in, nothing out", mergeAlerts([], [], 1), []);
 
+// The two states that stop Pacemaker acting while every other indicator stays
+// green. During the Phase 7 run the page showed Zimbra stopped everywhere, the
+// VIP nowhere, and fail-count clear, with nothing saying why.
+const okPair = {
+  topology: "2vm",
+  nodes: ["mail1", "mail2"],
+  promoted: "mail1",
+  zimbra_node: "mail1",
+  vip_node: "mail1",
+  vip_ip: "192.0.2.9",
+  drbd_uptodate: true,
+  qdevice_ok: true,
+  failcount_ok: true,
+  observability: { status: "healthy" },
+};
+const alertIds = (c) => deriveAlerts(c).map((a) => a.id);
+
+chk("a healthy pair raises nothing about these", 
+  alertIds(okPair).filter((i) => i === "maintenance_mode" || i === "stale_ban"), []);
+chk("maintenance-mode is raised", alertIds({ ...okPair, maintenance_mode: true }).includes("maintenance_mode"), true);
+chk("a leftover ban is raised",
+  alertIds({ ...okPair, bans: [{ resource: "kin-drbd-clone", node: "mail1", role: "Master" }] }).includes("stale_ban"),
+  true);
+chk("an empty ban list is not an alert", alertIds({ ...okPair, bans: [] }).includes("stale_ban"), false);
+
+// Both mean mail is down and cannot recover unattended, so neither is a
+// warning to scroll past.
+const alertSeverity = (c, id) => deriveAlerts(c).find((a) => a.id === id)?.severity;
+chk("maintenance-mode is not a mere warning", alertSeverity({ ...okPair, maintenance_mode: true }, "maintenance_mode"), "danger");
+chk("a leftover ban is not a mere warning",
+  alertSeverity({ ...okPair, bans: [{ resource: "kin-drbd-clone" }] }, "stale_ban"), "danger");
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);
