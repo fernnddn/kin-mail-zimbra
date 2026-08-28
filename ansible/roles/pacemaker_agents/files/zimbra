@@ -168,7 +168,7 @@ zimbra_holder_is_protected() {
 #   ERROR: holder: /dev/drbd0:  root   kernel mount /opt/zimbra
 #   ERROR: holder:              zimbra  4135 ..c.. sleep
 #   Result of stop operation for kin-zimbra: error
-#   sbd: Received command reset from mail.nisaroti.my.id
+#   sbd: Received command reset from <the other node>
 #
 # Zimbra has already been told to stop by the time we get here, so anything
 # still under the mount is a straggler of its own making. TERM first so a
