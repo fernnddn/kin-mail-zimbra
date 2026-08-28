@@ -14,5 +14,20 @@ pacemaker_agents_disable_zimbra_service: true
 pacemaker_agents_keep_meta_loop_unit: kin-drbd-meta-loop.service
 pacemaker_agents_luks_dropin_dir: /etc/systemd/system/pacemaker.service.d
 pacemaker_agents_luks_dropin_path: /etc/systemd/system/pacemaker.service.d/kin-luks-cryptsetup.conf
-# crypttab name kin-zimbra-crypt → systemd-cryptsetup@kin-zimbra-crypt.service
-pacemaker_agents_luks_cryptsetup_unit: systemd-cryptsetup@kin-zimbra-crypt.service
+# The crypttab name kin-zimbra-crypt does NOT map to a unit of the same name:
+# systemd escapes instance names, so the generated unit is
+# systemd-cryptsetup@kin\x2dzimbra\x2dcrypt.service. Believing otherwise is
+# what pointed Requires= at a unit that never existed.
+# The LUKS mapper backing /opt/zimbra. systemd names its generated unit after
+# the ESCAPED form of this - a dash becomes \x2d - so the unit name is derived
+# on the host with systemd-escape rather than written out here. Getting that
+# wrong points Requires= at a unit that does not exist, and Pacemaker then
+# refuses to start at all: a node that goes down cannot rejoin the cluster.
+pacemaker_agents_luks_mapper_name: >-
+  {{ drbd_resource_luks_mapper_name | default('kin-zimbra-crypt') }}
+# Fallback only. tasks/systemd.yml overrides this with the escaped name that
+# systemd-escape returns on the host.
+pacemaker_agents_luks_cryptsetup_unit: >-
+  systemd-cryptsetup@{{
+    pacemaker_agents_luks_mapper_name | trim | replace('-', '\x2d')
+  }}.service

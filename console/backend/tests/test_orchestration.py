@@ -2122,3 +2122,65 @@ class ObservabilityIdentityTests(unittest.TestCase):
         for play in ("mon-qnetd.yml", "mon-iscsi-target.yml"):
             text = (repo / "ansible/playbooks" / play).read_text(encoding="utf-8")
             self.assertIn("observability_identity", text, play)
+
+
+class CryptsetupUnitEscapingTests(unittest.TestCase):
+    """Pacemaker's LUKS drop-in must name a unit systemd can actually resolve.
+
+    systemd escapes instance names - a dash becomes \\x2d - so the generator
+    produced systemd-cryptsetup@kin\\x2dzimbra\\x2dcrypt.service while the drop-in
+    required systemd-cryptsetup@kin-zimbra-crypt.service. Requires= on a
+    not-found unit makes systemd refuse to start the service, so `pcs cluster
+    start` failed outright and a node that had gone down could not rejoin. Live
+    on 28 Aug 2026, and wrong since the drop-in was written.
+    """
+
+    def _repo(self):
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[3]
+
+    def test_the_unit_name_is_not_written_out_unescaped(self) -> None:
+        import re
+
+        defaults = (
+            self._repo() / "ansible/roles/pacemaker_agents/defaults/main.yml"
+        ).read_text(encoding="utf-8")
+        # A literal mapper name with raw dashes after the @ is the bug. Checked
+        # on config lines only: a comment may legitimately quote the wrong form
+        # while explaining why it is wrong.
+        config = "\n".join(
+            line for line in defaults.splitlines() if not line.lstrip().startswith("#")
+        )
+        self.assertIsNone(
+            re.search(r"systemd-cryptsetup@[A-Za-z0-9]+-[A-Za-z0-9-]+\.service", config),
+            "the cryptsetup unit name is written unescaped",
+        )
+
+    def test_the_escaped_name_is_asked_of_systemd_itself(self) -> None:
+        tasks = (
+            self._repo() / "ansible/roles/pacemaker_agents/tasks/systemd.yml"
+        ).read_text(encoding="utf-8")
+        # systemd's escaping is more than dashes; guessing it in Jinja is how
+        # this went wrong the first time.
+        self.assertIn("systemd-escape", tasks)
+        self.assertIn("--template=systemd-cryptsetup@.service", tasks)
+
+    def test_a_unit_that_does_not_resolve_fails_the_run(self) -> None:
+        tasks = (
+            self._repo() / "ansible/roles/pacemaker_agents/tasks/systemd.yml"
+        ).read_text(encoding="utf-8")
+        # Silently deploying a drop-in that cannot resolve leaves a node which
+        # looks fine until the day it is restarted.
+        self.assertIn("systemctl cat", tasks)
+        self.assertIn("could not rejoin", tasks)
+        self.assertLess(
+            tasks.index("systemctl cat"),
+            tasks.index("Deploy the pacemaker After=cryptsetup.target drop-in"),
+        )
+
+    def test_the_fallback_default_is_at_least_escaped(self) -> None:
+        defaults = (
+            self._repo() / "ansible/roles/pacemaker_agents/defaults/main.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("x2d", defaults)

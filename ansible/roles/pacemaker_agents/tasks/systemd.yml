@@ -76,6 +76,56 @@
   when: not ansible_check_mode
   tags: [pacemaker, agents, systemd]
 
+# systemd escapes instance names, and not only dashes. Asking systemd itself
+# is the only way to be sure the name matches the unit its generator produced
+# from /etc/crypttab. This was wrong for the whole life of the project: the
+# drop-in required systemd-cryptsetup@kin-zimbra-crypt.service, systemd had
+# generated systemd-cryptsetup@kin\x2dzimbra\x2dcrypt.service, and Requires= on
+# a not-found unit meant `pcs cluster start` failed outright - so a node that
+# had gone down could not be brought back.
+- name: Ask systemd for the escaped cryptsetup unit name
+  ansible.builtin.command:
+    cmd: systemd-escape --template=systemd-cryptsetup@.service {{ pacemaker_agents_luks_mapper_name | trim | quote }}
+  register: pacemaker_agents_luks_unit_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [pacemaker, agents, systemd]
+
+- name: Use the escaped unit name when systemd-escape answered
+  ansible.builtin.set_fact:
+    pacemaker_agents_luks_cryptsetup_unit: "{{ pacemaker_agents_luks_unit_probe.stdout | trim }}"
+  when:
+    - pacemaker_agents_luks_unit_probe is not skipped
+    - pacemaker_agents_luks_unit_probe.rc == 0
+    - (pacemaker_agents_luks_unit_probe.stdout | trim | length) > 0
+  tags: [pacemaker, agents, systemd]
+
+- name: Refuse to point Pacemaker at a cryptsetup unit that does not exist
+  ansible.builtin.command:
+    cmd: systemctl cat {{ pacemaker_agents_luks_cryptsetup_unit | trim | quote }}
+  register: pacemaker_agents_luks_unit_exists
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [pacemaker, agents, systemd]
+
+- name: Fail when the cryptsetup unit is not resolvable
+  ansible.builtin.assert:
+    that:
+      - pacemaker_agents_luks_unit_exists.rc == 0
+    fail_msg: >-
+      systemd cannot resolve {{ pacemaker_agents_luks_cryptsetup_unit | trim }}.
+      Pacemaker's drop-in would Require= a unit that does not exist, and
+      systemd refuses to start a service whose Requires= cannot be resolved -
+      so this node would come up without Pacemaker and could not rejoin the
+      cluster. Check /etc/crypttab names the mapper
+      {{ pacemaker_agents_luks_mapper_name | trim }}.
+  when:
+    - not ansible_check_mode
+    - pacemaker_agents_luks_unit_exists is not skipped
+  tags: [pacemaker, agents, systemd]
+
 - name: Deploy the pacemaker After=cryptsetup.target drop-in
   ansible.builtin.template:
     src: kin-luks-cryptsetup.conf.j2
