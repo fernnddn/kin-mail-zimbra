@@ -1,0 +1,21 @@
+---
+# The observability VM was the only host in the deployment that kept whatever
+# hostname its image shipped with. Mail nodes are renamed by 02-prepare-os.sh;
+# nothing ever did the same here, so a fresh pair ended up with an arbitration
+# host called "kin" - which is also the name it then carried into the Ansible
+# inventory, because the orchestrator prefers the live hostname so delegate_to
+# matches the real machine.
+#
+# Derived from the mail hostname so it lands in the same domain as the nodes it
+# arbitrates for. Override in inventory to name it something else.
+observability_domain: >-
+  {{
+    (pacemaker_mail_stack_zimbra_service_hostname | default('') | split('.'))[1:]
+    | join('.')
+  }}
+observability_hostname: >-
+  {{
+    ('observability.' ~ observability_domain)
+    if (observability_domain | length) > 0
+    else ''
+  }}

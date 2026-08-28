@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  role_name: observability_identity
+  description: Give the observability VM a hostname of its own.
+dependencies: []

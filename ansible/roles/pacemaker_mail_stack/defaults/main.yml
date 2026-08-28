@@ -43,3 +43,25 @@ pacemaker_mail_stack_ldap_keys:
   - ldap_url
   - ldap_master_url
 pacemaker_mail_stack_zimbra_require_interprocess_security: "0"
+
+# How kin-fs deals with processes still using /opt/zimbra when it unmounts.
+#
+# "safe" walks /proc for pids using the mount point instead of running fuser
+# against the device. On DRBD that matters: fuser on the device has blocked for
+# us before, and the holders we actually see are processes whose working
+# directory is inside the tree, which the /proc walk catches.
+#
+# Never "false". Relying on the RA default is also not good enough - it is the
+# difference between a busy mount costing two seconds and costing a fenced node,
+# and it is not something to inherit silently.
+pacemaker_mail_stack_fs_force_unmount: safe
+
+# Accounts that own files on the replicated /opt/zimbra volume and must
+# therefore carry identical numeric ids on every mail node. kin-console is
+# deliberately not here: it owns nothing on that volume, so its id may differ.
+pacemaker_mail_stack_shared_accounts:
+  - user:zimbra
+  - group:zimbra
+  - user:postfix
+  - group:postfix
+  - group:postdrop

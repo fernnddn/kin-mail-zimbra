@@ -132,6 +132,85 @@ zimbra_fail2ban_jails() {
 	return 0
 }
 
+# Processes we must never signal to free a mount. Killing any of these is
+# worse than the fence we are trying to avoid: sbd or pacemaker would take the
+# node down anyway, and sshd would take away the way in to fix it.
+zimbra_holder_is_protected() {
+	pid="$1"
+	case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+	[ "$pid" -eq 1 ] && return 0
+	[ "$pid" -eq "$$" ] && return 0
+	[ "$pid" -eq "${PPID:-0}" ] && return 0
+	# cat, not a redirect: the shell reports a failed "<file" itself, before
+	# the 2>/dev/null on the same line can suppress it, and a pid that exited
+	# between fuser and here is completely normal.
+	comm=$(cat "${KIN_OCF_PROC_ROOT:-/proc}/${pid}/comm" 2>/dev/null | tr -d '\n')
+	case "$comm" in
+	systemd | systemd-udevd | udevd | systemd-journal | systemd-journald) return 0 ;;
+	sshd | dbus-daemon | dbus-broker | init | kthreadd) return 0 ;;
+	multipathd | iscsid | iscsiuio) return 0 ;;
+	corosync | corosync-qdevice | pacemakerd | pacemaker-* | crmd | lrmd | sbd) return 0 ;;
+	drbdsetup | drbdadm | nsenter) return 0 ;;
+	esac
+	return 1
+}
+
+# Clear whatever is still holding the mount after zmcontrol stop.
+#
+# Reporting the holders and giving up is not a safe default here. A stop that
+# returns an error leaves Pacemaker exactly one option - fence the node - so
+# "refuse and let a human look" is really "reset the node, now and on every
+# retry". A 2-host pair did that every three minutes for a quarter of an hour
+# on 28 Aug 2026, from a single leftover `sleep` owned by zimbra whose working
+# directory was inside /opt/zimbra:
+#
+#   ERROR: /dev/drbd0 still has open holders after stop (checked 20 times)
+#   ERROR: holder: /dev/drbd0:  root   kernel mount /opt/zimbra
+#   ERROR: holder:              zimbra  4135 ..c.. sleep
+#   Result of stop operation for kin-zimbra: error
+#   sbd: Received command reset from mail.nisaroti.my.id
+#
+# Zimbra has already been told to stop by the time we get here, so anything
+# still under the mount is a straggler of its own making. TERM first so a
+# process with anything to flush can, then KILL what ignores it.
+zimbra_release_holders() {
+	src="$1"
+	pids=$(fuser -m "$src" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)
+	[ -n "$pids" ] || return 1
+
+	targets=""
+	for pid in $pids; do
+		if zimbra_holder_is_protected "$pid"; then
+			ocf_log warn "holder pid ${pid} ($(cat "${KIN_OCF_PROC_ROOT:-/proc}/${pid}/comm" 2>/dev/null)) is cluster or system infrastructure; leaving it alone"
+			continue
+		fi
+		targets="${targets} ${pid}"
+	done
+	[ -n "$targets" ] || return 1
+
+	for pid in $targets; do
+		ocf_log warn "sending TERM to mount holder ${pid} ($(cat "${KIN_OCF_PROC_ROOT:-/proc}/${pid}/comm" 2>/dev/null)) on ${src}"
+		kill -TERM "$pid" 2>/dev/null || true
+	done
+
+	i=0
+	while [ "$i" -lt "${KIN_OCF_HOLDER_TERM_WAIT:-10}" ]; do
+		fuser -m "$src" >/dev/null 2>&1 || return 0
+		sleep 1
+		i=$((i + 1))
+	done
+
+	for pid in $targets; do
+		if [ -d "${KIN_OCF_PROC_ROOT:-/proc}/${pid}" ]; then
+			ocf_log warn "mount holder ${pid} ignored TERM; sending KILL"
+			kill -KILL "$pid" 2>/dev/null || true
+		fi
+	done
+	sleep 2
+	fuser -m "$src" >/dev/null 2>&1 || return 0
+	return 1
+}
+
 # After umount/demote, leftover FDs on the mapper keep DRBD attach from
 # succeeding on the peer (same failure class as the plain-mount handoff).
 zimbra_wait_backing_free() {
@@ -158,11 +237,40 @@ zimbra_wait_backing_free() {
 		attempt=$((attempt + 1))
 		sleep "$delay"
 	done
-	ocf_log err "${src} still has open holders after stop (checked ${attempt} times)"
+	ocf_log warn "${src} still has open holders after stop (checked ${attempt} times)"
+	fuser -vm "$src" 2>&1 | while IFS= read -r line; do
+		ocf_log warn "holder: ${line}"
+	done || true
+
+	# Last resort before returning an error, because returning one here means
+	# the node gets fenced.
+	if zimbra_release_holders "$src"; then
+		ocf_log info "${src} released after clearing leftover holders"
+		return 0
+	fi
+
+	# Still busy, and we are NOT going to fail the stop for it.
+	#
+	# This agent's job is to stop Zimbra, and Zimbra is stopped by the time we
+	# reach here. Unmounting belongs to kin-fs, which is the next resource to
+	# stop in the group and whose force_unmount handling exists for exactly
+	# this - it kills what is holding the mount point and unmounts.
+	#
+	# Returning an error here means kin-fs never gets its turn, because a
+	# failed stop leaves Pacemaker one option: fence the node. That is how a
+	# leftover `sleep` rebooted a mail node every three minutes on 28 Aug 2026
+	# while the resource designed to deal with it sat one step later in the
+	# same group, never running.
+	#
+	# If kin-fs also cannot unmount, kin-fs fails and the escalation happens
+	# there - at the layer that owns the mount, after the code written for the
+	# job has actually tried.
+	ocf_log err "${src} still has open holders after clearing what we safely could"
 	fuser -vm "$src" 2>&1 | while IFS= read -r line; do
 		ocf_log err "holder: ${line}"
 	done || true
-	return $OCF_ERR_GENERIC
+	ocf_log warn "reporting stop as successful anyway: Zimbra is stopped, and kin-fs force_unmount owns the unmount from here"
+	return 0
 }
 
 zimbra_start() {

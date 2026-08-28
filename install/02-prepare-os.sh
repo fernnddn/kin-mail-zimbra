@@ -45,6 +45,17 @@ timedatectl set-ntp true
 ok "hostname : $(hostname -f)"
 ok "timezone : ${TIMEZONE}"
 
+# --- 1a. Service account ids must match the primary --------------------------
+# Only on a peer, and only before Zimbra is installed. /opt/zimbra arrives over
+# DRBD with the primary's numeric ownership on it; if `zimbra` is a different
+# uid here, every file on that volume belongs to a stranger and Zimbra cannot
+# start on this node at all. See install/lib/align-service-ids.sh.
+if kin_ha_peer_install; then
+  say "1a. Service account ids"
+  # shellcheck disable=SC1091
+  . ./lib/align-service-ids.sh
+fi
+
 # --- 1b. OS admin user + password SSH (HA ansible uses sshpass) --------------
 # Cloud images default to key-only SSH and have no `kin` user. Build HA pair
 # probes kin, then root, then ansible-ssh to every mail node and observability.
@@ -106,6 +117,42 @@ say "3. Packages"
 apt-get -y purge postfix exim4-base sendmail apache2 nginx bind9 dovecot-core >/dev/null 2>&1
 apt-get -y autoremove >/dev/null 2>&1
 apt-get -qq update
+
+# Patch the base image before anything is built on top of it.
+#
+# Nothing here did that, so an appliance went to a customer carrying whatever
+# its image shipped with. On a jammy image built today that was 231 upgradable
+# packages, 157 of them from -security, including openssl and openssh-server -
+# the two most exposed things on the box. unattended-upgrades does run (see
+# 09-hardening.sh) but only from the next daily timer, so the machine spent its
+# first day, and its whole acceptance test, unpatched.
+#
+# `upgrade`, not `dist-upgrade`: it patches in place and will not pull a new
+# kernel or remove packages, so it cannot change the boot path underneath a
+# deploy that has hours of Zimbra install still to run. Kernel updates keep
+# arriving through unattended-upgrades and land on the next reboot, which is
+# reported below rather than left for someone to notice.
+if [ "${KIN_SKIP_BASE_UPGRADE:-0}" = "1" ]; then
+  warn "KIN_SKIP_BASE_UPGRADE=1: base image left unpatched (not for production)"
+else
+  before=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst' || true)
+  info "Applying ${before:-0} pending package update(s) before installing Zimbra"
+  if apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold       upgrade >/dev/null 2>&1; then
+    after=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst' || true)
+    ok "Base packages upgraded (${before:-0} pending before, ${after:-0} after)"
+  else
+    # A failed upgrade must not take the deploy with it: the appliance is still
+    # installable, it is just no better patched than the image it came from.
+    warn "apt-get upgrade did not complete; continuing with the image as-is."
+    warn "Run 'sudo apt-get update && sudo apt-get upgrade' on this host afterwards."
+  fi
+  if [ -f /var/run/reboot-required ]; then
+    warn "A reboot is required to finish applying these updates."
+    warn "Do it after the deploy completes, from the Cluster page (maintenance"
+    warn "mode on an HA pair), not during install."
+  fi
+fi
+
 . /etc/os-release
 case "${VERSION_ID:-}" in
   24.04) PERL_LIB=libperl5.38 ;;

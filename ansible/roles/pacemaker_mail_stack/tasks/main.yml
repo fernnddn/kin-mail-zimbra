@@ -12,6 +12,10 @@
   ansible.builtin.import_tasks: hosts.yml
   tags: [pacemaker, stack, hosts]
 
+- name: Include the shared service account id check
+  ansible.builtin.import_tasks: service_ids.yml
+  tags: [pacemaker, stack, ids]
+
 - name: Include the promotable DRBD resource steps
   ansible.builtin.import_tasks: drbd_clone.yml
   tags: [pacemaker, stack, drbd]

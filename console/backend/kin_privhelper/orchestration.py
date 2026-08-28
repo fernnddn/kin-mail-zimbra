@@ -23,6 +23,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, AsyncIterator
 
 from . import protocol as proto
@@ -100,6 +101,58 @@ class OrchHost:
     name: str
     ip: str
     iqn_suffix: str
+
+
+# Accounts whose files live on the replicated /opt/zimbra volume, and which
+# therefore have to carry the same numeric ids on every mail node. kin-console
+# is deliberately absent: it owns nothing on that volume, so its id may differ.
+SHARED_SERVICE_IDS: tuple[tuple[str, str, str], ...] = (
+    ("user", "zimbra", "KIN_PEER_ZIMBRA_UID"),
+    ("group", "zimbra", "KIN_PEER_ZIMBRA_GID"),
+    ("user", "postfix", "KIN_PEER_POSTFIX_UID"),
+    ("group", "postfix", "KIN_PEER_POSTFIX_GID"),
+    ("group", "postdrop", "KIN_PEER_POSTDROP_GID"),
+)
+
+
+def local_service_id_env(
+    lookup: "Callable[[str, str], int | None] | None" = None,
+) -> dict[str, str]:
+    """This node's ids for the accounts that own files on /opt/zimbra.
+
+    An account that does not exist here is simply left out: the peer then has
+    nothing to align it to, which is better than sending a guess.
+    """
+    resolve = lookup or _lookup_service_id
+    env: dict[str, str] = {}
+    for kind, name, var in SHARED_SERVICE_IDS:
+        value = resolve(kind, name)
+        if value is not None:
+            env[var] = str(value)
+    return env
+
+
+def _lookup_service_id(kind: str, name: str) -> int | None:
+    import grp
+    import pwd
+
+    try:
+        if kind == "user":
+            return pwd.getpwnam(name).pw_uid
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        return None
+
+
+def describe_service_ids(env: dict[str, str]) -> list[str]:
+    """Say which ids the peer is being pinned to, so the log shows it."""
+    if not env:
+        return [
+            "No shared service accounts found on this node to align the peer "
+            "against; the peer will keep whatever ids its own install picks."
+        ]
+    pairs = ", ".join(f"{k.replace('KIN_PEER_', '').lower()}={v}" for k, v in sorted(env.items()))
+    return [f"Pinning peer service account ids to match this node: {pairs}"]
 
 
 def valid_ipv4(value: str) -> bool:
@@ -2622,12 +2675,23 @@ async def cmd_run_ha_orchestration(
                 "Peer /etc/kin-mail/config is in place; starting remote full-install."
             )
 
-            # Stream a remote full-install if the deploy tree already exists on the peer.
+            # The peer has to end up with the same numeric ids as this node for
+            # the service accounts that own files on /opt/zimbra. DRBD ships
+            # ownership as numbers, so a peer where `zimbra` is a different uid
+            # is a peer Zimbra can never start on - it fails creating its own
+            # ldapi socket, which reads as an unexplained permission error.
+            # Ubuntu allocates these downward from 999 in creation order, and
+            # the console user lands at a different point in that order on a
+            # peer than on a primary, so they diverge silently.
+            id_env = local_service_id_env()
+            for line in describe_service_ids(id_env):
+                yield emit_line(line)
             remote_cmd = (
                 "if [ -x /opt/kin-mail-deploy/install/kin-mail.sh ]; then "
                 + wrap_privileged_remote(
                     "env KIN_CONSOLE_CONFIRMED=1 KIN_HA_PEER_INSTALL=1 "
-                    "/opt/kin-mail-deploy/install/kin-mail.sh --full-install"
+                    + " ".join(f"{k}={v}" for k, v in sorted(id_env.items()))
+                    + " /opt/kin-mail-deploy/install/kin-mail.sh --full-install"
                 )
                 + "; "
                 "else echo KIN_REMOTE_INSTALL_MISSING; exit 3; fi"

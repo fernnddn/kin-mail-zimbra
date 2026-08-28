@@ -1,0 +1,69 @@
+---
+# /opt/zimbra is replicated by DRBD, and ownership on disk is numeric. If the
+# accounts that own those files carry different ids on the two mail nodes, then
+# as far as the other node is concerned every file on that volume belongs to a
+# stranger, and Zimbra cannot start there at all. It fails on something as
+# small as creating its own ldapi socket:
+#
+#   slap_open_listener: failed on ldapi:///   bind(8) failed errno=13
+#
+# which reads as a permissions problem when the permissions are fine. Worse,
+# nothing notices until the cluster is asked to fail over, so a pair can pass
+# its entire build and then take mail down the first time it moves. On 28 Aug
+# 2026 that combined with a stop failure and fenced a node every three minutes.
+#
+# The ids diverge for a dull reason: Ubuntu allocates system uids downward from
+# 999 in creation order, and the console user is created at a different point in
+# that order on a peer than on a primary. install/lib/align-service-ids.sh
+# prevents it on a new peer; this refuses to finish a pair where it happened
+# anyway, because the alternative is discovering it during a failover.
+
+- name: Read the ids of the accounts that own files on the replicated volume
+  ansible.builtin.shell:
+    cmd: |
+      set -u
+      for spec in {{ pacemaker_mail_stack_shared_accounts | join(' ') }}; do
+        kind=${spec%%:*}; name=${spec#*:}
+        if [ "$kind" = user ]; then
+          id=$(id -u "$name" 2>/dev/null || echo absent)
+        else
+          id=$(getent group "$name" 2>/dev/null | cut -d: -f3)
+          [ -n "$id" ] || id=absent
+        fi
+        printf '%s=%s\n' "$spec" "$id"
+      done
+  register: pacemaker_mail_stack_id_probe
+  changed_when: false
+  check_mode: false
+  tags: [pacemaker, stack, ids]
+
+- name: Compare the ids across the mail nodes
+  vars:
+    _mine: "{{ pacemaker_mail_stack_id_probe.stdout_lines | sort }}"
+    _peers: >-
+      {{
+        groups['mail_nodes']
+        | map('extract', hostvars, ['pacemaker_mail_stack_id_probe', 'stdout_lines'])
+        | select('defined')
+        | map('sort')
+        | list
+      }}
+  ansible.builtin.assert:
+    that:
+      - _peers | unique | length <= 1
+    fail_msg: >-
+      The mail nodes disagree on the numeric ids of the accounts that own
+      /opt/zimbra, so Zimbra cannot start on whichever node does not match the
+      volume. This node reports {{ _mine | join(', ') }}. Every mail node
+      reports: {{ _peers | unique | join('  ||  ') }}.
+      Fix it on the node that does not match the volume, before Zimbra is
+      running there: stop Zimbra and the console, renumber with usermod/groupmod
+      so both nodes agree, chown the local files that used the old ids, and
+      leave /opt/zimbra alone - it already carries the correct numbers.
+      install/lib/align-service-ids.sh does exactly this and is run on a peer
+      during install.
+    success_msg: >-
+      Mail nodes agree on service account ids: {{ _mine | join(', ') }}
+  run_once: true
+  when: (groups['mail_nodes'] | default([]) | length) > 1
+  tags: [pacemaker, stack, ids]

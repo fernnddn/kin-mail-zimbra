@@ -57,6 +57,7 @@
       directory={{ pacemaker_mail_stack_fs_directory }}
       fstype={{ pacemaker_mail_stack_fs_fstype }}
       options={{ pacemaker_mail_stack_fs_options }}
+      force_unmount={{ pacemaker_mail_stack_fs_force_unmount }}
       --group {{ pacemaker_mail_stack_group }}
       --disabled
   # SAFETY: never check_mode: false.
@@ -65,6 +66,24 @@
   when:
     - pacemaker_mail_stack_fs_cfg.rc != 0
     - not ansible_check_mode
+  tags: [pacemaker, stack, group]
+
+# Set on a cluster built before this was pinned. Unmounting is this resource's
+# job, and whether it is willing to clear what is holding the mount decides
+# whether a busy /opt/zimbra is a two-second delay or a fenced node.
+- name: Pin force_unmount on an existing kin-fs that does not set it
+  ansible.builtin.command:
+    cmd: >-
+      pcs resource update {{ pacemaker_mail_stack_fs }}
+      force_unmount={{ pacemaker_mail_stack_fs_force_unmount }}
+  run_once: true
+  when:
+    - not ansible_check_mode
+    - pacemaker_mail_stack_fs_cfg.rc == 0
+    - >-
+      ('force_unmount=' ~ pacemaker_mail_stack_fs_force_unmount)
+      not in pacemaker_mail_stack_fs_cfg.stdout
+  changed_when: true
   tags: [pacemaker, stack, group]
 
 - name: Check whether the kin-zimbra Zimbra resource already exists

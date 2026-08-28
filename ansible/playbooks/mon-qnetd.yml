@@ -14,5 +14,7 @@
   gather_facts: true
   become: true
   roles:
+    - role: observability_identity
+      tags: [observability, identity]
     - role: corosync_qnetd
       tags: [qnetd, monitoring]

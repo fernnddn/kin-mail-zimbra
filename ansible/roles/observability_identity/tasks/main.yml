@@ -1,0 +1,60 @@
+---
+- name: Decide whether this host still carries its image hostname
+  ansible.builtin.set_fact:
+    observability_identity_wanted: "{{ observability_hostname | trim }}"
+  tags: [observability, identity]
+
+- name: Report when no hostname can be derived
+  ansible.builtin.debug:
+    msg: >-
+      No mail hostname in inventory, so no observability hostname can be
+      derived. Leaving {{ ansible_hostname }} as it is. Set
+      observability_hostname in inventory to name this host explicitly.
+  when: observability_identity_wanted | length == 0
+  tags: [observability, identity]
+
+- name: Set the observability hostname
+  ansible.builtin.hostname:
+    name: "{{ observability_identity_wanted }}"
+  when:
+    - observability_identity_wanted | length > 0
+    - ansible_fqdn != observability_identity_wanted
+    - not ansible_check_mode
+  tags: [observability, identity]
+
+# Ubuntu resolves the hostname through the 127.0.1.1 line rather than DNS. Left
+# pointing at the old name, `hostname -f` keeps answering with it and sudo logs
+# a "unable to resolve host" warning on every call.
+- name: Point the 127.0.1.1 line at the new name
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: >-
+      127.0.1.1 {{ observability_identity_wanted }}
+      {{ observability_identity_wanted | split('.') | first }}
+    state: present
+  when:
+    - observability_identity_wanted | length > 0
+    - not ansible_check_mode
+  tags: [observability, identity]
+
+- name: Confirm the hostname took
+  ansible.builtin.command:
+    cmd: hostname -f
+  register: observability_identity_check
+  changed_when: false
+  check_mode: false
+  when:
+    - observability_identity_wanted | length > 0
+    - not ansible_check_mode
+  tags: [observability, identity]
+
+- name: Report the observability hostname
+  ansible.builtin.debug:
+    msg: >-
+      Observability host is now
+      {{ (observability_identity_check.stdout | default('')) | trim }}.
+  when:
+    - observability_identity_check is defined
+    - observability_identity_check is not skipped
+  tags: [observability, identity]

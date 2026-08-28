@@ -1956,3 +1956,169 @@ class DrbdLinkTuningTests(unittest.TestCase):
             iscsi["iscsi_initiator_replacement_timeout"],
             sbd["sbd_stonith_watchdog_timeout"],
         )
+
+
+class PeerServiceIdTests(unittest.TestCase):
+    """The peer must inherit the primary's numeric ids for shared accounts.
+
+    /opt/zimbra is replicated by DRBD and its ownership is numeric, so a peer
+    where `zimbra` is a different uid is a peer Zimbra can never start on. It
+    fails creating its own ldapi socket, which reads as a permissions problem
+    when the permissions are fine. Live on 28 Aug 2026: zimbra was 997 on the
+    primary and 998 on the peer, and every Move Master ended in a fenced node.
+    """
+
+    def test_ids_are_collected_for_every_shared_account(self) -> None:
+        from kin_privhelper.orchestration import local_service_id_env
+
+        table = {
+            ("user", "zimbra"): 997,
+            ("group", "zimbra"): 999,
+            ("user", "postfix"): 996,
+            ("group", "postfix"): 997,
+            ("group", "postdrop"): 996,
+        }
+        env = local_service_id_env(lambda kind, name: table.get((kind, name)))
+        self.assertEqual(
+            env,
+            {
+                "KIN_PEER_ZIMBRA_UID": "997",
+                "KIN_PEER_ZIMBRA_GID": "999",
+                "KIN_PEER_POSTFIX_UID": "996",
+                "KIN_PEER_POSTFIX_GID": "997",
+                "KIN_PEER_POSTDROP_GID": "996",
+            },
+        )
+
+    def test_an_account_that_does_not_exist_here_is_not_guessed(self) -> None:
+        from kin_privhelper.orchestration import local_service_id_env
+
+        # Sending an id we do not actually have would pin the peer to a number
+        # nothing on the volume uses, which is worse than leaving it alone.
+        env = local_service_id_env(
+            lambda kind, name: 997 if (kind, name) == ("user", "zimbra") else None
+        )
+        self.assertEqual(env, {"KIN_PEER_ZIMBRA_UID": "997"})
+
+    def test_the_console_user_is_deliberately_not_pinned(self) -> None:
+        from kin_privhelper.orchestration import SHARED_SERVICE_IDS
+
+        # kin-console owns nothing on the replicated volume, so its id is free
+        # to differ - and pinning it would mean renumbering a running service
+        # for no benefit.
+        names = {name for _kind, name, _var in SHARED_SERVICE_IDS}
+        self.assertNotIn("kin-console", names)
+        self.assertEqual(names, {"zimbra", "postfix", "postdrop"})
+
+    def test_the_peer_install_command_carries_the_ids(self) -> None:
+        from pathlib import Path
+
+        orch = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper/orchestration.py"
+        ).read_text(encoding="utf-8")
+        # The env has to reach the peer's install, or aligning is a no-op there.
+        self.assertIn("local_service_id_env()", orch)
+        self.assertIn("KIN_HA_PEER_INSTALL=1", orch)
+
+    def test_the_installer_aligns_before_zimbra_is_installed(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        # Renumbering has to happen while nothing runs as these users and
+        # nothing on local disk belongs to them.
+        self.assertIn("align-service-ids.sh", prepare)
+        self.assertIn("kin_ha_peer_install", prepare)
+        self.assertLess(
+            prepare.index("align-service-ids.sh"),
+            prepare.index("Zimbra dependencies"),
+        )
+
+    def test_the_cluster_refuses_to_build_on_mismatched_ids(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        role = repo / "ansible/roles/pacemaker_mail_stack/tasks/service_ids.yml"
+        text = role.read_text(encoding="utf-8")
+        self.assertIn("assert", text)
+        self.assertIn("mail nodes disagree", text.lower())
+        main = (
+            repo / "ansible/roles/pacemaker_mail_stack/tasks/main.yml"
+        ).read_text(encoding="utf-8")
+        # Must run before the resources that will later fail over onto the
+        # node that cannot run Zimbra.
+        self.assertIn("service_ids.yml", main)
+        self.assertLess(main.index("service_ids.yml"), main.index("mail_svc.yml"))
+
+
+class BaseImagePatchingTests(unittest.TestCase):
+    def test_the_image_is_patched_before_zimbra_goes_on_it(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        # A fresh jammy image had 231 upgradable packages, 157 of them from
+        # -security including openssl and openssh-server. unattended-upgrades
+        # only catches up on its next daily run, so the appliance spent its
+        # first day - and its acceptance test - unpatched.
+        self.assertIn("apt-get -y", prepare)
+        self.assertIn("upgrade", prepare)
+        self.assertIn("KIN_SKIP_BASE_UPGRADE", prepare)
+
+    def test_a_failed_upgrade_does_not_abort_the_deploy(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        # An appliance that is merely no better patched than its image is still
+        # installable; losing the whole deploy to a transient mirror error is
+        # not an improvement.
+        self.assertIn("did not complete; continuing with the image as-is", prepare)
+
+    def test_it_does_not_swap_the_kernel_mid_deploy(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        # dist-upgrade can install a new kernel and remove packages while hours
+        # of Zimbra install are still to run. Checked against apt-get command
+        # lines, not the whole file: the first version of this matched the
+        # comment that explains why dist-upgrade is not used.
+        import re
+
+        commands = [
+            line.strip()
+            for line in prepare.splitlines()
+            if "apt-get" in line and not line.lstrip().startswith("#")
+        ]
+        self.assertTrue(commands)
+        for line in commands:
+            self.assertNotRegex(line, r"\b(dist-upgrade|full-upgrade)\b", line)
+        self.assertTrue(
+            any(re.search(r"apt-get\b.*\bupgrade\b", c) for c in commands),
+            "nothing actually upgrades the base image",
+        )
+        self.assertIn("reboot-required", prepare)
+
+
+class ObservabilityIdentityTests(unittest.TestCase):
+    def test_the_observability_vm_is_given_a_name(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        role = repo / "ansible/roles/observability_identity/tasks/main.yml"
+        self.assertTrue(role.is_file())
+        text = role.read_text(encoding="utf-8")
+        self.assertIn("ansible.builtin.hostname", text)
+        # Ubuntu resolves its own hostname through 127.0.1.1; leaving that line
+        # behind makes `hostname -f` lie and sudo warn on every call.
+        self.assertIn("127.0.1.1", text)
+
+    def test_both_observability_playbooks_set_it(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        for play in ("mon-qnetd.yml", "mon-iscsi-target.yml"):
+            text = (repo / "ansible/playbooks" / play).read_text(encoding="utf-8")
+            self.assertIn("observability_identity", text, play)
