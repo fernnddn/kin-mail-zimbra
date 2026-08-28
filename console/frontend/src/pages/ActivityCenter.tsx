@@ -3,7 +3,7 @@ import styled from "@emotion/styled";
 import { useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { theme } from "../styles/theme";
-import { Hint, Page, PageHeader, AuditIcon } from "../ui";
+import { Page, PageHeader, AuditIcon } from "../ui";
 import { useTasks } from "../tasks/TaskProvider";
 import { formatElapsed, taskElapsedMs, type Task } from "../tasks/taskStore";
 import { useAlerts } from "../tasks/AlertProvider";
@@ -156,6 +156,13 @@ function AlertRow({ alert }: { alert: Alert }) {
   );
 }
 
+const FootNote = styled.p`
+  margin: 1.1rem 0 0;
+  color: ${theme.muted};
+  font-size: 0.82rem;
+  line-height: 1.5;
+`;
+
 export default function ActivityCenterPage() {
   const { tasks } = useTasks();
   const alerts = useAlerts();
@@ -193,10 +200,14 @@ export default function ActivityCenterPage() {
             <Empty>Nothing needs attention right now.</Empty>
           )}
         </List>
-        <Hint>
-          Tasks are kept for this browser session only. The Cluster page Activity log holds the
-          full command output.
-        </Hint>
+        {/* Hint's negative top margin pulls it up against the list, so it read
+            as though it were glued to the last card. This note is a footer, so
+            it gets footer spacing. */}
+        <FootNote>
+          Tasks in this list are kept for this browser session only. The full command
+          output of every cluster operation is recorded on the server and stays on the
+          Cluster page Activity log across refreshes and reboots.
+        </FootNote>
       </Page>
     </ConsoleChrome>
   );
