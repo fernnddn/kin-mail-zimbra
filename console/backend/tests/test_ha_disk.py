@@ -110,7 +110,7 @@ def _lsblk(
             }
         )
     elif sdb == "gpt_fresh":
-        # GPT written by disk_prep; no mkfs yet (live mail.nisaroti after a
+        # GPT written by disk_prep; no mkfs yet (a live pair after a
         # play that partitioned this host then failed on the peer).
         devices.append(
             {
@@ -458,7 +458,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_exists=True,
             require_zimbra_on_data=True,
             zimbra_tree_present=False,
-            label="mail.nisaroti.my.id",
+            label="mail.example.test",
         )
         self.assertEqual(r["errors"], [])
         self.assertTrue(r["ok"])
@@ -569,14 +569,14 @@ class HaDiskTests(unittest.TestCase):
         self.assertIn("fail-closed", comb["instructions"])
 
     def test_asymmetric_gpt_plus_blank_peer_allows_disk_prep(self) -> None:
-        """Live nisaroti: local already GPT, Zimbra still on root; peer still blank."""
+        """Live pair: local already GPT, Zimbra still on root; peer still blank."""
         local = evaluate_node(
             lsblk=_lsblk(sdb="gpt_fresh"),
             root_source="/dev/sda2",
             zimbra_source="/dev/sda2",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="mail.nisaroti.my.id",
+            label="mail.example.test",
         )
         peer = evaluate_node(
             lsblk=_lsblk(sdb="unpartitioned"),
@@ -584,7 +584,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="",
             zimbra_exists=False,
             require_zimbra_on_data=True,
-            label="mail2.nisaroti.my.id",
+            label="mail2.example.test",
         )
         comb = combine_results(local, peer)
         self.assertFalse(local["ok"])
@@ -606,7 +606,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="/dev/sda2",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="mail.nisaroti.my.id",
+            label="mail.example.test",
         )
         peer = evaluate_node(
             lsblk=_lsblk(sdb="gpt_fresh"),
@@ -614,7 +614,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="",
             zimbra_exists=False,
             require_zimbra_on_data=True,
-            label="mail2.nisaroti.my.id",
+            label="mail2.example.test",
         )
         comb = combine_results(local, peer)
         self.assertFalse(local["ok"])
@@ -630,7 +630,7 @@ class HaDiskTests(unittest.TestCase):
             zimbra_source="/dev/sda2",
             zimbra_exists=True,
             require_zimbra_on_data=True,
-            label="mail2.nisaroti.my.id",
+            label="mail2.example.test",
         )
         comb_both = combine_results(local, peer_zimbra)
         self.assertFalse(peer_zimbra["ok"])

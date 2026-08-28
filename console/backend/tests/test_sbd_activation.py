@@ -17,12 +17,12 @@ from kin_privhelper.sbd_activation import (
 
 PCS_PRIMARY = """\
 Clone Set: kin-drbd-clone [kin-drbd] (promotable):
-     kin-drbd\t(ocf::linbit:drbd):\t Promoted mail.nisaroti.my.id
-     kin-drbd\t(ocf::linbit:drbd):\t Unpromoted mail2.nisaroti.my.id
+     kin-drbd\t(ocf::linbit:drbd):\t Promoted mail.example.test
+     kin-drbd\t(ocf::linbit:drbd):\t Unpromoted mail2.example.test
  Resource Group: kin-mail-svc:
-     kin-fs\t(ocf::heartbeat:Filesystem):\t Started mail.nisaroti.my.id
-     kin-zimbra\t(ocf::kin:zimbra):\t Started mail.nisaroti.my.id
-     kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail.nisaroti.my.id
+     kin-fs\t(ocf::heartbeat:Filesystem):\t Started mail.example.test
+     kin-zimbra\t(ocf::kin:zimbra):\t Started mail.example.test
+     kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail.example.test
  Daemon Status:
   corosync: active/enabled
   pacemaker: active/enabled
@@ -32,12 +32,12 @@ Clone Set: kin-drbd-clone [kin-drbd] (promotable):
 
 PCS_IDLE_PEER = """\
 Clone Set: kin-drbd-clone [kin-drbd] (promotable):
-     kin-drbd\t(ocf::linbit:drbd):\t Promoted mail.nisaroti.my.id
-     kin-drbd\t(ocf::linbit:drbd):\t Unpromoted mail2.nisaroti.my.id
+     kin-drbd\t(ocf::linbit:drbd):\t Promoted mail.example.test
+     kin-drbd\t(ocf::linbit:drbd):\t Unpromoted mail2.example.test
  Resource Group: kin-mail-svc:
-     kin-fs\t(ocf::heartbeat:Filesystem):\t Started mail.nisaroti.my.id
-     kin-zimbra\t(ocf::kin:zimbra):\t Started mail.nisaroti.my.id
-     kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail.nisaroti.my.id
+     kin-fs\t(ocf::heartbeat:Filesystem):\t Started mail.example.test
+     kin-zimbra\t(ocf::kin:zimbra):\t Started mail.example.test
+     kin-vip\t(ocf::heartbeat:IPaddr2):\t Started mail.example.test
 """
 
 PCS_GREENFIELD = """\
@@ -87,7 +87,7 @@ class PcsStatusBusyTests(unittest.TestCase):
     def test_primary_fqdn_and_short(self) -> None:
         self.assertTrue(
             pcs_status_shows_local_mail_busy(
-                PCS_PRIMARY, ["mail.nisaroti.my.id", "mail"]
+                PCS_PRIMARY, ["mail.example.test", "mail"]
             )
         )
         self.assertTrue(pcs_status_shows_local_mail_busy(PCS_PRIMARY, ["mail"]))
@@ -95,7 +95,7 @@ class PcsStatusBusyTests(unittest.TestCase):
     def test_idle_peer_not_busy(self) -> None:
         self.assertFalse(
             pcs_status_shows_local_mail_busy(
-                PCS_IDLE_PEER, ["mail2.nisaroti.my.id", "mail2"]
+                PCS_IDLE_PEER, ["mail2.example.test", "mail2"]
             )
         )
 

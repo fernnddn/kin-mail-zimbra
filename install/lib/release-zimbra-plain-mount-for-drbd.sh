@@ -300,7 +300,7 @@ backing_majmin() {
 # /opt/zimbra was mounted, that namespace keeps the mount - and therefore one
 # open reference on the dm device - even after a completely successful umount
 # in the host namespace. The signature is exactly the live Host A failure
-# (mail.gits-it.site, 26 Aug 2026 phase3-1):
+# (live Host A, 26 Aug 2026 phase3-1):
 #
 #     findmnt      -> clean (host namespace only)
 #     fuser/-m     -> clean (it is a mount reference, not an open fd)
@@ -519,7 +519,7 @@ drop_leftover_zimbra_procs() {
 }
 
 # Best-effort: drop known re-openers that leave dmsetup open count=1 with no
-# fuser line (live Host A mail.gits-it.site, 26 Aug 2026 phase3-1).
+# fuser line (live Host A, 26 Aug 2026 phase3-1).
 nudge_backing_holders() {
   local fuser_dev="$1"
   local real line pid swap_hit

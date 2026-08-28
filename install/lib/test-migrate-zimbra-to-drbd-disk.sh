@@ -11,7 +11,7 @@ export KIN_MIGRATE_SOURCE_ONLY=1
 # shellcheck source=migrate-zimbra-to-drbd-disk.sh
 . ./migrate-zimbra-to-drbd-disk.sh
 
-STOPPED_ALL='Host mail.nisaroti.my.id
+STOPPED_ALL='Host mail.example.test
 	amavis                  Stopped
 	antivirus               Stopped
 	ldap                    Stopped
@@ -24,7 +24,7 @@ STOPPED_ALL='Host mail.nisaroti.my.id
 	zmconfigd               Stopped
 '
 
-STILL_RUNNING='Host mail.nisaroti.my.id
+STILL_RUNNING='Host mail.example.test
 	amavis                  Stopped
 	ldap                    Stopped
 	mailbox                 Running
@@ -32,7 +32,7 @@ STILL_RUNNING='Host mail.nisaroti.my.id
 	zmconfigd               Stopped
 '
 
-ALL_RUNNING='Host mail.nisaroti.my.id
+ALL_RUNNING='Host mail.example.test
 	amavis                  Running
 	antivirus               Running
 	ldap                    Running
@@ -47,7 +47,7 @@ ALL_RUNNING='Host mail.nisaroti.my.id
 '
 
 EMPTY=''
-CONNECT_NOISE='Host mail.nisaroti.my.id
+CONNECT_NOISE='Host mail.example.test
 Connect: Connection refused
 	ldap                    Running
 	mailbox                 Stopped
@@ -159,7 +159,7 @@ fi
 # zmantispamctl does not check processes when zmprov cannot list antispam.
 TONIGHT_ANTISPAM_CACHE='Connect: Unable to determine enabled services from ldap.
 Enabled services read from cache. Service list may be inaccurate.
-Host mail.nisaroti.my.id
+Host mail.example.test
 	amavis                  Stopped
 	antispam                Running
 	antivirus               Stopped
@@ -207,7 +207,7 @@ else
   bad "filter must not drop a live antispam process: [$filtered_up]"
 fi
 
-LDAP_UP_ANTISPAM='Host mail.nisaroti.my.id
+LDAP_UP_ANTISPAM='Host mail.example.test
 	amavis                  Stopped
 	antispam                Running
 	ldap                    Running

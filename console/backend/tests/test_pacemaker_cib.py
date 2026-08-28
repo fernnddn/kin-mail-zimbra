@@ -13,7 +13,7 @@ from kin_privhelper.pacemaker_cib import (
 
 
 # Shape matches the ~17-line package-first-start cib.xml observed live on
-# mail.nisaroti.my.id / mail2.nisaroti.my.id before pcs cluster destroy
+# mail.example.test / mail2.example.test before pcs cluster destroy
 # (2026-08-21): empty nodes/resources/constraints, empty status.
 EMPTY_SKELETON_CIB = """\
 <?xml version="1.0"?>

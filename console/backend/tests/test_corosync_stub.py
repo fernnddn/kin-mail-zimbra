@@ -17,7 +17,7 @@ from kin_privhelper.orchestration import live_cluster_blocks_apply
 from kin_privhelper.maintenance import parse_online_nodes
 
 
-# Live mail.nisaroti.my.id tonight: package default, name: commented out,
+# Live mail.example.test tonight: package default, name: commented out,
 # pcs omitted the unnamed node, Online/Offline empty.
 LIVE_STUB_NAME_COMMENTED = """\
 # Please read the corosync.conf.5 manual page
@@ -93,13 +93,13 @@ totem {
 
 nodelist {
 	node {
-		ring0_addr: 10.10.40.15
-		name: mail.nisaroti.my.id
+		ring0_addr: 192.0.2.15
+		name: mail.example.test
 		nodeid: 1
 	}
 	node {
-		ring0_addr: 10.10.40.14
-		name: mail2.nisaroti.my.id
+		ring0_addr: 192.0.2.14
+		name: mail2.example.test
 		nodeid: 2
 	}
 }
@@ -114,9 +114,9 @@ totem {
 
 nodelist {
 	node {
-		name: mail.nisaroti.my.id
+		name: mail.example.test
 		nodeid: 1
-		ring0_addr: 10.10.40.15
+		ring0_addr: 192.0.2.15
 	}
 }
 """
@@ -141,18 +141,18 @@ nodelist {
 
 PCS_REAL_NODES = """\
 Corosync Nodes:
- Online: mail.nisaroti.my.id mail2.nisaroti.my.id
+ Online: mail.example.test mail2.example.test
  Offline:
 """
 
-# Operator-captured pcs status on mail.nisaroti.my.id after the Ansible stub
+# Operator-captured pcs status on mail.example.test after the Ansible stub
 # fix was deployed but before this Python pre-flight knew about the stub.
 LIVE_PCS_STATUS = """\
 Cluster name: debian
 1 node configured
 0 resource instances configured
 
-Node List: Online: [ mail.nisaroti.my.id ]
+Node List: Online: [ mail.example.test ]
 
 Daemon Status:
   corosync: active/enabled
@@ -163,12 +163,12 @@ Daemon Status:
 LIVE_CRM_MON = """\
 Cluster Summary:
   * Stack: corosync
-  * Current DC: mail.nisaroti.my.id
+  * Current DC: mail.example.test
   * 1 node configured
   * 0 resource instances configured
 
 Node List:
-  * Online: [ mail.nisaroti.my.id ]
+  * Online: [ mail.example.test ]
 
 No active resources
 """
@@ -178,7 +178,7 @@ Cluster name: kin-mail
 2 nodes configured
 6 resource instances configured
 
-Node List: Online: [ mail.nisaroti.my.id ]
+Node List: Online: [ mail.example.test ]
 """
 
 
@@ -228,7 +228,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
     def test_real_membership_would_still_match_expected_names(self) -> None:
         # The role refuses when running and a mail node name is absent from
         # `pcs status nodes corosync`. Stub output has no names; real output does.
-        expected = ["mail.nisaroti.my.id", "mail2.nisaroti.my.id"]
+        expected = ["mail.example.test", "mail2.example.test"]
         for name in expected:
             self.assertNotIn(name, PCS_STUB_NODES)
             self.assertIn(name, PCS_REAL_NODES)
@@ -291,7 +291,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
         # Pacemaker reports the uname even when corosync.conf has no name:.
         self.assertEqual(
             parse_online_nodes(LIVE_PCS_STATUS),
-            ["mail.nisaroti.my.id"],
+            ["mail.example.test"],
         )
 
     def test_harmless_stub_matches_tonight_live_host(self) -> None:
@@ -299,14 +299,14 @@ class DebianCorosyncStubTests(unittest.TestCase):
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
             )
         )
         self.assertTrue(
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_CRM_MON,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
             )
         )
 
@@ -315,21 +315,21 @@ class DebianCorosyncStubTests(unittest.TestCase):
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=PCS_KIN_MAIL_WITH_RESOURCES,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
             )
         )
         self.assertFalse(
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
-                live_nodes=["mail.nisaroti.my.id", "mail2.nisaroti.my.id"],
+                live_nodes=["mail.example.test", "mail2.example.test"],
             )
         )
         self.assertFalse(
             is_harmless_package_stub_cluster(
                 REAL_TWO_NODE,
                 status_text=LIVE_CRM_MON,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
             )
         )
 
@@ -344,7 +344,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
                 cib_text=EMPTY_SKELETON_CIB,
             )
         )
@@ -352,7 +352,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
                 cib_text=DEBIAN_STUB_FIRST_START_CIB,
             )
         )
@@ -360,7 +360,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
             is_harmless_package_stub_cluster(
                 LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
                 cib_text=REAL_CIB_WITH_RESOURCES,
             )
         )
@@ -368,9 +368,9 @@ class DebianCorosyncStubTests(unittest.TestCase):
     def test_apply_gate_lets_tonight_stub_through(self) -> None:
         kwargs = dict(
             join_mode="apply",
-            live_nodes=["mail.nisaroti.my.id"],
-            peer_name="mail2.nisaroti.my.id",
-            peer_ip="10.10.40.52",
+            live_nodes=["mail.example.test"],
+            peer_name="mail2.example.test",
+            peer_ip="192.0.2.52",
             corosync_conf=LIVE_STUB_NAME_COMMENTED,
         )
         self.assertFalse(
@@ -385,7 +385,7 @@ class DebianCorosyncStubTests(unittest.TestCase):
         self.assertTrue(
             live_cluster_blocks_apply(
                 join_mode="apply",
-                live_nodes=["mail.nisaroti.my.id"],
+                live_nodes=["mail.example.test"],
                 peer_name="mail-wrong.example.test",
                 peer_ip="192.0.2.99",
                 corosync_conf=REAL_TWO_NODE,
@@ -397,9 +397,9 @@ class DebianCorosyncStubTests(unittest.TestCase):
         self.assertTrue(
             live_cluster_blocks_apply(
                 join_mode="apply",
-                live_nodes=["mail.nisaroti.my.id"],
-                peer_name="mail2.nisaroti.my.id",
-                peer_ip="10.10.40.52",
+                live_nodes=["mail.example.test"],
+                peer_name="mail2.example.test",
+                peer_ip="192.0.2.52",
                 corosync_conf=LIVE_STUB_NAME_COMMENTED,
                 status_text=PCS_KIN_MAIL_WITH_RESOURCES,
             )
@@ -409,9 +409,9 @@ class DebianCorosyncStubTests(unittest.TestCase):
         self.assertFalse(
             live_cluster_blocks_apply(
                 join_mode="apply",
-                live_nodes=["mail.nisaroti.my.id"],
-                peer_name="mail2.nisaroti.my.id",
-                peer_ip="10.10.40.14",
+                live_nodes=["mail.example.test"],
+                peer_name="mail2.example.test",
+                peer_ip="192.0.2.14",
                 corosync_conf=REAL_TWO_NODE,
                 status_text=PCS_KIN_MAIL_WITH_RESOURCES,
             )
@@ -422,8 +422,8 @@ class DebianCorosyncStubTests(unittest.TestCase):
             live_cluster_blocks_apply(
                 join_mode="apply",
                 live_nodes=[],
-                peer_name="mail2.nisaroti.my.id",
-                peer_ip="10.10.40.52",
+                peer_name="mail2.example.test",
+                peer_ip="192.0.2.52",
                 corosync_conf=LIVE_STUB_NAME_COMMENTED,
                 status_text=LIVE_PCS_STATUS,
             )
@@ -431,9 +431,9 @@ class DebianCorosyncStubTests(unittest.TestCase):
         self.assertFalse(
             live_cluster_blocks_apply(
                 join_mode="check",
-                live_nodes=["mail.nisaroti.my.id"],
-                peer_name="mail2.nisaroti.my.id",
-                peer_ip="10.10.40.52",
+                live_nodes=["mail.example.test"],
+                peer_name="mail2.example.test",
+                peer_ip="192.0.2.52",
                 corosync_conf=REAL_TWO_NODE,
                 status_text=PCS_KIN_MAIL_WITH_RESOURCES,
             )

@@ -118,8 +118,8 @@ class ObservabilityLifecycleTests(unittest.TestCase):
     def test_remove_inventory_omits_dead_observability_host(self) -> None:
         inv = render_observability_inventory(
             mail_hosts=[
-                ("mail.gits-it.site", "192.0.2.51", "mail"),
-                ("mail2.gits-it.site", "192.0.2.52", "mail2"),
+                ("mail.example.test", "192.0.2.51", "mail"),
+                ("mail2.example.test", "192.0.2.52", "mail2"),
             ],
             obs_name="observability-retired",
             obs_ip="192.0.2.53",

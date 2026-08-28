@@ -209,6 +209,24 @@ jobs:
           scan_private_ip '\b10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b'                   "private IP 10.0.0.0/8"
           scan_private_ip '\b192\.168\.[0-9]{1,3}\.[0-9]{1,3}\b'                         "private IP 192.168.0.0/16"
           scan_private_ip '\b172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}\b'       "private IP 172.16.0.0/12"
+
+          # Real deployment domains. Addresses were gated from the start but
+          # names were not, so two of them accumulated quietly across fixtures
+          # and comments until someone went looking. A hostname is not a
+          # credential, but it is still a customer's estate published to a
+          # public repository.
+          #
+          # Lines asserting a name is ABSENT are the point of the exercise and
+          # are allowed through: those guards are what keep generated
+          # inventories clean, and they have to name what they forbid.
+          # Use example.test / example.com for fixtures.
+          scan_domain() {
+            if grep -RInE "$1" "${includes[@]}" . | grep -v 'assertNot'; then
+              echo ">>> $2"; fail=1
+            fi
+          }
+          scan_domain 'nisaroti\.my\.id'  "real deployment domain (use example.test)"
+          scan_domain 'gits-it\.site'      "real deployment domain (use example.test)"
           exit $fail
 
       - name: Confirm internal documents are ignored
