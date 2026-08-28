@@ -32,6 +32,15 @@ type SeriesResp = {
   series: Series[];
 };
 type CatalogueResp = { metrics: { metric: string; label: string; unit: string }[]; ranges: string[]; default_range: string };
+// One request for every chart, sharing a single clock so the cards cannot
+// drift onto slightly different x-axes.
+type SeriesBatchResp = {
+  range: string;
+  start?: number;
+  end?: number;
+  step?: number;
+  charts: { metric: string; label: string; unit: string; series: Series[] }[];
+};
 
 const RANGE_LABELS: Record<string, string> = {
   "1h": "1 hour",
@@ -42,7 +51,24 @@ const RANGE_LABELS: Record<string, string> = {
   "1y": "1 year",
 };
 
-const CHARTS = ["cpu", "memory", "net_rx", "net_tx", "disk_read", "disk_write", "load1"];
+// Ordered so the pair you compare sits side by side: CPU next to what it is
+// waiting on, disk throughput next to how busy the disk actually is, and
+// network throughput next to the errors that show the link giving up.
+const CHARTS = [
+  "cpu",
+  "cpu_iowait",
+  "memory",
+  "swap_used",
+  "net_rx",
+  "net_tx",
+  "net_errors",
+  "tcp_established",
+  "disk_read",
+  "disk_write",
+  "disk_busy",
+  "load1",
+  "load5",
+];
 
 const Bar = styled.div`
   display: flex;
@@ -504,15 +530,22 @@ export function MonitoringTab() {
   const load = useCallback(async (window: string) => {
     setError("");
     try {
-      const results = await Promise.all(
-        CHARTS.map((m) =>
-          api<SeriesResp>(`/api/monitoring/series?metric=${m}&range=${window}`).catch(
-            () => null,
-          ),
-        ),
+      const batch = await api<SeriesBatchResp>(
+        `/api/monitoring/series-batch?metrics=${encodeURIComponent(CHARTS.join(","))}` +
+          `&range=${encodeURIComponent(window)}`,
       );
       if (!alive.current) return;
-      const good = results.filter((r): r is SeriesResp => !!r);
+      const good: SeriesResp[] = (batch.charts || [])
+        .filter((c) => (c.series || []).length > 0)
+        .map((c) => ({
+          metric: c.metric,
+          label: c.label,
+          unit: c.unit,
+          range: batch.range,
+          start: batch.start,
+          end: batch.end,
+          series: c.series,
+        }));
       setCharts(good);
       setUnavailable(good.length === 0);
       if (good.length === 0) {

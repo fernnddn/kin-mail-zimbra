@@ -1252,6 +1252,59 @@ async def monitoring_series(
     }
 
 
+@app.get("/api/monitoring/series-batch")
+async def monitoring_series_batch(
+    metrics: str,
+    range: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Time series for several catalogued metrics in one round trip.
+
+    The tab draws a dozen charts and used one request per chart, refreshing on
+    a 30s timer. On a host that is already struggling - which is exactly when
+    an operator opens this tab - that is a burst of requests competing with
+    the thing they are trying to diagnose. One request, one x-axis, and every
+    series is guaranteed to cover the same window.
+
+    A metric that fails comes back with an empty series rather than failing
+    the batch: one dead query must not blank the dashboard.
+    """
+    import asyncio
+    import time
+
+    from . import monitoring
+
+    window = range or monitoring.DEFAULT_RANGE
+    if window not in monitoring.RANGES:
+        raise HTTPException(status_code=400, detail=f"Unknown range: {window}")
+    try:
+        wanted = monitoring.parse_metric_list(metrics)
+    except monitoring.MonitoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # One clock for the whole batch, so every chart shares an x-axis.
+    end = time.time()
+    seconds, step = monitoring.range_window(window)
+
+    async def one(name: str) -> dict[str, object]:
+        try:
+            series = await asyncio.to_thread(
+                monitoring.fetch_range, name, window, now=end
+            )
+        except monitoring.MonitoringError:
+            series = []
+        return {**monitoring.metric_meta(name), "series": series}
+
+    charts = await asyncio.gather(*(one(n) for n in wanted))
+    return {
+        "range": window,
+        "start": end - seconds,
+        "end": end,
+        "step": step,
+        "charts": list(charts),
+    }
+
+
 @app.get("/api/monitoring/overview")
 async def monitoring_overview(
     _user: ConsoleUser = Depends(auth.require_console_user),

@@ -16,6 +16,12 @@ export function formatValue(value: number | null | undefined, unit: string): str
       // Network throughput is quoted in bits per second, with a lower-case b:
       // 1 MB/s of traffic is 8 Mbps, and showing "MBps" for it is simply wrong.
       return formatBitsPerSecond(value * 8);
+    case "disk_bytes_per_sec":
+      // Disk throughput is quoted in bytes per second, unlike network. Both
+      // used the network formatter, so a disk doing 50 MB/s read "400 Mbps".
+      return `${formatBytes(value)}/s`;
+    case "per_sec":
+      return `${value >= 100 ? value.toFixed(0) : value.toFixed(2)}/s`;
     case "seconds":
       return formatDuration(value);
     default:

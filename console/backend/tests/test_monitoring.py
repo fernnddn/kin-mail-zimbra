@@ -13,12 +13,24 @@ import unittest
 from kin_console import monitoring as m
 
 
+# Every unit the chart formatter knows how to render. A metric carrying a unit
+# that is not in this set draws, but with the wrong words next to the number.
+KNOWN_UNITS = {
+    "percent",
+    "bytes_per_sec",
+    "disk_bytes_per_sec",
+    "per_sec",
+    "number",
+    "seconds",
+}
+
+
 class CatalogueTests(unittest.TestCase):
     def test_every_metric_has_label_unit_and_query(self) -> None:
         self.assertTrue(m.CATALOGUE)
         for name, (label, unit, query) in m.CATALOGUE.items():
             self.assertTrue(label.strip(), name)
-            self.assertIn(unit, {"percent", "bytes_per_sec", "number", "seconds"}, name)
+            self.assertIn(unit, KNOWN_UNITS, name)
             self.assertTrue(query.strip(), name)
 
     def test_the_metrics_the_operator_asked_for_are_present(self) -> None:
@@ -229,3 +241,85 @@ Buffers:          123456 kB
         self.assertEqual(set(facts), {"cpu", "memory", "disks", "uptime_seconds"})
         self.assertEqual(set(facts["cpu"]), {"model", "threads", "cores", "load"})
         self.assertIsInstance(facts["disks"], list)
+
+
+class DiagnosticMetricTests(unittest.TestCase):
+    """Metrics added to answer "why is this slow?" and "is the link healthy?"."""
+
+    def test_the_lag_and_link_metrics_exist(self) -> None:
+        # Phase 7 had an operator reporting the console felt laggy while DRBD
+        # logged PingAck timeouts, and this tab could not distinguish a busy
+        # CPU from a saturated disk or a NIC dropping frames.
+        for wanted in (
+            "cpu_iowait",
+            "disk_busy",
+            "swap_used",
+            "net_errors",
+            "tcp_established",
+            "load5",
+        ):
+            self.assertIn(wanted, m.CATALOGUE)
+
+    def test_disk_throughput_is_not_quoted_in_bits(self) -> None:
+        # Network is bits per second, disks are bytes per second. Both used the
+        # same unit, so a disk reading 50 MB/s was labelled "400 Mbps".
+        self.assertEqual(m.CATALOGUE["disk_read"][1], "disk_bytes_per_sec")
+        self.assertEqual(m.CATALOGUE["disk_write"][1], "disk_bytes_per_sec")
+        self.assertEqual(m.CATALOGUE["net_rx"][1], "bytes_per_sec")
+
+    def test_swap_query_survives_a_host_with_no_swap(self) -> None:
+        # Dividing by SwapTotal on a swapless host is a division by zero, which
+        # Prometheus returns as NaN and the chart would draw as a gap forever.
+        self.assertIn("clamp_min", m.CATALOGUE["swap_used"][2])
+
+    def test_every_new_metric_still_builds_a_query(self) -> None:
+        for name in m.CATALOGUE:
+            params = m.build_range_params(name, "1h", now=1000.0)
+            self.assertTrue(params["query"])
+            self.assertNotIn("{job}", params["query"])
+
+
+class UnitsMatchTheFrontendTests(unittest.TestCase):
+    def test_the_chart_formatter_handles_every_unit_we_emit(self) -> None:
+        """A unit the backend invents and the frontend does not know is silent.
+
+        formatValue falls through to a bare number, so a percentage renders as
+        "93.00" and throughput as "52428800" - wrong, but never an error, so
+        nothing catches it except reading the tab.
+        """
+        from pathlib import Path
+
+        chart = (
+            Path(__file__).resolve().parents[2]
+            / "frontend/src/monitoring/chart.ts"
+        ).read_text(encoding="utf-8")
+        for unit in sorted({u for _l, u, _q in m.CATALOGUE.values()}):
+            if unit == "number":
+                continue  # the formatter's default branch
+            self.assertIn(f'case "{unit}":', chart, unit)
+
+
+class BatchRequestTests(unittest.TestCase):
+    """The batch endpoint is the only place a list of names becomes queries."""
+
+    def test_names_are_kept_in_order_and_deduplicated(self) -> None:
+        self.assertEqual(
+            m.parse_metric_list("memory, cpu ,memory"),
+            ["memory", "cpu"],
+        )
+
+    def test_anything_outside_the_catalogue_is_refused(self) -> None:
+        # The browser must never be able to widen this into PromQL.
+        for bad in (
+            "cpu,node_cpu_seconds_total",
+            'cpu,up{job="x"}',
+            "cpu,rate(node_cpu_seconds_total[5m])",
+            "../etc/passwd",
+        ):
+            with self.assertRaises(m.MonitoringError, msg=bad):
+                m.parse_metric_list(bad)
+
+    def test_an_empty_request_is_refused_rather_than_returning_everything(self) -> None:
+        for empty in ("", "   ", ",,,"):
+            with self.assertRaises(m.MonitoringError):
+                m.parse_metric_list(empty)

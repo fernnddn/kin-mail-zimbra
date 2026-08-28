@@ -60,14 +60,52 @@ CATALOGUE: dict[str, tuple[str, str, str]] = {
     ),
     "disk_read": (
         "Disk read",
-        "bytes_per_sec",
+        "disk_bytes_per_sec",
         "sum by (instance) (rate(node_disk_read_bytes_total[5m]))",
     ),
     "disk_write": (
         "Disk write",
-        "bytes_per_sec",
+        "disk_bytes_per_sec",
         "sum by (instance) (rate(node_disk_written_bytes_total[5m]))",
     ),
+    # The metrics below exist to answer "why does this feel slow?" and "is the
+    # replication link healthy?" - the two questions the Phase 7 run could not
+    # answer from this tab. iowait and disk busy separate a loaded CPU from a
+    # disk that cannot keep up; network errors and drops are what a saturated
+    # NIC looks like before DRBD starts logging PingAck timeouts.
+    "cpu_iowait": (
+        "CPU waiting on disk",
+        "percent",
+        'avg by (instance) (rate(node_cpu_seconds_total{mode="iowait"}[5m])) * 100',
+    ),
+    "disk_busy": (
+        "Busiest disk utilisation",
+        "percent",
+        "max by (instance) "
+        '(rate(node_disk_io_time_seconds_total{device!~"loop.*"}[5m])) * 100',
+    ),
+    "swap_used": (
+        "Swap used",
+        "percent",
+        "(1 - (node_memory_SwapFree_bytes / clamp_min(node_memory_SwapTotal_bytes, 1)))"
+        " * 100",
+    ),
+    "net_errors": (
+        "Network errors and drops",
+        "per_sec",
+        "sum by (instance) ("
+        'rate(node_network_receive_errs_total{device!~"lo|veth.*|docker.*"}[5m])'
+        ' + rate(node_network_transmit_errs_total{device!~"lo|veth.*|docker.*"}[5m])'
+        ' + rate(node_network_receive_drop_total{device!~"lo|veth.*|docker.*"}[5m])'
+        ' + rate(node_network_transmit_drop_total{device!~"lo|veth.*|docker.*"}[5m])'
+        ")",
+    ),
+    "tcp_established": (
+        "TCP connections",
+        "number",
+        "node_netstat_Tcp_CurrEstab",
+    ),
+    "load5": ("Load average (5m)", "number", "node_load5"),
     "uptime": (
         "Uptime",
         "seconds",
@@ -105,6 +143,27 @@ def metric_meta(name: str) -> dict[str, str]:
 
 def catalogue_public() -> list[dict[str, str]]:
     return [metric_meta(n) for n in CATALOGUE]
+
+
+def parse_metric_list(raw: str) -> list[str]:
+    """Names from a comma-separated request, validated against the catalogue.
+
+    The browser sends names, never PromQL, and this is the only place a batch
+    request turns text into metrics - so it is the place that has to refuse
+    anything not in the catalogue. Order is preserved and duplicates dropped,
+    so asking for the same chart twice cannot multiply the work.
+    """
+    wanted: list[str] = []
+    for chunk in raw.split(","):
+        name = chunk.strip()
+        if not name or name in wanted:
+            continue
+        if not known_metric(name):
+            raise MonitoringError(f"Unknown metric: {name}")
+        wanted.append(name)
+    if not wanted:
+        raise MonitoringError("No metrics requested")
+    return wanted
 
 
 def range_window(name: str) -> tuple[int, int]:
