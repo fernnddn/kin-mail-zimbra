@@ -542,7 +542,7 @@ async def mailbox_status(
         user.username,
         args={"op": "status"},
     )
-    return _mailbox_status_payload(result)
+    return _mailbox_status_payload(result, is_super_admin=user.role == ROLE_SUPER_ADMIN)
 
 
 @app.get("/api/mailbox")
@@ -559,7 +559,7 @@ async def mailbox_list(
         user.username,
         args={"op": "list"},
     )
-    payload = _mailbox_status_payload(result)
+    payload = _mailbox_status_payload(result, is_super_admin=user.role == ROLE_SUPER_ADMIN)
     rows = _json_any_from_log(str(result.get("log") or ""), "MAILBOX_JSON:")
     payload["mailboxes"] = rows if isinstance(rows, list) else []
     return payload
@@ -619,7 +619,7 @@ async def mailbox_create(
         },
     )
     created = _json_from_log(str(result.get("log") or ""), "CREATE_JSON:")
-    payload = _mailbox_status_payload(result)
+    payload = _mailbox_status_payload(result, is_super_admin=user.role == ROLE_SUPER_ADMIN)
     return {
         "exit_code": result["exit_code"],
         "ok": result["ok"],
@@ -895,7 +895,21 @@ def _current_license_view() -> dict:
     return license_view(read_license_token(), read_server_id() or "")
 
 
-def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
+# Whoever is reading this either can paste a licence or cannot. Telling a Super
+# Admin that "a Super Admin can paste a signed license" tells them nothing, and
+# telling anyone else to go and be one is worse - the licence comes from KIN,
+# so that is who they need.
+_LICENCE_FROM_KIN = "Contact KIN for a signed license key."
+_LICENCE_SELF_SERVE = "Paste your signed license key on the Settings page."
+
+
+def _licence_next_step(is_super_admin: bool) -> str:
+    return _LICENCE_SELF_SERVE if is_super_admin else _LICENCE_FROM_KIN
+
+
+def _seat_user_message(
+    seats: dict, *, license_blocked: bool, is_super_admin: bool = False
+) -> str:
     if license_blocked:
         return (
             "New mailboxes cannot be created while the license is invalid, in grace, or expired. "
@@ -905,11 +919,12 @@ def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
     used = seats.get("used")
     limit = seats.get("limit")
     if code == "unset":
-        return (
-            "Seat limit is not set. A Super Admin can paste a signed license on the Settings page."
-        )
+        return f"Seat limit is not set. {_licence_next_step(is_super_admin)}"
     if code == "invalid":
-        return "Seat limit is not a valid number. A Super Admin can paste a signed license on the Settings page."
+        return (
+            "The seat limit in the license could not be read. "
+            f"{_licence_next_step(is_super_admin)}"
+        )
     if code == "at_limit":
         return f"All contracted mailboxes are in use ({used}/{limit}). Contact KIN to add seats."
     if code == "count_failed":
@@ -921,11 +936,15 @@ def _seat_user_message(seats: dict, *, license_blocked: bool) -> str:
     return "Seat status is unavailable."
 
 
-def _mailbox_status_payload(result: dict[str, object]) -> dict[str, object]:
+def _mailbox_status_payload(
+    result: dict[str, object], *, is_super_admin: bool = False
+) -> dict[str, object]:
     seats = _json_from_log(str(result.get("log") or ""), "SEATS_JSON:")
     lic = _current_license_view()
     blocked = bool(lic.get("provisioning_blocked"))
-    message = _seat_user_message(seats, license_blocked=blocked)
+    message = _seat_user_message(
+        seats, license_blocked=blocked, is_super_admin=is_super_admin
+    )
     can_create = bool(seats.get("ok")) and not blocked
     return {
         "ok": bool(result.get("ok")) and not blocked,
@@ -948,7 +967,7 @@ def _human_mailbox_error(log: str, error: str) -> str:
     if "not found" in text.lower():
         return "Mailbox not found."
     if "PLACEHOLDER_UNSET" in text or "seat limit not configured" in text:
-        return "Seat limit is not set. A Super Admin can paste a signed license on the Settings page."
+        return f"Seat limit is not set. {_LICENCE_FROM_KIN}"
     if "seat limit reached" in text:
         return "All contracted mailboxes are in use. Contact KIN to add seats."
     if "grace or expired" in text or "license is invalid" in text:

@@ -111,7 +111,13 @@ export default function TlsStep() {
               {cfSaved ? "Replace token" : "Store token"}
             </Button>
           </NavRow>
-          {cfSaved ? <Hint>Token stored. Deploy can now issue and renew on its own.</Hint> : null}
+          {/* Hint tucks up under the element above it. After a row of buttons
+              that puts it behind them, so this one gets normal spacing. */}
+          {cfSaved ? (
+            <Hint style={{ marginTop: "0.9rem" }}>
+              Token stored. Deploy can now issue and renew on its own.
+            </Hint>
+          ) : null}
           <Err>{cfErr}</Err>
           <Hint>
             Without a token the deploy stops at the certificate step rather than issuing a

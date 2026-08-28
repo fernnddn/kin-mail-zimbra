@@ -14,7 +14,7 @@ import {
   FieldLabel,
   Hint,
   Input,
-  LogPane,
+  LogView,
   MenuItem,
   Modal,
   Page,
@@ -2091,7 +2091,9 @@ export default function ClusterPage() {
         ) : tab === "monitoring" ? (
           <MonitoringTab />
         ) : (
-          <LogPane aria-label="Maintenance log">{log || "Status and transition output appears here."}</LogPane>
+          <LogView aria-label="Maintenance log">
+            {log || "Status and transition output appears here."}
+          </LogView>
         )}
         {busy && liveStep ? (
           <Hint>

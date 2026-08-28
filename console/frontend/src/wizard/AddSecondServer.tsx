@@ -15,7 +15,7 @@ import {
   FieldRow,
   Hint,
   Input,
-  LogPane,
+  LogView,
   PairGrid,
   Page,
   PageHeader,
@@ -319,7 +319,7 @@ export default function AddSecondServerPage() {
                   ? "The HA build did not finish cleanly. Nothing on this server's existing mail was touched; review the log below before retrying."
                   : `${current}/${total || "?"} ${label}`}
             </Hint>
-            <LogPane aria-label="Add second server log">{log}</LogPane>
+            <LogView aria-label="Add second server log">{log}</LogView>
             {message ? <Hint>{message}</Hint> : null}
             {complete || failed ? (
               <Button type="button" onClick={() => navigate("/cluster")}>

@@ -2,6 +2,13 @@ import { FormEvent, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { api } from "../api";
+import {
+  EXPIRY_WARN_DAYS,
+  daysUntil,
+  expiringSoon,
+  formatDay,
+  formatExpiry,
+} from "../lib/dates";
 import { useAuth } from "../auth";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { theme } from "../styles/theme";
@@ -12,7 +19,7 @@ import {
   Hint,
   Input,
   Label,
-  LogPane,
+  LogView,
   Page,
   PageHeader,
   PasswordInput,
@@ -307,12 +314,15 @@ export default function SettingsPage() {
   }
 
   const days = tls.days_left;
-  const tlsLabel =
-    tls.not_after && days != null
-      ? `Expires ${tls.not_after} (${days} day${days === 1 ? "" : "s"} left).`
-      : tls.not_after
-        ? `Expires ${tls.not_after}.`
-        : "No certificate expiry could be read on this host yet.";
+  const tlsLabel = tls.not_after
+    ? `Expires ${formatExpiry(tls.not_after)}.`
+    : "No certificate expiry could be read on this host yet.";
+  // Renewal needs a working DNS-01 challenge and, on an HA pair, a deploy hook
+  // that restarts Zimbra. Finding out on the day it expires is finding out too
+  // late, so say so with a month to go.
+  const tlsExpiringSoon =
+    (days != null && days <= EXPIRY_WARN_DAYS) || expiringSoon(tls.not_after);
+  const tlsExpired = days != null ? days < 0 : (daysUntil(tls.not_after) ?? 1) < 0;
 
   return (
     <ConsoleChrome>
@@ -335,8 +345,12 @@ export default function SettingsPage() {
             Status: {license.status || "none"}
             {license.type ? ` · ${license.type}` : ""}
             {license.seats ? ` · ${license.seats} seats` : ""}
-            {license.expires_at ? ` · expires ${license.expires_at}` : license.type === "perpetual" ? " · no expiry" : ""}
-            {license.grace_until ? ` · grace until ${license.grace_until}` : ""}
+            {license.expires_at
+              ? ` · expires ${formatExpiry(license.expires_at)}`
+              : license.type === "perpetual"
+                ? " · no expiry"
+                : ""}
+            {license.grace_until ? ` · grace until ${formatDay(license.grace_until)}` : ""}
           </Hint>
           {license.provisioning_blocked ? (
             <WarnBox>
@@ -489,11 +503,24 @@ export default function SettingsPage() {
               </Button>
             ) : null}
           </Row>
-          {fwLog ? <LogPane aria-label="Firewall apply log">{fwLog}</LogPane> : null}
+          {fwLog ? <LogView aria-label="Firewall apply log">{fwLog}</LogView> : null}
         </Section>
 
         <Section>
           <SectionTitle>TLS certificate</SectionTitle>
+          {tlsExpired ? (
+            <WarnBox>
+              <strong>This certificate has expired.</strong> Mail clients will refuse
+              to connect until it is renewed.
+            </WarnBox>
+          ) : tlsExpiringSoon ? (
+            <WarnBox>
+              <strong>This certificate expires within {EXPIRY_WARN_DAYS} days.</strong>{" "}
+              Renew it now rather than on the day: renewal needs a working DNS-01
+              challenge, and on an HA pair the deploy hook restarts Zimbra, so it
+              is not something to be doing under pressure.
+            </WarnBox>
+          ) : null}
           <Hint>
             {tlsLabel} Method: {tls.method || "unknown"}. Renewal uses the same DNS-01 flow as
             install. When a TXT record is required, it appears below in copy-paste form.
@@ -502,7 +529,7 @@ export default function SettingsPage() {
             Renew certificate
           </Button>
           <AcmeChallengePanel log={tlsLog} mailDomain={mailDomain} />
-          {tlsLog ? <LogPane aria-label="Certificate renewal log">{tlsLog}</LogPane> : null}
+          {tlsLog ? <LogView aria-label="Certificate renewal log">{tlsLog}</LogView> : null}
         </Section>
       </Page>
       <ConfirmModal

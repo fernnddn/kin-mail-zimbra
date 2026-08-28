@@ -65,6 +65,16 @@ const FormGrid = styled.form`
   margin: 0;
 `;
 
+// Hint carries a negative top margin so it tucks under the field above it.
+// After a submit button there is no field to tuck under, so the result text
+// slid up behind the button and the first line was unreadable.
+const ResultNote = styled.p`
+  margin: 0.9rem 0 0;
+  color: ${theme.muted};
+  font-size: 0.82rem;
+  line-height: 1.45;
+`;
+
 const DomainSuffix = styled.span`
   color: ${theme.muted};
   font-size: 0.95rem;
@@ -414,7 +424,7 @@ export default function CreateMailboxPage() {
                 {busy ? "Creating..." : "Create mailbox"}
               </Button>
             </FormGrid>
-            {message ? <Hint>{message}</Hint> : null}
+            {message ? <ResultNote>{message}</ResultNote> : null}
           </FormCard>
         </Columns>
 

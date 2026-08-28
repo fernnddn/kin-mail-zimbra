@@ -11,6 +11,7 @@ import {
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { theme } from "./styles/theme";
+import { formatDeployLog } from "./wizard/ansi";
 import kinMailLogo from "./assets/kinmail-lockup-black.png";
 
 const spin = keyframes`
@@ -577,6 +578,24 @@ export const LogPane = styled.pre`
   white-space: pre-wrap;
   box-shadow: ${theme.shadow.sm};
 `;
+
+/**
+ * A log pane that shows what the operator meant to read.
+ *
+ * The install scripts colour their output, and that colouring was being
+ * rendered literally: "[36m=> [0m [1mTLS method: manual [0m" for one line of
+ * an ordinary certificate renewal. Every log surface in the console had it,
+ * which is most of what "the display is messy" meant.
+ *
+ * Stripping happens here, at the point of display, so what is written to disk
+ * and streamed over SSE stays byte-for-byte what the script produced.
+ */
+export function LogView({
+  children,
+  ...rest
+}: { children?: string } & ComponentProps<typeof LogPane>) {
+  return <LogPane {...rest}>{formatDeployLog(children || "")}</LogPane>;
+}
 
 export function FieldLabel({
   htmlFor,
