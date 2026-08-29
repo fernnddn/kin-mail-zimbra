@@ -95,6 +95,48 @@ Now prevented by `install/lib/align-service-ids.sh`, which runs on a peer before
 Zimbra is installed, and by an assertion in `pacemaker_mail_stack` that refuses
 to finish building a pair whose ids disagree.
 
+### The prevention has to RESERVE the number, not wait for it
+
+The first version of that script fixed this in a way that could not work, and it
+is worth understanding why, because the mistake is an easy one to repeat.
+
+It renumbered any account that already existed, and for an account that did not
+exist yet it printed:
+
+    user zimbra does not exist yet; leaving creation to its installer
+
+The reasoning was that creating `zimbra` early would fight Zimbra's installer.
+Two things were wrong with that.
+
+**A fresh peer is exactly the case where the account does not exist.** Zimbra has
+not been installed yet - that is the whole point of running before it. So on the
+one host that needed aligning, the aligner did nothing at all, and the installers
+went on to allocate whatever happened to be free. The deployment of 29 Aug 2026
+ran for 35 minutes and stopped at step 12 of 14 on exactly this.
+
+**And the installers do not fight it.** Both create these accounts only `if` they
+are missing, so an account already sitting at the right number is simply used.
+The proof was in the same log that showed the bug: the three *groups* the script
+pre-created survived a full Zimbra install untouched, at exactly the gids it
+pinned. Groups matched on both nodes; only the users diverged - the two the
+script had skipped.
+
+The lesson generalises past this bug: **when you pin an identity, create it.**
+Deferring to whatever runs later is not pinning, it is hoping.
+
+### Checking it yourself, before the console does
+
+Thirty seconds, from the primary, any time after the peer has Zimbra:
+
+    for h in <node-a> <node-b>; do
+      echo "== $h"
+      ssh $h 'for n in zimbra postfix; do echo "user:$n=$(id -u $n)"; done;
+              for g in zimbra postfix postdrop; do echo "group:$g=$(getent group $g | cut -d: -f3)"; done'
+    done
+
+The two blocks must be identical. If they are not, the pair will build and then
+fail the first time it moves - or, since 29 Aug 2026, refuse to build at all.
+
 ### Repairing an existing pair
 
 Only ever renumber the node whose ids do **not** match the volume, with
@@ -111,6 +153,19 @@ Only ever renumber the node whose ids do **not** match the volume, with
     # rewrite local files that used the old ids, never under /opt/zimbra
     find / -xdev -uid <old> -not -path '/opt/zimbra/*' -exec chown -h <new> {} +
     systemctl start kin-mail-console
+
+Or let the script do all of it, which is what the console now does for a peer
+that was installed outside the HA sequence:
+
+    sudo env KIN_PEER_ZIMBRA_UID=<uid>  KIN_PEER_ZIMBRA_GID=<gid> \
+             KIN_PEER_POSTFIX_UID=<uid> KIN_PEER_POSTFIX_GID=<gid> \
+             KIN_PEER_POSTDROP_GID=<gid> \
+             bash /opt/kin-mail-deploy/install/lib/align-service-ids.sh
+
+Run it **on the node that does not match the volume**, with the primary's
+numbers. It aligns, then verifies, and exits non-zero if the numbers still
+disagree. It stops whatever still holds an id before renumbering it, and it
+never touches `/opt/zimbra`.
 
 ---
 

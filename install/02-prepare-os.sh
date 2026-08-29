@@ -33,6 +33,16 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
+# Clear our own leftover apt service-start block (stage 3) if a previous run was
+# killed between installing and removing it. Only ever remove OUR file: an
+# operator's deliberate policy-rc.d is theirs. This runs before stage 3 on every
+# path into stage 4 and beyond, so a stale block can never reach the Zimbra
+# install and silently stop its packages from starting anything.
+if [ -f /usr/sbin/policy-rc.d ] && grep -q 'KIN Mail install' /usr/sbin/policy-rc.d 2>/dev/null; then
+  warn "Removing a leftover apt service-start block from an interrupted run"
+  rm -f /usr/sbin/policy-rc.d
+fi
+
 echo
 say "Preparing ${MAIL_HOST} (${SERVER_IP})"
 echo
@@ -52,8 +62,25 @@ ok "timezone : ${TIMEZONE}"
 # start on this node at all. See install/lib/align-service-ids.sh.
 if kin_ha_peer_install; then
   say "1a. Service account ids"
+  # Read by the file sourced on the next line.
+  # shellcheck disable=SC2034
+  KIN_ALIGN_IDS_SOURCE_ONLY=1
   # shellcheck disable=SC1091
   . ./lib/align-service-ids.sh
+  unset KIN_ALIGN_IDS_SOURCE_ONLY
+  align_log "Aligning service account ids with the primary"
+  if ! align_service_ids_from_env; then
+    fail "Could not align this peer's service account ids with the primary."
+    info "Zimbra cannot start on a node whose numeric ids disagree with the"
+    info "replicated volume, so the build stops here rather than at the end."
+    exit 1
+  fi
+  if align_verify_ids_from_env; then
+    ok "Service account ids match the primary"
+  else
+    fail "Service account ids still disagree with the primary after aligning."
+    exit 1
+  fi
 fi
 
 # --- 1b. OS admin user + password SSH (HA ansible uses sshpass) --------------
@@ -158,6 +185,35 @@ case "${VERSION_ID:-}" in
   24.04) PERL_LIB=libperl5.38 ;;
   *)     PERL_LIB=libperl5.34 ;;
 esac
+# dnsmasq's postinst starts the daemon the moment it unpacks, and port 53 is
+# still held by systemd-resolved at this point - deliberately, so a host is
+# never left without a resolver (see stage 4). That start always fails, and it
+# printed a red "Job for dnsmasq.service failed" block into the operator's
+# deploy log for a condition this script resolves ten lines later. policy-rc.d
+# is the supported way to tell a package not to start what it installs; the unit
+# is still enabled, and stage 4 starts dnsmasq itself once port 53 is free.
+# Scoped to dnsmasq by name, so every other package in the transaction still
+# starts its service exactly as it normally would.
+kin_block_pkg_service_start() {
+  mkdir -p /usr/sbin
+  cat > /usr/sbin/policy-rc.d <<'POLICY'
+#!/bin/sh
+# KIN Mail install: dnsmasq alone must not start as it unpacks - systemd-resolved
+# still holds port 53, and stage 4 starts dnsmasq itself once that is free.
+# Everything else in this transaction starts normally. Removed before stage 4.
+case "$1" in
+dnsmasq) exit 101 ;;
+esac
+exit 0
+POLICY
+  chmod +x /usr/sbin/policy-rc.d
+}
+kin_unblock_pkg_service_start() { rm -f /usr/sbin/policy-rc.d; }
+# Never leave it behind: a host that keeps this file silently stops starting
+# services on every future apt install.
+trap 'kin_unblock_pkg_service_start' EXIT HUP INT TERM
+kin_block_pkg_service_start
+
 if apt-get -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
@@ -182,7 +238,29 @@ if ! command -v dnsmasq >/dev/null 2>&1; then
   fail "dnsmasq is not installed"
   exit 1
 fi
+kin_unblock_pkg_service_start
+trap - EXIT HUP INT TERM
 ok "dnsmasq package is installed"
+
+# Stage 3 purged packages, patched 60-odd more, and installed a dozen: any of
+# those postinsts can allocate a system id, and a purge can in principle take
+# an account away. Re-run the aligner - it is a no-op when nothing moved - so
+# the numbers this peer carries into the Zimbra install are provably still the
+# primary's, rather than whatever survived the package churn.
+if kin_ha_peer_install; then
+  if ! align_verify_ids_from_env 2>/dev/null; then
+    warn "Package installation moved a service account id; realigning"
+    align_service_ids_from_env || {
+      fail "Could not realign service account ids after installing packages."
+      exit 1
+    }
+  fi
+  align_verify_ids_from_env || {
+    fail "Service account ids do not match the primary after the package stage."
+    exit 1
+  }
+  ok "Service account ids still match the primary"
+fi
 
 # --- 4. local resolver -------------------------------------------------------
 # Two traps live here:

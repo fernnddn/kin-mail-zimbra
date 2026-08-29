@@ -17,6 +17,15 @@ cd "$(dirname "$0")" && . ./00-config.sh
 # Shared mid-handoff probe (data partition holds bin/zmcontrol).
 # shellcheck source=lib/zimbra-data-disk-probe.sh
 . ./lib/zimbra-data-disk-probe.sh
+# Service-id checks used at the end of this stage. Sourced HERE, with every
+# other library, because stage 1 cds into $ZCS_SRC and never comes back - a
+# relative source further down would silently find nothing.
+# Read by the file sourced on the next line.
+# shellcheck disable=SC2034
+KIN_ALIGN_IDS_SOURCE_ONLY=1
+# shellcheck disable=SC1091
+. ./lib/align-service-ids.sh
+unset KIN_ALIGN_IDS_SOURCE_ONLY
 need_root
 
 MANUAL=0; [ "${1:-}" = "--manual" ] && MANUAL=1
@@ -798,6 +807,24 @@ secure_zimbra_install_config() {
 
 if ! secure_zimbra_install_config; then
   exit 1
+fi
+
+# The installer has just created (or reused) the accounts that own every file
+# on the replicated volume. On a peer those numbers have to be the primary's,
+# and 02-prepare-os.sh reserved them for exactly this moment. Check that they
+# survived, here, on the node it happened on - the alternative is finding out
+# eleven orchestration steps later, when the pair refuses to build and half an
+# hour of Zimbra install has to be repeated.
+if kin_ha_peer_install; then
+  say "Service account ids"
+  if align_verify_ids_from_env; then
+    ok "Service account ids still match the primary after the Zimbra install"
+  else
+    fail "The Zimbra install moved a service account id away from the primary's."
+    info "This node cannot run Zimbra off the replicated volume until they agree."
+    info "Re-run 02-prepare-os.sh on this host to renumber, then re-run this stage."
+    exit 1
+  fi
 fi
 
 echo

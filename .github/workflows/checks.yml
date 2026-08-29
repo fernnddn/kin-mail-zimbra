@@ -37,38 +37,35 @@ jobs:
           done
           exit $fail
 
-      - name: migrate-zimbra status parser tests
-        run: bash install/lib/test-migrate-zimbra-to-drbd-disk.sh
-
-      - name: prepare-zimbra-data-disk helper tests
-        run: bash install/lib/test-prepare-zimbra-data-disk.sh
-
-      - name: zimbra-data-disk-probe helper tests
-        run: bash install/lib/test-zimbra-data-disk-probe.sh
-
-      - name: zimbra-data-disk-luks helper tests
-        run: bash install/lib/test-zimbra-data-disk-luks.sh
-
-      - name: release-zimbra-plain-mount-for-drbd helper tests
-        run: bash install/lib/test-release-zimbra-plain-mount-for-drbd.sh
-
-      - name: 00-config TTY fail-closed tests
-        run: bash install/lib/test-00-config-tty.sh
-
-      - name: ACME poll-mode challenge log follow tests
-        run: bash install/lib/test-04-tls-acme-follow.sh
-
-      - name: ssh-password-toggle tests
-        run: bash install/lib/test-ssh-password-toggle.sh
-
-      - name: host-firewall peer derivation tests
-        run: bash install/lib/test-host-firewall-peers.sh
-
-      - name: ensure-outbound-dns helper tests
-        run: bash install/lib/test-ensure-outbound-dns.sh
-
-      - name: peer-console-activate helper tests
-        run: bash console/deploy/test-peer-console-activate.sh
+      # Every test-*.sh, discovered - never a hand-kept list.
+      #
+      # The list that used to live here was missing three suites, and two of
+      # them were the ones covering service-account id alignment and the OCF
+      # agent's process handling: the exact code whose failure stopped a
+      # deployment at step 12 of 14 on 29 Aug 2026. A suite nobody runs is not
+      # a test, and the way to notice is to stop maintaining the list by hand.
+      - name: Shell helper test suites
+        run: |
+          set -uo pipefail
+          find install/lib console/deploy backup -name 'test-*.sh' -type f 2>/dev/null \
+            | sort > /tmp/kin-shell-suites.txt
+          count=$(grep -c . /tmp/kin-shell-suites.txt || true)
+          if [ "${count:-0}" -lt 12 ]; then
+            echo "ERROR: found only ${count:-0} shell suites - refusing a silent pass"
+            exit 1
+          fi
+          echo "running ${count} shell suites"
+          fail=0
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            echo "=== $t"
+            if bash "$t"; then
+              echo "ok      $t"
+            else
+              echo "FAILED  $t"; fail=1
+            fi
+          done < /tmp/kin-shell-suites.txt
+          exit $fail
 
       - name: Install shellcheck
         run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
@@ -225,8 +222,9 @@ jobs:
               echo ">>> $2"; fail=1
             fi
           }
-          scan_domain 'nisaroti\.my\.id'  "real deployment domain (use example.test)"
+          scan_domain 'nisaroti\.my\.id'   "real deployment domain (use example.test)"
           scan_domain 'gits-it\.site'      "real deployment domain (use example.test)"
+          scan_domain 'helgaalan\.my\.id'  "real deployment domain (use example.test)"
           exit $fail
 
       - name: Confirm internal documents are ignored

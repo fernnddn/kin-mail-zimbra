@@ -2498,6 +2498,49 @@ async def cmd_run_ha_orchestration(
                 "(skip_remote_install=1) - OS prep + Zimbra on the new node "
                 "is not run in this invocation."
             )
+            # A peer installed outside this sequence had nothing pinning the
+            # numeric ids of the accounts that own /opt/zimbra, so they are
+            # almost certainly not this node's. Repair it here, where the peer
+            # is still idle, rather than letting the pair build and discover it
+            # during the first failover.
+            # Never in check mode: a dry run does not renumber accounts on a
+            # host, and this one is not even a cluster member yet.
+            id_env = local_service_id_env() if join_mode != "check" else {}
+            if id_env:
+                for line in describe_service_ids(id_env):
+                    yield emit_line(line)
+                align_code, align_text = await _ssh_run(
+                    peer,
+                    ssh_user,
+                    ssh_pass,
+                    secrets,
+                    wrap_privileged_remote(
+                        "env "
+                        + " ".join(f"{k}={v}" for k, v in sorted(id_env.items()))
+                        + " bash /opt/kin-mail-deploy/install/lib/align-service-ids.sh"
+                    ),
+                    timeout=600,
+                    stdin_text=ssh_pass,
+                )
+                for line in align_text.splitlines():
+                    if line.strip():
+                        yield emit_line(f"peer ids: {line.rstrip()}")
+                if align_code != 0:
+                    yield emit_line(
+                        "Could not align the peer's service account ids with this "
+                        "node. Zimbra cannot start on a node whose numbers "
+                        "disagree with the replicated volume, so the pair is not "
+                        "built. See HA-FAILOVER-TROUBLESHOOTING.md, Fault 1.",
+                        err=True,
+                    )
+                    failed_step = step.step_id
+                    exit_code = align_code
+                    yield emit_line(
+                        f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; "
+                        "stopping. No auto-retry, no auto-rollback.",
+                        err=True,
+                    )
+                    break
             continue
         if join_mode == "check" and step.cluster_join:
             yield emit_line(

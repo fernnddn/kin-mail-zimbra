@@ -2051,6 +2051,234 @@ class PeerServiceIdTests(unittest.TestCase):
         self.assertIn("service_ids.yml", main)
         self.assertLess(main.index("service_ids.yml"), main.index("mail_svc.yml"))
 
+    def test_an_absent_account_is_reserved_not_left_to_the_installer(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        lib = (repo / "install/lib/align-service-ids.sh").read_text(encoding="utf-8")
+        # A fresh peer is the case that matters: Zimbra is not installed, so the
+        # account does not exist, and the first version of this file did nothing
+        # at all in exactly that situation. It has to create the account at the
+        # primary's number so the installer finds it already there.
+        self.assertIn("align_reserve_user", lib)
+        self.assertIn("useradd", lib)
+        self.assertNotIn("leaving creation to its installer", lib)
+
+    def test_the_aligner_does_not_change_its_callers_shell_options(self) -> None:
+        import re
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        lib = (repo / "install/lib/align-service-ids.sh").read_text(encoding="utf-8")
+        # It is sourced into installer stages that manage their own errors;
+        # turning on -e underneath them changes how every later line behaves.
+        self.assertIsNone(re.search(r"^\s*set\s+-[a-z]*e", lib, re.M))
+
+    def test_the_peer_is_verified_after_zimbra_installs(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        install = (repo / "install/03-install-zimbra.sh").read_text(encoding="utf-8")
+        # Catch a divergence on the node it happened on, not eleven
+        # orchestration steps later with the Zimbra install to repeat.
+        self.assertIn("align_verify_ids_from_env", install)
+        self.assertIn("kin_ha_peer_install", install)
+
+    def test_a_peer_installed_elsewhere_is_still_aligned(self) -> None:
+        from pathlib import Path
+
+        orch = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper/orchestration.py"
+        ).read_text(encoding="utf-8")
+        # skip_remote_install means nothing pinned the peer's ids, so that is
+        # the path where they are guaranteed to be wrong.
+        skip = orch.index('"(skip_remote_install=1) - OS prep + Zimbra')
+        after = orch[skip : skip + 2500]
+        self.assertIn("align-service-ids.sh", after)
+        # And it must stop the build rather than carry on with a peer whose
+        # numbers are wrong.
+        self.assertIn("failed_step = step.step_id", after)
+        # A dry run must not renumber accounts on a host.
+        self.assertIn('join_mode != "check"', after)
+
+    def test_the_aligner_runs_standalone_for_that_repair(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        lib = (repo / "install/lib/align-service-ids.sh").read_text(encoding="utf-8")
+        # The console drives it over SSH, so running the file has to align AND
+        # prove it took - a repair that reports success without checking is
+        # how this reached step 12 of 14 in the first place.
+        tail = lib[lib.index("KIN_ALIGN_IDS_SOURCE_ONLY:-0"):]
+        self.assertIn("align_service_ids_from_env", tail)
+        self.assertIn("align_verify_ids_from_env", tail)
+
+
+class RelativeSourceAfterChdirTests(unittest.TestCase):
+    """A stage may not source a library after it has changed directory.
+
+    Every stage starts with `cd "$(dirname "$0")"` and then sources its
+    libraries relatively. 03-install-zimbra.sh also cds into $ZCS_SRC to unpack
+    the tarball and never comes back, so a `. ./lib/...` added near the bottom
+    of that file finds nothing - and the functions it was meant to define are
+    then "command not found", which reads as a failure of whatever called them.
+    """
+
+    def _stage_scripts(self):
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        # The numbered stages only. kin-mail.sh is the driver: it deliberately
+        # relocates itself into a cloned deploy directory and re-execs from
+        # there, so its relative sources are correct by construction and a
+        # static reading of its cds cannot say so.
+        return sorted((repo / "install").glob("[0-9]*.sh"))
+
+    @staticmethod
+    def _first_chdir_away(lines: list[str]) -> int | None:
+        import re
+
+        # Names assigned from the script's own directory, so that a later
+        # `cd "$self_dir"` is recognised as staying put rather than leaving.
+        self_dir_vars: set[str] = set()
+        for raw in lines:
+            m = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*)=.*dirname\s+"\$0"', raw)
+            if m:
+                self_dir_vars.add(m.group(1))
+        for i, raw in enumerate(lines):
+            line = raw.strip()
+            if not line.startswith("cd "):
+                continue
+            # The one every stage opens with, which is what makes the
+            # relative sources valid in the first place.
+            if 'dirname "$0"' in line:
+                continue
+            # First word only: `cd "$self_dir" || exit 1` has more after it.
+            target = line[3:].strip().split()[0].strip('"').strip("'")
+            if target.startswith("$") and target.lstrip("$").strip("{}") in self_dir_vars:
+                continue
+            return i
+        return None
+
+    def test_every_relative_source_precedes_the_first_chdir(self) -> None:
+        offenders = []
+        for path in self._stage_scripts():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            chdir = self._first_chdir_away(lines)
+            if chdir is None:
+                continue
+            for i, raw in enumerate(lines):
+                line = raw.strip()
+                if not line.startswith((". ./", "source ./")):
+                    continue
+                if i > chdir:
+                    offenders.append(
+                        f"{path.name}: sources {line!r} on line {i + 1}, but the "
+                        f"script cd'd away on line {chdir + 1}"
+                    )
+        self.assertEqual(offenders, [], "; ".join(offenders))
+
+    def test_the_check_actually_sees_a_chdir_somewhere(self) -> None:
+        # If the detector stopped matching, the test above would pass on
+        # everything and protect nothing.
+        found = [
+            p.name
+            for p in self._stage_scripts()
+            if self._first_chdir_away(p.read_text(encoding="utf-8").splitlines())
+            is not None
+        ]
+        self.assertIn("03-install-zimbra.sh", found)
+
+
+class PackageServiceStartTests(unittest.TestCase):
+    """dnsmasq must not try to start while systemd-resolved still owns port 53.
+
+    Stage 4 deliberately keeps the stub resolver up until dnsmasq is installed
+    and configured, so the host is never left with no resolver. The cost was a
+    red "Job for dnsmasq.service failed" block in every deploy log, for a
+    condition the same script fixes ten lines later.
+    """
+
+    def _prepare(self) -> str:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        return (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+
+    def test_only_dnsmasq_is_held_back(self) -> None:
+        text = self._prepare()
+        # A blanket block would also stop every other package's service, which
+        # is a much larger behaviour change than the problem being solved.
+        self.assertIn("policy-rc.d", text)
+        self.assertIn("dnsmasq) exit 101 ;;", text)
+
+    def test_the_block_is_always_removed(self) -> None:
+        text = self._prepare()
+        # Left behind, it silently stops services starting on every future apt
+        # install on that host - including the Zimbra packages in stage 03.
+        self.assertIn("trap 'kin_unblock_pkg_service_start' EXIT", text)
+        self.assertIn("kin_unblock_pkg_service_start\ntrap - EXIT", text)
+
+    def test_a_leftover_block_is_cleared_on_the_next_run(self) -> None:
+        text = self._prepare()
+        # If a run is killed outright the trap cannot fire, so the next run has
+        # to clear it - and 02 always runs before 03.
+        cleanup = text.index("leftover apt service-start block")
+        install = text.index("kin_block_pkg_service_start\n")
+        self.assertLess(cleanup, install)
+        # Never remove an operator's own policy-rc.d.
+        self.assertIn("grep -q 'KIN Mail install' /usr/sbin/policy-rc.d", text)
+
+
+class ShellSuiteCoverageTests(unittest.TestCase):
+    """Every shell suite on disk has to actually run in CI.
+
+    The hand-maintained list in checks.yml had gone stale and was missing
+    three suites - including the two covering service-account id alignment and
+    the OCF agent's process handling, which is the code whose failure stopped a
+    deployment at step 12 of 14 on 29 Aug 2026. A suite nobody runs is not a
+    test.
+    """
+
+    def _workflow(self) -> str:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        return (repo / ".github/workflows/checks.yml").read_text(encoding="utf-8")
+
+    def test_ci_discovers_suites_instead_of_listing_them(self) -> None:
+        text = self._workflow()
+        self.assertIn("-name 'test-*.sh'", text)
+
+    def test_every_suite_on_disk_is_reachable_by_that_search(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        searched = ("install/lib", "console/deploy", "backup")
+        found = sorted(
+            str(p.relative_to(repo))
+            for d in searched
+            for p in (repo / d).glob("test-*.sh")
+            if p.is_file()
+        )
+        on_disk = sorted(
+            str(p.relative_to(repo))
+            for p in repo.rglob("test-*.sh")
+            if p.is_file() and ".git" not in p.parts and "node_modules" not in p.parts
+        )
+        self.assertEqual(
+            found,
+            on_disk,
+            "a shell suite lives outside the directories CI searches, so it "
+            "would never run: " + str(sorted(set(on_disk) - set(found))),
+        )
+
+    def test_the_search_refuses_a_silent_pass(self) -> None:
+        text = self._workflow()
+        # A typo in the find path must fail the job, not quietly run nothing.
+        self.assertIn("refusing a silent pass", text)
+
 
 class BaseImagePatchingTests(unittest.TestCase):
     def test_the_image_is_patched_before_zimbra_goes_on_it(self) -> None:
