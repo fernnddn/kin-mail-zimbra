@@ -541,10 +541,49 @@ def hosts_match(left: str, right: str) -> bool:
     return a.split(".")[0] == b.split(".")[0]
 
 
+def crm_node_list_as_pcs_nodes(crm_node_l: str) -> str:
+    """Render `crm_node -l` in the shape `pcs status nodes` produces.
+
+    `pcs status nodes` needs a live CIB connection, so it fails on a node whose
+    Pacemaker has not come up yet - which is exactly the window an operator
+    watches after powering a node back on. The fallback used to hand the raw
+    `crm_node -l` text to the same parsers, and none of their prefixes matched
+    it, so every name fell through to a loose token scan that reported BOTH
+    nodes online. A node that Pacemaker had already marked `lost` was drawn as
+    a healthy cluster member for the whole reboot.
+
+    Lines are `<id> <name> <state>`, where only `member` means joined.
+    """
+    online: list[str] = []
+    offline: list[str] = []
+    for raw in (crm_node_l or "").splitlines():
+        parts = raw.split()
+        if len(parts) < 2:
+            continue
+        name = parts[1].strip("'\"")
+        if "." not in name or not NODE_RE.match(name):
+            continue
+        state = parts[2].strip().lower() if len(parts) > 2 else ""
+        (online if state == "member" else offline).append(name)
+    if not online and not offline:
+        return ""
+    return (
+        "Pacemaker Nodes:\n"
+        f" Online: {' '.join(online)}\n"
+        " Standby:\n"
+        " Standby with resource(s) running:\n"
+        " Maintenance:\n"
+        f" Offline: {' '.join(offline)}\n"
+    )
+
+
 async def _pcs_nodes_text() -> str:
     code, out, err = await _capture(["pcs", "status", "nodes"])
     if code != 0 or not out.strip():
         _c2, out2, _e2 = await _capture(["crm_node", "-l"])
+        shaped = crm_node_list_as_pcs_nodes(out2)
+        if shaped:
+            return shaped
         return out + "\n" + err + "\n" + out2
     return out
 
@@ -596,15 +635,22 @@ async def wait_drbd_uptodate(*, timeout_sec: int | None = None) -> tuple[bool, l
     """Poll until both DRBD replicas are UpToDate (or timeout)."""
     limit = FAILBACK_TIMEOUT_SEC if timeout_sec is None else timeout_sec
     logs: list[str] = []
-    deadline = asyncio.get_event_loop().time() + limit
+    started = asyncio.get_event_loop().time()
+    deadline = started + limit
     while True:
         st = await gather_status()
         pct = st.get("drbd_sync_percent")
         uptodate = bool(st["drbd_uptodate"])
+        # Elapsed, not just a repeated False. A line that never changes reads
+        # as a hang; the same line with a clock on it reads as progress.
+        waited = int(asyncio.get_event_loop().time() - started)
         if pct is None:
-            logs.append(f"drbd_uptodate={uptodate}")
+            logs.append(f"drbd_uptodate={uptodate} waited={waited}s of {limit}s")
         else:
-            logs.append(f"drbd_uptodate={uptodate} sync={pct:.1f}%")
+            logs.append(
+                f"drbd_uptodate={uptodate} sync={pct:.1f}% "
+                f"waited={waited}s of {limit}s"
+            )
         if uptodate:
             logs.append("DRBD both replicas UpToDate")
             return True, logs
@@ -654,9 +700,10 @@ async def wait_failback_settled(
         vip_node = st.get("vip_node")
         zimbra_node = st.get("zimbra_node")
         dual = bool(st.get("promoted_conflict"))
+        waited = int(asyncio.get_event_loop().time() - (deadline - limit))
         last = (
             f"promoted={promoted} vip_node={vip_node} zimbra_node={zimbra_node} "
-            f"dual_promoted={dual}"
+            f"dual_promoted={dual} waited={waited}s of {limit}s"
         )
         logs.append(last)
         stack_ok = _stack_on_target(st, target)
@@ -892,6 +939,52 @@ async def _observability_snapshot(corosync_txt: str) -> dict[str, Any]:
     )
 
 
+_OPS_HEADER_RE = re.compile(
+    r"^=== (?P<op>enter|exit) (?P<target>\S+) - (?P<stamp>.+?) ===\s*$"
+)
+
+
+def parse_maintenance_provenance(
+    ops_log: str, standby: list[str]
+) -> tuple[str, str]:
+    """When was the standby node put there, and was it this console?
+
+    Returns (since, source). `source` is "console" when the transcript records
+    an enter that was never followed by an exit, and "unknown" when a node is
+    in standby with nothing to account for it.
+
+    The distinction is the whole point. Pacemaker standby survives a reboot, so
+    a node can come back up still in it, and an operator watching that boot has
+    no way to tell a deliberate maintenance from a leftover one - which is
+    exactly the question asked after the 29 Aug 2026 power test. "Entered from
+    this console at 14:02" and "in standby with no record of how" call for
+    completely different responses.
+    """
+    if not standby:
+        return "", ""
+    latest: dict[str, tuple[str, str]] = {}
+    for line in (ops_log or "").splitlines():
+        m = _OPS_HEADER_RE.match(line.strip())
+        if not m:
+            continue
+        latest[m.group("target")] = (m.group("op"), m.group("stamp").strip())
+    for node in standby:
+        op, stamp = latest.get(node, ("", ""))
+        if op == "enter":
+            return stamp, "console"
+    return "", "unknown"
+
+
+def _maintenance_provenance(standby: list[str]) -> tuple[str, str]:
+    if not standby:
+        return "", ""
+    try:
+        text = CLUSTER_OPS_LOG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    return parse_maintenance_provenance(text, standby)
+
+
 async def gather_status() -> dict[str, Any]:
     nodes_text = await _pcs_nodes_text()
     nodes = parse_online_nodes(nodes_text)
@@ -940,11 +1033,27 @@ async def gather_status() -> dict[str, Any]:
         )
     )
 
+    # A node that Pacemaker counts as a member but that DRBD has not given a
+    # role to is still coming up. Without this the console had nowhere to put
+    # the reboot window: such a node was drawn as a plain Unpromoted replica,
+    # which reads as "ready to take over" when it is not ready for anything
+    # yet. vSphere and Nutanix both keep this transitional state separate from
+    # both healthy and failed, and for the same reason.
+    with_role = {n for n in ([promoted] if promoted else []) + list(promoted_names) + list(unpromoted)}
+    rejoining = [
+        n for n in nodes
+        if n not in with_role and n not in standby and n not in offline
+    ]
+    maint_since, maint_source = _maintenance_provenance(standby)
+
     return {
         "local_host": this_hostname(),
         "topology": saved_wizard_topology(),
         "nodes": nodes,
         "standby": standby,
+        "rejoining": rejoining,
+        "maintenance_since": maint_since,
+        "maintenance_source": maint_source,
         "offline": offline,
         "stale_peers": stale_peers,
         "promoted": promoted,
@@ -1236,6 +1345,15 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),
+            # A node that is up but has not been given a DRBD role yet. Drawn
+            # as its own state so a reboot does not read as either healthy or
+            # failed, neither of which it is.
+            "rejoining": st.get("rejoining") or [],
+            # Pacemaker standby survives a reboot. Saying when it was entered,
+            # and whether this console did it, is the difference between "we
+            # did that" and "why is this node in maintenance?".
+            "maintenance_since": st.get("maintenance_since") or "",
+            "maintenance_source": st.get("maintenance_source") or "",
             # Distinct from maintenance_active, which means "a node is in
             # standby". This one means Pacemaker has been told to stop acting
             # on resources cluster-wide, which looks identical to a dead
@@ -1618,8 +1736,10 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
                 return
 
             yield await _emit(
-                f"Waiting for Promoted + VIP + Zimbra on {target} "
-                f"(timeout {FAILBACK_TIMEOUT_SEC}s)"
+                f"Waiting for Promoted + VIP + Zimbra on {target}. "
+                f"This finishes as soon as they land, usually in well under a "
+                f"minute; {FAILBACK_TIMEOUT_SEC}s is the point at which it "
+                f"gives up, not how long it takes."
             )
             settled, settle_logs = await wait_failback_settled(target)
             for line in settle_logs:

@@ -169,6 +169,72 @@ never touches `/opt/zimbra`.
 
 ---
 
+## Fault 2b: an added node has the same problem, and nothing checked it
+
+`Add Host` does not install the new node. It attaches one that was already
+deployed on its own, which means its `zimbra` and `postfix` ids were allocated
+in whatever order that install happened to run - with no reason to match the
+survivor's.
+
+The assertion that catches this lives in `pacemaker_mail_stack`, and
+`mail-add-host.yml` never runs that role. So until 29 Aug 2026 an added node
+could join, report healthy, and fail the first time it was asked to take over -
+the Phase 8 fault exactly, on a path where nothing would have said so.
+
+The console now aligns the ids over SSH before the add-host playbook runs, and
+refuses the whole operation if they cannot be made to agree. Same script, same
+guarantee as the Build HA pair path.
+
+---
+
+## "Why is this node in maintenance?" - it probably is not
+
+Pacemaker **standby is a node attribute stored in the CIB, and it survives a
+reboot**. A node put into standby and never taken out comes back up still in
+standby, which is correct behaviour and reads as inexplicable.
+
+Nothing in the installer, the playbooks, or the OCF agents ever runs
+`pcs node standby`. Only two console operations do: maintenance enter, and the
+drain step of remove-host. So if a node is in standby, one of those put it
+there - or somebody did it by hand.
+
+The Cluster page now says which:
+
+- **"Entered from this console on ..."** - there is a matching record in
+  `/var/log/kin-mail/cluster-ops.log`.
+- **"No record of this console entering maintenance on that node"** - there is
+  not. Treat it as leftover state and exit maintenance to clear it.
+
+A node that is merely powering back on is **Rejoining**, not Maintenance, and
+one that is down is **Unreachable**. Those three are different states and the
+page draws them differently. A fault is never labelled as maintenance - that is
+the same distinction vSphere draws between Maintenance Mode and Not Responding,
+and it exists because the operator response is completely different.
+
+To see it directly:
+
+    crm_mon -1 | sed -n '1,12p'
+    cibadmin --query --scope nodes | grep -A2 standby
+
+---
+
+## "FAILED - RETRYING" is not a failure
+
+Ansible prints that line on every poll of a task that is waiting for something:
+
+    FAILED - RETRYING: [mail]: Wait until kin-fs, kin-vip, and kin-zimbra are
+    Started (90 retries left).
+
+That is a healthy cluster starting up. The console rewrites these as
+
+      waiting   Wait until kin-fs, kin-vip, and kin-zimbra are Started (90 more attempts)
+
+Similarly, the `1200` in a Move Master is the point at which the console gives
+up, not how long the move takes. Each poll line now carries `waited=Ns of
+1200s`, so a wait that is progressing looks different from one that is stuck.
+
+---
+
 ## Fault 3: the node could not rejoin after it went down
 
     pcs cluster start

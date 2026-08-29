@@ -409,6 +409,7 @@ async def cmd_add_observability(
             local_mail_name=local_name,
             force_tls_reinit=True,
             expect_fresh_sbd=True,
+            mail_domain=str(config.get("MAIL_DOMAIN") or ""),
         )
         extra = [
             "-e",

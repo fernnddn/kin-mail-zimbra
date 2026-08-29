@@ -17,6 +17,7 @@ from typing import Any, AsyncIterator
 
 from . import protocol as proto
 from .apply_config import update_config_keys
+from .license_sync import push_license_to_peer
 from .commands import resolve_under_deploy
 from .deploy_state import (
     ensure_server_id,
@@ -184,7 +185,21 @@ async def _set_seats(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     code, lines = update_config_keys({"CONTRACTED_SEATS": raw})
     for line in lines:
         yield _emit(line, err=code != 0)
-    yield proto.event_done(code)
+    if code != 0:
+        yield proto.event_done(code)
+        return
+    ok, sync_lines = await push_license_to_peer(seats=raw, token="", server_id=sid)
+    for line in sync_lines:
+        yield _emit(line, err=not ok)
+    if not ok:
+        yield _emit(
+            "The seat count is set on this node. Re-apply it once the other "
+            "node is reachable so the pair agrees.",
+            err=True,
+        )
+        yield proto.event_done(3)
+        return
+    yield proto.event_done(0)
 
 
 async def _set_ad(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
@@ -408,7 +423,26 @@ async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         yield proto.event_done(code)
         return
     write_license_token(token)
+
+    # An HA pair is one licensed appliance. Until this ran, applying a key here
+    # left the other node unlicensed, and which one answered depended on where
+    # the VIP was pointing.
+    ok, sync_lines = await push_license_to_peer(
+        seats=str(verified["seats"]), token=token, server_id=sid
+    )
+    for line in sync_lines:
+        yield _emit(line, err=not ok)
     yield _emit("LICENSE_JSON:" + json.dumps(verified))
+    if not ok:
+        # The local node is licensed correctly, so this is not a failure of the
+        # apply; it is a pair that now disagrees, and saying so is the point.
+        yield _emit(
+            "The license is active on this node. Re-apply it once the other "
+            "node is reachable so the pair agrees.",
+            err=True,
+        )
+        yield proto.event_done(3)
+        return
     yield proto.event_done(0)
 
 

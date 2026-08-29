@@ -554,6 +554,32 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
                 "ANSIBLE_RETRY_FILES_ENABLED": "False",
                 "ANSIBLE_LOCAL_TEMP": str(WORK_DIR / ".ansible" / "tmp"),
             }
+            # The new node arrives already deployed, so its zimbra/postfix ids
+            # were allocated by its own install and have no reason to match
+            # this one's. /opt/zimbra replicates ownership as numbers: unless
+            # they agree, the node joins, looks healthy, and cannot run Zimbra
+            # the first time it is asked to. Nothing on this path checked it -
+            # the assert added after 29 Aug 2026 lives in pacemaker_mail_stack,
+            # which mail-add-host.yml does not run.
+            from .orchestration import align_peer_service_ids
+
+            ids_ok, id_lines = await align_peer_service_ids(
+                OrchHost(plan.new_name, plan.new_ip, "mail2"),
+                ssh_user,
+                ssh_pass,
+                secrets,
+            )
+            for line in id_lines:
+                yield await _emit(line, err=not ids_ok)
+            if not ids_ok:
+                yield await _emit(
+                    "Refusing to add a node that cannot run Zimbra off the "
+                    "replicated volume. Nothing was changed on the cluster.",
+                    err=True,
+                )
+                yield proto.event_done(1)
+                return
+
             argv = [ansible_playbook, "-i", str(inv_path), str(play)]
             yield await _emit(
                 f"ansible-playbook mail-add-host.yml new={plan.new_name} survivor={plan.survivor_name}"

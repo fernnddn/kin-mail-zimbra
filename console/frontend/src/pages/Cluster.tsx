@@ -51,6 +51,9 @@ type ClusterSnap = {
   failcount_ok?: boolean;
   maintenance_active?: boolean;
   maintenance_mode?: boolean;
+  maintenance_since?: string;
+  maintenance_source?: string;
+  rejoining?: string[];
   bans?: ClusterBan[];
   offline?: string[];
   stale_peers?: string[];
@@ -399,9 +402,11 @@ const CardHint = styled.p`
   line-height: 1.45;
 `;
 
+// Opacity, not drop-shadow. This runs forever while anything is not OK, and
+// an animated filter repaints the element on every frame of that.
 const gaugePulse = keyframes`
-  0%, 100% { filter: drop-shadow(0 0 0 rgba(217, 119, 6, 0)); }
-  50% { filter: drop-shadow(0 0 6px rgba(217, 119, 6, 0.4)); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.68; }
 `;
 
 const fadeIn = keyframes`
@@ -1709,6 +1714,7 @@ export default function ClusterPage() {
     vip: cluster.vip_node === name ? cluster.vip_ip || undefined : undefined,
   }));
   const standby = new Set(cluster.standby || []);
+  const rejoining = new Set(cluster.rejoining || []);
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
   const lines = healthLines(cluster);
   const clusterOk = loaded && lines.every((l) => l.ok);
@@ -1732,20 +1738,29 @@ export default function ClusterPage() {
       !cluster.promoted_conflict &&
       !cluster.maintenance_active &&
       Boolean(cluster.qdevice_ok);
+    // Four distinct states, and a power cycle must never land in the
+    // maintenance one. Maintenance is something an operator chose; Rejoining
+    // is a node on its way back; Unreachable is a fault. Collapsing the middle
+    // one into either of its neighbours is what made a reboot unreadable.
+    const isRejoining = rejoining.has(node) && !isStandby && !isOffline;
     const statusTone: "ok" | "idle" | "warn" = isOffline
       ? "warn"
       : isStandby
         ? "warn"
-        : isPromoted
-          ? "ok"
-          : "idle";
+        : isRejoining
+          ? "idle"
+          : isPromoted
+            ? "ok"
+            : "idle";
     const statusLabel = isOffline
       ? "Unreachable"
       : isStandby
         ? "Maintenance"
-        : isPromoted
-          ? "Promoted"
-          : "Unpromoted";
+        : isRejoining
+          ? "Rejoining"
+          : isPromoted
+            ? "Promoted"
+            : "Unpromoted";
     return (
       <NodeCard key={node}>
         <NodeHead>
@@ -1910,8 +1925,21 @@ export default function ClusterPage() {
         ) : null}
         {cluster.maintenance_active ? (
           <WarnBox>
-            A node is in maintenance ({(cluster.standby || []).join(", ") || "unknown"}). Deploy
-            and mailbox create stay blocked until you exit.
+            {(cluster.standby || []).join(", ") || "A node"} is in maintenance.
+            Deploy and mailbox create stay blocked until you exit.{" "}
+            {cluster.maintenance_source === "console" ? (
+              <>Entered from this console on {cluster.maintenance_since}.</>
+            ) : (
+              <>
+                <strong>
+                  There is no record of this console entering maintenance on
+                  that node.
+                </strong>{" "}
+                Pacemaker standby survives a reboot, so this is either a
+                leftover from an earlier session or it was set outside the
+                console. Exit maintenance to clear it.
+              </>
+            )}
           </WarnBox>
         ) : null}
         {/* Both of these stop Pacemaker acting while reporting no failure at

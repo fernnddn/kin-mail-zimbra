@@ -278,3 +278,54 @@ class ObservabilityLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReplacementIsNamedTests(unittest.TestCase):
+    """Remove then Add must leave the same estate you started with.
+
+    The first Observability VM keeps its image hostname unless something
+    renames it; that was fixed for the initial deploy on 29 Aug 2026 but the
+    rebuild path did not include the role at all, so a replacement would have
+    come back called `ubuntu` while the console still showed `observability`.
+    """
+
+    def test_the_inventory_names_the_replacement_host(self) -> None:
+        inv = render_observability_inventory(
+            mail_hosts=[("mail.example.test", "192.0.2.1", "a")],
+            obs_name="obs-192-0-2-5",
+            obs_ip="192.0.2.5",
+            mail_domain="example.test",
+        )
+        self.assertIn('observability_hostname: "observability.example.test"', inv)
+
+    def test_no_domain_means_no_invented_name(self) -> None:
+        inv = render_observability_inventory(
+            mail_hosts=[("mail.example.test", "192.0.2.1", "a")],
+            obs_name="obs-192-0-2-5",
+            obs_ip="192.0.2.5",
+        )
+        self.assertNotIn("observability_hostname", inv)
+
+    def test_the_rebuild_playbook_runs_the_identity_role(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        play = (
+            repo / "ansible/playbooks/mail-add-observability.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("observability_identity", play)
+        # It has to run before qnetd: the TLS identity and the corosync config
+        # should be written by a host that already knows its own name.
+        self.assertLess(
+            play.index("observability_identity"), play.index("corosync_qnetd")
+        )
+
+    def test_add_passes_the_domain_through(self) -> None:
+        from pathlib import Path
+
+        ops = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper/observability_ops.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("mail_domain=str(config.get(\"MAIL_DOMAIN\")", ops)
+

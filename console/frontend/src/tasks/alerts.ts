@@ -61,6 +61,8 @@ export type AlertSnap = {
   failcount_ok?: boolean;
   maintenance_active?: boolean;
   maintenance_mode?: boolean;
+  maintenance_since?: string;
+  maintenance_source?: string;
   bans?: { resource?: string; node?: string; role?: string }[];
   quorum_hint?: string;
   no_quorum_policy?: string;
@@ -156,10 +158,16 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
   }
 
   if (cluster.maintenance_active) {
+    const who = (cluster.standby || []).join(", ");
+    // Standby survives a reboot, so "in maintenance" on its own leaves the
+    // operator unable to tell a deliberate one from a leftover.
     out.push({
       id: "maintenance",
-      title: "A node is in maintenance",
-      detail: (cluster.standby || []).join(", ") || undefined,
+      title: who ? `${who} is in maintenance` : "A node is in maintenance",
+      detail:
+        cluster.maintenance_source === "console"
+          ? `Entered from this console on ${cluster.maintenance_since}.`
+          : "No record of this console entering it. Exit maintenance to clear it.",
       severity: "warn",
     });
   }

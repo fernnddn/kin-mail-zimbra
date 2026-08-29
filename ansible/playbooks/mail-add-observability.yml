@@ -8,6 +8,12 @@
   gather_facts: true
   become: true
   roles:
+    # A replacement VM arrives with whatever hostname its image shipped with,
+    # exactly like the first one did. Renaming it here means Remove then Add
+    # leaves the same estate you started with, rather than one arbitration host
+    # called `observability` and its replacement called `ubuntu`.
+    - role: observability_identity
+      tags: [observability, add, identity]
     - role: corosync_qnetd
       tags: [observability, add, qnetd]
     - role: iscsi_target

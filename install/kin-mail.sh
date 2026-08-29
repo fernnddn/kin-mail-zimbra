@@ -163,11 +163,10 @@ load_install_config() {
 run_stage() {
   local script="$1"
   shift || true
+  # One line, flush left. The rules above and below cost three lines per stage
+  # and told the reader nothing the stage name did not already say.
   echo
-  hr
-  say "Running ${script}${*:+ ($*)}"
-  hr
-  echo
+  say "${script}${*:+ ($*)}"
   if [ "$DRY_RUN" = "1" ]; then
     info "DRY_RUN=1 - would execute: ./${script} $*"
     ok "${script} skipped (dry-run)"

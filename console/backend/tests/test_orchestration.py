@@ -2095,12 +2095,50 @@ class PeerServiceIdTests(unittest.TestCase):
         # the path where they are guaranteed to be wrong.
         skip = orch.index('"(skip_remote_install=1) - OS prep + Zimbra')
         after = orch[skip : skip + 2500]
-        self.assertIn("align-service-ids.sh", after)
+        self.assertIn("align_peer_service_ids", after)
         # And it must stop the build rather than carry on with a peer whose
         # numbers are wrong.
         self.assertIn("failed_step = step.step_id", after)
         # A dry run must not renumber accounts on a host.
         self.assertIn('join_mode != "check"', after)
+
+    def test_the_shared_aligner_runs_the_script_and_pins_the_ids(self) -> None:
+        import inspect
+
+        from kin_privhelper.orchestration import align_peer_service_ids
+
+        src = inspect.getsource(align_peer_service_ids)
+        self.assertIn("align-service-ids.sh", src)
+        self.assertIn("local_service_id_env()", src)
+        # A non-zero exit means the ids still disagree; it must not be ignored.
+        self.assertIn("return False, lines", src)
+
+    def test_add_host_aligns_before_it_joins_anything(self) -> None:
+        import inspect
+
+        from kin_privhelper.add_host import cmd_add_host
+
+        src = inspect.getsource(cmd_add_host)
+        # mail-add-host.yml never runs pacemaker_mail_stack, so the assertion
+        # that catches diverged ids on the Build HA pair path does not exist
+        # here. Without this call an added node joins, looks healthy, and
+        # cannot run Zimbra the first time it is asked to.
+        self.assertIn("align_peer_service_ids", src)
+        self.assertLess(
+            src.index("align_peer_service_ids"),
+            src.index("mail-add-host.yml new="),
+        )
+
+    def test_add_host_refuses_rather_than_joining_a_mismatched_node(self) -> None:
+        import inspect
+
+        from kin_privhelper.add_host import cmd_add_host
+
+        src = inspect.getsource(cmd_add_host)
+        head = src.index("align_peer_service_ids")
+        window = src[head : head + 1200]
+        self.assertIn("if not ids_ok:", window)
+        self.assertIn("Nothing was changed on the cluster.", window)
 
     def test_the_aligner_runs_standalone_for_that_repair(self) -> None:
         from pathlib import Path

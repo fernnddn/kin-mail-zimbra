@@ -640,6 +640,7 @@ async def _stream_redacted(
     stdin_text: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     from .commands import _stream_subprocess
+    from .log_format import tidy_ansible_text
 
     async for ev in _stream_subprocess(
         argv,
@@ -649,6 +650,10 @@ async def _stream_redacted(
         transcript_reset=False,
         secrets=secrets,
         stdin_text=stdin_text,
+        # Applied once, before the line is both teed to the transcript and sent
+        # to the browser, so the deploy log the operator reads afterwards is the
+        # same text they watched go by.
+        line_filter=tidy_ansible_text,
     ):
         if ev.get("type") in ("stdout", "stderr") and ev.get("data"):
             ev = dict(ev)
@@ -1769,6 +1774,55 @@ async def sync_peer_ha_console_state(
     return True, notes
 
 
+async def align_peer_service_ids(
+    host: OrchHost,
+    user: str,
+    password: str,
+    secrets: list[str],
+) -> tuple[bool, list[str]]:
+    """Make the other node's zimbra/postfix ids match this one's.
+
+    /opt/zimbra is replicated by DRBD and its ownership is numeric, so a node
+    whose `zimbra` is a different uid cannot start Zimbra off that volume at
+    all. Build HA pair pins the ids through the peer's own install. Add Host
+    does not install anything - the node arrives already deployed, with ids
+    allocated in whatever order its own install happened to run - so without
+    this it inherits exactly the divergence that stopped the 29 Aug 2026
+    deployment, and nothing on the add-host path would have noticed.
+
+    The script aligns and then verifies, so a zero exit means the ids agree.
+    """
+    id_env = local_service_id_env()
+    lines = list(describe_service_ids(id_env))
+    if not id_env:
+        return True, lines
+    code, text = await _ssh_run(
+        host,
+        user,
+        password,
+        secrets,
+        wrap_privileged_remote(
+            "env "
+            + " ".join(f"{k}={v}" for k, v in sorted(id_env.items()))
+            + " bash /opt/kin-mail-deploy/install/lib/align-service-ids.sh"
+        ),
+        timeout=600,
+        stdin_text=password,
+    )
+    for line in text.splitlines():
+        if line.strip():
+            lines.append(f"peer ids: {line.rstrip()}")
+    if code != 0:
+        lines.append(
+            "Could not make the other node's service account ids match this "
+            "one. Zimbra cannot start on a node whose numbers disagree with "
+            "the replicated volume. See HA-FAILOVER-TROUBLESHOOTING.md, "
+            "Fault 2."
+        )
+        return False, lines
+    return True, lines
+
+
 async def _push_peer_identity_files(
     host: OrchHost,
     user: str,
@@ -2505,36 +2559,15 @@ async def cmd_run_ha_orchestration(
             # during the first failover.
             # Never in check mode: a dry run does not renumber accounts on a
             # host, and this one is not even a cluster member yet.
-            id_env = local_service_id_env() if join_mode != "check" else {}
-            if id_env:
-                for line in describe_service_ids(id_env):
-                    yield emit_line(line)
-                align_code, align_text = await _ssh_run(
-                    peer,
-                    ssh_user,
-                    ssh_pass,
-                    secrets,
-                    wrap_privileged_remote(
-                        "env "
-                        + " ".join(f"{k}={v}" for k, v in sorted(id_env.items()))
-                        + " bash /opt/kin-mail-deploy/install/lib/align-service-ids.sh"
-                    ),
-                    timeout=600,
-                    stdin_text=ssh_pass,
+            if join_mode != "check":
+                ids_ok, id_lines = await align_peer_service_ids(
+                    peer, ssh_user, ssh_pass, secrets
                 )
-                for line in align_text.splitlines():
-                    if line.strip():
-                        yield emit_line(f"peer ids: {line.rstrip()}")
-                if align_code != 0:
-                    yield emit_line(
-                        "Could not align the peer's service account ids with this "
-                        "node. Zimbra cannot start on a node whose numbers "
-                        "disagree with the replicated volume, so the pair is not "
-                        "built. See HA-FAILOVER-TROUBLESHOOTING.md, Fault 1.",
-                        err=True,
-                    )
+                for line in id_lines:
+                    yield emit_line(line, err=not ids_ok)
+                if not ids_ok:
                     failed_step = step.step_id
-                    exit_code = align_code
+                    exit_code = 1
                     yield emit_line(
                         f"[{index}/{total}] FAIL {step.step_id} exit={exit_code}; "
                         "stopping. No auto-retry, no auto-rollback.",

@@ -165,6 +165,7 @@ def render_observability_inventory(
     force_tls_reinit: bool = False,
     expect_fresh_sbd: bool = False,
     include_observability_host: bool = True,
+    mail_domain: str = "",
 ) -> str:
     """YAML inventory with env-lookup passwords. Never embed secret values.
 
@@ -189,8 +190,14 @@ def render_observability_inventory(
         f"    corosync_qdevice_force_tls_reinit: {str(bool(force_tls_reinit)).lower()}",
         f"    observability_expect_fresh_sbd: {str(bool(expect_fresh_sbd)).lower()}",
         '    kin_mail_deploy_dir: "' + kin_mail_deploy_dir() + '"',
-        "  children:",
     ]
+    # The replacement VM has to be renamed like the original was. The identity
+    # role normally derives the domain from the mail service hostname, which is
+    # a mail-stack variable and is not in scope here, so name it outright.
+    domain = (mail_domain or "").strip().lstrip(".")
+    if domain:
+        lines.append(f'    observability_hostname: "observability.{domain}"')
+    lines.append("  children:")
     if include_observability_host:
         lines.extend(
             [

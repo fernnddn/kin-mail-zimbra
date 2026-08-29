@@ -328,6 +328,7 @@ async def _stream_subprocess(
     follow_poll_s: float = 0.2,
     file_backed: bool = False,
     stdin_text: str | None = None,
+    line_filter: Callable[[str], str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "PYTHONUNBUFFERED": "1"}
     if extra_env:
@@ -339,10 +340,13 @@ async def _stream_subprocess(
         try:
             transcript.parent.mkdir(parents=True, exist_ok=True)
             log_fh = transcript.open("w" if transcript_reset else "a", encoding="utf-8")
-            header_cmd = _redact_secrets(" ".join(argv), secrets)
-            log_fh.write(
-                f"\n=== {header_cmd} @ {datetime.now(timezone.utc).isoformat()} ===\n"
+            from .log_format import format_command_banner
+
+            header_cmd = _redact_secrets(
+                format_command_banner(argv, datetime.now(timezone.utc).isoformat()),
+                secrets,
             )
+            log_fh.write(f"\n{header_cmd}\n")
             log_fh.flush()
             try:
                 os.chmod(transcript, 0o640)
@@ -479,6 +483,8 @@ async def _stream_subprocess(
                 break
             kind, text = item
             text = _redact_secrets(text, secrets)
+            if line_filter is not None:
+                text = line_filter(text)
             if kind == "tee_only":
                 _tee(text)
                 continue

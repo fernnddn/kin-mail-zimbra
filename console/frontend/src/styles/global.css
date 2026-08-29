@@ -71,16 +71,18 @@ code {
   }
 }
 
+/* Opacity and transform only: both are composited, so this runs on the GPU
+   without repainting. It used to animate `filter: blur()` across the whole
+   page container - up to 1680px wide - which forces a full repaint every
+   frame and is what made navigation stutter on a modest VM. */
 @keyframes kin-page-in {
   from {
     opacity: 0;
     transform: scale(0.97);
-    filter: blur(2px);
   }
   to {
     opacity: 1;
     transform: scale(1);
-    filter: blur(0);
   }
 }
 
@@ -116,4 +118,19 @@ code {
 
 .kin-focus-flash {
   animation: kin-focus-flash 1.6s ease-in-out 2;
+}
+
+/* Respect the system setting. Some people get motion sickness from this kind
+   of movement, and on a slow remote session every animation reads as a glitch
+   whether or not it is one. Transitions are reduced to near-zero rather than
+   removed so state changes still register as changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
