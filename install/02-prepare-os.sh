@@ -158,11 +158,31 @@ case "${VERSION_ID:-}" in
   24.04) PERL_LIB=libperl5.38 ;;
   *)     PERL_LIB=libperl5.34 ;;
 esac
-apt-get -y install \
+if apt-get -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
-  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup >/dev/null 2>&1
-ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
+  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup
+then
+  ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
+else
+  warn "Some Zimbra dependency packages did not install; dnsmasq is still required"
+fi
+
+# A missing optional package used to fail the whole apt-get (stderr swallowed),
+# so dnsmasq never landed, /etc/dnsmasq.d did not exist, and this stage died
+# after systemd-resolved was already off (live Host A, 29 Aug 2026).
+if ! dpkg -s dnsmasq >/dev/null 2>&1; then
+  apt-get -qq update
+  if ! apt-get -y install dnsmasq; then
+    fail "dnsmasq package failed to install"
+    exit 1
+  fi
+fi
+if ! command -v dnsmasq >/dev/null 2>&1; then
+  fail "dnsmasq is not installed"
+  exit 1
+fi
+ok "dnsmasq package is installed"
 
 # --- 4. local resolver -------------------------------------------------------
 # Two traps live here:
@@ -170,8 +190,10 @@ ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
 #  - zimbra-mta-components installs 'resolvconf', which reclaims the file
 #    mid-install and points it back at the systemd-resolved stub. Driving
 #    resolvconf's head file is what survives that.
+# Install + write conf BEFORE disabling systemd-resolved so a failed start
+# does not leave the host with no resolver.
 say "4. Local resolver (dnsmasq)"
-systemctl disable --now systemd-resolved >/dev/null 2>&1 || true
+mkdir -p /etc/dnsmasq.d
 
 cat > /etc/dnsmasq.d/kin-mail.conf <<EOF
 # KIN Mail - split-horizon resolver for the mail host
@@ -221,6 +243,9 @@ RestartSec=3
 EOF
 systemctl daemon-reload
 
+# Port 53: stop the stub resolver only after dnsmasq is installed and configured.
+systemctl disable --now systemd-resolved >/dev/null 2>&1 || true
+
 systemctl enable dnsmasq >/dev/null 2>&1
 systemctl restart dnsmasq
 sleep 2
@@ -228,7 +253,13 @@ sleep 2
 if [ "$(systemctl is-active dnsmasq)" = "active" ]; then
   ok "dnsmasq active"
 else
-  fail "dnsmasq failed to start"; exit 1
+  journalctl -u dnsmasq -n 40 --no-pager >&2 || true
+  warn "Restoring upstream DNS so this stage can be retried"
+  printf 'nameserver %s\nnameserver %s\n' \
+    "${DNS_UPSTREAM_1:-1.1.1.1}" "${DNS_UPSTREAM_2:-8.8.8.8}" > /etc/resolv.conf.kin-retry
+  ln -sf /etc/resolv.conf.kin-retry /etc/resolv.conf
+  fail "dnsmasq failed to start"
+  exit 1
 fi
 
 a=$(dig +short +time=4 A "$MAIL_HOST" 2>/dev/null | head -1)

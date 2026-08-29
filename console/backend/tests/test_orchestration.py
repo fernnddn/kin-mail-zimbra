@@ -2101,6 +2101,27 @@ class BaseImagePatchingTests(unittest.TestCase):
         )
         self.assertIn("reboot-required", prepare)
 
+    def test_dnsmasq_is_installed_and_conf_dir_exists_before_resolved_is_off(self) -> None:
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[3]
+        prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
+        self.assertIn("mkdir -p /etc/dnsmasq.d", prepare)
+        self.assertIn("apt-get -y install dnsmasq", prepare)
+        self.assertLess(
+            prepare.index("mkdir -p /etc/dnsmasq.d"),
+            prepare.index("cat > /etc/dnsmasq.d/kin-mail.conf"),
+        )
+        self.assertLess(
+            prepare.index("apt-get -y install dnsmasq"),
+            prepare.index("disable --now systemd-resolved"),
+        )
+        self.assertLess(
+            prepare.index("cat > /etc/dnsmasq.d/kin-mail.conf"),
+            prepare.index("disable --now systemd-resolved"),
+        )
+        self.assertIn("resolv.conf.kin-retry", prepare)
+
 
 class ObservabilityIdentityTests(unittest.TestCase):
     def test_the_observability_vm_is_given_a_name(self) -> None:
