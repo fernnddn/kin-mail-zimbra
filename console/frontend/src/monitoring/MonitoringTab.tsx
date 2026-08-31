@@ -43,6 +43,7 @@ type SeriesBatchResp = {
 };
 
 const RANGE_LABELS: Record<string, string> = {
+  now: "Now (live)",
   "1h": "1 hour",
   "6h": "6 hours",
   "24h": "24 hours",
@@ -488,8 +489,8 @@ function Chart({ data }: { data: SeriesResp }) {
 }
 
 export function MonitoringTab() {
-  const [range, setRange] = useState("6h");
-  const [ranges, setRanges] = useState<string[]>(["1h", "6h", "24h", "7d", "30d", "1y"]);
+  const [range, setRange] = useState("1h");
+  const [ranges, setRanges] = useState<string[]>(["now", "1h", "6h", "24h", "7d", "30d", "1y"]);
   const [charts, setCharts] = useState<SeriesResp[]>([]);
   const [host, setHost] = useState<HostFacts | null>(null);
   const [loading, setLoading] = useState(true);
@@ -522,7 +523,7 @@ export function MonitoringTab() {
       .then((res) => {
         if (!alive.current) return;
         if (res.ranges?.length) setRanges(res.ranges);
-        if (res.default_range) setRange((r) => (r === "6h" ? res.default_range : r));
+        if (res.default_range) setRange((r) => (r === "1h" ? res.default_range : r));
       })
       .catch(() => undefined);
   }, []);
@@ -567,13 +568,17 @@ export function MonitoringTab() {
     // Short windows are live; a year of history does not need re-fetching often.
     // When there is no Prometheus at all, back right off: polling every 30s
     // fires a dozen failing requests a minute for as long as the tab is open.
+    // "Now" is a live view: refresh on the same cadence as its step so the
+    // trace actually moves while you watch it.
     const period = unavailable
       ? 300000
-      : range === "1h"
-        ? 30000
-        : range === "6h"
-          ? 60000
-          : 300000;
+      : range === "now"
+        ? 10000
+        : range === "1h"
+          ? 30000
+          : range === "6h"
+            ? 60000
+            : 300000;
     const id = window.setInterval(() => void load(range), period);
     return () => window.clearInterval(id);
   }, [range, load, unavailable]);

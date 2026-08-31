@@ -857,9 +857,22 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
       </IconChip>
       <OverviewBody>
         <OverviewLabel>Topology</OverviewLabel>
-        <OverviewValue>{topology === "2vm" ? "2-node HA pair" : "Single server"}</OverviewValue>
+        {/* "2-node HA pair" above "1 mail node configured" is a contradiction,
+            and it is what a half-finished Remove Host leaves on the page. Say
+            the state instead: configured for two, only one present. */}
+        <OverviewValue>
+          {topology !== "2vm"
+            ? "Single server"
+            : nodeCount === 1
+              ? "HA pair, one node"
+              : "2-node HA pair"}
+        </OverviewValue>
         <OverviewSub>
-          {topology === "2vm" ? `${nodeCount} mail node${nodeCount === 1 ? "" : "s"} configured` : cluster.local_host || "-"}
+          {topology !== "2vm"
+            ? cluster.local_host || "-"
+            : nodeCount === 1
+              ? "Configured for two; only this node is in the cluster"
+              : `${nodeCount} mail nodes configured`}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -949,21 +962,43 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
 
   const pct = cluster.drbd_sync_percent;
   const uptodate = Boolean(cluster.drbd_uptodate);
-  const replTone: StatusTone = uptodate ? "ok" : typeof pct === "number" ? "warn" : "muted";
+  // A dead link is a fact, not an absence of data. The card used to say
+  // "Unknown / No live sync data" directly beside a red banner saying
+  // replication was down, which reads as the page contradicting itself.
+  const linkDown = cluster.drbd_link === "down";
+  const replTone: StatusTone = linkDown
+    ? "warn"
+    : uptodate
+      ? "ok"
+      : typeof pct === "number"
+        ? "warn"
+        : "muted";
   cards.push(
     <OverviewCard key="replication" $tone={replTone}>
-      <ReplicationGauge percent={typeof pct === "number" ? pct : uptodate ? 100 : 0} ok={uptodate} unknown={!uptodate && typeof pct !== "number"} />
+      <ReplicationGauge
+        percent={typeof pct === "number" ? pct : uptodate && !linkDown ? 100 : 0}
+        ok={uptodate && !linkDown}
+        unknown={!linkDown && !uptodate && typeof pct !== "number"}
+      />
       <OverviewBody>
         <OverviewLabel>DRBD Replication</OverviewLabel>
         <OverviewValue>
-          {uptodate ? "UpToDate" : typeof pct === "number" ? `${pct.toFixed(0)}% synced` : "Unknown"}
+          {linkDown
+            ? "Link down"
+            : uptodate
+              ? "UpToDate"
+              : typeof pct === "number"
+                ? `${pct.toFixed(0)}% synced`
+                : "Unknown"}
         </OverviewValue>
         <OverviewSub $tone={replTone}>
-          {uptodate
-            ? "Both replicas in sync"
-            : typeof pct === "number"
-              ? "Resync in progress - normal after Build HA or rejoin"
-              : "No live sync data"}
+          {linkDown
+            ? "Nothing is being copied to the other node"
+            : uptodate
+              ? "Both replicas in sync"
+              : typeof pct === "number"
+                ? "Resync in progress - normal after Build HA or rejoin"
+                : "No live sync data"}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
@@ -1922,6 +1957,26 @@ export default function ClusterPage() {
               it needs.</>
             ) : null}{" "}
             {cluster.quorum_hint}
+          </WarnBox>
+        ) : null}
+        {/* Remove Host takes the peer out of Corosync first and demotes this
+            node's topology last. If it stops in between, the survivor is a
+            single node still calling itself a pair: Add Host will not offer
+            itself (it needs 1vm) and the operator is left with no way forward
+            on the page. Say what to do (live, 31 Aug 2026). */}
+        {topology === "2vm" &&
+        uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers).length === 1 ? (
+          <WarnBox>
+            <strong>
+              This node is configured as one of a pair, but no second node is in
+              the cluster.
+            </strong>{" "}
+            Either Remove Host stopped before it finished, or the peer was taken
+            out by hand. Mail here is unaffected. Run <strong>Remove Host</strong>{" "}
+            once more against the retired node to finish tidying up: the cluster
+            steps are already done and safe to repeat, and it is the demote to a
+            single-server appliance that is missing. Once that completes, the
+            option to add a replacement node appears here.
           </WarnBox>
         ) : null}
         {cluster.drbd_link === "down" ? (

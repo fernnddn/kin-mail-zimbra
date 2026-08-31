@@ -266,6 +266,45 @@ To see it directly:
 
 ---
 
+## Remove Host stopped, and now there is nothing to click
+
+Remove Host takes the retired node out of Corosync first and demotes this node
+to a single-server appliance last. If it stops in between, the survivor is one
+node still calling itself a pair: `Add host` will not offer itself, because it
+requires TOPOLOGY=1vm.
+
+The Cluster page now says so, and the answer is to **run Remove Host again**
+against the same retired node. Every cluster step is idempotent and already
+done; the demote is what is missing. The configured peer name is still in
+`/etc/kin-mail/config`, which is why the retired node is still a valid target
+even though Pacemaker has never heard of it.
+
+To confirm the state by hand:
+
+    pcs status nodes
+    grep -E 'TOPOLOGY|PEER_HOST' /etc/kin-mail/config
+
+One node listed, `TOPOLOGY="2vm"`, `PEER_HOST_NAME` still set: that is the
+half-finished state, and re-running finishes it.
+
+### Why it stopped there on 31 Aug 2026
+
+The role rewrote the DRBD resource to name only the survivor, and kept the
+`net{}` section while doing it. drbdadm will not parse that:
+
+    /etc/drbd.d/kin-zimbra.res:5: in resource kin-zimbra:
+        Missing section 'on <PEER> { ... }'.
+    resource kin-zimbra: cannot configure network without knowing my peer.
+
+Network settings belong to a connection, and a one-host resource has none. The
+template no longer writes `net`, `protocol` or `address`; they come back when a
+replacement node is added. The previous file is kept at
+`kin-zimbra.res.removehost.bak`, and `drbdadm adjust` failing is no longer
+fatal: what is checked afterwards is whether this node is still Primary on its
+own data, because a bookkeeping step must never be the reason mail stops.
+
+---
+
 ## "Could not get lock /var/lib/dpkg/lock-frontend"
 
     E: Could not get lock /var/lib/dpkg/lock-frontend.

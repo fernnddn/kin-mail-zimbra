@@ -138,7 +138,7 @@ async def push_license_to_peer(
     the whole appliance.
     """
     from .console_users_sync import _ssh_session
-    from .orchestration import _push_peer_text_file, _ssh_run
+    from .orchestration import _iqn_suffix, _push_peer_text_file, _ssh_run
 
     lines: list[str] = []
     plan = await resolve_peer()
@@ -147,7 +147,13 @@ async def push_license_to_peer(
     if plan["action"] == "refuse":
         return False, [str(plan["error"])]
 
-    host = OrchHost(name=plan["peer_name"] or plan["peer_ip"], ip=plan["peer_ip"])
+    # OrchHost carries three fields. Passing two raised
+    # "OrchHost.__init__() missing 1 required positional argument: 'iqn_suffix'"
+    # on every license apply on a pair, because nothing in the tests ever
+    # built one - they covered the pure planning functions and the wiring, and
+    # stopped exactly where the I/O began.
+    peer_label = plan["peer_name"] or plan["peer_ip"]
+    host = OrchHost(peer_label, plan["peer_ip"], _iqn_suffix(peer_label))
     label = plan["peer_name"] or plan["peer_ip"]
     try:
         user, password, secrets = await _ssh_session(host)

@@ -1159,7 +1159,17 @@ async def gather_status() -> dict[str, Any]:
         "drbd_sync_percent": drbd_sync_percent(drbd),
         # Both disks can read UpToDate while the link between them is dead.
         # Without this the console called that healthy.
-        "drbd_link": drbd_link_state(drbd),
+        #
+        # Only meaningful when a second node is supposed to exist. After Remove
+        # Host there is nothing to replicate to, and reporting "replication is
+        # down" on a healthy single-node appliance is a red banner that can
+        # never be cleared (seen live, 31 Aug 2026). A peer that is merely
+        # switched off still counts: it appears in offline or stale_peers.
+        "drbd_link": (
+            drbd_link_state(drbd)
+            if len(set(nodes) | set(offline) | set(stale_peers)) > 1
+            else ""
+        ),
         "qdevice_ok": qdevice_voting(quorum),
         "quorate": quorate,
         "votes_total": votes_total,
@@ -1878,11 +1888,37 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
                         yield await _emit(out_clr)
                     if err_clr:
                         yield await _emit(err_clr, err=True)
-                    if c_clr == 0 and hosts_match(
-                        str((await gather_status()).get("promoted") or ""), target
-                    ):
+                    # Re-read the whole stack, not just `promoted`. Clearing a
+                    # ban makes Pacemaker recompute placement, and for a moment
+                    # `promoted` can read empty or stale while the transition
+                    # runs. Judging the move on that one field reported a
+                    # completed Move Master as FAILED, then fell through to the
+                    # failure branch and told the operator the Master had not
+                    # moved - while it was sitting on the target (live, 31 Aug
+                    # 2026). Give the transition a few polls to land.
+                    st_after = await gather_status()
+                    for _ in range(6):
+                        if c_clr != 0 or _stack_on_target(st_after, target):
+                            break
+                        await asyncio.sleep(FAILBACK_POLL_SEC)
+                        st_after = await gather_status()
+                    if c_clr == 0 and _stack_on_target(st_after, target):
                         yield await _emit(f"Master move to {target} complete (recovered)")
                         yield proto.event_done(0)
+                        return
+                    if c_clr == 0:
+                        # The stack was on the target a moment ago and is not
+                        # now. Say that, rather than "the Master was not moved",
+                        # which is a different and wrong story.
+                        yield await _emit(
+                            f"The stack reached {target} but did not stay there "
+                            f"(promoted={st_after.get('promoted')} "
+                            f"vip_node={st_after.get('vip_node')} "
+                            f"zimbra_node={st_after.get('zimbra_node')}). "
+                            "The temporary ban has been cleared.",
+                            err=True,
+                        )
+                        yield proto.event_done(1)
                         return
                 # The move failed and the stack is not on the target, so the
                 # ban we placed is now pointing -INFINITY at the node that was

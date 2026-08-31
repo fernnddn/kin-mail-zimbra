@@ -55,7 +55,51 @@
       (rebuild meta is /dev/sdb2, not /dev/loop21).
   tags: [cluster, remove_host, drbd]
 
-- name: Deploy survivor-only DRBD resource (drop retired peer)
+# Is the retired node still named in the live resource file? Everything below
+# is conditional on it, so a repeat run (the file already rewritten) does not
+# disconnect again or overwrite the good two-node backup with the one-node
+# file it is meant to protect against.
+- name: Decide whether the retired peer is still in the resource file
+  ansible.builtin.set_fact:
+    cluster_remove_host_peer_in_res: >-
+      {{
+        (cluster_remove_host_retired_name in cluster_remove_host_res_text)
+        or (cluster_remove_host_retired_address | length > 0
+            and cluster_remove_host_retired_address in cluster_remove_host_res_text)
+      }}
+  tags: [cluster, remove_host, drbd]
+
+# Stop talking to a node that is being removed before the config that names it
+# is rewritten. Best-effort: an already-disconnected resource is the state we
+# want, and a failure here must not stop the removal.
+- name: Disconnect the retired peer before rewriting the resource
+  ansible.builtin.command:
+    cmd: drbdadm disconnect {{ cluster_remove_host_drbd_resource }}
+  register: cluster_remove_host_disconnect
+  changed_when: cluster_remove_host_disconnect.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_peer_in_res | bool
+  tags: [cluster, remove_host, drbd]
+
+# Keep the two-node file so a failed reconciliation can be undone. Mail is
+# running off this resource; losing its configuration is not an acceptable
+# outcome of a bookkeeping step.
+- name: Back up the live DRBD resource file before rewriting it
+  ansible.builtin.copy:
+    src: "{{ cluster_remove_host_drbd_res_path }}"
+    dest: "{{ cluster_remove_host_drbd_res_path }}.removehost.bak"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_peer_in_res | bool
+  tags: [cluster, remove_host, drbd]
+
+- name: Deploy single-node DRBD resource (drop retired peer)
   ansible.builtin.template:
     src: kin-zimbra-single.res.j2
     dest: "{{ cluster_remove_host_drbd_res_path }}"
@@ -64,18 +108,89 @@
     mode: "0644"
   when:
     - not ansible_check_mode
-    - cluster_remove_host_retired_name in cluster_remove_host_res_text
-      or (cluster_remove_host_retired_address | length > 0
-          and cluster_remove_host_retired_address in cluster_remove_host_res_text)
+    - cluster_remove_host_peer_in_res | bool
   register: cluster_remove_host_res_tpl
   tags: [cluster, remove_host, drbd]
 
+# Not fatal. drbdadm rejecting a rewritten file is a configuration problem, not
+# a reason to abandon a removal halfway through with the node already out of
+# Corosync - which is exactly what happened on 31 Aug 2026: the play stopped
+# here, the topology was never demoted, and the console offered no way forward.
 - name: Adjust DRBD after peer drop (survivor remains Primary)
   ansible.builtin.command:
     cmd: drbdadm adjust {{ cluster_remove_host_drbd_resource }}
+  register: cluster_remove_host_adjust
+  failed_when: false
+  changed_when: cluster_remove_host_adjust.rc == 0
   when:
     - not ansible_check_mode
     - cluster_remove_host_res_tpl is changed
+  tags: [cluster, remove_host, drbd]
+
+# What matters is not whether adjust liked the file. It is whether this node is
+# still serving: disk attached, still Primary, still mounted.
+- name: Read the DRBD role and disk state after the rewrite
+  ansible.builtin.command:
+    cmd: drbdadm status {{ cluster_remove_host_drbd_resource }}
+  register: cluster_remove_host_post_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_res_tpl is changed
+  tags: [cluster, remove_host, drbd]
+
+- name: Put the previous resource file back if the survivor stopped serving
+  ansible.builtin.copy:
+    src: "{{ cluster_remove_host_drbd_res_path }}.removehost.bak"
+    dest: "{{ cluster_remove_host_drbd_res_path }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_res_tpl is changed
+    - cluster_remove_host_post_status is defined
+    - (cluster_remove_host_post_status.rc | default(1)) != 0
+      or 'Primary' not in (cluster_remove_host_post_status.stdout | default(''))
+  tags: [cluster, remove_host, drbd]
+
+- name: Fail only when the survivor is no longer Primary on its own data
+  ansible.builtin.assert:
+    that:
+      - (cluster_remove_host_post_status.rc | default(1)) == 0
+      - "'Primary' in (cluster_remove_host_post_status.stdout | default(''))"
+    fail_msg: >-
+      After rewriting {{ cluster_remove_host_drbd_res_path }} the survivor is no
+      longer DRBD Primary
+      (rc={{ cluster_remove_host_post_status.rc | default('?') }}:
+      {{ cluster_remove_host_post_status.stdout | default('') | trim }}).
+      The previous resource file has been restored from
+      {{ cluster_remove_host_drbd_res_path }}.removehost.bak. Mail service was
+      not touched by this role; check `drbdadm status` before retrying.
+    success_msg: >-
+      Survivor is still DRBD Primary on its own disk after dropping the peer.
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_res_tpl is changed
+  tags: [cluster, remove_host, drbd]
+
+- name: Say so when drbdadm would not reconcile the single-node file
+  ansible.builtin.debug:
+    msg: >-
+      drbdadm adjust returned
+      {{ cluster_remove_host_adjust.rc }}:
+      {{ cluster_remove_host_adjust.stderr | default('') | trim }}.
+      The node is still Primary and serving, so the removal continues. The
+      resource file now names one host; the peer section comes back when a
+      replacement is added. Previous file kept at
+      {{ cluster_remove_host_drbd_res_path }}.removehost.bak.
+  when:
+    - not ansible_check_mode
+    - cluster_remove_host_adjust is defined
+    - (cluster_remove_host_adjust.rc | default(0)) != 0
   tags: [cluster, remove_host, drbd]
 
 - name: Ensure retired hostname is gone from DRBD resource file

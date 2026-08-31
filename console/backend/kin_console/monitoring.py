@@ -117,6 +117,13 @@ CATALOGUE: dict[str, tuple[str, str, str]] = {
 # returns roughly 250-400 points: enough to draw, small enough that a year of
 # history is not a multi-megabyte JSON response.
 RANGES: dict[str, tuple[int, int]] = {
+    # A live window: the last half hour at the resolution the data actually
+    # has. Prometheus scrapes every 15s (monitoring_stack_scrape_interval), so
+    # a finer step invents nothing and just repeats the same sample - and 5
+    # minutes of it was too few points to draw a line worth looking at. Thirty
+    # minutes at 15s is 120 points, refreshed often enough that the right-hand
+    # edge moves while you watch it.
+    "now": (1800, 15),
     "1h": (3600, 15),
     "6h": (6 * 3600, 60),
     "24h": (24 * 3600, 300),
@@ -125,7 +132,9 @@ RANGES: dict[str, tuple[int, int]] = {
     "1y": (365 * 86400, 86400),
 }
 
-DEFAULT_RANGE = "6h"
+# 1 hour, not 6. The first thing an operator looks at is what the box is doing
+# now; six hours of history flattens exactly the movement they came to see.
+DEFAULT_RANGE = "1h"
 
 
 class MonitoringError(RuntimeError):

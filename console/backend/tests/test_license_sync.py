@@ -117,5 +117,69 @@ class LicenseApplyWiringTests(unittest.TestCase):
         self.assertLess(body.index("MAIL_CONFIG_DEST"), body.index("LICENSE_TOKEN_DEST"))
 
 
+
+class ActuallyRunsTests(unittest.IsolatedAsyncioTestCase):
+    """Reach the code that touches a host, not just the planning around it.
+
+    Everything above tests pure functions and greps the wiring, and all of it
+    passed while `push_license_to_peer` raised TypeError on its first real
+    call: OrchHost takes three fields and was being given two. Applying a
+    license on a pair failed every time with
+
+      TypeError: OrchHost.__init__() missing 1 required positional argument:
+      'iqn_suffix'
+
+    A test that stops where the I/O starts does not cover the I/O.
+    """
+
+    async def test_it_builds_a_usable_host_for_the_peer(self) -> None:
+        from unittest import mock
+
+        from kin_privhelper import license_sync
+
+        seen = {}
+
+        async def fake_session(host):
+            seen["host"] = host
+            raise RuntimeError("no ssh in tests")
+
+        async def fake_resolve():
+            return {
+                "action": "push",
+                "peer_name": "mail2.example.test",
+                "peer_ip": "192.0.2.9",
+            }
+
+        with mock.patch.object(license_sync, "resolve_peer", fake_resolve), \
+             mock.patch("kin_privhelper.console_users_sync._ssh_session", fake_session):
+            ok, lines = await license_sync.push_license_to_peer(
+                seats="50", token="tok", server_id="sid"
+            )
+
+        # Got past the constructor and into the login attempt.
+        self.assertIn("host", seen, "never reached the SSH call")
+        self.assertEqual(seen["host"].name, "mail2.example.test")
+        self.assertEqual(seen["host"].ip, "192.0.2.9")
+        self.assertTrue(seen["host"].iqn_suffix, "iqn_suffix was not filled in")
+        # A login failure is reported, not raised.
+        self.assertFalse(ok)
+        self.assertTrue(any("Could not log in" in line for line in lines))
+
+    async def test_a_single_node_appliance_does_no_io_at_all(self) -> None:
+        from unittest import mock
+
+        from kin_privhelper import license_sync
+
+        async def fake_resolve():
+            return {"action": "single", "reason": "single-node appliance"}
+
+        with mock.patch.object(license_sync, "resolve_peer", fake_resolve):
+            ok, lines = await license_sync.push_license_to_peer(
+                seats="50", token="tok", server_id="sid"
+            )
+        self.assertTrue(ok)
+        self.assertEqual(lines, [])
+
+
 if __name__ == "__main__":
     unittest.main()
