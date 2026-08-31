@@ -15,6 +15,10 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# apt on a freshly booted host: wait out apt-daily / unattended-upgrades
+# instead of failing on a lock that clears itself.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 need_root
 
 DEADMAN_SEC="${KIN_UFW_DEADMAN_SEC:-300}"
@@ -140,8 +144,8 @@ apply_rules() {
 
   say "Installing ufw (if needed)"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get -qq update
-  apt-get -y install ufw >/dev/null
+  kin_apt -qq update
+  kin_apt -y install ufw >/dev/null
 
   say "Resetting ufw to a clean deny-incoming policy"
   ufw --force reset >/dev/null

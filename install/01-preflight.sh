@@ -7,6 +7,8 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 
 echo
 say "PREFLIGHT for ${MAIL_HOST} (${SERVER_IP})"
@@ -113,7 +115,7 @@ done
 
 # --- 6. public DNS state -----------------------------------------------------
 echo; say "6. Public DNS for ${MAIL_DOMAIN}"
-command -v dig >/dev/null || apt-get -qq -y install dnsutils >/dev/null 2>&1
+command -v dig >/dev/null || kin_apt -qq -y install dnsutils >/dev/null 2>&1
 
 ns=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_DOMAIN" NS 2>/dev/null | tr '\n' ' ')
 [ -n "$ns" ] && ok "NS     : $ns" || { fail "NS     : none - domain is not delegated"; FATAL=1; }

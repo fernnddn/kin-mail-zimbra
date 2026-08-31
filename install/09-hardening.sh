@@ -27,6 +27,10 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# apt on a freshly booted host: wait out apt-daily / unattended-upgrades
+# instead of failing on a lock that clears itself.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 # Relay-scope and certificate decisions for stage 8 below.
 # shellcheck source=lib/mail-surface-hardening.sh
 . ./lib/mail-surface-hardening.sh
@@ -128,8 +132,8 @@ show_status() {
 configure_fail2ban() {
   say "1. fail2ban (SSH + Zimbra + Z-Push)"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get -qq update
-  apt-get -y install fail2ban >/dev/null
+  kin_apt -qq update
+  kin_apt -y install fail2ban >/dev/null
 
   mkdir -p /etc/fail2ban/filter.d /etc/fail2ban/jail.d
 
@@ -169,7 +173,7 @@ EOF
 configure_unattended() {
   say "2. unattended-upgrades (security-only, no auto-reboot)"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get -y install unattended-upgrades >/dev/null
+  kin_apt -y install unattended-upgrades >/dev/null
 
   cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";

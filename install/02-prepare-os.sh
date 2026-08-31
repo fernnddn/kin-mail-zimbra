@@ -19,6 +19,9 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 # shellcheck source=lib/ssh-password-toggle.sh
 . ./lib/ssh-password-toggle.sh
+# Waiting out apt-daily / unattended-upgrades instead of dying on them.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 need_root
 
 if [ "${1:-}" = "--revert-ssh-password" ]; then
@@ -88,8 +91,11 @@ fi
 # probes kin, then root, then ansible-ssh to every mail node and observability.
 OS_USER="${KIN_OS_USER:-kin}"
 if ! getent group sudo >/dev/null 2>&1; then
-  apt-get -qq update
-  apt-get -y install sudo
+  # Rare (the sudo group exists on every stock image) but it is still an apt
+  # call on a freshly booted host, so it waits for the lock like the rest.
+  apt_wait_for_lock || warn "Proceeding with sudo install while the lock is busy"
+  kin_apt -qq update
+  kin_apt -y install sudo
 fi
 if [ -n "${KIN_USER_PASS:-}" ] && [ "$OS_USER" != "root" ]; then
   if ! id -u "$OS_USER" >/dev/null 2>&1; then
@@ -139,11 +145,33 @@ ff02::2 ip6-allrouters
 EOF
 ok "FQDN mapped to ${SERVER_IP}, 127.0.1.1 line removed"
 
+# Both halves of stage 3 undo themselves however the stage ends: the service
+# start block, and the background updaters we asked to stand down. Leaving
+# either behind changes how this host behaves long after the install.
+kin_stage3_cleanup() {
+  kin_unblock_pkg_service_start 2>/dev/null || true
+  apt_resume_background_upgrades 2>/dev/null || true
+}
+
 # --- 3. remove conflicts, install dependencies -------------------------------
 say "3. Packages"
-apt-get -y purge postfix exim4-base sendmail apache2 nginx bind9 dovecot-core >/dev/null 2>&1
-apt-get -y autoremove >/dev/null 2>&1
-apt-get -qq update
+
+# A cloud image runs apt-daily and unattended-upgrades within seconds of first
+# boot, and they hold the dpkg lock for minutes. Stand them down for the length
+# of this stage and wait out anything still in flight, rather than letting the
+# first apt-get fail on a lock that clears itself.
+trap 'kin_stage3_cleanup' EXIT HUP INT TERM
+if ! apt_prepare; then
+  fail "The package lock is still held after ${KIN_APT_LOCK_WAIT}s."
+  info "Something outside this installer is holding it. Check with:"
+  info "  systemctl status unattended-upgrades apt-daily.service"
+  info "  fuser -v /var/lib/dpkg/lock-frontend"
+  exit 1
+fi
+
+kin_apt -y purge postfix exim4-base sendmail apache2 nginx bind9 dovecot-core >/dev/null 2>&1
+kin_apt -y autoremove >/dev/null 2>&1
+kin_apt -qq update
 
 # Patch the base image before anything is built on top of it.
 #
@@ -162,10 +190,10 @@ apt-get -qq update
 if [ "${KIN_SKIP_BASE_UPGRADE:-0}" = "1" ]; then
   warn "KIN_SKIP_BASE_UPGRADE=1: base image left unpatched (not for production)"
 else
-  before=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst' || true)
+  before=$(kin_apt -s upgrade 2>/dev/null | grep -c '^Inst' || true)
   info "Applying ${before:-0} pending package update(s) before installing Zimbra"
-  if apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold       upgrade >/dev/null 2>&1; then
-    after=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst' || true)
+  if kin_apt -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade >/dev/null 2>&1; then
+    after=$(kin_apt -s upgrade 2>/dev/null | grep -c '^Inst' || true)
     ok "Base packages upgraded (${before:-0} pending before, ${after:-0} after)"
   else
     # A failed upgrade must not take the deploy with it: the appliance is still
@@ -209,12 +237,9 @@ POLICY
   chmod +x /usr/sbin/policy-rc.d
 }
 kin_unblock_pkg_service_start() { rm -f /usr/sbin/policy-rc.d; }
-# Never leave it behind: a host that keeps this file silently stops starting
-# services on every future apt install.
-trap 'kin_unblock_pkg_service_start' EXIT HUP INT TERM
 kin_block_pkg_service_start
 
-if apt-get -y install \
+if kin_apt -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
   dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup
@@ -228,8 +253,8 @@ fi
 # so dnsmasq never landed, /etc/dnsmasq.d did not exist, and this stage died
 # after systemd-resolved was already off (live Host A, 29 Aug 2026).
 if ! dpkg -s dnsmasq >/dev/null 2>&1; then
-  apt-get -qq update
-  if ! apt-get -y install dnsmasq; then
+  kin_apt -qq update
+  if ! kin_apt -y install dnsmasq; then
     fail "dnsmasq package failed to install"
     exit 1
   fi
@@ -239,6 +264,7 @@ if ! command -v dnsmasq >/dev/null 2>&1; then
   exit 1
 fi
 kin_unblock_pkg_service_start
+apt_resume_background_upgrades
 trap - EXIT HUP INT TERM
 ok "dnsmasq package is installed"
 

@@ -2255,8 +2255,11 @@ class PackageServiceStartTests(unittest.TestCase):
         text = self._prepare()
         # Left behind, it silently stops services starting on every future apt
         # install on that host - including the Zimbra packages in stage 03.
-        self.assertIn("trap 'kin_unblock_pkg_service_start' EXIT", text)
-        self.assertIn("kin_unblock_pkg_service_start\ntrap - EXIT", text)
+        # One trap now undoes both halves of stage 3: the service-start block
+        # and the background updaters that were asked to stand down.
+        self.assertIn("trap 'kin_stage3_cleanup' EXIT", text)
+        self.assertIn("kin_unblock_pkg_service_start 2>/dev/null", text)
+        self.assertIn("apt_resume_background_upgrades 2>/dev/null", text)
 
     def test_a_leftover_block_is_cleared_on_the_next_run(self) -> None:
         text = self._prepare()
@@ -2328,7 +2331,7 @@ class BaseImagePatchingTests(unittest.TestCase):
         # -security including openssl and openssh-server. unattended-upgrades
         # only catches up on its next daily run, so the appliance spent its
         # first day - and its acceptance test - unpatched.
-        self.assertIn("apt-get -y", prepare)
+        self.assertIn("kin_apt -y", prepare)
         self.assertIn("upgrade", prepare)
         self.assertIn("KIN_SKIP_BASE_UPGRADE", prepare)
 
@@ -2373,13 +2376,14 @@ class BaseImagePatchingTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[3]
         prepare = (repo / "install/02-prepare-os.sh").read_text(encoding="utf-8")
         self.assertIn("mkdir -p /etc/dnsmasq.d", prepare)
-        self.assertIn("apt-get -y install dnsmasq", prepare)
+        # kin_apt, not apt-get: every package call waits for the dpkg lock.
+        self.assertIn("kin_apt -y install dnsmasq", prepare)
         self.assertLess(
             prepare.index("mkdir -p /etc/dnsmasq.d"),
             prepare.index("cat > /etc/dnsmasq.d/kin-mail.conf"),
         )
         self.assertLess(
-            prepare.index("apt-get -y install dnsmasq"),
+            prepare.index("kin_apt -y install dnsmasq"),
             prepare.index("disable --now systemd-resolved"),
         )
         self.assertLess(

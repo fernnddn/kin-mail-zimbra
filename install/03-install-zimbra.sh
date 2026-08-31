@@ -14,6 +14,10 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# apt on a freshly booted host: wait out apt-daily / unattended-upgrades
+# instead of failing on a lock that clears itself.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 # Shared mid-handoff probe (data partition holds bin/zmcontrol).
 # shellcheck source=lib/zimbra-data-disk-probe.sh
 . ./lib/zimbra-data-disk-probe.sh
@@ -404,8 +408,15 @@ EOF
 
 cleanup_redactor() {
   rm -f "$ENVF" "$REDACTOR"
+  # The Zimbra installer runs for twenty minutes or more and drives dpkg the
+  # whole time. unattended-upgrades waking up in the middle of that is the one
+  # collision that costs a whole install, so it is stood down for the duration
+  # and put back here, on every exit path.
+  apt_resume_background_upgrades 2>/dev/null || true
 }
 trap cleanup_redactor EXIT
+
+apt_prepare || warn "Package lock still busy; the Zimbra installer may contend for it"
 
 tmux kill-session -t "$SESS" 2>/dev/null
 tmux new-session -d -s "$SESS" -x 200 -y 50

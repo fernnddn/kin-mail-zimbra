@@ -17,6 +17,10 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# apt on a freshly booted host: wait out apt-daily / unattended-upgrades
+# instead of failing on a lock that clears itself.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 need_root
 
 ZPUSH_VERSION="${ZPUSH_VERSION:-2.7.6}"
@@ -119,7 +123,7 @@ install_ondrej_php_keyring() {
 
   command -v curl >/dev/null || { fail "curl required to fetch ondrej/php GPG key"; exit 1; }
   if ! command -v gpg >/dev/null 2>&1; then
-    if ! apt-get -y install gnupg ca-certificates >/dev/null; then
+    if ! kin_apt -y install gnupg ca-certificates >/dev/null; then
       fail "gpg is required to import the ondrej/php PPA key (apt-get install gnupg failed)"
       exit 1
     fi
@@ -205,7 +209,7 @@ ensure_php83_apt_source() {
   install_ondrej_php_keyring
   write_ondrej_php_list "$codename"
 
-  if ! apt-get -qq update; then
+  if ! kin_apt -qq update; then
     fail "apt-get update failed after adding ppa:ondrej/php"
     exit 1
   fi
@@ -219,12 +223,12 @@ ensure_php83_apt_source() {
 install_packages() {
   say "1. Packages (PHP 8.3-FPM + helpers)"
   export DEBIAN_FRONTEND=noninteractive
-  if ! apt-get -qq update; then
+  if ! kin_apt -qq update; then
     fail "apt-get update failed"
     exit 1
   fi
   ensure_php83_apt_source
-  if ! apt-get -y install \
+  if ! kin_apt -y install \
     php8.3-fpm php8.3-cli php8.3-curl php8.3-xml php8.3-mbstring \
     php8.3-intl php8.3-soap php8.3-zip unzip curl ca-certificates >/dev/null; then
     fail "apt-get failed to install PHP 8.3-FPM and dependencies"

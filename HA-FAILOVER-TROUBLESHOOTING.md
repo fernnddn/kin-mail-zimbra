@@ -266,6 +266,40 @@ To see it directly:
 
 ---
 
+## "Could not get lock /var/lib/dpkg/lock-frontend"
+
+    E: Could not get lock /var/lib/dpkg/lock-frontend.
+       It is held by process 6811 (unattended-upgr)
+
+Not a fault, and not something to fix by hand. A cloud image starts
+`apt-daily.timer` and `unattended-upgrades` within seconds of first boot, and
+they hold that lock for minutes. `apt-get` does not wait by default: it prints
+this and exits immediately, which is why the same commands work when you run
+them yourself two minutes later.
+
+The installer now stands those units down for the length of a stage, waits for
+anything still in flight, and passes `DPkg::Lock::Timeout` to every apt call so
+a late race waits instead of dying. Ansible plays do the same through
+`lock_timeout`. Whatever was paused is started again on every exit path.
+
+**It does not kill the holder**, and neither should you. `kill -9` on dpkg
+leaves the package database half-written, and every apt command after it
+refuses to run until somebody finds:
+
+    dpkg --configure -a
+
+Stopping the service is the safe version of "kill it": unattended-upgrades
+finishes the package it is unpacking and exits. That is what the installer
+does.
+
+If it still times out after 15 minutes, something outside the installer holds
+the lock. The message names the process:
+
+    fuser -v /var/lib/dpkg/lock-frontend
+    systemctl status unattended-upgrades apt-daily.service
+
+---
+
 ## "FAILED - RETRYING" is not a failure
 
 Ansible prints that line on every poll of a task that is waiting for something:

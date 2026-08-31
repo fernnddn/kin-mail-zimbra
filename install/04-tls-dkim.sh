@@ -85,6 +85,10 @@ if [ "${KIN_TLS_SOURCE_ONLY:-0}" = "1" ]; then
 fi
 
 cd "$(dirname "$0")" && . ./00-config.sh
+# apt on a freshly booted host: wait out apt-daily / unattended-upgrades
+# instead of failing on a lock that clears itself.
+# shellcheck source=lib/apt-lock.sh
+. ./lib/apt-lock.sh
 need_root
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
@@ -251,8 +255,8 @@ tls_cloudflare() {
   : "${CF_PROPAGATION:=40}"
 
   say "1. certbot and Cloudflare plugin"
-  apt-get -qq update
-  apt-get -y install certbot python3-certbot-dns-cloudflare >/dev/null 2>&1
+  kin_apt -qq update
+  kin_apt -y install certbot python3-certbot-dns-cloudflare >/dev/null 2>&1
   certbot plugins 2>/dev/null | grep -qi cloudflare \
     && ok "dns-cloudflare plugin installed" \
     || { fail "dns-cloudflare plugin not available"; exit 1; }
@@ -319,8 +323,8 @@ tls_manual() {
   info "Do not rely on cron 'certbot renew' for this mode."
 
   say "1. certbot"
-  apt-get -qq update
-  apt-get -y install certbot >/dev/null 2>&1
+  kin_apt -qq update
+  kin_apt -y install certbot >/dev/null 2>&1
   command -v certbot >/dev/null || { fail "certbot is not installed"; exit 1; }
   ok "certbot ready"
 

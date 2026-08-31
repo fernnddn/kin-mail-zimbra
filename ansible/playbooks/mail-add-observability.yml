@@ -7,6 +7,13 @@
   hosts: monitoring
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     # A replacement VM arrives with whatever hostname its image shipped with,
     # exactly like the first one did. Renaming it here means Remove then Add
@@ -23,6 +30,13 @@
   hosts: mail_nodes
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     - role: iscsi_initiator
       tags: [observability, add, iscsi]

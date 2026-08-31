@@ -33,7 +33,13 @@ kin_ensure_outbound_dns() {
   fi
 
   if ! command -v dig >/dev/null 2>&1; then
-    apt-get -qq -y install dnsutils >/dev/null 2>&1 || true
+    # kin_apt when the caller has sourced lib/apt-lock.sh, plain otherwise:
+    # this library is also sourced by contexts that do not need apt at all.
+    if command -v kin_apt >/dev/null 2>&1; then
+      kin_apt -qq -y install dnsutils >/dev/null 2>&1 || true
+    else
+      apt-get -qq -y install dnsutils >/dev/null 2>&1 || true
+    fi
   fi
   if ! command -v dig >/dev/null 2>&1; then
     echo "KIN_DNS: dig unavailable; cannot probe upstream resolvers" >&2

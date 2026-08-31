@@ -23,6 +23,13 @@
   gather_facts: false
   become: false
   run_once: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   tasks:
     - name: Ensure the new node name differs from the old node
       ansible.builtin.assert:
@@ -46,6 +53,13 @@
   hosts: mail_new_node
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     - role: cluster_node_base
       tags: [addhost, new, base]
@@ -66,6 +80,13 @@
   hosts: mail_new_node
   gather_facts: false
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   tasks:
     - name: Include DRBD LUKS ensure (new node only)
       ansible.builtin.include_role:
@@ -80,6 +101,13 @@
   hosts: mail_survivor
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     - role: cluster_survivor_replace
       tags: [addhost, survivor]
@@ -91,6 +119,13 @@
   hosts: mail_survivor,mail_new_node
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     - role: corosync_qdevice
       tags: [addhost, qdevice]
@@ -102,6 +137,13 @@
   hosts: mail_new_node
   gather_facts: true
   become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
   roles:
     - role: drbd_live_join
       tags: [addhost, livejoin]
