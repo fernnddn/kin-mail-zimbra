@@ -27,6 +27,9 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# Relay-scope and certificate decisions for stage 8 below.
+# shellcheck source=lib/mail-surface-hardening.sh
+. ./lib/mail-surface-hardening.sh
 need_root
 
 FAIL2BAN_IGNORE_IP="${KIN_FAIL2BAN_IGNORE_IP:-}"
@@ -311,6 +314,113 @@ configure_tls() {
   fi
 }
 
+configure_mail_surface() {
+  say "8. Mail-borne and browser-facing surface"
+  if [ ! -d /opt/zimbra ]; then
+    warn "Skipping mail surface - /opt/zimbra not present"
+    return 0
+  fi
+
+  # --- relay scope ----------------------------------------------------------
+  local nets
+  nets=$(zimbra_cmd zmprov gacf zimbraMtaMyNetworks 2>/dev/null |
+         sed -n 's/^zimbraMtaMyNetworks: //p' | tr '\n' ' ')
+  if [ -z "$nets" ]; then
+    warn "zimbraMtaMyNetworks is unset; Postfix falls back to its own default"
+  elif relay_scope_too_wide "$nets"; then
+    fail "zimbraMtaMyNetworks relays for a very wide range: ${nets}"
+    info "Anything listed there can send through this server without"
+    info "authenticating. Narrow it to this host and its LAN:"
+    info "  su - zimbra -c 'zmprov mcf zimbraMtaMyNetworks \"127.0.0.0/8 <lan>/24\"'"
+    info "Not changed automatically: relay scope is a deployment decision."
+  else
+    ok "Relay scope is bounded (${nets})"
+  fi
+
+  # --- attachment types -----------------------------------------------------
+  # Executable content delivered by mail is still the most common way into a
+  # network. Zimbra rejects these at the MTA, before they reach a mailbox.
+  if [ "${KIN_BLOCK_EXECUTABLE_ATTACHMENTS:-1}" = "1" ]; then
+    local want="exe scr vbs vbe js jse bat cmd com pif cpl msi msp hta lnk reg jar wsf wsh"
+    local have missing=0 ext
+    have=$(zimbra_cmd zmprov gacf zimbraMtaBlockedExtension 2>/dev/null |
+           sed -n 's/^zimbraMtaBlockedExtension: //p' | tr '\n' ' ')
+    for ext in $want; do
+      printf '%s' " $have " | grep -q " ${ext} " || missing=1
+    done
+    if [ "$missing" -eq 0 ]; then
+      ok "Executable attachment types already blocked at the MTA"
+    else
+      for ext in $want; do
+        printf '%s' " $have " | grep -q " ${ext} " && continue
+        zimbra_cmd zmprov mcf +zimbraMtaBlockedExtension "$ext" >/dev/null 2>&1 || true
+      done
+      ok "Blocked executable attachment types at the MTA (${want})"
+      info "Set KIN_BLOCK_EXECUTABLE_ATTACHMENTS=0 and re-run to leave them alone."
+    fi
+  else
+    warn "KIN_BLOCK_EXECUTABLE_ATTACHMENTS=0: executable attachments are delivered"
+  fi
+
+  # --- browser-facing headers ----------------------------------------------
+  # Added one at a time with `+`, never assigned wholesale: this attribute is
+  # multi-valued and Zimbra puts its own entries in it.
+  local cur headers_changed=0
+  cur=$(zimbra_cmd zmprov gacf zimbraResponseHeader 2>/dev/null |
+        sed -n 's/^zimbraResponseHeader: //p')
+  add_response_header() {
+    local name="$1" value="$2"
+    if printf '%s\n' "$cur" | grep -qi "^${name}:"; then
+      ok "Response header already set: ${name}"
+      return 0
+    fi
+    if zimbra_cmd zmprov mcf +zimbraResponseHeader "${name}: ${value}" >/dev/null 2>&1; then
+      ok "Set response header ${name}: ${value}"
+      headers_changed=1
+    else
+      warn "Could not set response header ${name}"
+    fi
+  }
+  # SAMEORIGIN, not DENY: the web client frames its own documents.
+  add_response_header "X-Content-Type-Options" "nosniff"
+  add_response_header "X-Frame-Options" "SAMEORIGIN"
+  add_response_header "Referrer-Policy" "strict-origin-when-cross-origin"
+
+  if cert_is_trusted; then
+    add_response_header "Strict-Transport-Security" "max-age=31536000"
+  else
+    warn "Skipping HSTS: the certificate on :443 is still self-signed."
+    warn "HSTS would remove the browser's 'proceed anyway' option and lock you"
+    warn "out of the console. Finish stage 04, then re-run this stage."
+  fi
+
+  if [ "$headers_changed" -eq 0 ]; then
+    ok "Response headers already in place; not restarting zmproxy"
+    return 0
+  fi
+  if [ "${KIN_HARDENING_SKIP_PROXY_RESTART:-0}" = "1" ]; then
+    warn "Headers set but KIN_HARDENING_SKIP_PROXY_RESTART=1 - not restarting zmproxy"
+    warn "They take effect on the next proxy restart."
+    return 0
+  fi
+  # Never restart zmproxy while Pacemaker is watching it. The monitor sees the
+  # blip, decides kin-zimbra has failed, and tears down the VIP - or fences the
+  # node. Same unmanage/remanage dance stage 5 above already uses.
+  warn "Restarting zmproxy for the new headers (kin-zimbra temporarily unmanaged)"
+  kin_zimbra_unmanage
+  trap kin_zimbra_remanage EXIT
+  if ! zimbra_cmd zmproxyctl restart >/tmp/kin-hardening-headers.out 2>&1; then
+    warn "zmproxyctl restart failed - see /tmp/kin-hardening-headers.out"
+    warn "Headers are stored and take effect on the next proxy restart."
+  elif ! kin_zimbra_wait_healthy; then
+    warn "Zimbra did not report healthy after the proxy restart; check zmcontrol status"
+  else
+    ok "zmproxy restarted; response headers are live"
+  fi
+  kin_zimbra_remanage
+  trap - EXIT
+}
+
 configure_smtp_rates() {
   say "6. SMTP client rate limits (Postfix / Zimbra MTA)"
   # Auth limit is a first-class LDAP attr (zmconfigd → main.cf). Connection/message
@@ -448,6 +558,7 @@ configure_lockout
 configure_cleartext
 configure_tls
 configure_smtp_rates
+configure_mail_surface
 test_fail2ban_ban_unban
 
 echo

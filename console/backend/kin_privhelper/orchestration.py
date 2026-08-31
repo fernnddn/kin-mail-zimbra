@@ -971,6 +971,10 @@ async def _scp_put(
         sshpass,
         "-e",
         "scp",
+        # Carry the local 0600 across. Without this the staged copy lands under
+        # the SSH user's umask - 0644 on a stock Ubuntu - and these files are
+        # the license token and the console's cookie-signing key.
+        "-p",
         "-o",
         "PreferredAuthentications=password",
         "-o",
@@ -1083,13 +1087,18 @@ async def _install_staged_peer_file(
         f"[ ! -L {remote_tmp} ] "
         f"|| {{ echo 'refusing: {remote_tmp} is a symlink' >&2; exit 1; }} && "
     )
+    # The staged copy is removed on every path, not only the successful one.
+    # Chained with && it survived a failed install, and a secret left in /tmp
+    # is a secret every local account on that host can read.
     inner = (
         f"{symlink_guard}"
         f"{ensure_owner}"
         f"mkdir -p {dest_dir} && "
         f"{chmod_dir}"
-        f"install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} && "
-        f"rm -f {remote_tmp}"
+        f"chmod 600 {remote_tmp} 2>/dev/null; "
+        f"rc=0; install -m {mode} -o {owner} -g {group} {remote_tmp} {dest} || rc=$?; "
+        f"rm -f {remote_tmp}; "
+        f"exit $rc"
     )
     cmd = wrap_privileged_remote(inner)
     return await _ssh_run(

@@ -187,6 +187,54 @@ guarantee as the Build HA pair path.
 
 ---
 
+## The one that looks healthy: replication is down, both disks say UpToDate
+
+This is the worst state this product can reach, and until 30 Aug 2026 the
+console drew it in green.
+
+After a partition heals badly, or a node is fenced mid-write, DRBD can settle
+into **StandAlone with both sides UpToDate**. Every signal the Cluster page had
+agreed nothing was wrong: both replicas report UpToDate, there is no resync
+percentage because nothing is syncing, and no resource has failed because none
+has. Meanwhile nothing written on the serving node is reaching the other one.
+
+Lose the serving node in that state and you lose every message since the split.
+
+    drbdadm status kin-zimbra
+
+Read the **connection**, not the disk:
+
+    kin-zimbra role:Primary
+      disk:UpToDate
+      mail2 connection:StandAlone role:Secondary     <-- this line
+        peer-disk:UpToDate                           <-- this one lies to you
+
+`peer-disk:UpToDate` is the last thing the peer said before the link dropped.
+It is a memory, not a measurement.
+
+The console now reports this as **Replication between the nodes is down**, in
+red, and Move Master refuses while it lasts, because promoting the other copy
+is what turns a recoverable split into a lost mailbox.
+
+**Do not "fix" it by failing over.** Decide which node has the data you want,
+then discard the other side's divergent copy:
+
+    # on the node whose data you are DISCARDING
+    drbdadm disconnect kin-zimbra
+    drbdadm secondary kin-zimbra
+    drbdadm connect --discard-my-data kin-zimbra
+    # on the node you are KEEPING
+    drbdadm connect kin-zimbra
+
+Watch it come back with `drbdadm status` until the connection is Established
+and both sides are UpToDate again. Only then move anything.
+
+If the connection says `Connecting` or `Unconnected` rather than `StandAlone`,
+there is no split to resolve: the peer is unreachable. That is a network or a
+dead node, and it heals on its own once the peer is back.
+
+---
+
 ## "Why is this node in maintenance?" - it probably is not
 
 Pacemaker **standby is a node attribute stored in the CIB, and it survives a

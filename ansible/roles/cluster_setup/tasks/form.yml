@@ -52,15 +52,60 @@
     - cluster_setup_formed_this_run | bool
   tags: [cluster, setup, pcs]
 
-- name: Enable cluster start at boot on both nodes (fresh cluster only)
+# Every run, not only the one that forms the cluster. `pcs cluster enable` is
+# idempotent, and gating it on formation meant a pair built by an earlier
+# version - or by a run where that flag was false - kept corosync and pacemaker
+# disabled at boot. A node that lost power then came back up and simply sat
+# there: no resources, no rejoin, and nothing on the console explaining why,
+# until somebody ssh'd in and ran `pcs cluster start`. That is the opposite of
+# what an HA pair is for.
+- name: Enable cluster start at boot on both nodes
   ansible.builtin.command:
     cmd: pcs cluster enable --all
   # SAFETY: never check_mode: false.
   run_once: true
+  changed_when: false
   when:
     - not ansible_check_mode
-    - cluster_setup_formed_this_run | bool
   tags: [cluster, setup, pcs]
+
+- name: Read whether corosync and pacemaker start at boot
+  ansible.builtin.command:
+    cmd: systemctl is-enabled {{ item }}
+  loop: [corosync, pacemaker]
+  register: cluster_setup_boot_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [cluster, setup, pcs, verify]
+
+# Fails only on the states that actually mean "will not come up at boot".
+# systemd also answers enabled-runtime, indirect, alias and generated, all of
+# which do start the unit; requiring the literal string `enabled` would turn a
+# healthy host into a failed deployment.
+- name: Require both to start at boot so a lost node rejoins by itself
+  ansible.builtin.assert:
+    that:
+      - >-
+        cluster_setup_boot_enabled.results
+        | map(attribute='stdout') | map('trim')
+        | select('in', ['disabled', 'masked', 'linked'])
+        | list | length == 0
+    fail_msg: >-
+      corosync and/or pacemaker are not enabled at boot on
+      {{ inventory_hostname }}
+      ({{ cluster_setup_boot_enabled.results | map(attribute='stdout')
+         | map('trim') | list | join(', ') }}).
+      A node that reboots would stay out of the cluster until someone started
+      it by hand, which defeats automatic failback. Run
+      `pcs cluster enable --all` on either node and re-run this stage.
+    success_msg: corosync and pacemaker both start at boot
+  when:
+    - not ansible_check_mode
+    - cluster_setup_boot_enabled is defined
+    - cluster_setup_boot_enabled.results is defined
+  tags: [cluster, setup, pcs, verify]
 
 - name: Note that cluster setup is skipped when already running or this is --check
   ansible.builtin.debug:

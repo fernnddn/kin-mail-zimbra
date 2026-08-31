@@ -53,6 +53,7 @@ type ClusterSnap = {
   maintenance_mode?: boolean;
   maintenance_since?: string;
   maintenance_source?: string;
+  drbd_link?: string;
   rejoining?: string[];
   bans?: ClusterBan[];
   offline?: string[];
@@ -1921,6 +1922,20 @@ export default function ClusterPage() {
               it needs.</>
             ) : null}{" "}
             {cluster.quorum_hint}
+          </WarnBox>
+        ) : null}
+        {cluster.drbd_link === "down" ? (
+          <WarnBox>
+            <strong>
+              Replication between the two nodes is down. Mail written here is
+              not reaching the other node.
+            </strong>{" "}
+            Both nodes can still report their disks as UpToDate while holding
+            different data, which is why nothing else on this page is
+            complaining. Do not move the Master or fail over until DRBD is
+            connected again: doing so serves the copy that has been diverging
+            and discards everything written since the split. Check{" "}
+            <code>drbdadm status kin-zimbra</code> on both nodes.
           </WarnBox>
         ) : null}
         {cluster.maintenance_active ? (

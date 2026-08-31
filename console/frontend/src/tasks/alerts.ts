@@ -63,6 +63,7 @@ export type AlertSnap = {
   maintenance_mode?: boolean;
   maintenance_since?: string;
   maintenance_source?: string;
+  drbd_link?: string;
   bans?: { resource?: string; node?: string; role?: string }[];
   quorum_hint?: string;
   no_quorum_policy?: string;
@@ -169,6 +170,21 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
           ? `Entered from this console on ${cluster.maintenance_since}.`
           : "No record of this console entering it. Exit maintenance to clear it.",
       severity: "warn",
+    });
+  }
+
+  // Both replicas can read UpToDate while nothing is being copied between
+  // them. This is the one fault where every other indicator stays green and
+  // the cost is losing every message written since it started.
+  if (cluster.drbd_link === "down") {
+    out.push({
+      id: "drbd_link",
+      title: "Replication between the nodes is down",
+      detail:
+        "Mail written on the serving node is not reaching the other one. " +
+        "Both may still report UpToDate and hold different data. Do not fail " +
+        "over until DRBD is reconnected.",
+      severity: "danger",
     });
   }
 

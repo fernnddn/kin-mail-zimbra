@@ -119,6 +119,16 @@ _MEMBER_PREFIXES = (
 _OFFLINE_PREFIXES = ("offline:",)
 
 
+def _has_pcs_nodes_sections(pcs_nodes: str) -> bool:
+    """Does this look like `pcs status nodes` output, however empty?"""
+    for line in (pcs_nodes or "").splitlines():
+        low = line.strip().lower()
+        for prefix in (*_MEMBER_PREFIXES, *_OFFLINE_PREFIXES):
+            if low.startswith(prefix):
+                return True
+    return False
+
+
 def parse_online_nodes(pcs_nodes: str) -> list[str]:
     """Parse `pcs status nodes` member lines (Online, Standby, draining)."""
     found: list[str] = []
@@ -127,7 +137,12 @@ def parse_online_nodes(pcs_nodes: str) -> list[str]:
         if rest is None:
             continue
         found.extend(_node_tokens(rest))
-    if not found:
+    if not found and not _has_pcs_nodes_sections(pcs_nodes):
+        # Last resort for output that is not `pcs status nodes` at all. It must
+        # NOT run once real section headers are present: an empty Online list
+        # next to a populated Offline one is a legitimate answer, and scanning
+        # every token would then report the offline node as online - the exact
+        # thing the crm_node fallback was fixed to stop doing.
         for line in pcs_nodes.splitlines():
             parts = line.split()
             for tok in parts:
@@ -249,6 +264,34 @@ def parse_unpromoted(crm: str) -> list[str]:
     return []
 
 
+def parse_rejoining_nodes(
+    *,
+    nodes: list[str],
+    promoted_names: list[str],
+    unpromoted: list[str],
+    standby: list[str],
+    offline: list[str],
+) -> list[str]:
+    """Members the promotable clone has not given a role to yet.
+
+    This is the window after a node is powered back on: Pacemaker counts it as
+    a member, but DRBD has not made it Promoted or Unpromoted. Drawn as its own
+    state so a reboot reads as neither healthy nor failed, which is the
+    distinction vSphere and Nutanix both keep.
+
+    It only applies when some OTHER node already holds a role. Without that
+    condition every node with no role is "rejoining", which on a single-node
+    appliance means its only node is permanently rejoining, and on a pair being
+    built for the first time means both are - neither of which is a node coming
+    back from anywhere.
+    """
+    with_role = {n for n in list(promoted_names) + list(unpromoted) if n}
+    if not with_role:
+        return []
+    busy = with_role | set(standby) | set(offline)
+    return [n for n in nodes if n not in busy]
+
+
 def parse_resource_node(crm: str, resource: str) -> str | None:
     """Which node a Pacemaker primitive (e.g. kin-vip) is Started on.
 
@@ -276,6 +319,61 @@ def drbd_both_uptodate(status: str) -> bool:
     if len(disks) < 2:
         return False
     return all(d.lower() == "uptodate" for d in disks)
+
+
+# Replication states that mean bytes are actually moving between the nodes.
+# SyncSource/SyncTarget are healthy: that is a resync in progress.
+_DRBD_LIVE_REPLICATION = {
+    "established",
+    "syncsource",
+    "synctarget",
+    "pausedsyncs",
+    "pausedsynct",
+    "verifys",
+    "verifyt",
+    "wfbitmaps",
+    "wfbitmapt",
+    "wfsyncuuid",
+    "ahead",
+    "behind",
+}
+_DRBD_LIVE_CONNECTION = {"connected", "established"}
+
+
+def drbd_link_state(status: str) -> str:
+    """Is the replication link up? Returns "", "connected", "syncing" or "down".
+
+    THE reason this exists: after a partition heals badly, DRBD can sit
+    StandAlone with BOTH sides reporting UpToDate. Every other signal the
+    console had went green - `drbd_both_uptodate` is True, there is no resync
+    percentage, no resource has failed - while nothing written on the Promoted
+    node was reaching the other one. Lose that node and you lose every message
+    since the split, and the page said the cluster was healthy the whole time.
+
+    "" means there is no DRBD resource to talk about (a single-node appliance),
+    which is not the same as a link that is down and must not be alerted on.
+    """
+    text = status or ""
+    if not re.search(r"\brole:\S+", text, flags=re.I):
+        return ""
+
+    conns = [m.lower() for m in re.findall(r"\bconnection:\s*(\S+)", text, flags=re.I)]
+    if conns and any(c not in _DRBD_LIVE_CONNECTION for c in conns):
+        return "down"
+
+    repls = [m.lower() for m in re.findall(r"\breplication:\s*(\S+)", text, flags=re.I)]
+    if repls and any(r not in _DRBD_LIVE_REPLICATION for r in repls):
+        return "down"
+
+    syncing = bool(re.search(r"\bdone:\d", text)) or any(
+        r.startswith(("sync", "pausedsync", "wfbitmap", "wfsync")) for r in repls
+    )
+    if syncing:
+        return "syncing"
+    if repls or re.search(r"\bpeer-disk:\s*\S+", text, flags=re.I):
+        return "connected"
+    # A resource that names no peer at all is not replicating to one.
+    return "down"
 
 
 def drbd_sync_percent(status: str) -> float | None:
@@ -1033,17 +1131,13 @@ async def gather_status() -> dict[str, Any]:
         )
     )
 
-    # A node that Pacemaker counts as a member but that DRBD has not given a
-    # role to is still coming up. Without this the console had nowhere to put
-    # the reboot window: such a node was drawn as a plain Unpromoted replica,
-    # which reads as "ready to take over" when it is not ready for anything
-    # yet. vSphere and Nutanix both keep this transitional state separate from
-    # both healthy and failed, and for the same reason.
-    with_role = {n for n in ([promoted] if promoted else []) + list(promoted_names) + list(unpromoted)}
-    rejoining = [
-        n for n in nodes
-        if n not in with_role and n not in standby and n not in offline
-    ]
+    rejoining = parse_rejoining_nodes(
+        nodes=nodes,
+        promoted_names=promoted_names,
+        unpromoted=unpromoted,
+        standby=standby,
+        offline=offline,
+    )
     maint_since, maint_source = _maintenance_provenance(standby)
 
     return {
@@ -1063,6 +1157,9 @@ async def gather_status() -> dict[str, Any]:
         "zimbra_node": zimbra_node,
         "drbd_uptodate": drbd_both_uptodate(drbd),
         "drbd_sync_percent": drbd_sync_percent(drbd),
+        # Both disks can read UpToDate while the link between them is dead.
+        # Without this the console called that healthy.
+        "drbd_link": drbd_link_state(drbd),
         "qdevice_ok": qdevice_voting(quorum),
         "quorate": quorate,
         "votes_total": votes_total,
@@ -1111,6 +1208,24 @@ async def run_preflight(target: str) -> tuple[bool, list[str], dict[str, Any]]:
         f"nodes={st['nodes'] or 'none'} standby={st.get('standby') or []}",
     )
     rec("drbd_uptodate", bool(st["drbd_uptodate"]), "both replicas UpToDate" if st["drbd_uptodate"] else "DRBD is not UpToDate/UpToDate")
+    # Moving the Master while the link is down hands service to a copy that has
+    # been diverging, and silently discards everything written since the split.
+    # UpToDate on both sides does not mean they agree.
+    _link = str(st.get("drbd_link") or "")
+    rec(
+        "drbd_replicating",
+        _link in ("connected", "syncing", ""),
+        {
+            "connected": "replication link is up",
+            "syncing": "replication link is up (resync in progress)",
+            "": "no DRBD resource on this host",
+        }.get(
+            _link,
+            "the replication link is DOWN. Both nodes may report UpToDate and "
+            "still hold different data. Reconnect DRBD before moving anything: "
+            "drbdadm status " + DRBD_RESOURCE,
+        ),
+    )
     rec("qdevice_voting", bool(st["qdevice_ok"]), "qdevice reachable and voting" if st["qdevice_ok"] else "qdevice missing, offline, or not voting")
     # Detail names any entry we could not read, so an operator seeing this
     # pass on a cluster with unreadable entries knows why, instead of the check
@@ -1336,6 +1451,7 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "zimbra_node": st.get("zimbra_node"),
             "drbd_uptodate": st["drbd_uptodate"],
             "drbd_sync_percent": st.get("drbd_sync_percent"),
+            "drbd_link": st.get("drbd_link") or "",
             "qdevice_ok": st["qdevice_ok"],
             "quorate": st.get("quorate"),
             "votes_total": st.get("votes_total"),
