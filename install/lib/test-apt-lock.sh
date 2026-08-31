@@ -122,6 +122,19 @@ else
     "$(grep -nE '(^|[;&|(]  *|! )apt-get ' "$STAGE" | grep -vE 'warn |info |^ *#')"
 fi
 grep -q 'kin_stage3_cleanup' "$STAGE" && ok "02 restores the background updaters however it exits" || bad "no cleanup trap"
+grep -q 'apt_ensure_tmpdir' "$STAGE" && ok "02 recreates /tmp after the base-image upgrade" || bad "02 does not restore /tmp after upgrade"
+grep -q 'apt_ensure_tmpdir' "$LIB" && ok "apt-lock defines apt_ensure_tmpdir" || bad "missing apt_ensure_tmpdir"
+
+# --- /tmp missing after systemd upgrade must not kill apt -------------------
+FAKE_TMP="$TMP/gone-tmp"
+rm -rf "$FAKE_TMP"
+KIN_APT_TMPDIR="$FAKE_TMP" KIN_APT_VARTMP="$TMP/gone-vartmp" apt_ensure_tmpdir
+if [ -d "$FAKE_TMP" ]; then
+  ok "apt_ensure_tmpdir creates a missing /tmp"
+else
+  bad "apt_ensure_tmpdir left tmpdir missing"
+fi
+[ "$TMPDIR" = "$FAKE_TMP" ] && ok "apt_ensure_tmpdir exports TMPDIR for apt/mkstemp" || bad "TMPDIR not set ($TMPDIR)"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi

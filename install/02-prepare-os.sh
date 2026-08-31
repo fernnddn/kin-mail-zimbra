@@ -207,6 +207,9 @@ else
     warn "mode on an HA pair), not during install."
   fi
 fi
+# systemd/tmpfiles in the upgrade above can remount /tmp; recreate it before
+# the next apt-get or mkstemp dies with "No such file or directory".
+apt_ensure_tmpdir || true
 
 . /etc/os-release
 case "${VERSION_ID:-}" in

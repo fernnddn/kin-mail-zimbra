@@ -17,6 +17,13 @@ if [ -n "${KIN_MAIL_CONFIG:-}" ]; then
   CONF_DIR=$(dirname "$CONF_FILE")
 fi
 
+# Absolute install/ dir so apt_ensure_tmpdir can cd back if /tmp remounts
+# mid-upgrade and this shell's cwd inode disappears.
+if [ -z "${KIN_MAIL_INSTALL_DIR:-}" ]; then
+  KIN_MAIL_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  export KIN_MAIL_INSTALL_DIR
+fi
+
 # 0755 so unprivileged kin-console can traverse to 0644 markers. Do not rely
 # on umask. Sensitive files inside (config) stay 0600.
 ensure_kin_mail_conf_dir() {

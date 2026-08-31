@@ -124,14 +124,36 @@ apt_repair_dpkg() {
   fi
 }
 
+# apt and getcwd die if /tmp is missing, or if systemd-tmpfiles remounts /tmp
+# as a new tmpfs during a systemd upgrade while this shell still sits on the
+# old inode (ENOENT on mkstemp, "getcwd() failed"). Seen live on jammy after
+# the base-image upgrade in 02-prepare-os (31 Aug 2026).
+apt_ensure_tmpdir() {
+  local tmpdir="${KIN_APT_TMPDIR:-/tmp}"
+  local vartmp="${KIN_APT_VARTMP:-/var/tmp}"
+  mkdir -p "$tmpdir" "$vartmp" || return 1
+  chmod 1777 "$tmpdir" 2>/dev/null || true
+  chmod 1777 "$vartmp" 2>/dev/null || true
+  export TMPDIR="$tmpdir" TMP="$tmpdir" TEMP="$tmpdir"
+  if ! pwd >/dev/null 2>&1; then
+    cd / || true
+    if [ -n "${KIN_MAIL_INSTALL_DIR:-}" ] && [ -d "${KIN_MAIL_INSTALL_DIR}" ]; then
+      cd "$KIN_MAIL_INSTALL_DIR" || true
+    fi
+  fi
+  return 0
+}
+
 # Every apt-get in the installer goes through this. The lock timeout is the
 # backstop for a race that starts after apt_wait_for_lock returned.
 kin_apt() {
+  apt_ensure_tmpdir || true
   apt-get -o DPkg::Lock::Timeout="$KIN_APT_LOCK_WAIT" "$@"
 }
 
 # Clear the way once, at the start of a stage that is about to use apt.
 apt_prepare() {
+  apt_ensure_tmpdir || true
   apt_pause_background_upgrades
   apt_wait_for_lock || return 1
   apt_repair_dpkg
