@@ -183,6 +183,41 @@ class ReplicationValueTests(unittest.TestCase):
                     )
 
 
+class AddressGuardTests(unittest.TestCase):
+    """Every path that writes a DRBD address must refuse a wrong one.
+
+    An empty address, the same address on both nodes, or the Observability IP
+    all point replication somewhere it must never go. The greenfield role has
+    always refused them; the two Add Host roles did not, so running those
+    playbooks directly - without the console's own validation in front - could
+    write any of the three.
+    """
+
+    WRITERS = [
+        ROLES / "drbd_resource/tasks/resource_file.yml",
+        ROLES / "drbd_live_join/tasks/resource_file.yml",
+        ROLES / "cluster_survivor_replace/tasks/drbd_peer.yml",
+    ]
+
+    def test_every_writer_checks_the_addresses_first(self) -> None:
+        for path in self.WRITERS:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(role=str(path.relative_to(ROLES))):
+                self.assertIn("drbd_resource_node_a_address | length > 0", text)
+                self.assertIn(
+                    "drbd_resource_node_a_address != drbd_resource_node_b_address", text
+                )
+                self.assertIn("corosync_qdevice_qnetd_ip", text)
+
+    def test_the_guard_runs_before_the_template(self) -> None:
+        for path in self.WRITERS:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(role=str(path.relative_to(ROLES))):
+                guard = text.index("drbd_resource_node_a_address | length > 0")
+                tpl = text.index("ansible.builtin.template:")
+                self.assertLess(guard, tpl, "the file is written before it is checked")
+
+
 class SingleNodeHandoffTests(unittest.TestCase):
     """Remove Host leaves a one-host file. Add Host has to read it back."""
 

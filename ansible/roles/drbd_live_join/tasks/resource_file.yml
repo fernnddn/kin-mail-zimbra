@@ -1,4 +1,21 @@
 ---
+- name: Require DRBD node addresses (never silently use stale role defaults)
+  ansible.builtin.assert:
+    that:
+      - drbd_resource_node_a_address | length > 0
+      - drbd_resource_node_b_address | length > 0
+      - drbd_resource_node_a_address != drbd_resource_node_b_address
+      - drbd_resource_node_a_address != (corosync_qdevice_qnetd_ip | default(''))
+      - drbd_resource_node_b_address != (corosync_qdevice_qnetd_ip | default(''))
+    fail_msg: >-
+      drbd_resource_node_*_address is empty, identical on both nodes, or
+      collides with the qnetd IP
+      ({{ corosync_qdevice_qnetd_ip | default('unset') }}).
+      Replication would be pointed at the wrong host. The console checks this
+      before it runs the playbook; this is the guard for running the role
+      directly, and it is the same one the greenfield path has always had.
+  tags: [drbd, livejoin, config]
+
 - name: Deploy the DRBD resource definition for the survivor plus new node peers
   ansible.builtin.template:
     src: kin-zimbra.res.j2
