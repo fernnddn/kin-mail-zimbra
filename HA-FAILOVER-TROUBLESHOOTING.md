@@ -266,6 +266,35 @@ To see it directly:
 
 ---
 
+## A rebuilt pair must replicate on the same terms as a fresh one
+
+Three roles used to write `kin-zimbra.res`: `drbd_resource` for a greenfield
+pair, `cluster_survivor_replace` and `drbd_live_join` for Add Host. Only the
+first carried the Phase 7 tuning. The other two still had
+
+    syncer { rate 100M; }
+
+with no rate controller, and no `ping-int` / `ping-timeout` / `connect-int` /
+`timeout`, so DRBD's stock ping-timeout of 5 applied: half a second for the
+peer to answer a keepalive, on a NIC shared with corosync, the SBD iSCSI
+session and Zimbra. That is the configuration whose PingAck timeouts tore
+replication down every three minutes in Phase 7, and Add Host would have put it
+straight back on a rebuilt pair - during the longest resync there is, a whole
+disk, at a ceiling 2.5x higher than the tested one.
+
+They are one file now; the two Add Host roles link to the greenfield template,
+and the resync ceiling is the same value in all three. A test fails if any
+file shared between roles stops being byte-identical.
+
+If you are checking a live pair, the settings that matter are:
+
+    drbdadm dump kin-zimbra | grep -E 'c-plan-ahead|c-max-rate|ping-timeout|syncer'
+
+`c-plan-ahead` present and `syncer` absent is correct. `syncer` present means
+that node was configured by an old Add Host and is running the Phase 7 fault.
+
+---
+
 ## Remove Host stopped, and now there is nothing to click
 
 Remove Host takes the retired node out of Corosync first and demotes this node

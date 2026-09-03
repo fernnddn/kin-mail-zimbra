@@ -1,7 +1,7 @@
 # KIN Mail - production Zimbra DRBD resource (task 2.5)
 # Data: {{ drbd_resource_backing_disk | default(drbd_resource_disk) }}
 # (LUKS mapper under DRBD when encryption is on; raw partition otherwise)
-# Meta: EXTERNAL on {{ drbd_resource_meta_disk }} -> {{ drbd_resource_meta_img }}
+# Meta: EXTERNAL on {{ drbd_resource_meta_disk }}{{ ' -> ' ~ drbd_resource_meta_img if drbd_resource_meta_img is defined else '' }}
 # NEVER use meta-disk internal on a populated data device.
 resource {{ drbd_resource_name }} {
   protocol {{ drbd_resource_protocol }};

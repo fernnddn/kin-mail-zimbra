@@ -17,7 +17,12 @@ cluster_add_host_drbd_meta_img_size: 256M
 cluster_add_host_drbd_meta_dir: /var/lib/kin-mail
 cluster_add_host_drbd_port: 7788
 cluster_add_host_drbd_protocol: C
-cluster_add_host_drbd_sync_rate: 100M
+# Matches drbd_resource_sync_rate. This is the ceiling the rate
+# controller may not cross, and Add Host triggers the longest resync
+# there is: a whole disk. It was 100M here against 40M for a fresh
+# pair, so a rebuilt pair pushed 2.5x as hard down the same NIC that
+# carries corosync and the SBD iSCSI session.
+cluster_add_host_drbd_sync_rate: 40M
 cluster_add_host_drbd_meta_loop_script: /usr/local/sbin/kin-drbd-meta-loop.sh
 cluster_add_host_drbd_meta_loop_unit: kin-drbd-meta-loop.service
 # Wait polls for initial sync progress (logic only - untested).
@@ -41,3 +46,17 @@ drbd_resource_node_a_name: "{{ cluster_add_host_survivor_name }}"
 drbd_resource_node_a_address: "{{ cluster_add_host_survivor_address }}"
 drbd_resource_node_b_name: "{{ cluster_add_host_new_name }}"
 drbd_resource_node_b_address: "{{ cluster_add_host_new_address }}"
+
+# Replication tuning. These MUST match the greenfield role: a pair rebuilt by
+# Add Host was getting the old fixed-rate `syncer` and DRBD's stock 0.5s
+# ping-timeout, which is the configuration whose PingAck timeouts tore down
+# replication every three minutes and fed the Phase 7 fence loop. The template
+# is now shared with drbd_resource; these are the values it reads.
+drbd_resource_tuning: "{{ cluster_add_host_drbd_tuning | default('full') }}"
+drbd_resource_ping_int: "{{ cluster_add_host_drbd_ping_int | default(10) }}"
+drbd_resource_connect_int: "{{ cluster_add_host_drbd_connect_int | default(10) }}"
+drbd_resource_ping_timeout: "{{ cluster_add_host_drbd_ping_timeout | default(30) }}"
+drbd_resource_timeout: "{{ cluster_add_host_drbd_timeout | default(60) }}"
+drbd_resource_c_plan_ahead: "{{ cluster_add_host_drbd_c_plan_ahead | default(20) }}"
+drbd_resource_c_fill_target: "{{ cluster_add_host_drbd_c_fill_target | default('10M') }}"
+drbd_resource_c_min_rate: "{{ cluster_add_host_drbd_c_min_rate | default('4M') }}"
