@@ -205,6 +205,33 @@ else
   t_bad "a set that failed its checksum stays in daily/"
 fi
 
+# --- 9. staging on the mail node is cleared on every exit path -------------
+# Staging is a full copy of the store on the production node's OS disk. A
+# collector that failed part-way used to leave it there until the next night's
+# run reached its own rm -rf - and if the failure was a full disk, that copy is
+# what kept it full.
+grep -q 'trap cleanup_remote_staging EXIT' "$SRC" \
+  && t_ok "remote staging is cleared by an EXIT trap, not only on success" \
+  || t_bad "a failed collector leaves a mail-store copy on the production node"
+trap_line=$(grep -n 'trap cleanup_remote_staging EXIT' "$SRC" | head -1 | cut -d: -f1)
+collect_line=$(grep -n 'REMOTE_SCRIPT_DST --backup' "$SRC" | head -1 | cut -d: -f1)
+if [ -n "$trap_line" ] && [ -n "$collect_line" ] && [ "$trap_line" -lt "$collect_line" ]; then
+  t_ok "the trap is armed before the collector is invoked"
+else
+  t_bad "the trap is armed too late to cover a failed collect" "trap=$trap_line collect=$collect_line"
+fi
+# The success path must not clean twice, and must not be skipped either.
+grep -q 'STAGING_CLEANED=1' "$SRC" \
+  && t_ok "the normal cleanup marks staging as already cleared" \
+  || t_bad "the trap would re-run cleanup after the normal path"
+
+# --- 10. an incomplete set is reported, not silently marked good ----------
+if awk '/SHA256SUMS match/,/^say "Retention/' "$SRC" | grep -q 'complete=false'; then
+  t_ok "a set with failed mailbox exports is called out after verification"
+else
+  t_bad "an incomplete set reads exactly like a complete one"
+fi
+
 echo
 if [ "$t_fail" -eq 0 ]; then echo "ALL OK ($t_pass checks)"; exit 0; fi
 echo "FAILED $t_fail test(s) ($t_pass ok)"; exit 1

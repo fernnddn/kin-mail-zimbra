@@ -139,6 +139,15 @@ run_check() {
       fail "no verified backup set exists yet"
       problems=$((problems + 1))
     fi
+    # Checksums prove a set arrived intact, not that it holds every mailbox.
+    if [ -n "$newest" ] && grep -q '^complete=false' "${newest#* }/MANIFEST.txt" 2>/dev/null; then
+      local got want
+      got=$(grep -m1 '^mailboxes_exported=' "${newest#* }/MANIFEST.txt" | cut -d= -f2)
+      want=$(grep -m1 '^mailboxes_expected=' "${newest#* }/MANIFEST.txt" | cut -d= -f2)
+      fail "the newest backup is INCOMPLETE: ${got:-0} of ${want:-0} mailboxes exported"
+      printf '           %s\n' "restorable from store/MySQL/LDAP; see MANIFEST.txt for the accounts"
+      problems=$((problems + 1))
+    fi
     local partial
     partial=$(find "$BACKUP_ROOT/daily" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d '[:space:]')
     [ "$partial" -gt "$n" ] && warn "$((partial - n)) set(s) are unverified (an interrupted run leaves these)"

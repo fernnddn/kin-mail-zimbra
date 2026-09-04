@@ -227,6 +227,24 @@ DEST="$BACKUP_ROOT/daily/$STAMP"
 mkdir -p "$BACKUP_ROOT/daily"
 chmod 700 "$BACKUP_ROOT"
 
+# Staging on the mail node is a full copy of the store, on that node's OS
+# disk. Every exit path from here on has to clear it: without this trap, a
+# collector that failed part-way left it there until the next night's run
+# happened to reach its own `rm -rf` - and if the failure was a full disk,
+# that is the copy keeping it full.
+STAGING_CLEANED=0
+cleanup_remote_staging() {
+  [ "${STAGING_CLEANED:-0}" = "1" ] && return 0
+  [ -n "${PROMOTED:-}" ] || return 0
+  STAGING_CLEANED=1
+  if backup_ssh "$PROMOTED" "rm -rf '$REMOTE_STAGING'" >/dev/null 2>&1; then
+    warn "cleared leftover staging on $PROMOTED"
+  else
+    warn "could not clear $PROMOTED:$REMOTE_STAGING - remove it by hand"
+  fi
+}
+trap cleanup_remote_staging EXIT
+
 say "Collecting on $PROMOTED"
 backup_ssh "$PROMOTED" "sudo $REMOTE_SCRIPT_DST --backup --staging '$REMOTE_STAGING'"
 
@@ -245,6 +263,7 @@ checksum_rc=0
 # to also leave this run's copy sitting on the production node's /var/tmp;
 # repeated failures would otherwise fill that disk over time.
 say "Removing remote staging"
+STAGING_CLEANED=1
 backup_ssh "$PROMOTED" "rm -rf '$REMOTE_STAGING'" || warn "remote staging cleanup failed, check $PROMOTED:$REMOTE_STAGING by hand"
 
 if [ "$checksum_rc" -ne 0 ]; then
@@ -265,6 +284,17 @@ if [ "$checksum_rc" -ne 0 ]; then
 fi
 ok "SHA256SUMS match"
 touch "$DEST/.backup-ok"
+
+# Checksums prove the set arrived intact, not that it holds everything it was
+# meant to. The collector records a shortfall in per-account exports; say so
+# here rather than letting a partial set read as a clean one.
+if grep -q '^complete=false' "$DEST/MANIFEST.txt" 2>/dev/null; then
+  got=$(grep -m1 '^mailboxes_exported=' "$DEST/MANIFEST.txt" | cut -d= -f2)
+  want=$(grep -m1 '^mailboxes_expected=' "$DEST/MANIFEST.txt" | cut -d= -f2)
+  warn "This set is INCOMPLETE: ${got:-0} of ${want:-0} mailbox exports succeeded."
+  warn "It is checksum-valid and restorable from store, MySQL and LDAP."
+  warn "The accounts that failed are named in $DEST/MANIFEST.txt"
+fi
 
 say "Retention (daily keep=$DAILY_KEEP weekly keep=$WEEKLY_KEEP)"
 apply_retention "$DEST"

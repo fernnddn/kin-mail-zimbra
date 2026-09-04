@@ -549,6 +549,31 @@ On the Backup VM:
 | Partial sets | `UNVERIFIED_KEEP=2`. A run interrupted between the pull and the checksum leaves a set with no `.backup-ok` marker. These are kept for inspection, never counted towards the quota, and never reported as fresh. |
 | Failed sets | `/var/lib/kin-mail-backup/failed/<timestamp>` (checksum mismatch; newest 5 kept) |
 | Install | `backup/install-backup-vm.sh` (idempotent; `--check` to audit, `--uninstall` to unschedule) |
+| Staging | `/var/tmp/kin-mail-backup-staging` on the **Promoted mail node**, cleared on every exit path |
+
+**A set can be checksum-valid and still incomplete.** `SHA256SUMS` proves the
+set arrived intact; it says nothing about whether every mailbox was exported.
+The collector records the result of that in `MANIFEST.txt`:
+
+| Field | Meaning |
+|---|---|
+| `mailboxes_expected` / `mailboxes_exported` | per-account tgz exports attempted vs written |
+| `mailboxes_failed` | the accounts with no tgz in this set |
+| `complete` | `false` when any export failed |
+
+An incomplete set is still restorable - the store, MySQL and LDAP layers are
+the restore path and they are all present - but the per-account hot exports for
+those accounts are missing. The nightly run says so after verification, and
+`install-backup-vm.sh --check` fails while the newest set is incomplete.
+
+**Staging is on the mail node's OS disk, by design**, so nothing is written to
+the DRBD volume. The shipped sizing is a 100GB OS disk beside a 500GB data
+disk, so a large enough store would fill `/` on a live mail node and take mail
+down. The collector sizes `store` + `index` + `redolog` first and refuses
+(exit 4) when the staging filesystem cannot hold roughly 150% of it. Skipping a
+night's backup is the better failure. If staging lives on its own disk and the
+estimate is wrong for that node, raise `KIN_BACKUP_SPACE_FACTOR` or set
+`KIN_BACKUP_SKIP_SPACE_CHECK=1`.
 | Cron | `/etc/cron.d/kin-mail-backup` → `15 2 * * * root /usr/local/sbin/kin-mail-backup.sh` |
 | Log | `/var/log/kin-mail-backup.log` |
 | Scripts | `/usr/local/sbin/kin-mail-backup.sh` (orchestrator), `kin-mail-backup-remote.sh` (collector on mail nodes), `kin-mail-restore.sh` |

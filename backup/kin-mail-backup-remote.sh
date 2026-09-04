@@ -71,15 +71,117 @@ if [ -z "$STAGING" ]; then
   fail "--staging DIR is required"
   exit 2
 fi
-case "$STAGING" in
-  /opt/zimbra|/*/opt/zimbra/*)
+# The next thing this script does with $STAGING is `rm -rf` it, as root, on a
+# live production mail node. $STAGING comes from the backup VM's config file,
+# so a typo there is a destructive command here. Refuse anything that is not
+# plainly a scratch directory before that line is reached.
+assert_safe_staging() {
+  local dir="$1"
+  case "$dir" in
+  /) fail "Staging must not be /"; exit 2 ;;
+  /*) : ;;
+  *) fail "Staging must be an absolute path (got '$dir')"; exit 2 ;;
+  esac
+  case "$dir" in
+  */. | */..) fail "Staging must not end in . or .."; exit 2 ;;
+  *//*) fail "Staging path contains an empty component: '$dir'"; exit 2 ;;
+  esac
+  case "$dir" in
+  /opt/zimbra | /opt/zimbra/*)
     fail "Staging must not be on /opt/zimbra (DRBD)"
     exit 2
     ;;
-esac
+  /bin | /boot | /dev | /etc | /home | /lib | /opt | /proc | /root | /run | /sbin | /srv | /sys | /usr | /var)
+    fail "Staging must not be a system directory ('$dir')"
+    exit 2
+    ;;
+  /bin/* | /boot/* | /dev/* | /etc/* | /lib/* | /proc/* | /sbin/* | /sys/* | /usr/*)
+    fail "Staging must not be under a system directory ('$dir')"
+    exit 2
+    ;;
+  esac
+  # At least two path components, so /var/tmp is allowed but /var is not, and
+  # a single stray component like /staging cannot become the target either.
+  local depth
+  depth=$(printf '%s' "${dir#/}" | awk -F/ '{print NF}')
+  if [ "${depth:-0}" -lt 2 ]; then
+    fail "Staging must be at least two levels deep (got '$dir')"
+    exit 2
+  fi
+  if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+    fail "Staging exists and is not a directory: '$dir'"
+    exit 2
+  fi
+}
+assert_safe_staging "$STAGING"
+
 if ! is_promoted_here; then
   fail "This node is not Promoted (/opt/zimbra not mounted with store)"
   exit 3
+fi
+
+# Staging is deliberately on the root filesystem so nothing is written to the
+# DRBD volume. That means a full copy of the mail store lands on the OS disk -
+# and the shipped sizing is a 100GB OS disk beside a 500GB data disk, so a
+# store that has outgrown the OS disk would fill / on a live mail node and take
+# mail down. That is a worse outcome than skipping a night's backup, so this
+# refuses before writing anything.
+#
+# Needed is the store plus index plus redolog, times a factor covering the
+# mysqldump and the per-account tgz exports (which are a compressed second copy
+# of the same mail). Override the factor, or skip the check outright, for a
+# node whose staging lives on its own disk.
+: "${KIN_BACKUP_SPACE_FACTOR:=150}"
+: "${KIN_BACKUP_SKIP_SPACE_CHECK:=0}"
+
+human() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || printf '%sB' "${1:-0}"; }
+
+assert_staging_space() {
+  local dir="$1" parent src_bytes need_bytes avail_bytes
+  parent="$dir"
+  while [ ! -d "$parent" ] && [ "$parent" != "/" ]; do parent=$(dirname "$parent"); done
+
+  src_bytes=0
+  local d
+  for d in /opt/zimbra/store /opt/zimbra/index /opt/zimbra/redolog; do
+    [ -d "$d" ] || continue
+    local b
+    b=$(du -sb "$d" 2>/dev/null | awk '{print $1}')
+    case "$b" in '' | *[!0-9]*) b=0 ;; esac
+    src_bytes=$((src_bytes + b))
+  done
+  if [ "$src_bytes" -eq 0 ]; then
+    warn "could not size /opt/zimbra/store - skipping the free-space check"
+    return 0
+  fi
+
+  avail_bytes=$(df -B1 --output=avail "$parent" 2>/dev/null | tail -1 | tr -dc '0-9')
+  case "$avail_bytes" in '' | *[!0-9]*) avail_bytes=0 ;; esac
+  if [ "$avail_bytes" -eq 0 ]; then
+    warn "could not read free space on $parent - skipping the free-space check"
+    return 0
+  fi
+
+  need_bytes=$((src_bytes / 100 * KIN_BACKUP_SPACE_FACTOR))
+  ok "staging needs ~$(human "$need_bytes"), $(human "$avail_bytes") free on $parent"
+  if [ "$avail_bytes" -ge "$need_bytes" ]; then
+    return 0
+  fi
+  fail "Not enough room on $parent to stage this backup."
+  fail "  mail data:  $(human "$src_bytes")"
+  fail "  needed:     ~$(human "$need_bytes")  (${KIN_BACKUP_SPACE_FACTOR}% of it, for the dump and tgz exports)"
+  fail "  available:  $(human "$avail_bytes")"
+  fail "Staging on this node is on the OS disk. Filling it would take mail"
+  fail "down, so this run is refusing rather than starting a copy it cannot"
+  fail "finish. Point REMOTE_STAGING at a larger filesystem on this node, or"
+  fail "set KIN_BACKUP_SKIP_SPACE_CHECK=1 if the estimate is wrong for it."
+  exit 4
+}
+
+if [ "$KIN_BACKUP_SKIP_SPACE_CHECK" != "1" ]; then
+  assert_staging_space "$STAGING"
+else
+  warn "free-space check skipped (KIN_BACKUP_SKIP_SPACE_CHECK=1)"
 fi
 
 rm -rf "$STAGING"
@@ -149,19 +251,69 @@ ok "config tarballs written"
 say "5. Per-account REST tgz (Zimbra-native hot export)"
 ACCOUNTS=$(zimbra_sh 'zmprov -l gaa' | grep -vE '^(spam\.|ham\.|virus-quarantine\.|galsync\.)' || true)
 echo "accounts=$(printf '%s' "$ACCOUNTS" | tr '\n' ' ')" >> "$MARKER_FILE"
+
+# An empty mailbox still exports a valid tgz with a header in it, so anything
+# smaller than this is a truncated or error-page response, not a mailbox.
+# getRestURL can exit 0 and still write one, which would otherwise be counted
+# as a successful export and pass the SHA256SUMS check as a good backup.
+MIN_TGZ_BYTES=64
+
+expected=0
 exported=0
+failed_accounts=""
 while IFS= read -r acct; do
   [ -n "$acct" ] || continue
+  expected=$((expected + 1))
   safe=$(printf '%s' "$acct" | tr '@.' '__')
-  if zimbra_sh "zmmailbox -z -m '$acct' getRestURL '//?fmt=tgz'" > "$STAGING/mailboxes/${safe}.tgz"; then
+  dest="$STAGING/mailboxes/${safe}.tgz"
+  rc=0
+  zimbra_sh "zmmailbox -z -m '$acct' getRestURL '//?fmt=tgz'" > "$dest" || rc=$?
+  size=$(wc -c <"$dest" 2>/dev/null | tr -d ' ')
+  case "$size" in '' | *[!0-9]*) size=0 ;; esac
+  if [ "$rc" -eq 0 ] && [ "$size" -ge "$MIN_TGZ_BYTES" ]; then
     exported=$((exported + 1))
-    ok "exported $acct"
+    ok "exported $acct ($size bytes)"
   else
-    warn "export failed for $acct (continuing)"
-    rm -f "$STAGING/mailboxes/${safe}.tgz"
+    if [ "$rc" -eq 0 ]; then
+      warn "export for $acct returned success but only $size bytes - discarding"
+    else
+      warn "export failed for $acct (exit $rc)"
+    fi
+    rm -f "$dest"
+    failed_accounts="$failed_accounts $acct"
   fi
 done <<< "$ACCOUNTS"
-ok "$exported mailbox tgz file(s)"
+
+# Record the counts. Without them a set that exported none of its mailboxes
+# looked exactly like one that exported all of them: the run still succeeded,
+# checksums still matched, and the backup was still marked verified.
+{
+  echo "mailboxes_expected=$expected"
+  echo "mailboxes_exported=$exported"
+  echo "mailboxes_failed=${failed_accounts# }"
+} >> "$MARKER_FILE"
+
+# A shortfall is recorded and shouted about, but it does not abort the run.
+# The store, MySQL and LDAP layers are the restore path; a set carrying them is
+# genuinely restorable and far better than no backup at all. Aborting here
+# would also strand this staging tree - a full copy of the mail store - on the
+# production node's OS disk until the next night's run cleared it.
+if [ "$expected" -gt 0 ] && [ "$exported" -eq 0 ]; then
+  echo "complete=false" >> "$MARKER_FILE"
+  fail "none of the $expected mailboxes exported - check zmmailbox on this node"
+  fail "store, MySQL and LDAP were still collected, so this set can still be"
+  fail "restored, but it has no per-account tgz exports in it at all."
+elif [ "$exported" -lt "$expected" ]; then
+  echo "complete=false" >> "$MARKER_FILE"
+else
+  echo "complete=true" >> "$MARKER_FILE"
+fi
+if [ "$exported" -lt "$expected" ] && [ "$exported" -gt 0 ]; then
+  warn "$((expected - exported)) of $expected mailbox export(s) failed:${failed_accounts}"
+  warn "The set is still restorable from store/MySQL/LDAP, but these mailboxes"
+  warn "have no per-account tgz in it."
+fi
+ok "$exported of $expected mailbox tgz file(s)"
 
 say "6. Checksums"
 du -sh "$STAGING" | awk '{print "staging_size="$1}' >> "$MARKER_FILE"
