@@ -497,6 +497,45 @@ FOSS has **no** `zmbackup` / `zmrestore` (Network Edition). Collector uses
 onto `/var/tmp` (root fs, never DRBD), config tarballs, and per-account
 `zmmailbox getRestURL '//?fmt=tgz'`.
 
+### Setting up the Backup VM
+
+Everything below is installed by one idempotent script, run from a checkout on
+the backup VM. Until 0.1.3 this table described a layout that nothing created:
+the scripts existed in the repo and the nightly schedule did not exist at all,
+so a VM was "set up" only if somebody had wired the cron entry by hand.
+
+```bash
+sudo backup/install-backup-vm.sh
+```
+
+It installs the three scripts, creates `/etc/kin-mail-backup/`, generates the
+SSH identity if there is none, writes the cron entry and a logrotate rule, and
+installs the freshness probe when a Zabbix agent is present. Re-running it is
+safe: an existing config and an existing SSH key are never overwritten, because
+rotating that key would leave every mail node trusting the old one and break
+the next unattended run silently.
+
+Two things still need a human afterwards, and the script says so rather than
+reporting success:
+
+1. Set `MAIL_NODES` in `/etc/kin-mail-backup/config` to the real mail nodes.
+2. Trust the printed public key on each node as the `kin` user.
+
+Then confirm the pull path end to end:
+
+```bash
+sudo /usr/local/sbin/kin-mail-backup.sh --probe
+```
+
+To ask whether this VM is actually taking backups - scripts present, schedule
+installed, cron running, newest verified set inside the 26h window:
+
+```bash
+sudo backup/install-backup-vm.sh --check
+```
+
+`--uninstall` removes the schedule and leaves every backup in place.
+
 ### Where backups live / retention
 
 On the Backup VM:
@@ -506,7 +545,10 @@ On the Backup VM:
 | Config | `/etc/kin-mail-backup/config` (mode 0600; not in git) |
 | Daily sets | `/var/lib/kin-mail-backup/daily/<UTC timestamp>` |
 | Weekly | `/var/lib/kin-mail-backup/weekly/<ISO week>` (`cp -al` of the first daily of that week) |
-| Keep | `DAILY_KEEP=7`, `WEEKLY_KEEP=4` |
+| Keep | `DAILY_KEEP=7`, `WEEKLY_KEEP=4` - **verified sets only** |
+| Partial sets | `UNVERIFIED_KEEP=2`. A run interrupted between the pull and the checksum leaves a set with no `.backup-ok` marker. These are kept for inspection, never counted towards the quota, and never reported as fresh. |
+| Failed sets | `/var/lib/kin-mail-backup/failed/<timestamp>` (checksum mismatch; newest 5 kept) |
+| Install | `backup/install-backup-vm.sh` (idempotent; `--check` to audit, `--uninstall` to unschedule) |
 | Cron | `/etc/cron.d/kin-mail-backup` → `15 2 * * * root /usr/local/sbin/kin-mail-backup.sh` |
 | Log | `/var/log/kin-mail-backup.log` |
 | Scripts | `/usr/local/sbin/kin-mail-backup.sh` (orchestrator), `kin-mail-backup-remote.sh` (collector on mail nodes), `kin-mail-restore.sh` |

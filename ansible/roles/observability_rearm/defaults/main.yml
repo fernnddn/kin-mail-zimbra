@@ -1,5 +1,9 @@
 ---
+# Poll interval and attempt count while waiting for sbd to arm on a node.
+# SBD_DELAY_START can hold the unit in `activating` for ~70s on a fresh
+# LUN, so the default ceiling here is 24 x 5s = 120s.
 observability_rearm_wait_sec: 5
+observability_arm_retries: 24
 observability_sbd_stop_order: ""
 observability_promoted: ""
 observability_disarm_dropin: >-

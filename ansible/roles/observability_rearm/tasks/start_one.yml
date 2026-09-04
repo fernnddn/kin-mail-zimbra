@@ -1,7 +1,68 @@
 ---
+# Arming SBD is the operation that can panic the node it runs on: if the
+# watchdog cannot reach its slot on the new LUN in time, sbd reboots the host
+# rather than risk two Promoted replicas. The disarm path already guards its
+# stop loop with a boot_id check for that reason. Without the same guard here,
+# a first node that self-fenced while arming would be followed straight into
+# the second, and a rebuild meant to restore fencing would take mail down on
+# both nodes instead.
+
+- name: Capture boot_id before arming sbd
+  ansible.builtin.command:
+    cmd: cat /proc/sys/kernel/random/boot_id
+  delegate_to: "{{ obs_start_host }}"
+  register: observability_arm_boot_before
+  changed_when: false
+
 - name: Start sbd on this mail node
   ansible.builtin.command:
     cmd: systemctl start sbd
   delegate_to: "{{ obs_start_host }}"
   register: observability_sbd_start
   failed_when: observability_sbd_start.rc != 0
+
+# SBD_DELAY_START holds the unit in activating for up to ~70s on a fresh LUN.
+# Waiting for `active` here is what makes the loop sequential in fact and not
+# only in intent: the next node is armed only once this one is armed.
+- name: Wait for sbd to finish arming on this node
+  ansible.builtin.command:
+    cmd: systemctl is-active sbd
+  delegate_to: "{{ obs_start_host }}"
+  register: observability_arm_active
+  changed_when: false
+  failed_when: false
+  retries: "{{ observability_arm_retries | int }}"
+  delay: "{{ observability_rearm_wait_sec | int }}"
+  until: observability_arm_active.stdout | trim == "active"
+
+- name: Confirm sbd came up on this node
+  ansible.builtin.assert:
+    that:
+      - observability_arm_active.stdout | trim == "active"
+    fail_msg: >-
+      sbd is {{ observability_arm_active.stdout | trim | default('unknown') }}
+      on {{ obs_start_host }} after waiting
+      {{ (observability_arm_retries | int) * (observability_rearm_wait_sec | int) }}s.
+      Refusing to arm the remaining node: fencing would be enabled with a
+      device only one node can reach.
+
+- name: Capture boot_id after arming sbd
+  ansible.builtin.command:
+    cmd: cat /proc/sys/kernel/random/boot_id
+  delegate_to: "{{ obs_start_host }}"
+  register: observability_arm_boot_after
+  changed_when: false
+
+- name: Fail if this mail node rebooted while arming sbd
+  ansible.builtin.assert:
+    that:
+      - >-
+        observability_arm_boot_before.stdout
+        | kin_boot_id_unchanged(observability_arm_boot_after.stdout)
+    fail_msg: >-
+      boot_id changed on {{ obs_start_host }} while sbd was arming, which means
+      the node self-fenced against the new SBD device.
+      before={{ observability_arm_boot_before.stdout | trim }}
+      after={{ observability_arm_boot_after.stdout | trim }}.
+      Refusing to arm the remaining node - check the LUN is reachable from both
+      nodes before retrying.

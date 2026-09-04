@@ -59,6 +59,26 @@ chk("observability unreachable is danger",
 // qdevice noise must not stack on top of the real observability alert.
 chk("observability alert replaces the qdevice alert",
   ids({ ...healthy, qdevice_ok: false, observability: { status: "unreachable" } }), ["observability"]);
+chk("observability absent is a warning",
+  deriveAlerts({ ...healthy, observability: { status: "absent" } }).map((a) => [a.id, a.severity]),
+  [["observability-absent", "warn"]]);
+
+// Losing the witness costs the pair its third vote, so quorum then needs both
+// mail nodes and a single node failure stops mail. Saying only "no witness"
+// reads as "still fine, I have two nodes", which is the wrong conclusion.
+const detailOf = (snap, id) =>
+  (deriveAlerts(snap).find((a) => a.id === id) || {}).detail || "";
+chk("absent witness says the pair cannot survive a node failure",
+  /both mail\s+nodes/.test(detailOf({ ...healthy, observability: { status: "absent" } }, "observability-absent")),
+  true);
+chk("absent witness titles the consequence, not just the missing VM",
+  /cannot survive/.test(
+    (deriveAlerts({ ...healthy, observability: { status: "absent" } })[0] || {}).title || ""),
+  true);
+chk("unreachable witness says losing a node stops mail",
+  /stops mail/.test(detailOf({ ...healthy, observability: { status: "unreachable" } }, "observability")),
+  true);
+
 chk("qdevice alone is a warning",
   deriveAlerts({ ...healthy, qdevice_ok: false }).map((a) => [a.id, a.severity]), [["qdevice", "warn"]]);
 

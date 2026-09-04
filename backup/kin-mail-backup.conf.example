@@ -18,3 +18,9 @@ DRBD_RESOURCE="kin-zimbra"
 
 DAILY_KEEP=7
 WEEKLY_KEEP=4
+
+# Only sets that passed their checksum count towards DAILY_KEEP/WEEKLY_KEEP.
+# A run interrupted between the pull and the verification leaves a partial set
+# behind; this many are kept for inspection and then discarded. They are never
+# counted as backups and never reported as fresh. 0 discards them immediately.
+UNVERIFIED_KEEP=2

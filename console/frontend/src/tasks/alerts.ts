@@ -132,19 +132,28 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
     });
   }
 
+  // Both of these states cost the pair its third vote. Quorum then needs BOTH
+  // mail nodes, so losing one stops mail instead of failing over - the exact
+  // opposite of what an operator assumes a running HA pair will do. Naming
+  // only the missing witness let that be read as "still fine, I have two
+  // nodes", so each of these says what it costs.
   const obs = cluster.observability?.status;
   if (obs === "unreachable") {
     out.push({
       id: "observability",
       title: "Observability VM unreachable",
-      detail: "Quorum witness and SBD fencing are both down.",
+      detail:
+        "The quorum witness and SBD fencing are both down. Until it is back, " +
+        "losing a mail node stops mail rather than failing over.",
       severity: "danger",
     });
   } else if (obs === "absent") {
     out.push({
       id: "observability-absent",
-      title: "No Observability VM configured",
-      detail: "The pair has no quorum witness and no fencing.",
+      title: "Pair cannot survive a node failure",
+      detail:
+        "There is no quorum witness and no fencing, so quorum needs both mail " +
+        "nodes. Add an Observability VM to restore failover.",
       severity: "warn",
     });
   } else if (!cluster.qdevice_ok) {

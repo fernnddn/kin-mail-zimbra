@@ -37,6 +37,25 @@ need_root() {
   [ "$(id -u)" -eq 0 ] || { fail "Run as root"; exit 1; }
 }
 
+# require_count <name> <value> <minimum>
+#
+# A retention count that is empty, not a number, or zero would either abort
+# this script under `set -u` at 2am on a backup VM, or - worse - be taken as
+# "keep none" and delete every backup there is.
+require_count() {
+  local name="$1" value="$2" min="$3"
+  case "$value" in
+  '' | *[!0-9]*)
+    fail "${name} must be a whole number in ${CONF} (got '${value}')"
+    exit 2
+    ;;
+  esac
+  if [ "$value" -lt "$min" ]; then
+    fail "${name}=${value} is below the minimum of ${min}; refusing to run"
+    exit 2
+  fi
+}
+
 load_conf() {
   if [ ! -f "$CONF" ]; then
     fail "Missing $CONF - copy kin-mail-backup.conf.example and set MAIL_NODES"
@@ -48,6 +67,19 @@ load_conf() {
     fail "MAIL_NODES is empty in $CONF"
     exit 2
   fi
+  # Defaults for keys a config written before these existed does not carry.
+  # This script runs under `set -u`, so an unset one would abort with a bare
+  # "unbound variable" on a backup VM at 2am.
+  : "${DAILY_KEEP:=7}"
+  : "${WEEKLY_KEEP:=4}"
+  : "${UNVERIFIED_KEEP:=2}"
+  : "${BACKUP_ROOT:=/var/lib/kin-mail-backup}"
+  : "${REMOTE_STAGING:=/var/tmp/kin-mail-backup-staging}"
+  : "${SSH_USER:=kin}"
+  : "${SSH_IDENTITY:=/etc/kin-mail-backup/id_ed25519}"
+  require_count DAILY_KEEP "$DAILY_KEEP" 1
+  require_count WEEKLY_KEEP "$WEEKLY_KEEP" 1
+  require_count UNVERIFIED_KEEP "$UNVERIFIED_KEEP" 0
 }
 
 backup_ssh() {
@@ -88,6 +120,42 @@ find_promoted() {
   printf 'SELECTED=%s\n' "$found"
 }
 
+# Newest-first list of set directories under $1 that carry the marker written
+# only after SHA256SUMS passed. Set names are UTC timestamps
+# (YYYYmmddTHHMMSSZ) and ISO weeks, so sorting by name is sorting by time -
+# and unlike mtime, a name cannot be changed by a later cp -al or touch.
+verified_sets() {
+  local root="$1" d
+  for d in "$root"/*/; do
+    [ -d "$d" ] || continue
+    d=${d%/}
+    [ -f "$d/.backup-ok" ] || continue
+    printf '%s\n' "$d"
+  done | sort -r
+}
+
+unverified_sets() {
+  local root="$1" d
+  for d in "$root"/*/; do
+    [ -d "$d" ] || continue
+    d=${d%/}
+    [ -f "$d/.backup-ok" ] && continue
+    printf '%s\n' "$d"
+  done | sort -r
+}
+
+# Keep the newest $2 entries of the list on stdin; delete the rest.
+prune_all_but() {
+  local keep="$1" n=0 d
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    n=$((n + 1))
+    [ "$n" -le "$keep" ] && continue
+    rm -rf "$d"
+    ok "pruned $(basename "$d")"
+  done
+}
+
 apply_retention() {
   local daily="$BACKUP_ROOT/daily" weekly="$BACKUP_ROOT/weekly"
   mkdir -p "$daily" "$weekly"
@@ -98,13 +166,23 @@ apply_retention() {
     cp -al "$1" "$weekly/$week"
     ok "weekly snapshot $week"
   fi
-  # Prune by directory mtime. Keep newest DAILY_KEEP / WEEKLY_KEEP names.
-  find "$daily" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
-    | sort -nr | awk -v k="$DAILY_KEEP" 'NR>k {print $2}' \
-    | while IFS= read -r d; do [ -n "$d" ] && rm -rf "$d"; done
-  find "$weekly" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
-    | sort -nr | awk -v k="$WEEKLY_KEEP" 'NR>k {print $2}' \
-    | while IFS= read -r d; do [ -n "$d" ] && rm -rf "$d"; done
+
+  # Only VERIFIED sets count towards the quota. Retention used to prune the
+  # oldest by mtime regardless, so a run interrupted between the pull and the
+  # checksum left a partial set in daily/ with a recent timestamp - and that
+  # partial set then pushed a good backup out of the window. The thing that
+  # made room was the thing that was not a backup.
+  verified_sets "$daily" | prune_all_but "$DAILY_KEEP"
+  verified_sets "$weekly" | prune_all_but "$WEEKLY_KEEP"
+
+  # Partial sets are kept for inspection but bounded, and never counted above.
+  unverified_sets "$daily" | prune_all_but "$UNVERIFIED_KEEP"
+  local leftover
+  leftover=$(unverified_sets "$daily" | wc -l | tr -d '[:space:]')
+  if [ "${leftover:-0}" -gt 0 ]; then
+    warn "${leftover} unverified set(s) in ${daily} - an interrupted run leaves these"
+    warn "They are ignored by retention and by the backup-age check."
+  fi
 }
 
 PROBE_ONLY=0

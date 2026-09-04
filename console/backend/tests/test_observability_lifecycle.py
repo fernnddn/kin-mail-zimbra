@@ -265,6 +265,13 @@ class ObservabilityLifecycleTests(unittest.TestCase):
                 "aaa\n", "aaa"
             )
         )
+        # This used to assert the OPPOSITE - that start_one.yml contained no
+        # boot_id check at all - which encoded the assumption that arming SBD
+        # is safe and only stopping it can fence a node. Arming is when sbd
+        # opens the watchdog and reads its slot, so it is exactly when a node
+        # can reset; if it did, the loop went straight on to arm the peer and
+        # took mail down on both. Both loops carry the guard now, and
+        # test_observability_rearm_guard.py covers the arming side in full.
         rearm_start = (
             REPO
             / "ansible"
@@ -273,7 +280,8 @@ class ObservabilityLifecycleTests(unittest.TestCase):
             / "tasks"
             / "start_one.yml"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("boot_id", rearm_start)
+        self.assertIn("kin_boot_id_unchanged", rearm_start)
+        self.assertIn("/proc/sys/kernel/random/boot_id", rearm_start)
 
 
 if __name__ == "__main__":
