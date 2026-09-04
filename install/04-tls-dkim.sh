@@ -112,10 +112,58 @@ esac
 
 say "TLS method: ${TLS_METHOD}"
 
+# The root that gets appended to every renewed chain, so a bad copy here is a
+# bad copy at 3am ninety days from now, not today.
+#
+# `curl -s` without -f exits 0 on an HTTP error and writes the error page to
+# the output file. Let's Encrypt's 404 is 23KB of HTML, so a "is the file
+# non-empty" check passes happily and the deploy hook then appends that HTML to
+# chain.pem. Fail on the status code, and then confirm the bytes really are the
+# certificate we asked for rather than trusting their length.
 install_isrg_root() {
   mkdir -p "$ZS" /etc/letsencrypt/renewal-hooks/deploy
-  curl -s -m 30 -o "${ZS}/isrgrootx1.pem" https://letsencrypt.org/certs/isrgrootx1.pem
-  [ -s "${ZS}/isrgrootx1.pem" ] || { fail "Failed to download ISRG Root X1"; exit 1; }
+  local dest="${ZS}/isrgrootx1.pem" tmp
+  local url="${KIN_ISRG_ROOT_URL:-https://letsencrypt.org/certs/isrgrootx1.pem}"
+
+  # A good copy already here is reused, so a re-run does not depend on the
+  # network and cannot replace a working root with a worse download.
+  if isrg_root_is_valid "$dest"; then
+    ok "ISRG Root X1 already present and valid"
+    return 0
+  fi
+
+  tmp=$(mktemp "${TMPDIR:-/tmp}/kin-isrg.XXXXXX") || {
+    fail "Could not create a temporary file for the ISRG root"
+    exit 1
+  }
+  if ! curl -fsS -m 30 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    fail "Could not download ISRG Root X1 from ${url}"
+    info "Renewal appends this root to the chain Zimbra serves, so the install"
+    info "stops here rather than continuing without it."
+    exit 1
+  fi
+  if ! isrg_root_is_valid "$tmp"; then
+    rm -f "$tmp"
+    fail "What ${url} returned is not the ISRG Root X1 certificate"
+    info "That is usually a captive portal or a proxy answering instead of"
+    info "Let's Encrypt. Check outbound HTTPS and retry."
+    exit 1
+  fi
+  install -m 0644 "$tmp" "$dest"
+  rm -f "$tmp"
+  ok "ISRG Root X1 downloaded and verified"
+}
+
+# Is this file a PEM certificate, and is it the root we expect?
+isrg_root_is_valid() {
+  local path="$1" subject
+  [ -s "$path" ] || return 1
+  subject=$(openssl x509 -in "$path" -noout -subject 2>/dev/null) || return 1
+  case "$subject" in
+  *"ISRG Root X1"*) return 0 ;;
+  esac
+  return 1
 }
 
 write_deploy_hook() {
