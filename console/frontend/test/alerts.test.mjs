@@ -133,5 +133,45 @@ chk("maintenance-mode is not a mere warning", alertSeverity({ ...okPair, mainten
 chk("a leftover ban is not a mere warning",
   alertSeverity({ ...okPair, bans: [{ resource: "kin-drbd-clone" }] }, "stale_ban"), "danger");
 
+// --- TLS certificate expiry ------------------------------------------------
+// The one fault that is invisible until the morning it takes mail down. Two of
+// the three TLS methods never renew on their own, and on an HA pair renewal
+// only runs on the node that issued the certificate.
+chk("a certificate with plenty of time is silent", ids({ ...healthy, tls_days_left: 60, tls_method: "cloudflare" }), []);
+chk("no certificate reading raises nothing", ids({ ...healthy, tls_days_left: null }), []);
+chk("missing field raises nothing", ids(healthy), []);
+chk("expiring soon is flagged", ids({ ...healthy, tls_days_left: 20, tls_method: "cloudflare" }), ["tls_expiring"]);
+chk("exactly at the threshold is flagged", ids({ ...healthy, tls_days_left: 30, tls_method: "manual" }), ["tls_expiring"]);
+chk("one day past the threshold is silent", ids({ ...healthy, tls_days_left: 31, tls_method: "manual" }), []);
+chk("an expired certificate is its own alert", ids({ ...healthy, tls_days_left: -2, tls_method: "customer" }), ["tls_expired"]);
+
+// Severity: a week out is urgent whoever renews it; expired is always danger.
+{
+  const sev = (c) => deriveAlerts(c).filter((a) => a.id.startsWith("tls_")).map((a) => a.severity);
+  chk("three weeks out warns", sev({ ...healthy, tls_days_left: 21, tls_method: "cloudflare" }), ["warn"]);
+  chk("one week out is danger", sev({ ...healthy, tls_days_left: 5, tls_method: "cloudflare" }), ["danger"]);
+  chk("expired is danger", sev({ ...healthy, tls_days_left: -1, tls_method: "cloudflare" }), ["danger"]);
+}
+
+// The advice has to match who is responsible for renewing it.
+{
+  const detail = (m) => deriveAlerts({ ...healthy, tls_days_left: 10, tls_method: m })[0].detail;
+  chk("cloudflare says renewal is automatic", /[Aa]utomatic renewal/.test(detail("cloudflare")), true);
+  chk("manual says it will not renew itself", /does not renew automatically/.test(detail("manual")), true);
+  chk("customer says it will not renew itself", /does not renew automatically/.test(detail("customer")), true);
+}
+
+// Singular/plural, because "expires in 1 days" is the kind of thing an
+// operator notices and stops trusting the rest of the page over.
+{
+  const title = (d) => deriveAlerts({ ...healthy, tls_days_left: d, tls_method: "manual" })[0].title;
+  chk("one day is singular", title(1), "TLS certificate expires in 1 day");
+  chk("two days is plural", title(2), "TLS certificate expires in 2 days");
+  const expired = (d) => deriveAlerts({ ...healthy, tls_days_left: d, tls_method: "manual" })[0].detail;
+  chk("expired one day ago is singular", /ran out 1 day ago/.test(expired(-1)), true);
+  chk("expired two days ago is plural", /ran out 2 days ago/.test(expired(-2)), true);
+}
+
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

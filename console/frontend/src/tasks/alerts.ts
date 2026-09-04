@@ -47,6 +47,10 @@ export function activeAlertCount(alerts: Alert[]): number {
   return alerts.filter((a) => a.severity !== "resolved").length;
 }
 
+// Thirty days is a full Let's Encrypt renewal window plus slack, and long
+// enough that a human-driven renewal can be scheduled rather than rushed.
+export const TLS_WARN_DAYS = 30;
+
 export type AlertSnap = {
   topology?: string;
   nodes?: string[];
@@ -64,6 +68,8 @@ export type AlertSnap = {
   maintenance_since?: string;
   maintenance_source?: string;
   drbd_link?: string;
+  tls_days_left?: number | null;
+  tls_method?: string;
   bans?: { resource?: string; node?: string; role?: string }[];
   quorum_hint?: string;
   no_quorum_policy?: string;
@@ -171,6 +177,34 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
           : "No record of this console entering it. Exit maintenance to clear it.",
       severity: "warn",
     });
+  }
+
+  // The certificate is the one fault that stays invisible until the morning it
+  // takes mail down, and only the Cloudflare method renews on its own: manual
+  // and customer both need a human, and on an HA pair renewal only happens on
+  // the node that issued it. Warn with enough time to act.
+  const tlsDays = cluster.tls_days_left;
+  if (typeof tlsDays === "number") {
+    const auto = cluster.tls_method === "cloudflare";
+    if (tlsDays < 0) {
+      out.push({
+        id: "tls_expired",
+        title: "The TLS certificate has expired",
+        detail:
+          `It ran out ${Math.abs(tlsDays)} day${Math.abs(tlsDays) === 1 ? "" : "s"} ago. ` +
+          "Mail clients and browsers will refuse to connect. Renew it from Settings.",
+        severity: "danger",
+      });
+    } else if (tlsDays <= TLS_WARN_DAYS) {
+      out.push({
+        id: "tls_expiring",
+        title: `TLS certificate expires in ${tlsDays} day${tlsDays === 1 ? "" : "s"}`,
+        detail: auto
+          ? "Automatic renewal should handle this. If the number keeps falling, check Settings."
+          : "This appliance does not renew automatically. Renew it from Settings before it runs out.",
+        severity: tlsDays <= 7 ? "danger" : "warn",
+      });
+    }
   }
 
   // Both replicas can read UpToDate while nothing is being copied between

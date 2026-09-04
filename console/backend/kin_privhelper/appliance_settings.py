@@ -446,62 +446,41 @@ async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(0)
 
 
-def _cert_paths() -> list[Path]:
-    host = ""
+def _mail_host_from_config() -> str:
     try:
         from .apply_config import CONF_FILE, parse_config
 
         if CONF_FILE.is_file():
-            host = str(parse_config(CONF_FILE.read_text(encoding="utf-8")).get("MAIL_HOST") or "")
+            return str(
+                parse_config(CONF_FILE.read_text(encoding="utf-8")).get("MAIL_HOST") or ""
+            )
     except OSError:
-        host = ""
-    paths = [
-        Path(f"/etc/letsencrypt/live/{host}/cert.pem") if host else None,
-        Path("/opt/zimbra/ssl/zimbra/commercial/commercial.crt"),
-        Path("/var/lib/kin-mail-console/tls/cert.pem"),
-    ]
-    return [p for p in paths if p is not None]
+        pass
+    return ""
 
 
-async def _tls_status() -> AsyncIterator[dict[str, Any]]:
-    import subprocess
-
-    info: dict[str, Any] = {"path": "", "not_after": "", "days_left": None, "method": ""}
+def _tls_method_from_config() -> str:
     try:
         from .apply_config import CONF_FILE, parse_config
 
         if CONF_FILE.is_file():
-            info["method"] = str(
+            return str(
                 parse_config(CONF_FILE.read_text(encoding="utf-8")).get("TLS_METHOD") or ""
             )
     except OSError:
         pass
-    for path in _cert_paths():
-        if not path.is_file():
-            continue
-        try:
-            proc = subprocess.run(
-                ["openssl", "x509", "-in", str(path), "-noout", "-enddate"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError:
-            continue
-        if proc.returncode != 0:
-            continue
-        line = (proc.stdout or "").strip()
-        # notAfter=Oct  1 12:00:00 2026 GMT
-        stamp = line.split("=", 1)[-1].strip()
-        try:
-            dt = datetime.strptime(stamp, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
-        except ValueError:
-            dt = None
-        info["path"] = str(path)
-        info["not_after"] = stamp
-        if dt is not None:
-            info["days_left"] = (dt - datetime.now(timezone.utc)).days
-        break
+    return ""
+
+
+async def _tls_status() -> AsyncIterator[dict[str, Any]]:
+    """Report the certificate this host would actually present.
+
+    The reading itself lives in kin_privhelper.tls_status so the Settings page
+    and the cluster status poll cannot disagree about which file is the truth.
+    """
+    from .tls_status import read_certificate
+
+    info = read_certificate(_mail_host_from_config(), _tls_method_from_config())
     yield _emit("TLS_JSON:" + json.dumps(info))
     yield proto.event_done(0)
 

@@ -1131,6 +1131,24 @@ async def gather_status() -> dict[str, Any]:
         )
     )
 
+    # Cached: an expiry date does not change between 30-second polls.
+    try:
+        from .tls_status import cached_certificate
+
+        _cfg = {}
+        try:
+            from .apply_config import CONF_FILE, parse_config
+
+            if CONF_FILE.is_file():
+                _cfg = parse_config(CONF_FILE.read_text(encoding="utf-8"))
+        except OSError:
+            _cfg = {}
+        _tls = cached_certificate(
+            str(_cfg.get("MAIL_HOST") or ""), str(_cfg.get("TLS_METHOD") or "")
+        )
+    except Exception:  # noqa: BLE001 - never let a certificate read break status
+        _tls = {}
+
     rejoining = parse_rejoining_nodes(
         nodes=nodes,
         promoted_names=promoted_names,
@@ -1165,6 +1183,9 @@ async def gather_status() -> dict[str, Any]:
         # down" on a healthy single-node appliance is a red banner that can
         # never be cleared (seen live, 31 Aug 2026). A peer that is merely
         # switched off still counts: it appears in offline or stale_peers.
+        "tls_days_left": _tls.get("days_left"),
+        "tls_method": _tls.get("method") or "",
+        "tls_source": _tls.get("source") or "",
         "drbd_link": (
             drbd_link_state(drbd)
             if len(set(nodes) | set(offline) | set(stale_peers)) > 1
@@ -1462,6 +1483,12 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "drbd_uptodate": st["drbd_uptodate"],
             "drbd_sync_percent": st.get("drbd_sync_percent"),
             "drbd_link": st.get("drbd_link") or "",
+        # Certificate expiry rides on this poll so it can raise an alert. It
+        # is the one fault that is invisible until the day it takes mail down,
+        # and on two of the three TLS methods nothing renews it automatically.
+        "tls_days_left": st.get("tls_days_left"),
+        "tls_method": st.get("tls_method") or "",
+        "tls_source": st.get("tls_source") or "",
             "qdevice_ok": st["qdevice_ok"],
             "quorate": st.get("quorate"),
             "votes_total": st.get("votes_total"),

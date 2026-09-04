@@ -137,6 +137,20 @@ ZS="/opt/zimbra/ssl/letsencrypt"
 
 [ "${RENEWED_LINEAGE:-$LE}" = "$LE" ] || exit 0
 
+# On an HA pair this node may not be the one serving mail. /opt/zimbra is the
+# replicated volume: on a Secondary it is an empty mountpoint, so every command
+# below would fail and certbot would report a renewal failure twice a day for
+# something that is not wrong. The certificate itself renewed fine; it is
+# deployed by whichever node is Primary at the time.
+#
+# Exit 0, and say why, rather than manufacturing a failure.
+if [ ! -x /opt/zimbra/bin/zmcertmgr ]; then
+  logger -t kin-mail "cert renewed but this node is not serving Zimbra (/opt/zimbra not mounted); deploy skipped"
+  echo "kin-mail deploy hook: /opt/zimbra is not mounted here - this node is not"
+  echo "currently serving. The certificate renewed; the serving node deploys it."
+  exit 0
+fi
+
 pcs_has_kin_zimbra() {
   command -v pcs >/dev/null 2>&1 || return 1
   # pcs 0.11 replaced `resource status <id>`; prefer config, fall back to status.
@@ -313,6 +327,37 @@ tls_cloudflare() {
   certbot renew --dry-run 2>&1 | grep -qi "simulated renewal" \
     && ok "certbot renew --dry-run succeeded" \
     || warn "dry-run inconclusive, check /var/log/letsencrypt/"
+
+  # A passing dry-run only proves the renewal WOULD work. Something has to
+  # actually run it, and nothing here ever checked that. A masked or disabled
+  # timer means the certificate expires in 90 days with every other signal
+  # green.
+  local timer=""
+  for candidate in certbot.timer snap.certbot.renew.timer; do
+    if systemctl list-unit-files "$candidate" >/dev/null 2>&1 &&
+      systemctl cat "$candidate" >/dev/null 2>&1; then
+      timer="$candidate"
+      break
+    fi
+  done
+  if [ -z "$timer" ]; then
+    warn "No certbot renewal timer found on this host."
+    warn "Renewal will NOT happen on its own. Add a cron entry or install the"
+    warn "certbot package that ships certbot.timer."
+  elif [ "$(systemctl is-enabled "$timer" 2>/dev/null)" = "masked" ]; then
+    fail "${timer} is masked; renewal will never run."
+    info "Unmask and enable it:  systemctl unmask ${timer} && systemctl enable --now ${timer}"
+  elif systemctl is-active --quiet "$timer" 2>/dev/null; then
+    ok "${timer} is active ($(systemctl show -p NextElapseUSecRealtime --value "$timer" 2>/dev/null || echo 'next run scheduled'))"
+  else
+    warn "${timer} exists but is not active; enabling it"
+    systemctl enable --now "$timer" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$timer" 2>/dev/null; then
+      ok "${timer} enabled and active"
+    else
+      fail "Could not start ${timer}; renewal will not happen automatically."
+    fi
+  fi
 }
 
 # --- Manual DNS-01 (any provider) --------------------------------------------
@@ -329,6 +374,12 @@ tls_manual() {
   ok "certbot ready"
 
   say "2. Issuing certificate (DNS-01 manual)"
+  # An unquoted $(...) that expands to nothing relies on word splitting to
+  # vanish, which is exactly the construct that silently passes an empty
+  # argument when someone later quotes it. tls_cloudflare already uses an
+  # array here; so does this now.
+  local MANUAL_FORCE=()
+  [ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && MANUAL_FORCE+=(--force-renewal)
   if [ -f "${LE_DIR}/cert.pem" ] && [ "${KIN_TLS_FORCE_RENEW:-0}" != "1" ]; then
     ok "Certificate already exists, issuance skipped"
   else
@@ -344,7 +395,7 @@ tls_manual() {
         --preferred-chain "ISRG Root X1" \
         --agree-tos --no-eff-email -m "$LE_EMAIL" \
         --manual-public-ip-logging-ok \
-        $([ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && echo --force-renewal)
+        ${MANUAL_FORCE[@]+"${MANUAL_FORCE[@]}"}
     else
       info "Poll mode: the DNS-01 TXT name and value will print in this log when certbot issues them."
       info "Create that TXT in the DNS panel for zone ${MAIL_DOMAIN}, then wait for propagation."
@@ -407,7 +458,7 @@ HOOK
           --agree-tos --no-eff-email -m "$LE_EMAIL" \
           --manual-public-ip-logging-ok \
           --non-interactive \
-          $([ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && echo --force-renewal)
+          ${MANUAL_FORCE[@]+"${MANUAL_FORCE[@]}"}
       rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
     fi
     [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"; exit 1; }
@@ -457,11 +508,32 @@ tls_customer() {
   fi
 }
 
-case "$TLS_METHOD" in
-  cloudflare) tls_cloudflare ;;
-  manual)     tls_manual ;;
-  customer)   tls_customer ;;
-esac
+# An HA pair serves ONE certificate, for the service hostname, and it lives on
+# the replicated volume with the rest of /opt/zimbra. A peer must never obtain
+# its own.
+#
+# Left unguarded, a peer installed with TLS_METHOD=cloudflare issued a
+# Let's Encrypt certificate for its OWN name (mail2.<domain>) and installed a
+# renewal deploy hook baked to that lineage. The hook then writes into
+# /opt/zimbra/ssl - which is the replicated volume - so the first renewal after
+# the peer became Primary would have replaced the service certificate with one
+# issued for mail2, and every client connecting to the service name would get a
+# name mismatch. It also spends a public CA issuance on a hostname that never
+# serves anything.
+#
+# Same reasoning as the DKIM block below: the primary and public DNS own this.
+if kin_ha_peer_install; then
+  warn "HA peer: not issuing a TLS certificate for ${MAIL_HOST}"
+  info "The pair serves one certificate, for the service hostname, and it is"
+  info "already on the replicated volume. This node presents it after failover."
+  info "Renewal stays with the node that issued it."
+else
+  case "$TLS_METHOD" in
+    cloudflare) tls_cloudflare ;;
+    manual)     tls_manual ;;
+    customer)   tls_customer ;;
+  esac
+fi
 
 # --- DKIM (independent of TLS method) ----------------------------------------
 # HA peer: skip. A second zmdkimkeyutil -a here would sign mail with a key that

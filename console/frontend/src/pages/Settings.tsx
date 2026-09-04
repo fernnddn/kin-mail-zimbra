@@ -55,6 +55,9 @@ type TlsState = {
   not_after?: string;
   days_left?: number | null;
   method?: string;
+  /** "deployed" when read from Zimbra's own tree, "issued" when read from
+   *  certbot's. They differ when a renewal deploy hook failed. */
+  source?: string;
 };
 
 type SettingsResp = {
@@ -521,9 +524,24 @@ export default function SettingsPage() {
               is not something to be doing under pressure.
             </WarnBox>
           ) : null}
+          {tls.source === "issued" ? (
+            <WarnBox>
+              <strong>
+                This date comes from certbot's copy, not from the certificate
+                Zimbra is serving.
+              </strong>{" "}
+              Zimbra has no deployed certificate at{" "}
+              <code>/opt/zimbra/ssl/zimbra/commercial/</code>, which usually means
+              a renewal deploy hook did not finish, or this node is not the one
+              currently serving mail. What clients receive may be older than the
+              date below.
+            </WarnBox>
+          ) : null}
           <Hint>
-            {tlsLabel} Method: {tls.method || "unknown"}. Renewal uses the same DNS-01 flow as
-            install. When a TXT record is required, it appears below in copy-paste form.
+            {tlsLabel} Method: {tls.method || "unknown"}.
+            {tls.path ? ` Read from ${tls.path}.` : ""} Renewal uses the same
+            DNS-01 flow as install. When a TXT record is required, it appears
+            below in copy-paste form.
           </Hint>
           <Button type="button" variant="primary" loading={busy === "tls"} onClick={() => void renewTls()}>
             Renew certificate
