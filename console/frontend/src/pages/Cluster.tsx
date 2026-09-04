@@ -59,6 +59,9 @@ type ClusterSnap = {
   offline?: string[];
   stale_peers?: string[];
   observability?: ObservabilitySnap;
+  // Tri-state: null/undefined means `pcs property` could not be read, which
+  // is not the same as fencing being off.
+  fencing_enabled?: boolean | null;
   node_ips?: Record<string, string>;
 };
 

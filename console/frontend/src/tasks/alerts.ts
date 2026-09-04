@@ -74,6 +74,7 @@ export type AlertSnap = {
   quorum_hint?: string;
   no_quorum_policy?: string;
   observability?: { status?: string };
+  fencing_enabled?: boolean | null;
 };
 
 export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
@@ -161,6 +162,23 @@ export function deriveAlerts(cluster: AlertSnap | null | undefined): Alert[] {
       id: "qdevice",
       title: "Quorum device is not voting",
       severity: "warn",
+    });
+  }
+
+  // Only when the witness is healthy, so fencing SHOULD be on. While
+  // Observability is absent or unreachable, fencing is off by design and the
+  // alert above already says so - raising this one too would just be noise.
+  // Undefined means the property could not be read, which is not evidence
+  // that fencing is off.
+  if (obs === "healthy" && cluster.fencing_enabled === false) {
+    out.push({
+      id: "fencing-off",
+      title: "Fencing is disabled",
+      detail:
+        "stonith-enabled is false, so a split-brain would not be arbitrated " +
+        "and the two replicas could diverge. Left over from a failed Remove " +
+        "Observability, or from a manual override.",
+      severity: "danger",
     });
   }
 

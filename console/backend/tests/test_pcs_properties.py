@@ -6,7 +6,7 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-from kin_privhelper.pcs_properties import listing_has_property
+from kin_privhelper.pcs_properties import listing_has_property, parse_stonith_enabled
 
 # Ubuntu 22.04 pcs 0.10 default text listing.
 PCS_0_10 = """\
@@ -84,3 +84,56 @@ class PcsPropertyListingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StonithEnabledTests(unittest.TestCase):
+    """Nothing read stonith-enabled until now.
+
+    Remove Observability disables fencing as its first action. A disarm that
+    failed part-way, or a troubleshooting override nobody undid, left a
+    two-node DRBD cluster with no fencing - the thing that stops two replicas
+    diverging - and no indication of it anywhere in the console.
+    """
+
+    def test_reads_both_pcs_spellings(self) -> None:
+        self.assertIs(
+            parse_stonith_enabled("Cluster Properties:\n stonith-enabled: true\n"), True
+        )
+        self.assertIs(parse_stonith_enabled("stonith-enabled=true"), True)
+        self.assertIs(
+            parse_stonith_enabled("Cluster Properties:\n stonith-enabled: false\n"), False
+        )
+        self.assertIs(parse_stonith_enabled("stonith-enabled=false"), False)
+
+    def test_case_and_spacing_do_not_matter(self) -> None:
+        self.assertIs(parse_stonith_enabled("  stonith-enabled : TRUE  "), True)
+        self.assertIs(parse_stonith_enabled("STONITH-ENABLED: False"), False)
+
+    def test_unreadable_is_none_not_false(self) -> None:
+        # A failed `pcs property` capture returns "". Reporting that as
+        # "fencing is off" would raise the one alarm that means the operator's
+        # data can diverge, on a cluster that is fine.
+        self.assertIsNone(parse_stonith_enabled(""))
+        self.assertIsNone(parse_stonith_enabled("no-quorum-policy: stop\n"))
+        self.assertIsNone(parse_stonith_enabled("stonith-enabled: maybe"))
+
+    def test_a_similarly_named_property_is_not_confused_for_it(self) -> None:
+        self.assertIsNone(
+            parse_stonith_enabled("stonith-enabled-extra: false\nstonith-action: reboot\n")
+        )
+
+    def test_the_snapshot_exposes_it(self) -> None:
+        # The parser is useless if gather_status never puts it in the payload
+        # and the API never forwards it; both were the actual gap.
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "kin_privhelper"
+            / "maintenance.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("parse_stonith_enabled(props_text)", src)
+        # In the status dict gather_status builds...
+        self.assertIn('"fencing_enabled": fencing_enabled,', src)
+        # ...and forwarded by the API layer, or the console never sees it.
+        self.assertIn('"fencing_enabled": st.get("fencing_enabled"),', src)

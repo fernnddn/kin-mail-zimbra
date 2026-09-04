@@ -20,6 +20,7 @@ from typing import Any, IO
 from xml.etree import ElementTree
 
 from . import protocol as proto
+from .pcs_properties import parse_stonith_enabled
 
 NODE_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
 DRBD_RESOURCE = os.environ.get("KIN_DRBD_RESOURCE", "kin-zimbra")
@@ -1113,6 +1114,11 @@ async def gather_status() -> dict[str, Any]:
     _cp, props_text, _ep = await _capture(["pcs", "property"])
     no_quorum_policy = parse_no_quorum_policy(props_text)
     maintenance_mode = parse_maintenance_mode(props_text)
+    # Nothing read this before. Remove Observability disables fencing as its
+    # first action, so a disarm that failed part-way - or a troubleshooting
+    # `pcs property set stonith-enabled=false` nobody undid - left a two-node
+    # DRBD cluster with no fencing and no indication of it anywhere.
+    fencing_enabled = parse_stonith_enabled(props_text)
     # cibadmin rather than `pcs constraint`, whose subcommand spelling moved
     # between pcs 0.10 and 0.11. The CIB scope is the same on both.
     _cc, cib_constraints, _ec = await _capture(
@@ -1196,6 +1202,7 @@ async def gather_status() -> dict[str, Any]:
         "votes_total": votes_total,
         "votes_needed": votes_needed,
         "no_quorum_policy": no_quorum_policy,
+        "fencing_enabled": fencing_enabled,
         "maintenance_mode": maintenance_mode,
         "bans": bans,
         "quorum_hint": quorum_recovery_hint(
@@ -1495,6 +1502,7 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "votes_needed": st.get("votes_needed"),
             "quorum_hint": st.get("quorum_hint") or "",
             "no_quorum_policy": st.get("no_quorum_policy") or "",
+            "fencing_enabled": st.get("fencing_enabled"),
             "observability": st.get("observability") or {},
             "failcount_ok": st["failcount_ok"],
             "maintenance_active": bool(st["standby"]),

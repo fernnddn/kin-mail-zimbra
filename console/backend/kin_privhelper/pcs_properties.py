@@ -34,3 +34,18 @@ def listing_has_property(text: str, name: str, *values: str) -> bool:
         if value.lower() in wanted:
             return True
     return False
+
+
+def parse_stonith_enabled(text: str) -> bool | None:
+    """True/False when `pcs property` states stonith-enabled, None when it does not.
+
+    Tri-state on purpose. A failed capture returns an empty string, and
+    reporting that as "fencing is off" would raise a false alarm on a healthy
+    cluster - which is worse than saying nothing, because the alarm it raises
+    is the one that means "your data can diverge".
+    """
+    if listing_has_property(text, "stonith-enabled", "true"):
+        return True
+    if listing_has_property(text, "stonith-enabled", "false"):
+        return False
+    return None

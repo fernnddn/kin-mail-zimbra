@@ -82,6 +82,24 @@ chk("unreachable witness says losing a node stops mail",
 chk("qdevice alone is a warning",
   deriveAlerts({ ...healthy, qdevice_ok: false }).map((a) => [a.id, a.severity]), [["qdevice", "warn"]]);
 
+// Fencing is what stops two replicas diverging. Nothing read stonith-enabled
+// at all before, so a disarm that failed part-way left it off invisibly.
+chk("fencing off on a healthy pair is danger",
+  deriveAlerts({ ...healthy, fencing_enabled: false }).map((a) => [a.id, a.severity]),
+  [["fencing-off", "danger"]]);
+chk("fencing on raises nothing", ids({ ...healthy, fencing_enabled: true }), []);
+// Unreadable is not evidence of anything; a false alarm here is the one that
+// says the operator's data can diverge.
+chk("unknown fencing state raises nothing", ids({ ...healthy, fencing_enabled: null }), []);
+chk("absent fencing field raises nothing", ids({ ...healthy }), []);
+// While the witness is gone fencing is off by design and already explained.
+chk("fencing alert does not stack on the absent-witness alert",
+  ids({ ...healthy, fencing_enabled: false, observability: { status: "absent" } }),
+  ["observability-absent"]);
+chk("fencing alert does not stack on the unreachable-witness alert",
+  ids({ ...healthy, fencing_enabled: false, observability: { status: "unreachable" } }),
+  ["observability"]);
+
 chk("failcount is a warning", ids({ ...healthy, failcount_ok: false }), ["failcount"]);
 chk("maintenance is a warning", ids({ ...healthy, maintenance_active: true }), ["maintenance"]);
 
