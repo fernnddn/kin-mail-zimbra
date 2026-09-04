@@ -1,6 +1,7 @@
 import styled from "@emotion/styled";
 import { Button } from "../ui";
 import { theme } from "../styles/theme";
+import { charsThatFit, truncate } from "../lib/text";
 
 export type ObservabilitySnap = {
   present?: boolean;
@@ -93,10 +94,6 @@ const CARD_W = 200;
 const CARD_H = 104;
 const OBS_H = 84;
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
-}
-
 function NodeGlyph({
   cx,
   cy,
@@ -128,7 +125,12 @@ function NodeGlyph({
   const top = cy - height / 2;
   // One consistent left margin for every line of text in the card.
   const textX = left + 20;
-  const badge = floating ? `${role} - VIP ${floating}` : role || "";
+  // The badge's background rect is capped at the card width, but the text
+  // inside it was not, so a longer role or an IPv6 VIP printed past the
+  // rounded edge and off the card. 9px bold averages about 5.6px a character;
+  // the pill costs 20px of padding on top of the card's own 20px inset.
+  const badgeFull = floating ? `${role} - VIP ${floating}` : role || "";
+  const badge = truncate(badgeFull, charsThatFit(CARD_W - 2 * 20 - 20, 5.6));
 
   return (
     <g>

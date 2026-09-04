@@ -324,7 +324,10 @@ const InlineStatus = styled.span<{ $tone: "ok" | "idle" | "warn" }>`
 const Kv = styled.dl`
   margin: 0.45rem 0 0;
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0, ...) on both tracks: a grid track's automatic minimum is
+     min-content, so a long value would widen the row past the card rather
+     than being clipped by the ellipsis on KvValue. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
   gap: 0;
   font-size: 0.86rem;
 
@@ -350,6 +353,10 @@ const KvValue = styled.dd<{ $mono?: boolean }>`
   text-align: right;
   color: ${theme.surface[800]};
   border-bottom: 1px solid ${theme.line};
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 const CheckList = styled.ul`
