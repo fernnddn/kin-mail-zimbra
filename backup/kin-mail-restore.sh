@@ -81,6 +81,32 @@ assert_set() {
     fail "Not a KIN Mail backup set (missing MANIFEST.txt / SHA256SUMS)"
     exit 2
   fi
+
+  # Say what this set is before the operator spends an hour restoring it. The
+  # checksum pass below would catch a truncated set anyway, but only after they
+  # have committed to it, and it says nothing at all about a set that arrived
+  # intact while missing half its mailbox exports.
+  if [ ! -f "$SET/.backup-ok" ]; then
+    warn "This set has no .backup-ok marker: the backup run that produced it"
+    warn "never got as far as verifying it. It may be a partial copy left by an"
+    warn "interrupted run. The checksum pass below is now the only thing"
+    warn "standing between you and restoring an incomplete set."
+  fi
+  if grep -q '^complete=false' "$SET/MANIFEST.txt" 2>/dev/null; then
+    local got want
+    got=$(grep -m1 '^mailboxes_exported=' "$SET/MANIFEST.txt" | cut -d= -f2)
+    want=$(grep -m1 '^mailboxes_expected=' "$SET/MANIFEST.txt" | cut -d= -f2)
+    warn "This set is INCOMPLETE: ${got:-0} of ${want:-0} mailbox exports succeeded."
+    warn "The store, MySQL and LDAP layers below are unaffected and are what a"
+    warn "full restore actually uses, so this restore will still work. The"
+    warn "per-account tgz files for the accounts named in MANIFEST.txt are"
+    warn "simply not in this set."
+  fi
+  local taken
+  taken=$(grep -m1 '^taken_on=' "$SET/MANIFEST.txt" | cut -d= -f2)
+  local when
+  when=$(grep -m1 '^created_utc=' "$SET/MANIFEST.txt" | cut -d= -f2)
+  ok "set taken on ${taken:-unknown} at ${when:-unknown}"
 }
 
 verify_checksums() {

@@ -412,6 +412,25 @@ not invent a shorter path. Naive `systemctl stop sbd` is **refused**
 
 **Do this before any Observability power-off, resize, or long NIC outage.**
 
+### What the pair loses while Observability is gone
+
+Both of these are deliberate, and both are now shown in the console rather than
+left for the operator to infer.
+
+**Failover.** The witness is the third vote. Without it quorum needs *both*
+mail nodes, so while Observability is absent or unreachable, losing a mail node
+**stops mail** instead of failing over. `strip_quorum_device.py` deliberately
+does not write `two_node: 1`: a lone quorate node with fencing disabled is how
+the two replicas diverge, and data safety wins over availability here. The
+Cluster page says "Pair cannot survive a node failure" for the duration.
+
+**Fencing.** Disarm sets `stonith-enabled=false` as its first action. A disarm
+that fails part-way therefore leaves fencing off, and so does a manual override
+nobody undid. The console reads `stonith-enabled` and raises **Fencing is
+disabled** whenever the witness is healthy but fencing is not on - the one
+combination that is unexplained and dangerous. Add Observability verifies the
+property came back before reporting success.
+
 ### Disarm (mail stays up; fencing is paused on purpose)
 
 Confirm baseline: Promoted + VIP 200, fail-count 0, `NO_DUAL_PRIMARY_OK`, SBD slots

@@ -472,6 +472,22 @@ async def cmd_add_observability(
             )
             yield proto.event_done(1)
             return
+        # Restoring fencing is the point of this operation, and it was the one
+        # thing not checked afterwards. The rearm role sets stonith-enabled and
+        # verifies sbd is running, but a play can report success while the
+        # property did not take. Explicit False only: an unreadable
+        # `pcs property` must not fail a rebuild that otherwise verified.
+        if after.get("fencing_enabled") is False:
+            yield await _emit(
+                "rebuild finished with quorum restored but fencing is still "
+                "disabled (stonith-enabled=false). Until it is on, a "
+                "split-brain would not be arbitrated. Re-run Add "
+                "Observability, or set it by hand on either mail node with: "
+                "pcs property set stonith-enabled=true",
+                err=True,
+            )
+            yield proto.event_done(1)
+            return
         promoted_after = str(after.get("promoted") or "")
         if promoted_before and promoted_after and promoted_before != promoted_after:
             yield await _emit(
@@ -483,7 +499,8 @@ async def cmd_add_observability(
         clear_observability_secrets()
         yield await _emit(
             "verified: qdevice Connected path (votes ok), expected 3 / total 3 / "
-            f"quorum 2, Promoted still {promoted_after or promoted_before}"
+            f"quorum 2, fencing enabled, Promoted still "
+            f"{promoted_after or promoted_before}"
         )
         yield proto.event_done(0)
     finally:

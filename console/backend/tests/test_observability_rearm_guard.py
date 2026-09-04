@@ -111,6 +111,34 @@ class FilterIsResolvableFromRearm(unittest.TestCase):
         self.assertFalse(fn(same, ""))
 
 
+class AddVerifiesFencingCameBack(unittest.TestCase):
+    """Add Observability exists to restore quorum AND fencing.
+
+    Its post-checks confirmed the witness was healthy, the qdevice was voting,
+    the votes were 3/3/2 and Promoted had not moved - but never that fencing
+    was actually back on, which is half of what the operation is for.
+    """
+
+    def setUp(self) -> None:
+        self.src = (
+            REPO / "console/backend/kin_privhelper/observability_ops.py"
+        ).read_text(encoding="utf-8")
+
+    def test_it_checks_fencing_after_the_rebuild(self) -> None:
+        self.assertIn('after.get("fencing_enabled") is False', self.src)
+
+    def test_unreadable_fencing_does_not_fail_the_rebuild(self) -> None:
+        # `is False` and not a truthiness test: None means the property could
+        # not be read, which must not fail an otherwise verified rebuild.
+        self.assertNotIn('if not after.get("fencing_enabled")', self.src)
+
+    def test_the_operator_is_told_how_to_fix_it(self) -> None:
+        self.assertIn("pcs property set stonith-enabled=true", self.src)
+
+    def test_the_success_line_mentions_fencing(self) -> None:
+        self.assertIn("fencing enabled", self.src)
+
+
 class DisarmGuardStillStands(unittest.TestCase):
     """The guard this one was modelled on must not quietly disappear."""
 
