@@ -51,7 +51,11 @@ grep -q '>>.*kin-mail-backup\.log' "$cron" \
 grep -qE '^[0-9]+ [0-9]+ \* \* \* +root ' "$cron" \
   && t_ok "cron runs daily as root" || t_bad "cron schedule/user line is malformed" "$(cat "$cron")"
 # A cron.d file with a bad mode is silently ignored by cron.
-mode=$(stat -f '%Lp' "$cron" 2>/dev/null || stat -c '%a' "$cron" 2>/dev/null)
+# GNU stat first, BSD second. Not the other way round: on Linux `stat -f` is
+# "filesystem status" and SUCCEEDS with unrelated output, so a BSD-first probe
+# never reaches its fallback and returns garbage. `stat -c` fails cleanly on
+# macOS, so this order works on both.
+mode=$(stat -c '%a' "$cron" 2>/dev/null || stat -f '%Lp' "$cron" 2>/dev/null)
 [ "$mode" = "644" ] && t_ok "cron.d file is 0644 (cron ignores other modes)" \
                     || t_bad "cron.d mode is $mode, want 644"
 
