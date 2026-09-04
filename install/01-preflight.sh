@@ -141,8 +141,18 @@ done
 
 # --- 7. public address and PTR ----------------------------------------------
 echo; say "7. Public address"
-ip1=$(curl -s -m 12 https://ifconfig.me 2>/dev/null)
-ip2=$(curl -s -m 12 https://api.ipify.org 2>/dev/null)
+# -f so an HTTP error is an error, and a shape check so a captive portal or a
+# proxy error page cannot be printed to the operator as this host's public
+# address - or worse, matched against the other one and reported as "stable".
+only_ipv4() {
+  case "$1" in
+  '' | *[!0-9.]*) printf '' ;;
+  *.*.*.*) printf '%s' "$1" ;;
+  *) printf '' ;;
+  esac
+}
+ip1=$(only_ipv4 "$(curl -fsS -m 12 https://ifconfig.me 2>/dev/null | tr -d '[:space:]')")
+ip2=$(only_ipv4 "$(curl -fsS -m 12 https://api.ipify.org 2>/dev/null | tr -d '[:space:]')")
 info "seen by ifconfig.me : ${ip1:-unknown}"
 info "seen by ipify       : ${ip2:-unknown}"
 if [ -n "$ip1" ] && [ -n "$ip2" ] && [ "$ip1" != "$ip2" ]; then
