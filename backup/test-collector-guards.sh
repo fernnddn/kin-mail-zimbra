@@ -31,9 +31,11 @@ for fn in assert_safe_staging assert_staging_space human; do
 done
 t_ok "the staging guards were extracted and are callable"
 
-# assert_safe_staging exits on refusal, so call it in a subshell.
-refuses() { ( assert_safe_staging "$1" ) >/dev/null 2>&1; [ $? -ne 0 ]; }
-allows()  { ( assert_safe_staging "$1" ) >/dev/null 2>&1; }
+# assert_safe_staging exits on refusal, so call it in a subshell - and under
+# the same `set -euo pipefail` the collector itself runs with, or these would
+# be testing the functions under flags they never see in production.
+refuses() { ( set -euo pipefail; assert_safe_staging "$1" ) >/dev/null 2>&1; [ $? -ne 0 ]; }
+allows()  { ( set -euo pipefail; assert_safe_staging "$1" ) >/dev/null 2>&1; }
 
 # --- paths that must never reach `rm -rf` ----------------------------------
 for bad in / /etc /var /usr /opt /root /home /boot /etc/kin-mail /usr/local \
@@ -100,6 +102,7 @@ else
       # shellcheck disable=SC2317
       set -- /var/tmp/kin-x
       KIN_BACKUP_SPACE_FACTOR=150
+      set -euo pipefail
       eval "$(awk '/^assert_staging_space\(\) \{/,/^\}/' "$SRC" \
               | sed 's#/opt/zimbra/store /opt/zimbra/index /opt/zimbra/redolog#'"$FAKEROOT"'/store#')"
       assert_staging_space /var/tmp/kin-x
@@ -156,8 +159,19 @@ grep -q 'MIN_TGZ_BYTES' "$SRC" \
   && t_ok "a truncated tgz is not counted as an export" \
   || t_bad "an empty getRestURL response counts as a successful export"
 grep -q 'none of the \$expected mailboxes exported' "$SRC" \
-  && t_ok "a total mailbox-export failure fails the run" \
-  || t_bad "every mailbox export can fail and the run still reports success"
+  && t_ok "a total mailbox-export failure is reported loudly" \
+  || t_bad "every mailbox export can fail and nothing says so"
+# Deliberately NOT fatal: store, MySQL and LDAP are the restore path, so the
+# set is still worth keeping - and aborting here would strand a full copy of
+# the mail store on the production node's OS disk until the next run.
+if awk '/mailboxes_exported=0|none of the \$expected/,/^ok "\$exported of/' "$SRC" | grep -qE '^\s*exit [0-9]'; then
+  t_bad "a mailbox shortfall aborts the run and strands staging on the mail node"
+else
+  t_ok "a mailbox shortfall is recorded, not fatal (the set is still restorable)"
+fi
+grep -q 'complete=true' "$SRC" && grep -q 'complete=false' "$SRC" \
+  && t_ok "the manifest states plainly whether the set is complete" \
+  || t_bad "nothing in the set records whether it is complete"
 
 echo
 if [ "$t_fail" -eq 0 ]; then echo "ALL OK ($t_pass checks)"; exit 0; fi

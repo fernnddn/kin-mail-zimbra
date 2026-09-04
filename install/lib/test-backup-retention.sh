@@ -45,6 +45,12 @@ t_ok "the retention functions were extracted and are callable"
 
 names()  { for d in "$1"/*/; do [ -d "$d" ] && basename "${d%/}"; done | sort | tr '\n' ' '; }
 count()  { "$1" "$2" | grep -c . | tr -d '[:space:]'; }
+
+# kin-mail-backup.sh runs under `set -euo pipefail`. Sourcing its functions
+# into a plain shell tested them under flags they never actually run with -
+# an unset variable or a non-zero test that would abort the real script would
+# have passed here silently. Every call below goes through this.
+retention() { ( set -euo pipefail; apply_retention "$@" ); }
 make_set() {  # <dir> <name> <verified 1|0>
   mkdir -p "$1/$2"
   printf 'data\n' > "$1/$2/MANIFEST.txt"
@@ -64,7 +70,7 @@ for n in 20260101T020000Z 20260102T020000Z 20260103T020000Z; do
 done
 make_set "$ROOT/daily" "20260104T020000Z" 0   # died between pull and checksum
 make_set "$ROOT/daily" "20260105T020000Z" 1   # newest good set
-apply_retention "$ROOT/daily/20260105T020000Z" >/dev/null 2>&1
+retention "$ROOT/daily/20260105T020000Z" >/dev/null 2>&1
 got=$(names "$ROOT/daily")
 
 case "$got" in
@@ -116,7 +122,7 @@ make_set "$ROOT/daily" "20260110T020000Z" 1
 for n in 20260101T020000Z 20260102T020000Z 20260103T020000Z 20260104T020000Z; do
   make_set "$ROOT/daily" "$n" 0
 done
-apply_retention "$ROOT/daily/20260110T020000Z" >/dev/null 2>&1
+retention "$ROOT/daily/20260110T020000Z" >/dev/null 2>&1
 u=$(count unverified_sets "$ROOT/daily")
 [ "$u" = "2" ] && t_ok "unverified sets are bounded at UNVERIFIED_KEEP" \
                || t_bad "unverified sets left: $u, want 2" "$(names "$ROOT/daily")"
@@ -134,7 +140,7 @@ for n in 20260101T020000Z 20260202T020000Z 20260303T020000Z; do
   make_set "$ROOT/daily" "$n" 1
 done
 touch "$ROOT/daily/20260101T020000Z"   # make the OLDEST look newest by mtime
-apply_retention "$ROOT/daily/20260303T020000Z" >/dev/null 2>&1
+retention "$ROOT/daily/20260303T020000Z" >/dev/null 2>&1
 if verified_sets "$ROOT/daily" | grep -q 20260101T020000Z; then
   t_bad "a touched mtime changed which backups were kept" "$(names "$ROOT/daily")"
 else
@@ -147,7 +153,7 @@ new_root
 DAILY_KEEP=7; WEEKLY_KEEP=2; UNVERIFIED_KEEP=2
 make_set "$ROOT/daily" "20260110T020000Z" 1
 for w in 2026-W01 2026-W02 2026-W03 2026-W04; do make_set "$ROOT/weekly" "$w" 1; done
-apply_retention "$ROOT/daily/20260110T020000Z" >/dev/null 2>&1
+retention "$ROOT/daily/20260110T020000Z" >/dev/null 2>&1
 w=$(count verified_sets "$ROOT/weekly")
 # WEEKLY_KEEP, plus possibly this ISO week's snapshot created by the call.
 [ "$w" -le 3 ] && t_ok "weekly snapshots are pruned to WEEKLY_KEEP" \
