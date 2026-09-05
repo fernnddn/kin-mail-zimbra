@@ -125,6 +125,78 @@ chk("an empty series has no stats", C.seriesStats([]), { min: null, max: null, a
 chk("a flat series reports the same value three times",
   C.seriesStats([[0, 7], [1, 7]]), { min: 7, max: 7, avg: 7 });
 ok("a zone label is always produced", typeof C.localZoneLabel() === "string" && C.localZoneLabel().length > 0);
+// --- per-minute rates -------------------------------------------------------
+// Mail arrives in bursts. "0.02/s" is not a rate anyone reasons about.
+chk("a mail rate reads per minute", C.formatValue(12, "per_min"), "12.0/min");
+chk("a busy rate drops the decimal", C.formatValue(340, "per_min"), "340/min");
+chk("a trickle does not read as zero", C.formatValue(0.02, "per_min"), "<0.1/min");
+chk("actual zero is zero", C.formatValue(0, "per_min"), "0.0/min");
+chk("no samples is a dash", C.formatValue(null, "per_min"), "-");
+
+// --- y axis labels ----------------------------------------------------------
+// Without these a line could be read for shape but never for magnitude.
+{
+  const t = C.yTicks([0, 100], "percent");
+  chk("three y labels", t.length, 3);
+  chk("top label is the maximum", t[0].label, "100%");
+  chk("top label sits at the top", t[0].at, 0);
+  chk("middle label is the midpoint", t[1].label, "50%");
+  chk("bottom label is the minimum", t[2].label, "0%");
+  chk("bottom label sits at the bottom", t[2].at, 1);
+  chk("a flat band draws no labels", C.yTicks([5, 5], "number").length, 0);
+  chk("a non-finite band draws no labels", C.yTicks([NaN, 1], "number").length, 0);
+}
+
+// --- vertical placement -----------------------------------------------------
+chk("the maximum sits at the top", C.yFraction(100, [0, 100]), 0);
+chk("the minimum sits at the bottom", C.yFraction(0, [0, 100]), 1);
+chk("the midpoint sits in the middle", C.yFraction(50, [0, 100]), 0.5);
+chk("above the band clamps to the top", C.yFraction(150, [0, 100]), 0);
+chk("below the band clamps to the bottom", C.yFraction(-50, [0, 100]), 1);
+chk("a zero-height band is centred", C.yFraction(5, [5, 5]), 0.5);
+
+// --- threshold shading ------------------------------------------------------
+// Only where a number has an agreed meaning; inventing one is decoration.
+chk("cpu percent gets warn and danger bands", C.thresholdsFor("percent", "cpu").length, 2);
+chk("cpu warns at 80", C.thresholdsFor("percent", "cpu")[0].from, 80);
+chk("a filling disk warns earlier than cpu", C.thresholdsFor("percent", "disk_root")[0].from, 75);
+chk("disk danger is 90", C.thresholdsFor("percent", "disk_root")[1].from, 90);
+chk("disk busy is not a filling disk", C.thresholdsFor("percent", "disk_busy")[0].from, 80);
+chk("throughput has no meaningful level", C.thresholdsFor("bytes_per_sec", "net_rx").length, 0);
+chk("a queue age of an hour is worth a look", C.thresholdsFor("seconds", "mail_queue_oldest")[0].from, 3600);
+chk("uptime seconds get no bands", C.thresholdsFor("seconds", "uptime").length, 0);
+
+
+// --- counts -----------------------------------------------------------------
+// A rate can be fractional; a queue cannot. "6.96 messages waiting" is not a
+// quantity anyone has.
+chk("a queue depth is a whole number", C.formatValue(6.96, "count"), "7");
+chk("a count rounds down too", C.formatValue(6.2, "count"), "6");
+chk("zero is zero", C.formatValue(0, "count"), "0");
+chk("large counts get separators", C.formatValue(12345, "count"), (12345).toLocaleString());
+chk("no samples is still a dash", C.formatValue(null, "count"), "-");
+chk("NaN is a dash", C.formatValue(NaN, "count"), "-");
+
+
+// --- a quiet series must not imply negative values --------------------------
+// An error counter sitting at zero is the commonest flat series there is.
+// Padding it symmetrically drew an axis reading "-0.50/s", and there is no
+// such thing as minus half an error.
+{
+  const flatZero = [[1, 0], [2, 0], [3, 0]];
+  const b = C.yBounds(flatZero, "per_sec");
+  chk("a flat zero series starts at zero", b[0], 0);
+  chk("and still has height to draw in", b[1] > 0, true);
+  chk("axis labels never go negative", C.yTicks(b, "per_sec")[2].label, "0.00/s");
+  const flatCount = C.yBounds([[1, 0], [2, 0]], "count");
+  chk("a flat zero count starts at zero", flatCount[0], 0);
+  const flatHigh = C.yBounds([[1, 40], [2, 40]], "count");
+  chk("a flat non-zero series keeps room below", flatHigh[0], 0);
+  chk("a flat non-zero series keeps room above", flatHigh[1], 60);
+  const rising = C.yBounds([[1, 10], [2, 90]], "count");
+  chk("a normal series is still padded", rising[1], 98);
+  chk("and is still floored at zero", rising[0], 2);
+}
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

@@ -30,6 +30,87 @@
   when: not ansible_check_mode
   tags: [monitoring, config]
 
+# --- mail flow ---------------------------------------------------------------
+# The Monitoring tab could say the machine was busy. It could not say whether
+# mail was moving, which is the only question a mail appliance exists to
+# answer. This collector reads the Postfix log and spool and writes a .prom
+# file that node_exporter serves alongside the machine metrics.
+
+- name: Create the node_exporter textfile directory
+  ansible.builtin.file:
+    path: "{{ monitoring_stack_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [monitoring, config, mailflow]
+
+- name: Install the mail flow collector
+  ansible.builtin.copy:
+    src: kin-mail-flow-metrics.py
+    dest: "{{ monitoring_stack_mailflow_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [monitoring, mailflow]
+
+- name: Install the mail flow collector units
+  ansible.builtin.template:
+    src: "kin-mail-flow.{{ item }}.j2"
+    dest: "/etc/systemd/system/kin-mail-flow.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - service
+    - timer
+  register: monitoring_stack_mailflow_units
+  when: not ansible_check_mode
+  tags: [monitoring, mailflow]
+
+- name: Reload systemd after writing the mail flow units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - monitoring_stack_mailflow_units is changed
+  tags: [monitoring, mailflow]
+
+- name: Take a first sample so the tab is not empty on the first look
+  ansible.builtin.command:
+    cmd: >-
+      {{ monitoring_stack_mailflow_script }}
+      --log {{ monitoring_stack_mailflow_log }}
+      --spool {{ monitoring_stack_mailflow_spool }}
+      --textfile-dir {{ monitoring_stack_textfile_dir }}
+  register: monitoring_stack_mailflow_first
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [monitoring, mailflow]
+
+- name: Report when the first mail flow sample could not be taken
+  ansible.builtin.debug:
+    msg: >-
+      The mail flow collector exited
+      {{ monitoring_stack_mailflow_first.rc | default('?') }}. The timer is
+      still installed; metrics will appear once it can read
+      {{ monitoring_stack_mailflow_log }}. This does not affect mail.
+  when:
+    - not ansible_check_mode
+    - (monitoring_stack_mailflow_first.rc | default(0)) != 0
+  tags: [monitoring, mailflow]
+
+- name: Enable and start the mail flow timer
+  ansible.builtin.systemd_service:
+    name: kin-mail-flow.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+  tags: [monitoring, mailflow]
+
 # See the drop-in template for why: a private mount namespace on a unit that
 # starts after /opt/zimbra is mounted can pin the DRBD backing device and block
 # a later failover.

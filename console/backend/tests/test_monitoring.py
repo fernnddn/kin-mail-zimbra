@@ -20,6 +20,8 @@ KNOWN_UNITS = {
     "bytes_per_sec",
     "disk_bytes_per_sec",
     "per_sec",
+    "per_min",
+    "count",
     "number",
     "seconds",
 }
@@ -36,6 +38,103 @@ class CatalogueTests(unittest.TestCase):
     def test_the_metrics_the_operator_asked_for_are_present(self) -> None:
         for wanted in ("cpu", "memory", "net_rx", "net_tx", "disk_root", "disk_mail"):
             self.assertIn(wanted, m.CATALOGUE)
+
+    def test_mail_flow_is_in_the_catalogue(self) -> None:
+        # Everything else here describes the machine. These describe the mail,
+        # which is the question a mail appliance exists to answer.
+        for wanted in (
+            "mail_received",
+            "mail_delivered_in",
+            "mail_delivered_out",
+            "mail_rejected",
+            "mail_deferred",
+            "mail_bounced",
+            "mail_queue",
+            "mail_queue_oldest",
+        ):
+            self.assertIn(wanted, m.CATALOGUE)
+
+    def test_mail_flow_queries_match_what_the_collector_writes(self) -> None:
+        """Every mail-flow query must name a series the collector emits.
+
+        The collector's metric names and the PromQL that reads them live in
+        different files and different languages, and a rename in one is
+        completely silent in the other - the chart simply stays empty forever.
+        So this renders real output from the collector and checks the queries
+        against it, rather than grepping source for strings it builds at
+        runtime with f-strings.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        path = (
+            Path(__file__).resolve().parents[3]
+            / "monitoring/mailflow/kin-mail-flow-metrics.py"
+        )
+        importlib.invalidate_caches()
+        spec = importlib.util.spec_from_file_location("kin_mail_flow_probe", path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        emitted = mod.render(
+            mod.new_counters(),
+            {q: 0 for q in mod.QUEUES},
+            0.0,
+            ok=True,
+            now=0.0,
+        )
+        emitted_series = {
+            line.split("{")[0].split(" ")[0]
+            for line in emitted.splitlines()
+            if line and not line.startswith("#")
+        }
+
+        mail_queries = [
+            q for name, (_l, _u, q) in m.CATALOGUE.items() if name.startswith("mail_")
+        ]
+        self.assertTrue(mail_queries, "no mail flow metrics in the catalogue")
+        for query in mail_queries:
+            named = [s for s in emitted_series if s in query]
+            self.assertTrue(
+                named, f"query references a series the collector never writes: {query}"
+            )
+
+        # Label filters must match labels that actually appear in the output.
+        for label in (
+            'event="accepted"',
+            'event="rejected"',
+            'transport="lmtp"',
+            'transport="smtp"',
+            'outcome="deferred"',
+            'outcome="bounced"',
+            'queue="deferred"',
+        ):
+            self.assertIn(label, emitted, f"the collector never emits {label}")
+
+        # And nothing the collector emits should be silently unused.
+        for series in ("kin_mail_delivered_total", "kin_mail_queue_messages"):
+            self.assertTrue(
+                any(series in q for q in mail_queries),
+                f"{series} is collected but no chart reads it",
+            )
+
+    def test_the_frontend_formatter_knows_every_unit(self) -> None:
+        # KNOWN_UNITS above is a list someone maintains by hand. This checks
+        # the thing it stands in for: a unit the chart formatter has no case
+        # for renders with the wrong words next to the number.
+        from pathlib import Path
+
+        chart_ts = (
+            Path(__file__).resolve().parents[3]
+            / "console/frontend/src/monitoring/chart.ts"
+        ).read_text(encoding="utf-8")
+        for _label, unit, _q in m.CATALOGUE.values():
+            if unit == "number":
+                continue  # the formatter's default branch
+            self.assertIn(
+                f'case "{unit}":', chart_ts, f"chart.ts cannot format unit {unit!r}"
+            )
 
     def test_public_catalogue_never_leaks_promql(self) -> None:
         # The query is an implementation detail; shipping it to the browser

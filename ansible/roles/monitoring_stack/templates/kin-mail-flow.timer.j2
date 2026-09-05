@@ -1,0 +1,13 @@
+# Managed by Ansible role monitoring_stack (KIN Mail).
+[Unit]
+Description=Collect KIN Mail flow metrics every {{ monitoring_stack_mailflow_interval }}
+
+[Timer]
+# Start soon after boot so the first graph point is not a scrape interval away.
+OnBootSec=45s
+OnUnitActiveSec={{ monitoring_stack_mailflow_interval }}
+AccuracySec=5s
+Unit=kin-mail-flow.service
+
+[Install]
+WantedBy=timers.target

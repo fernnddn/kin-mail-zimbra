@@ -19,6 +19,9 @@ import {
   usageTone,
   yBounds,
   type Point,
+  yTicks,
+  yFraction,
+  thresholdsFor,
 } from "./chart";
 
 type Series = { instance: string; points: Point[] };
@@ -55,21 +58,46 @@ const RANGE_LABELS: Record<string, string> = {
 // Ordered so the pair you compare sits side by side: CPU next to what it is
 // waiting on, disk throughput next to how busy the disk actually is, and
 // network throughput next to the errors that show the link giving up.
-const CHARTS = [
-  "cpu",
-  "cpu_iowait",
-  "memory",
-  "swap_used",
-  "net_rx",
-  "net_tx",
-  "net_errors",
-  "tcp_established",
-  "disk_read",
-  "disk_write",
-  "disk_busy",
-  "load1",
-  "load5",
+// Grouped the way an operator triages: is mail moving, is the machine coping,
+// is the link healthy, is there room on disk. A flat wall of thirteen
+// identical cards made every one of them equally easy to miss.
+type ChartGroup = { title: string; blurb: string; metrics: string[] };
+
+const CHART_GROUPS: ChartGroup[] = [
+  {
+    title: "Mail flow",
+    blurb:
+      "What the mail server is actually doing. Everything below this describes " +
+      "the machine; this describes the mail.",
+    metrics: [
+      "mail_received",
+      "mail_delivered_in",
+      "mail_delivered_out",
+      "mail_rejected",
+      "mail_deferred",
+      "mail_bounced",
+      "mail_queue",
+      "mail_queue_oldest",
+    ],
+  },
+  {
+    title: "Processor and memory",
+    blurb: "CPU next to what it is waiting on, so a busy machine reads differently from a stuck one.",
+    metrics: ["cpu", "cpu_iowait", "memory", "swap_used", "load1", "load5"],
+  },
+  {
+    title: "Network",
+    blurb: "Throughput next to the errors that show a link giving up before DRBD notices.",
+    metrics: ["net_rx", "net_tx", "net_errors", "tcp_established"],
+  },
+  {
+    title: "Storage",
+    blurb: "Throughput next to how busy the disk actually is.",
+    metrics: ["disk_read", "disk_write", "disk_busy"],
+  },
 ];
+
+const CHARTS = CHART_GROUPS.flatMap((g) => g.metrics);
 
 const Bar = styled.div`
   display: flex;
@@ -192,6 +220,68 @@ const Stats = styled.div`
     font-weight: 650;
     font-variant-numeric: tabular-nums;
   }
+`;
+
+const Section = styled.section`
+  margin-top: 26px;
+  &:first-of-type {
+    margin-top: 4px;
+  }
+`;
+
+const SectionHead = styled.div`
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid ${theme.line};
+`;
+
+const SectionTitle = styled.h3`
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: ${theme.ink};
+`;
+
+const SectionBlurb = styled.p`
+  margin: 0;
+  font-size: 0.75rem;
+  color: ${theme.muted};
+`;
+
+/* Wraps the svg ALONE. An earlier version put the y labels over the whole
+   Plot, which also contains the time axis and the peak/low/avg row - so the
+   bottom label landed on top of the statistics. */
+const PlotArea = styled.div`
+  position: relative;
+  line-height: 0;
+`;
+
+const YAxis = styled.div`
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+`;
+
+/* Left edge, not right: these sit over the oldest few pixels of the trace
+   rather than over the newest, which is the part being read. */
+const YTick = styled.span<{ $at: number }>`
+  position: absolute;
+  left: 0;
+  top: ${(p) => p.$at * 100}%;
+  transform: translateY(${(p) => (p.$at === 0 ? "0" : p.$at === 1 ? "-100%" : "-50%")});
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  color: ${theme.muted};
+  background: ${theme.bgElev};
+  padding: 0 3px;
+  border-radius: 3px;
+  line-height: 1.15;
+  opacity: 0.92;
 `;
 
 const Axis = styled.div`
@@ -387,6 +477,8 @@ function Chart({ data }: { data: SeriesResp }) {
   const ticks = timeTicks(points, 4, domain);
   const stats = seriesStats(points);
   const gid = `mon-grad-${data.metric}`;
+  const yLabels = yTicks(bounds, data.unit);
+  const bands = thresholdsFor(data.unit, data.metric);
   const hasData = segments.length > 0;
   const [hover, setHover] = useState<number | null>(null);
   const longRange = data.range === "7d" || data.range === "30d" || data.range === "1y";
@@ -395,6 +487,14 @@ function Chart({ data }: { data: SeriesResp }) {
   const hoverAt = hoverPoint
     ? (xFraction(hoverPoint[0], domain) ?? hoverIdx / Math.max(1, points.length - 1))
     : 0;
+
+  // The point the operator is reading: the hovered sample, or the latest one.
+  const markerValue = hoverPoint ? hoverPoint[1] : now;
+  const markerX = hoverPoint
+    ? hoverAt
+    : points.length
+      ? (xFraction(points[points.length - 1][0], domain) ?? 1)
+      : 1;
 
   return (
     <Card>
@@ -422,6 +522,7 @@ function Chart({ data }: { data: SeriesResp }) {
               </Tip>
             </>
           ) : null}
+          <PlotArea>
           <svg
             viewBox={`0 0 ${W} ${H}`}
             width="100%"
@@ -436,6 +537,23 @@ function Chart({ data }: { data: SeriesResp }) {
                 <stop offset="100%" stopColor={theme.accent} stopOpacity="0" />
               </linearGradient>
             </defs>
+            {/* Threshold context, drawn behind the trace. A CPU at 95% should
+                read as "in the red" without anyone parsing the axis. */}
+            {bands.map((b) => {
+              const top = yFraction(b.from, bounds) * H;
+              if (top >= H) return null;
+              return (
+                <rect
+                  key={`${b.tone}-${b.from}`}
+                  x={0}
+                  y={0}
+                  width={W}
+                  height={Math.max(0, top)}
+                  fill={b.tone === "danger" ? theme.danger : theme.warn}
+                  opacity={b.tone === "danger" ? 0.09 : 0.07}
+                />
+              );
+            })}
             {[0.25, 0.5, 0.75].map((f) => (
               <line
                 key={f}
@@ -461,7 +579,28 @@ function Chart({ data }: { data: SeriesResp }) {
                 vectorEffect="non-scaling-stroke"
               />
             ))}
+            {/* A dot on the value being read. Without it the crosshair says
+                which moment, and nothing says which point on the line. */}
+            {markerValue !== null && markerValue !== undefined ? (
+              <circle
+                cx={markerX * W}
+                cy={yFraction(markerValue, bounds) * H}
+                r={3}
+                fill={theme.accent}
+                stroke={theme.bgElev}
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : null}
           </svg>
+            <YAxis aria-hidden="true">
+              {yLabels.map((t) => (
+                <YTick key={t.at} $at={t.at}>
+                  {t.label}
+                </YTick>
+              ))}
+            </YAxis>
+          </PlotArea>
           <Axis>
             {ticks.map((t, i) => (
               <Tick key={i} $at={t.at}>
@@ -618,11 +757,26 @@ export function MonitoringTab() {
 
       {host ? <HostPanel host={host} /> : null}
 
-      <ChartGrid>
-        {charts.map((c) => (
-          <Chart key={c.metric} data={c} />
-        ))}
-      </ChartGrid>
+      {CHART_GROUPS.map((group) => {
+        const inGroup = charts.filter((c) => group.metrics.includes(c.metric));
+        // A group with nothing behind it is hidden rather than shown empty:
+        // mail flow metrics only exist once the collector has run, and an
+        // appliance mid-deploy should not display eight blank cards.
+        if (inGroup.length === 0) return null;
+        return (
+          <Section key={group.title}>
+            <SectionHead>
+              <SectionTitle>{group.title}</SectionTitle>
+              <SectionBlurb>{group.blurb}</SectionBlurb>
+            </SectionHead>
+            <ChartGrid>
+              {inGroup.map((c) => (
+                <Chart key={c.metric} data={c} />
+              ))}
+            </ChartGrid>
+          </Section>
+        );
+      })}
     </>
   );
 }

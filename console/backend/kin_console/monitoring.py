@@ -102,10 +102,67 @@ CATALOGUE: dict[str, tuple[str, str, str]] = {
     ),
     "tcp_established": (
         "TCP connections",
-        "number",
+        "count",
         "node_netstat_Tcp_CurrEstab",
     ),
     "load5": ("Load average (5m)", "number", "node_load5"),
+    # --- mail flow -----------------------------------------------------------
+    # Everything above describes the machine. These describe the mail, which
+    # is the reason the machine exists. They come from the textfile collector
+    # (monitoring/mailflow/kin-mail-flow-metrics.py) reading the Postfix log
+    # and spool, so they travel the same loopback path as the node metrics.
+    #
+    # Rates use 5m to match the rest of the catalogue and to stay meaningful
+    # on an appliance where mail arrives in bursts rather than continuously.
+    "mail_received": (
+        "Mail accepted",
+        "per_min",
+        "sum by (instance) (rate(kin_mail_events_total{event=\"accepted\"}[5m])) * 60",
+    ),
+    "mail_delivered_in": (
+        "Delivered to mailboxes",
+        "per_min",
+        "sum by (instance) (rate(kin_mail_delivered_total{transport=\"lmtp\"}[5m])) * 60",
+    ),
+    "mail_delivered_out": (
+        "Sent to other servers",
+        "per_min",
+        "sum by (instance) (rate(kin_mail_delivered_total{transport=\"smtp\"}[5m])) * 60",
+    ),
+    "mail_rejected": (
+        "Rejected at the door",
+        "per_min",
+        "sum by (instance) (rate(kin_mail_events_total{event=\"rejected\"}[5m])) * 60",
+    ),
+    "mail_deferred": (
+        "Deferred (will retry)",
+        "per_min",
+        "sum by (instance) "
+        "(rate(kin_mail_undelivered_total{outcome=\"deferred\"}[5m])) * 60",
+    ),
+    "mail_bounced": (
+        "Bounced (gave up)",
+        "per_min",
+        "sum by (instance) "
+        "(rate(kin_mail_undelivered_total{outcome=\"bounced\"}[5m])) * 60",
+    ),
+    "mail_queue": (
+        "Messages waiting",
+        "count",
+        "sum by (instance) (kin_mail_queue_messages)",
+    ),
+    "mail_queue_deferred": (
+        "Deferred queue",
+        "count",
+        "sum by (instance) (kin_mail_queue_messages{queue=\"deferred\"})",
+    ),
+    # Depth alone cannot tell ten messages that arrived a second ago from ten
+    # that have been retrying since 03:00. This is the one that says "stuck".
+    "mail_queue_oldest": (
+        "Oldest message waiting",
+        "seconds",
+        "max by (instance) (kin_mail_queue_oldest_seconds)",
+    ),
     "uptime": (
         "Uptime",
         "seconds",

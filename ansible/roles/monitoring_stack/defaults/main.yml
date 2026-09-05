@@ -33,3 +33,15 @@ monitoring_stack_node_exporter_listen: 127.0.0.1:9100
 # are a deliberate follow-up, not an oversight.
 monitoring_stack_targets:
   - "{{ monitoring_stack_node_exporter_listen }}"
+
+# Metrics this appliance publishes about itself, alongside the machine metrics
+# node_exporter collects. Written as .prom files into the textfile directory,
+# so they reach the console over the same loopback path as everything else and
+# nothing new listens on a port.
+monitoring_stack_textfile_dir: /var/lib/node_exporter/textfile
+monitoring_stack_mailflow_script: /usr/local/libexec/kin-mail-flow-metrics.py
+monitoring_stack_mailflow_log: /var/log/zimbra.log
+monitoring_stack_mailflow_spool: /opt/zimbra/data/postfix/spool
+# Prometheus scrapes every 15s; collecting faster than that just burns IO on a
+# live mail node for samples nothing reads.
+monitoring_stack_mailflow_interval: 30s
