@@ -9,7 +9,7 @@ const bundle = join(out, "text.mjs");
 execFileSync(join(here, "..", "node_modules", ".bin", "esbuild"),
   [join(here, "..", "src", "lib", "text.ts"), "--bundle", "--format=esm",
    `--outfile=${bundle}`, "--log-level=error"], { stdio: "inherit" });
-const { truncate, charsThatFit } = await import(pathToFileURL(bundle).href);
+const { truncate, charsThatFit, fitHostname } = await import(pathToFileURL(bundle).href);
 rmSync(out, { recursive: true, force: true });
 
 let pass = 0, fail = 0;
@@ -62,5 +62,31 @@ chk("a zero glyph width does not divide by zero", charsThatFit(140, 0), 0);
 }
 
 console.log("");
+
+// --- hostnames in the topology diagram --------------------------------------
+// truncate() on an FQDN spends the whole budget on the part every node shares.
+// "observability.example.test" became "observability.example...", which is the
+// domain the operator already knows and none of the identity they wanted.
+chk("a name that fits is left alone", fitHostname("mail-a.example.test", 22), "mail-a.example.test");
+chk("exactly at the budget is left alone", fitHostname("abcdefghij", 10), "abcdefghij");
+chk("a long FQDN falls back to the short name",
+  fitHostname("observability.example.test", 22), "observability");
+chk("a long short-name is truncated as a last resort",
+  fitHostname("a-very-long-hostname-indeed.corp.example.test", 12), "a-very-lo...");
+chk("a bare short name survives", fitHostname("mail-a", 22), "mail-a");
+chk("empty input is empty", fitHostname("", 22), "");
+chk("whitespace is trimmed", fitHostname("  mail-a  ", 22), "mail-a");
+chk("a zero budget yields nothing", fitHostname("mail-a.example.test", 0), "");
+chk("a negative budget yields nothing", fitHostname("mail-a.example.test", -5), "");
+chk("null-ish input is safe", fitHostname(undefined, 22), "");
+// The budget is a hard cap: SVG has no overflow, so anything longer draws
+// over the shape next to it.
+for (const [name, max] of [["observability.example.test", 22], ["x".repeat(80), 15],
+                           ["a.b.c.d.e.f.g", 5], ["short", 4]]) {
+  chk(`fitHostname respects its budget (${max})`, within(fitHostname(name, max), max), true);
+}
+
+
+
 if (fail === 0) { console.log(`ALL OK (${pass} checks)`); process.exit(0); }
 console.log(`FAILED ${fail} of ${pass + fail}`); process.exit(1);

@@ -1,7 +1,7 @@
 import styled from "@emotion/styled";
 import { Button } from "../ui";
 import { theme } from "../styles/theme";
-import { charsThatFit, truncate } from "../lib/text";
+import { charsThatFit, fitHostname, truncate } from "../lib/text";
 
 export type ObservabilitySnap = {
   present?: boolean;
@@ -129,8 +129,16 @@ function NodeGlyph({
   // inside it was not, so a longer role or an IPv6 VIP printed past the
   // rounded edge and off the card. 9px bold averages about 5.6px a character;
   // the pill costs 20px of padding on top of the card's own 20px inset.
+  const badgeBudget = charsThatFit(CARD_W - 2 * 20 - 20, 5.6);
   const badgeFull = floating ? `${role} - VIP ${floating}` : role || "";
-  const badge = truncate(badgeFull, charsThatFit(CARD_W - 2 * 20 - 20, 5.6));
+  // When the pair does not fit, drop the role WORD and keep the address.
+  // "SERVING MAIL - VIP 198..." cut the one thing on the badge that cannot be
+  // inferred from anywhere else on the card - the card is already labelled
+  // Mail, and the promoted node is already drawn as the promoted one.
+  const badge = truncate(
+    badgeFull.length > badgeBudget && floating ? `VIP ${floating}` : badgeFull,
+    badgeBudget,
+  );
 
   return (
     <g>
@@ -151,7 +159,11 @@ function NodeGlyph({
         {subtitle.toUpperCase()}
       </text>
       <text x={textX} y={top + 42} fill={INK} fontSize={13} fontWeight={650}>
-        {truncate(title, 24)}
+        {/* Budgeted against the card it has to sit in, rather than a magic 24
+            that did not correspond to any width. 13px semibold averages about
+            7.1px a character across the card's 20px inset on each side. */}
+        {fitHostname(title, charsThatFit(CARD_W - 2 * 20, 7.1))}
+        <title>{title}</title>
       </text>
       {addr ? (
         <text x={textX} y={top + 60} fill={SUB} fontSize={11}>

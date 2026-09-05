@@ -26,3 +26,20 @@ export function charsThatFit(px: number, avgCharPx: number): number {
   if (avgCharPx <= 0) return 0;
   return Math.max(0, Math.floor(px / avgCharPx));
 }
+
+/** A hostname shortened to fit, preferring the short name over a cut FQDN.
+ *
+ * `truncate` on a fully-qualified name spends the whole budget on the part
+ * every node shares: `observability.example.test` became
+ * `observability.example...`, which is the domain the operator already knows
+ * and none of the identity they were looking for. On an operations page the
+ * first label is the useful half, so drop the domain before cutting letters.
+ */
+export function fitHostname(name: string, max: number): string {
+  const full = (name ?? "").trim();
+  if (max <= 0) return "";
+  if (full.length <= max) return full;
+  const short = full.split(".")[0];
+  if (short.length <= max) return short;
+  return truncate(short, max);
+}
