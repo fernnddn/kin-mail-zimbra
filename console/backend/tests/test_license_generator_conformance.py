@@ -31,6 +31,18 @@ from kin_console.license_keys import KIN_LICENSE_PUBLIC_KEY_B64
 REPO = Path(__file__).resolve().parents[3]
 GENERATOR = REPO / "licensing-generator" / "generate_license.py"
 
+# The signing kit is gitignored on purpose - it lives on KIN's offline signing
+# machine and is not published with the product. So this suite runs on that
+# machine and on any checkout that has it, and skips in CI, where the file does
+# not exist. That is a real limitation: CI cannot enforce this conformance, so
+# the full backend suite has to be run locally before issuing keys from a
+# changed generator.
+_HAVE_GENERATOR = GENERATOR.is_file()
+_SKIP_REASON = (
+    f"{GENERATOR.relative_to(REPO)} is not in this checkout "
+    "(gitignored: it lives on the signing machine)"
+)
+
 
 def _load_generator() -> Any:
     # Without this, a cached .pyc can be reused when an edit leaves the file
@@ -64,6 +76,7 @@ def _payloads() -> list[dict[str, Any]]:
     ]
 
 
+@unittest.skipUnless(_HAVE_GENERATOR, _SKIP_REASON)
 class EmbeddedKeysMatch(unittest.TestCase):
     def test_the_generator_ships_the_same_public_key_as_the_appliance(self) -> None:
         gen = _load_generator()
@@ -81,6 +94,7 @@ class EmbeddedKeysMatch(unittest.TestCase):
         self.assertEqual(gen.EXPIRING_LICENSE_TYPES, appliance.EXPIRING_LICENSE_TYPES)
 
 
+@unittest.skipUnless(_HAVE_GENERATOR, _SKIP_REASON)
 class SignedHereVerifiesThere(unittest.TestCase):
     def setUp(self) -> None:
         self.gen = _load_generator()
@@ -124,6 +138,7 @@ class SignedHereVerifiesThere(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(_HAVE_GENERATOR, _SKIP_REASON)
 class BothValidatorsRejectTheSameThings(unittest.TestCase):
     """A payload one side accepts and the other rejects is an unusable key."""
 
