@@ -500,7 +500,7 @@ def build_base_config() -> dict[str, str]:
         "EXTERNAL_TEST_ADDRESS": "",
         "CONTRACTED_SEATS": "PLACEHOLDER_UNSET",
         "KIN_ADMIN_IPS": "",
-        "ZPUSH_ENABLED": "no",
+        "ZPUSH_ENABLED": "yes",
         "AD_AUTH_ENABLED": "no",
         "AD_LDAP_URL": "",
         "AD_SEARCH_BASE": "",
@@ -717,7 +717,12 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["KIN_ADMIN_IPS"] = draft_ips
     elif "KIN_ADMIN_IPS" not in out:
         out["KIN_ADMIN_IPS"] = ""
-    out["ZPUSH_ENABLED"] = "yes" if draft.get("zpush_enabled", False) else "no"
+    # Default ON. It was off so a first-night Deploy could not be stopped by
+    # the Ondrej PHP PPA being unreachable - but run_full_install already
+    # treats 07-zpush.sh as a soft failure ("mail install continues, re-run
+    # later"), so that risk was already handled and the cost was an
+    # appliance that shipped without phone mail unless someone opted in.
+    out["ZPUSH_ENABLED"] = "yes" if draft.get("zpush_enabled", True) else "no"
 
     # Keep test users aligned to domain (passwords preserved if already set).
     out["TEST_USER_1"] = f"test1@{domain}"

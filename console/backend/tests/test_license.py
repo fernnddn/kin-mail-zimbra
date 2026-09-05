@@ -208,3 +208,111 @@ class LicenseVerifyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PastedKeyTests(unittest.TestCase):
+    """A license key reaches the operator through email, chat or a document.
+
+    Every one of those mangles it. Curly quotes are the common case: Word,
+    Outlook and most chat clients replace straight quotes around a pasted key,
+    and curly quotes are not whitespace, so stripping whitespace left them in.
+    The operator then got `'ascii' codec can't encode characters in position
+    1-2` - a Python error, on a key that was perfectly valid.
+    """
+
+    def setUp(self) -> None:
+        self.priv = Ed25519PrivateKey.generate()
+        self.pub = _raw_public(self.priv)
+        self.server_id = "11111111-2222-4333-8444-555555555555"
+        self.now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+        self.token = sign_payload(
+            {
+                "server_id": self.server_id,
+                "seats": 32,
+                "type": "subscription",
+                "issued_at": self.now.isoformat(),
+                "expires_at": (self.now + timedelta(days=365)).isoformat(),
+            },
+            self.priv,
+        )
+
+    def _verify(self, text: str) -> dict:
+        return verify_license(
+            text, server_id=self.server_id, now=self.now, public_key=self.pub
+        )
+
+    def test_a_key_wrapped_in_quotes_still_applies(self) -> None:
+        for wrap in ('"%s"', "'%s'", "“%s”", "‘%s’",
+                     "<%s>", "`%s`", "(%s)", "[%s]", "«%s»"):
+            with self.subTest(wrap=wrap):
+                self.assertEqual(self._verify(wrap % self.token)["status"], "active")
+
+    def test_a_key_wrapped_across_lines_still_applies(self) -> None:
+        wrapped = "\n".join(
+            self.token[i : i + 40] for i in range(0, len(self.token), 40)
+        )
+        self.assertEqual(self._verify(wrapped)["status"], "active")
+        # Quoted AND wrapped: an email client doing both.
+        self.assertEqual(self._verify("“" + wrapped + "”")["status"], "active")
+
+    def test_a_key_with_a_non_breaking_space_still_applies(self) -> None:
+        mangled = self.token[:20] + " " + self.token[20:]
+        self.assertEqual(self._verify(mangled)["status"], "active")
+
+    def test_stripping_wrappers_cannot_corrupt_a_real_key(self) -> None:
+        # None of the wrapper characters are in the base64url alphabet, so a
+        # legitimate key can never lose a character to the strip.
+        from kin_console.license import _LICENSE_ALPHABET, _WRAPPERS
+
+        self.assertFalse(set(_WRAPPERS) & set(_LICENSE_ALPHABET))
+        self.assertTrue(set(self.token) <= set(_LICENSE_ALPHABET))
+
+
+class UnreadableKeyErrorTests(unittest.TestCase):
+    """Whatever is pasted, the operator must get a sentence they can act on."""
+
+    SID = "11111111-2222-4333-8444-555555555555"
+
+    def _err(self, token: str) -> str:
+        view = license_view(token, self.SID)
+        self.assertEqual(view["status"], "invalid")
+        self.assertTrue(view["provisioning_blocked"])
+        return str(view.get("error") or "")
+
+    def test_stray_characters_are_named_and_explained(self) -> None:
+        err = self._err("påylo≈ad.sig")
+        self.assertIn("not part of a key", err)
+        self.assertIn("curly quotes", err)
+        self.assertNotIn("codec", err)
+
+    def test_bad_base64_does_not_leak_binascii_wording(self) -> None:
+        err = self._err("a.b.c.d.e")
+        self.assertIn("not valid base64", err)
+        self.assertNotIn("data characters", err)
+
+    def test_no_python_internals_reach_the_operator(self) -> None:
+        leaky = ("codec", "Traceback", "binascii", "0x", "object at",
+                 "position 1-2", "b'", "NoneType")
+        for token in ("", "   ", "abcdef", ".", "!!!!.!!!!", "\U0001f511.\U0001f512",
+                      "A" * 3000 + "." + "B" * 3000, "aGVsbG8.c2ln",
+                      "WzEsMl0.c2ln", "eyJhIjoxfQ.AAAA", "a.b.c.d.e",
+                      "“eyJhIjoxfQ.AAAA”"):
+            with self.subTest(token=token[:24]):
+                view = license_view(token, self.SID)
+                err = str(view.get("error") or "")
+                for needle in leaky:
+                    self.assertNotIn(needle, err)
+
+    def test_nothing_escapes_as_an_exception(self) -> None:
+        # license_view catches ValueError only. Anything else would reach the
+        # console as a 500 with no explanation - the original complaint was
+        # that a license error was undiagnosable, not that it was wrong.
+        for token in ("", "\x00\x00.\x00", "\U0001f511", "." * 50,
+                      "=" * 10 + "." + "=" * 10, "A.", ".A", "\n\t\r"):
+            with self.subTest(token=repr(token)[:24]):
+                view = license_view(token, self.SID)
+                self.assertIn(view["status"], ("none", "invalid"))
+        for sid in ("", "   ", None):
+            with self.subTest(sid=sid):
+                view = license_view("eyJhIjoxfQ.AAAA", sid)  # type: ignore[arg-type]
+                self.assertEqual(view["status"], "invalid")

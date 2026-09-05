@@ -16,18 +16,22 @@ export default function ZpushStep() {
     <>
       <Title>Email on phones</Title>
       <Lede>
-        Choose whether staff can sync mail on mobile devices (ActiveSync). Skip is the
-        default so a first-night Deploy does not depend on the Ondrej PHP PPA. You can
-        enable it later with sudo ./07-zpush.sh.
+        Staff mail on phones and tablets, over ActiveSync. This is on by default so
+        the appliance is usable from a phone the day it is handed over. If the PHP
+        packages cannot be fetched during Deploy, mail still installs normally and
+        this step is reported as one to re-run.
       </Lede>
       <ChoiceGrid>
         <Choice
           type="button"
-          selected={draft.zpush_enabled === true}
+          selected={draft.zpush_enabled !== false}
           onClick={() => setLocal({ zpush_enabled: true })}
         >
           <strong>Enable mobile email access</strong>
-          <span>Staff can add company mail on phones and tablets.</span>
+          <span>
+            Recommended. Staff can add company mail on phones and tablets straight
+            after handover.
+          </span>
         </Choice>
         <Choice
           type="button"
@@ -35,7 +39,10 @@ export default function ZpushStep() {
           onClick={() => setLocal({ zpush_enabled: false })}
         >
           <strong>Skip mobile email</strong>
-          <span>Web and desktop mail only for this deployment.</span>
+          <span>
+            Web and desktop mail only. You can turn it on later with
+            sudo ./07-zpush.sh.
+          </span>
         </Choice>
       </ChoiceGrid>
       <Err>{error}</Err>
@@ -46,7 +53,7 @@ export default function ZpushStep() {
         <Button
           type="button"
           loading={saving}
-          onClick={() => void next(draft.zpush_enabled)}
+          onClick={() => void next(draft.zpush_enabled !== false)}
         >
           Continue
         </Button>

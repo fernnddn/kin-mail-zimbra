@@ -1044,7 +1044,12 @@ class CheckModeSafetyTests(unittest.TestCase):
         types = (repo / "console/frontend/src/wizard/types.ts").read_text(
             encoding="utf-8"
         )
-        self.assertIn("zpush_enabled: false", types)
+        # Mobile email now ships ON. It was off so a first-night Deploy could
+        # not fail on the Ondrej PHP PPA, but run_full_install already treats
+        # 07-zpush.sh as a soft failure, so the only thing the old default
+        # bought was an appliance handed over without phone mail.
+        # test_mobile_email_default.py covers this properly.
+        self.assertIn("zpush_enabled: true", types)
 
 
 class TranscriptRedactTests(unittest.IsolatedAsyncioTestCase):

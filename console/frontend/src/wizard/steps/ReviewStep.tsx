@@ -73,7 +73,7 @@ export default function ReviewStep() {
         <dt>Company directory</dt>
         <dd>{draft.ad_auth_enabled ? `Enabled (${draft.ad_ldap_url || "incomplete"})` : "Skipped"}</dd>
         <dt>Mobile email</dt>
-        <dd>{draft.zpush_enabled ? "Enabled" : "Skipped"}</dd>
+        <dd>{draft.zpush_enabled !== false ? "Enabled" : "Skipped"}</dd>
         <dt>Contracted mailboxes</dt>
         <dd>{seatsLabel}</dd>
         <dt>Trusted admin IPs</dt>

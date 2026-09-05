@@ -20,9 +20,26 @@ LICENSE_TYPES = ("trial", "subscription", "perpetual")
 EXPIRING_LICENSE_TYPES = ("trial", "subscription")
 
 
+# Characters a license key can legitimately contain: base64url plus the dot
+# that separates payload from signature.
+_LICENSE_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=."
+)
+# Quote-like characters an operator's tooling wraps a key in. Curly quotes are
+# the common one: a key pasted out of Word, Outlook or a chat client arrives
+# with them and they are not whitespace, so stripping whitespace leaves them.
+_WRAPPERS = "\"'\u2018\u2019\u201c\u201d\u00ab\u00bb<>[]()`"
+
+
 def _b64url_decode(raw: str) -> bytes:
     pad = "=" * ((4 - len(raw) % 4) % 4)
-    return base64.urlsafe_b64decode((raw + pad).encode("ascii"))
+    try:
+        return base64.urlsafe_b64decode((raw + pad).encode("ascii"))
+    except (UnicodeEncodeError, ValueError) as exc:
+        # binascii.Error subclasses ValueError, and both of these surfaced
+        # their raw Python text to the operator: "'ascii' codec can't encode
+        # characters in position 1-2" is not something anyone can act on.
+        raise ValueError("license key is not valid base64") from exc
 
 
 def public_key_bytes() -> bytes:
@@ -39,9 +56,19 @@ def parse_license_string(token: str) -> tuple[dict[str, Any], bytes, bytes]:
     # Drop all whitespace so a terminal-wrapped or double-pasted token still
     # verifies. A stray newline in the middle is the most common real-world
     # failure mode when an operator hand-selects a long license string.
-    text = "".join((token or "").split())
+    text = "".join((token or "").split()).strip(_WRAPPERS)
     if "." not in text:
         raise ValueError("license is not a signed payload.signature string")
+    # Say plainly that the key has characters a key cannot have, and name the
+    # usual cause, rather than letting a codec error reach the operator.
+    stray = sorted({c for c in text if c not in _LICENSE_ALPHABET})
+    if stray:
+        shown = " ".join(repr(c) for c in stray[:4])
+        raise ValueError(
+            "license key contains characters that are not part of a key "
+            f"({shown}). Copy it as plain text - a key pasted from a document "
+            "or email often picks up curly quotes or hidden formatting."
+        )
     payload_b64, sig_b64 = text.rsplit(".", 1)
     if not payload_b64 or not sig_b64:
         raise ValueError("license is missing payload or signature")
