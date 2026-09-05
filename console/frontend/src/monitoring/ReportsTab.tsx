@@ -45,6 +45,45 @@ const PERIODS: { id: string; label: string }[] = [
 // The four an operator would read out loud, in the order they would say them.
 const HEADLINE = ["accepted", "delivered_in", "delivered_out", "bounced"];
 
+/* A monthly report gets printed or saved as a PDF and handed to somebody.
+   On paper the controls are noise, a table that scrolls inside a 460px box
+   loses every row past the twelfth, and a card with no background is a box of
+   numbers with no structure. */
+const Printable = styled.div`
+  @media print {
+    .no-print {
+      display: none !important;
+    }
+    /* Backgrounds are dropped by default, which erases the header banding and
+       the total row - the two things that make the table readable. */
+    * {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+`;
+
+/* Only exists on paper: on screen the period is in the panel heading and the
+   freshness is obvious, but a printed page has to say what it is and when it
+   was taken or it is just a table of numbers. */
+const PrintHead = styled.header`
+  display: none;
+  @media print {
+    display: block;
+    margin-bottom: 14px;
+    h2 {
+      margin: 0 0 2px;
+      font-size: 1.1rem;
+      color: ${theme.ink};
+    }
+    p {
+      margin: 0;
+      font-size: 0.72rem;
+      color: ${theme.muted};
+    }
+  }
+`;
+
 const Bar = styled.div`
   display: flex;
   align-items: center;
@@ -150,6 +189,11 @@ const TableWrap = styled.div`
   overflow-x: auto;
   max-height: 460px;
   overflow-y: auto;
+  @media print {
+    /* Otherwise the print stops at whatever fits the box on screen. */
+    overflow: visible;
+    max-height: none;
+  }
 `;
 
 const Table = styled.table`
@@ -170,6 +214,21 @@ const Table = styled.table`
     left: 0;
     z-index: 2;
     box-shadow: 1px 0 0 ${theme.surface[200]};
+  }
+  @media print {
+    /* Nothing scrolls on paper, and a sticky cell prints on top of the row
+       it was pinned over. */
+    th,
+    td,
+    tfoot td {
+      position: static !important;
+    }
+    tr {
+      break-inside: avoid;
+    }
+    thead {
+      display: table-header-group;
+    }
   }
   /* The header's first cell is pinned in both directions, so it has to sit
      above the row headers it crosses. */
@@ -223,6 +282,7 @@ const Foot = styled.tr`
   td {
     position: sticky;
     bottom: 0;
+    /* stays a total row on paper, just not a floating one */
     background: ${theme.surface[100]};
     font-weight: 660;
     box-shadow: inset 0 1px 0 ${theme.line};
@@ -315,8 +375,18 @@ export function ReportsTab() {
   }
 
   return (
-    <>
-      <Bar>
+    <Printable>
+      <PrintHead>
+        <h2>KIN Mail - mail report</h2>
+        <p>
+          {report ? `${report.label} · ` : ""}
+          {report
+            ? `${report.start.slice(0, 10)} to ${report.end.slice(0, 10)}`
+            : ""}
+          {report ? ` · generated ${new Date(report.generated_at).toLocaleString()}` : ""}
+        </p>
+      </PrintHead>
+      <Bar className="no-print">
         <PeriodGroup role="group" aria-label="Report period">
           {PERIODS.map((p) => (
             <PeriodBtn
@@ -335,6 +405,14 @@ export function ReportsTab() {
           type="button"
           variant="ghost"
           disabled={!report || rows.length === 0}
+          onClick={() => window.print()}
+        >
+          Print / PDF
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={!report || rows.length === 0}
           onClick={() => {
             // A plain navigation, so the browser handles the download and the
             // Content-Disposition filename rather than us inventing one.
@@ -345,7 +423,7 @@ export function ReportsTab() {
         </Button>
       </Bar>
 
-      {error ? <WarnBox>{error}</WarnBox> : null}
+      {error ? <WarnBox className="no-print">{error}</WarnBox> : null}
 
       {report ? (
         <>
@@ -447,6 +525,6 @@ export function ReportsTab() {
           </Panel>
         </>
       ) : null}
-    </>
+    </Printable>
   );
 }

@@ -23,14 +23,25 @@ reinstalled, and a subtraction does not.
 Day boundaries are the APPLIANCE's local days, not UTC. A monthly report that
 ends at 07:00 on the 1st because the server reasoned in UTC is wrong in a way
 nobody would think to check.
+
+One limitation, stated rather than hidden: the daily breakdown asks Prometheus
+for a fixed 24-hour step, so in a timezone that observes DST the buckets for
+the days after a transition are offset by an hour from local midnight. Period
+TOTALS are exact everywhere, because they are a single window measured in real
+elapsed seconds. This appliance ships Asia/Jakarta, which has no DST, so the
+breakdown is exact there; getting it exact in a DST zone would need one query
+per day and 250 queries to draw one table is not a trade worth making.
 """
 
 from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timedelta, timezone, tzinfo
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .monitoring import (  # noqa: F401
     MonitoringError,
@@ -107,6 +118,43 @@ PERIODS: tuple[str, ...] = (
 DEFAULT_PERIOD = "last_month"
 
 
+ETC_TIMEZONE = "/etc/timezone"
+
+
+def appliance_zone() -> tzinfo:
+    """The appliance's real timezone, not a fixed offset.
+
+    `datetime.astimezone()` attaches the offset in force AT THAT INSTANT and
+    then keeps it. `.replace(day=1)` on a date in April therefore carried
+    April's offset back to March, and in any timezone that observes DST the
+    month boundaries came out an hour wrong - a monthly report that started and
+    ended at 01:00. Jakarta has no DST so nothing showed locally, which is
+    exactly why it was worth checking somewhere that does.
+
+    A real ZoneInfo computes the offset per date. The name comes from
+    /etc/timezone, which is what Ubuntu writes and what the wizard's TIMEZONE
+    setting ends up in; TZ wins when set, so tests can pin it.
+    """
+    name = (os.environ.get("TZ") or "").strip()
+    if not name:
+        try:
+            name = Path(ETC_TIMEZONE).read_text(encoding="utf-8").strip()
+        except OSError:
+            name = ""
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            pass
+    # Last resort: the fixed local offset. Wrong across a DST boundary, but
+    # only reachable on a host with no usable zone database at all.
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def now_local() -> datetime:
+    return datetime.now(appliance_zone())
+
+
 def _local_midnight(when: datetime) -> datetime:
     return when.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -129,6 +177,10 @@ def period_bounds(period: str, now: datetime) -> tuple[datetime, datetime, str]:
     read as an outage.
     """
     name = (period or "").strip().lower() or DEFAULT_PERIOD
+    # A caller's `now` may carry a fixed offset (that is what astimezone gives).
+    # Re-anchor it so every .replace() below lands on the right offset for the
+    # date it produces, not for the date it started from.
+    now = now.astimezone(appliance_zone())
     if name not in PERIODS:
         raise MonitoringError(
             f"unknown report period {period!r} (expected one of: {', '.join(PERIODS)})"
@@ -153,7 +205,7 @@ def build_daily_params(metric: str, start: datetime, end: datetime) -> dict[str,
     """
     if metric not in REPORT_SERIES:
         raise MonitoringError(f"unknown report series {metric!r}")
-    if end <= start:
+    if end.timestamp() <= start.timestamp():
         raise MonitoringError("report period ends before it starts")
     _heading, template, _kind = REPORT_SERIES[metric]
     first_eval = start + timedelta(days=1)
@@ -176,10 +228,15 @@ def build_total_params(metric: str, start: datetime, end: datetime) -> dict[str,
     """
     if metric not in REPORT_SERIES:
         raise MonitoringError(f"unknown report series {metric!r}")
-    if end <= start:
+    if end.timestamp() <= start.timestamp():
         raise MonitoringError("report period ends before it starts")
     _heading, template, _kind = REPORT_SERIES[metric]
-    window = max(1, int(round((end - start).total_seconds())))
+    # Elapsed seconds from the epochs, NOT (end - start).total_seconds().
+    # Subtracting two aware datetimes in the same zone is wall-clock
+    # arithmetic: across a DST boundary it reports 31 days for a month that
+    # actually lasted 743 hours, and the query window would then reach an hour
+    # further back than the period and count that hour twice.
+    window = max(1, int(round(end.timestamp() - start.timestamp())))
     return {
         "query": template.replace("$w", f"{window}s"),
         "time": f"{end.timestamp():.3f}",
@@ -214,7 +271,9 @@ def daily_rows(
         kind = REPORT_SERIES.get(metric, ("", "", "counter"))[2]
         for ts, value in points:
             # The point is the END of the day it summarises.
-            day = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+            day = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(
+                appliance_zone()
+            )
             label = (day - timedelta(seconds=1)).strftime("%Y-%m-%d")
             row = by_day.setdefault(label, {"date": label})
             row[metric] = _round_count(value, kind)
@@ -330,7 +389,7 @@ def series_csv(
                 writer.writerow(
                     [
                         when.strftime("%Y-%m-%d %H:%M:%S"),
-                        when.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                        when.astimezone(appliance_zone()).strftime("%Y-%m-%d %H:%M:%S"),
                         metric,
                         label,
                         unit,
@@ -378,7 +437,7 @@ def fetch_total(metric: str, start: datetime, end: datetime) -> float | None:
 
 def build_report(period: str, *, now: datetime | None = None) -> dict[str, Any]:
     """The whole report. Read-only; raises MonitoringError only on a bad period."""
-    clock = now or datetime.now().astimezone()
+    clock = now or now_local()
     start, end, label = period_bounds(period, clock)
 
     per_metric: dict[str, list[tuple[float, float | None]]] = {}

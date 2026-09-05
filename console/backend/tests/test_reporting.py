@@ -114,6 +114,79 @@ def _midnight(when: datetime) -> datetime:
     return when.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+class DaylightSaving(unittest.TestCase):
+    """Nothing here shows up in Jakarta, which is why it needed looking for.
+
+    `datetime.astimezone()` attaches the offset in force at that instant and
+    keeps it, so `.replace(day=1)` on a date in April carried April's offset
+    back to March and a monthly report began and ended at 01:00. And
+    subtracting two aware datetimes in the same zone is WALL-CLOCK arithmetic:
+    it calls a 743-hour March "31 days", so the totals window reached an hour
+    further back than the period and counted that hour twice.
+    """
+
+    def _report_month(self, zone: str) -> tuple[datetime, datetime, str]:
+        with _TZ(zone):
+            import importlib
+
+            importlib.reload(R)
+            now = datetime(2026, 4, 10, 12, 0, tzinfo=R.appliance_zone())
+            return R.period_bounds("last_month", now)
+
+    def tearDown(self) -> None:
+        import importlib
+
+        importlib.reload(R)
+
+    def test_month_boundaries_use_the_offset_of_their_own_date(self) -> None:
+        start, end, _ = self._report_month("Europe/London")
+        self.assertEqual(start.strftime("%H:%M"), "00:00")
+        self.assertEqual(end.strftime("%H:%M"), "00:00")
+        self.assertEqual(start.utcoffset(), timedelta(0), "March in London is GMT")
+        self.assertEqual(end.utcoffset(), timedelta(hours=1), "April is BST")
+
+    def test_the_totals_window_is_real_elapsed_time(self) -> None:
+        for zone, hours in (
+            ("Europe/London", 743),
+            ("America/New_York", 743),
+            ("Asia/Jakarta", 744),
+        ):
+            with self.subTest(zone=zone):
+                start, end, _ = self._report_month(zone)
+                with _TZ(zone):
+                    params = R.build_total_params("accepted", start, end)
+                window = int(params["query"].split("[")[1].split("s]")[0])
+                self.assertEqual(window, hours * 3600)
+
+    def test_a_no_dst_appliance_is_unaffected(self) -> None:
+        start, end, label = self._report_month("Asia/Jakarta")
+        self.assertEqual(label, "March 2026")
+        self.assertEqual(start.utcoffset(), timedelta(hours=7))
+        self.assertEqual(end.utcoffset(), timedelta(hours=7))
+
+    def test_the_zone_comes_from_the_appliance_not_a_fixed_offset(self) -> None:
+        with _TZ("Europe/London"):
+            import importlib
+
+            importlib.reload(R)
+            zone = R.appliance_zone()
+            # A real zone answers differently on either side of a transition.
+            self.assertNotEqual(
+                datetime(2026, 1, 15, tzinfo=zone).utcoffset(),
+                datetime(2026, 7, 15, tzinfo=zone).utcoffset(),
+            )
+
+    def test_an_unknown_zone_name_falls_back_rather_than_raising(self) -> None:
+        with _TZ("Not/AZone"):
+            import importlib
+
+            importlib.reload(R)
+            self.assertIsNotNone(R.appliance_zone())
+            # And the report still builds.
+            start, end, _ = R.period_bounds("last_7d", R.now_local())
+            self.assertLess(start.timestamp(), end.timestamp())
+
+
 class QueryBuilders(unittest.TestCase):
     def setUp(self) -> None:
         self.tz = _TZ("Asia/Jakarta")
