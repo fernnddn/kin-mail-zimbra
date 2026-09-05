@@ -27,6 +27,7 @@ import {
 import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
 import { useTasks } from "../tasks/TaskProvider";
 import { MonitoringTab } from "../monitoring/MonitoringTab";
+import { ReportsTab } from "../monitoring/ReportsTab";
 
 type ClusterSnap = {
   local_host?: string;
@@ -1227,7 +1228,9 @@ export default function ClusterPage() {
   const [preflightByNode, setPreflightByNode] = useState<
     Record<string, Record<string, PreflightCheck>>
   >({});
-  const [tab, setTab] = useState<"status" | "monitoring" | "activity">("status");
+  const [tab, setTab] = useState<
+    "status" | "monitoring" | "reports" | "activity"
+  >("status");
   const [healthOpen, setHealthOpen] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [removeProbe, setRemoveProbe] = useState<RemoveProbe | null>(null);
@@ -2064,6 +2067,9 @@ export default function ClusterPage() {
           <TabBtn type="button" $on={tab === "monitoring"} onClick={() => setTab("monitoring")}>
             Monitoring
           </TabBtn>
+          <TabBtn type="button" $on={tab === "reports"} onClick={() => setTab("reports")}>
+            Reports
+          </TabBtn>
           <TabBtn type="button" $on={tab === "activity"} onClick={() => setTab("activity")}>
             Activity log
           </TabBtn>
@@ -2214,6 +2220,8 @@ export default function ClusterPage() {
           )
         ) : tab === "monitoring" ? (
           <MonitoringTab />
+        ) : tab === "reports" ? (
+          <ReportsTab />
         ) : (
           <LogView aria-label="Maintenance log">
             {log || "Status and transition output appears here."}

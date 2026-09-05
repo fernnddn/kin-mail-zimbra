@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { theme } from "../styles/theme";
-import { Hint, Skeleton, SkeletonCard, WarnBox } from "../ui";
+import { Button, Hint, Skeleton, SkeletonCard, WarnBox } from "../ui";
 import {
   areaPath,
   formatBytes,
@@ -106,6 +106,12 @@ const Bar = styled.div`
   flex-wrap: wrap;
   gap: 0.75rem;
   margin: 0 0 1.1rem;
+`;
+
+/* Pushed to the end of the bar so the range buttons keep their position when
+   the hint text wraps at a narrow width. */
+const ExportSlot = styled.div`
+  margin-left: auto;
 `;
 
 const RangeGroup = styled.div`
@@ -751,6 +757,22 @@ export function MonitoringTab() {
           Times shown in {localZoneLabel()}. Collected on this server and kept for a year;
           metrics never leave the appliance.
         </Hint>
+        <ExportSlot>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={charts.length === 0}
+            onClick={() => {
+              // Plain navigation: the browser handles the download and takes
+              // the filename from Content-Disposition.
+              window.location.href =
+                `/api/monitoring/series.csv?metrics=${encodeURIComponent(CHARTS.join(","))}` +
+                `&range=${encodeURIComponent(range)}`;
+            }}
+          >
+            Export CSV
+          </Button>
+        </ExportSlot>
       </Bar>
 
       {error ? <WarnBox>{error}</WarnBox> : null}

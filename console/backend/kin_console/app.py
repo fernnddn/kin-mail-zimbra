@@ -1324,6 +1324,122 @@ async def monitoring_series_batch(
     }
 
 
+# ---------------------------------------------------------------------------
+# Reports.
+#
+# The Monitoring tab answers "what is happening now". These answer "what
+# happened last month" - the question somebody asks once a month and otherwise
+# has to leave the console to answer, or cannot answer at all. Read-only: they
+# run range queries through the same loopback Prometheus proxy and touch
+# nothing else.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/reports/mail")
+async def reports_mail(
+    period: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Mail totals and a per-day breakdown for a named period."""
+    import asyncio
+
+    from . import reporting
+
+    want = period or reporting.DEFAULT_PERIOD
+    if want not in reporting.PERIODS:
+        raise HTTPException(status_code=400, detail=f"Unknown period: {want}")
+    try:
+        return await asyncio.to_thread(reporting.build_report, want)
+    except reporting.MonitoringError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/reports/mail.csv")
+async def reports_mail_csv(
+    period: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> Response:
+    """The same report as a spreadsheet: one row per day."""
+    import asyncio
+    from datetime import datetime
+
+    from . import reporting
+
+    want = period or reporting.DEFAULT_PERIOD
+    if want not in reporting.PERIODS:
+        raise HTTPException(status_code=400, detail=f"Unknown period: {want}")
+    try:
+        report = await asyncio.to_thread(reporting.build_report, want)
+    except reporting.MonitoringError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    body = reporting.to_csv(
+        list(report.get("daily") or []), reporting.report_csv_columns()
+    )
+    name = reporting.csv_filename(
+        f"kin-mail-report-{want}",
+        datetime.fromisoformat(str(report["start"])),
+        datetime.fromisoformat(str(report["end"])),
+    )
+    return _csv_response(body, name)
+
+
+@app.get("/api/monitoring/series.csv")
+async def monitoring_series_csv(
+    metrics: str,
+    range: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> Response:
+    """Raw samples for the charted metrics, long format.
+
+    The operator asked to take the data "from raw to finished" elsewhere, so
+    this is the samples as scraped rather than anything pre-aggregated.
+    """
+    import asyncio
+    import time
+
+    from . import monitoring, reporting
+
+    window = range or monitoring.DEFAULT_RANGE
+    if window not in monitoring.RANGES:
+        raise HTTPException(status_code=400, detail=f"Unknown range: {window}")
+    try:
+        wanted = monitoring.parse_metric_list(metrics)
+    except monitoring.MonitoringError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    end = time.time()
+
+    async def one(name: str) -> dict[str, object]:
+        try:
+            series = await asyncio.to_thread(
+                monitoring.fetch_range, name, window, now=end
+            )
+        except monitoring.MonitoringError:
+            series = []
+        return {**monitoring.metric_meta(name), "series": series}
+
+    charts = await asyncio.gather(*(one(n) for n in wanted))
+    body = reporting.series_csv(list(charts))
+    return _csv_response(body, reporting.csv_filename(f"kin-mail-metrics-{window}"))
+
+
+def _csv_response(body: str, filename: str) -> Response:
+    """CSV with a BOM, so Excel opens UTF-8 correctly.
+
+    Without it Excel reads a UTF-8 CSV as the local 8-bit codepage and mangles
+    any non-ASCII in it. The BOM is invisible to every other reader.
+    """
+    return Response(
+        content="\ufeff" + body,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # A report is a point-in-time answer; a cached one is a wrong one.
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.get("/api/monitoring/overview")
 async def monitoring_overview(
     _user: ConsoleUser = Depends(auth.require_console_user),
