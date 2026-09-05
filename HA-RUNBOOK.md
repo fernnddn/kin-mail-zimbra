@@ -527,6 +527,48 @@ FOSS has **no** `zmbackup` / `zmrestore` (Network Edition). Collector uses
 onto `/var/tmp` (root fs, never DRBD), config tarballs, and per-account
 `zmmailbox getRestURL '//?fmt=tgz'`.
 
+## Mail reports (Cluster -> Reports)
+
+Answers "what happened last month" without leaving the console or reading
+Postfix logs. Read-only: range queries against the same loopback Prometheus the
+Monitoring tab uses.
+
+| What | Where |
+|---|---|
+| Report | Cluster page -> **Reports** tab |
+| Periods | This month, last month, rolling 7 / 30 / 90 days |
+| Figures | Accepted, delivered to mailboxes, sent to other servers, rejected, deferral events, bounced, queue peak, longest wait |
+| Export | **Export CSV** (one row per day), **Print / PDF** (a clean page with its own title, period and generation time) |
+| Raw samples | Monitoring tab -> **Export CSV** (every charted metric, one row per sample) |
+| API | `GET /api/reports/mail?period=…`, `…/mail.csv`, `GET /api/monitoring/series.csv?metrics=…&range=…` |
+
+**The figures come from the mail flow collector**
+(`monitoring/mailflow/kin-mail-flow-metrics.py`), installed by the
+`monitoring_stack` role. An appliance deployed before that role carried it
+shows an empty report until the monitoring step is re-run:
+
+```bash
+ansible-playbook -i inventory/lab.yml playbooks/mail-monitoring.yml
+```
+
+Figures start from the day the collector first runs. There is no back-fill:
+Postfix's log is rotated and the counters are cumulative from first start.
+
+**Reading the numbers honestly.** "Accepted" counts messages entering the
+queue. The two delivered columns count per RECIPIENT, so a message to three
+people is one acceptance and three deliveries - which is why the summary quotes
+delivered as a share of *final outcomes* (delivered plus bounced) rather than
+against accepted. "Deferral events" counts retries, not messages: Postfix logs
+`status=deferred` every time it postpones, so a message that retried nine times
+before arriving appears nine times and is still a successful delivery. Queue
+figures are the worst point in each day, not an average - a queue that peaked
+at 400 is the fact worth keeping.
+
+**Days are this server's days.** Period totals are exact in any timezone. The
+day-by-day breakdown uses a fixed 24-hour step, so in a timezone that observes
+DST the buckets after a transition sit an hour off local midnight. Asia/Jakarta
+has no DST, so the breakdown is exact on the shipped configuration.
+
 ### Setting up the Backup VM
 
 Everything below is installed by one idempotent script, run from a checkout on

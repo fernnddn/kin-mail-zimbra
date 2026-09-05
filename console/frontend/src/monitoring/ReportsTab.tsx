@@ -518,8 +518,13 @@ export function ReportsTab() {
               </TableWrap>
             ) : (
               <Empty>
-                No mail activity recorded in this period. If the appliance was
-                only deployed recently, there is nothing further back to show.
+                No mail figures for this period.
+                <br />
+                On an appliance deployed before mail reporting existed, the
+                collector that produces these numbers is installed by re-running
+                the monitoring step of the deploy; figures start from the day it
+                first runs, not before. On a recent appliance there is simply
+                nothing further back to show yet.
               </Empty>
             )}
           </Panel>
