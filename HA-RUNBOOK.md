@@ -417,12 +417,23 @@ not invent a shorter path. Naive `systemctl stop sbd` is **refused**
 Both of these are deliberate, and both are now shown in the console rather than
 left for the operator to infer.
 
-**Failover.** The witness is the third vote. Without it quorum needs *both*
-mail nodes, so while Observability is absent or unreachable, losing a mail node
-**stops mail** instead of failing over. `strip_quorum_device.py` deliberately
-does not write `two_node: 1`: a lone quorate node with fencing disabled is how
-the two replicas diverge, and data safety wins over availability here. The
-Cluster page says "Pair cannot survive a node failure" for the duration.
+**Fencing, and with it the protection against a split.** The SBD LUN lives on
+that VM, so while it is gone nothing can fence a peer. This appliance ships
+`no-quorum-policy=ignore` (see `sbd_stonith_no_quorum_policy`), so a lone
+surviving mail node **keeps serving** rather than stopping - the availability
+trade is deliberate. What it costs is that a partition which cuts the two nodes
+off from each other while both stay up can put both into Primary. That is
+contained rather than silent: `after-sb-2pri disconnect` makes DRBD refuse to
+merge two diverged copies and wait for an operator.
+
+`strip_quorum_device.py` deliberately does not write `two_node: 1`, so the vote
+count stays honest about what is present rather than manufacturing a quorum the
+cluster does not have.
+
+For a deployment that must prefer consistency over availability, set
+`sbd_stonith_no_quorum_policy: stop`. Then the survivor is not quorate and
+Pacemaker stops mail on it. The Cluster page follows whichever policy is
+actually set rather than assuming one.
 
 **Fencing.** Disarm sets `stonith-enabled=false` as its first action. A disarm
 that fails part-way therefore leaves fencing off, and so does a manual override

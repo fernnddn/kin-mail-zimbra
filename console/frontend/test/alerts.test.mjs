@@ -63,20 +63,52 @@ chk("observability absent is a warning",
   deriveAlerts({ ...healthy, observability: { status: "absent" } }).map((a) => [a.id, a.severity]),
   [["observability-absent", "warn"]]);
 
-// Losing the witness costs the pair its third vote, so quorum then needs both
-// mail nodes and a single node failure stops mail. Saying only "no witness"
-// reads as "still fine, I have two nodes", which is the wrong conclusion.
+// Losing the witness costs the third vote AND the SBD fencing LUN. What that
+// costs depends on no-quorum-policy, so the wording has to follow the actual
+// setting. This appliance ships "ignore": a lone survivor keeps serving, and
+// telling the operator mail would stop is simply false. Naming only the
+// missing witness reads as "still fine, I have two nodes", which is the wrong
+// conclusion under either policy.
 const detailOf = (snap, id) =>
   (deriveAlerts(snap).find((a) => a.id === id) || {}).detail || "";
-chk("absent witness says the pair cannot survive a node failure",
-  /both mail\s+nodes/.test(detailOf({ ...healthy, observability: { status: "absent" } }, "observability-absent")),
-  true);
-chk("absent witness titles the consequence, not just the missing VM",
-  /cannot survive/.test(
-    (deriveAlerts({ ...healthy, observability: { status: "absent" } })[0] || {}).title || ""),
-  true);
-chk("unreachable witness says losing a node stops mail",
-  /stops mail/.test(detailOf({ ...healthy, observability: { status: "unreachable" } }, "observability")),
+const titleOf = (snap, id) =>
+  (deriveAlerts(snap).find((a) => a.id === id) || {}).title || "";
+
+const absentIgnore = { ...healthy, no_quorum_policy: "ignore", observability: { status: "absent" } };
+const absentStop = { ...healthy, no_quorum_policy: "stop", observability: { status: "absent" } };
+const downIgnore = { ...healthy, no_quorum_policy: "ignore", observability: { status: "unreachable" } };
+const downStop = { ...healthy, no_quorum_policy: "stop", observability: { status: "unreachable" } };
+
+// The shipped default: mail keeps running, fencing is what is lost.
+chk("on an ignore appliance the witness alert does not claim mail stops",
+  /stops mail/.test(detailOf(absentIgnore, "observability-absent")), false);
+chk("on an ignore appliance it names the split-brain exposure",
+  /both can go Primary/.test(detailOf(absentIgnore, "observability-absent")), true);
+chk("and says a survivor keeps serving",
+  /keeps serving/.test(detailOf(absentIgnore, "observability-absent")), true);
+chk("its title names the real risk",
+  /diverge the replicas/.test(titleOf(absentIgnore, "observability-absent")), true);
+
+// A consistency-first deployment: the survivor is not quorate and mail stops.
+chk("on a stop appliance it does say mail stops",
+  /stops mail/.test(detailOf(absentStop, "observability-absent")), true);
+chk("and titles it as lost failover",
+  /cannot survive/.test(titleOf(absentStop, "observability-absent")), true);
+chk("the stop wording never claims a survivor keeps serving",
+  /keeps serving/.test(detailOf(absentStop, "observability-absent")), false);
+
+// The same distinction for a witness that is configured but unreachable.
+chk("unreachable on ignore does not claim mail stops",
+  /stops mail/.test(detailOf(downIgnore, "observability")), false);
+chk("unreachable on stop does",
+  /stops mail/.test(detailOf(downStop, "observability")), true);
+chk("both still say fencing is down",
+  [/fencing/i.test(detailOf(downIgnore, "observability")),
+   /fencing/i.test(detailOf(downStop, "observability"))], [true, true]);
+// An unset policy must not be read as "stop": absent from `pcs property` is
+// not evidence of the consistency-first setting.
+chk("an unknown policy uses the availability wording",
+  /keeps serving/.test(detailOf({ ...healthy, observability: { status: "absent" } }, "observability-absent")),
   true);
 
 chk("qdevice alone is a warning",
