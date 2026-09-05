@@ -96,6 +96,78 @@ class EveryEndpointRequiresASession(unittest.TestCase):
         self.assertEqual(seen, wanted, "an endpoint was renamed without updating this")
 
 
+class GatedTheSameAsTheChartsBeside(unittest.TestCase):
+    """Reports must not drift away from the Monitoring tab's posture.
+
+    All three roles already see the charts, and a Customer Admin looking at
+    their own mail volumes is appropriate. What must not happen is the two
+    surfaces disagreeing after somebody tightens one of them: the reports read
+    the same Prometheus data, so a rule that applies to the charts applies here.
+    """
+
+    def _dependency_text(self, name: str) -> str:
+        source = APP_SRC.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
+                return ast.get_source_segment(source, node) or ""
+        raise AssertionError(f"no endpoint named {name}")
+
+    def test_reports_are_gated_like_the_series_endpoint(self) -> None:
+        charts = self._dependency_text("monitoring_series_batch")
+        for name in ("reports_mail", "reports_mail_csv", "monitoring_series_csv"):
+            with self.subTest(endpoint=name):
+                mine = self._dependency_text(name)
+                # Whatever the charts require, these require too.
+                self.assertEqual(
+                    "auth.require_console_user" in charts,
+                    "auth.require_console_user" in mine,
+                )
+                self.assertEqual(
+                    "command_allowed(" in charts, "command_allowed(" in mine,
+                    f"{name} does not match the charts' role check",
+                )
+
+    def test_none_of_them_mutate_anything(self) -> None:
+        # A report is a read. If one of these ever grows a privhelper call, it
+        # has stopped being one.
+        for name in ("reports_mail", "reports_mail_csv", "monitoring_series_csv"):
+            with self.subTest(endpoint=name):
+                body = self._dependency_text(name)
+                for forbidden in ("_collect_privhelper", "write_config", "subprocess"):
+                    self.assertNotIn(forbidden, body)
+
+
+class ReportingUsesMonitoringsInternals(unittest.TestCase):
+    """reporting.py imports private names out of monitoring.py.
+
+    That is deliberate - it is the same Prometheus proxy and duplicating the
+    HTTP handling would be worse - but a private name carries no promise. This
+    fails loudly if one is renamed, instead of the reports quietly 500ing.
+    """
+
+    def test_the_borrowed_names_still_exist(self) -> None:
+        from kin_console import monitoring
+
+        for name in ("_get", "_num", "parse_matrix", "parse_vector",
+                     "MonitoringError", "PROM_TIMEOUT_SEC"):
+            self.assertTrue(hasattr(monitoring, name), f"monitoring.{name} is gone")
+
+    def test_reporting_uses_the_same_objects(self) -> None:
+        from kin_console import monitoring
+
+        self.assertIs(R.parse_matrix, monitoring.parse_matrix)
+        self.assertIs(R.MonitoringError, monitoring.MonitoringError)
+
+    def test_the_console_boots_even_if_reporting_is_broken(self) -> None:
+        # reporting is imported inside the endpoints, not at module scope, so
+        # a fault in it cannot stop the console starting.
+        source = APP_SRC.read_text(encoding="utf-8")
+        head = source[: source.index("app = FastAPI")]
+        self.assertNotIn("from . import reporting", head)
+        self.assertNotIn("from .reporting import", head)
+
+
 class ReportEndpoint(unittest.TestCase):
     def test_it_returns_the_report(self) -> None:
         with mock.patch.object(R, "build_report", lambda p: _fake_report(p)):
