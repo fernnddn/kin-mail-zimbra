@@ -1896,147 +1896,174 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
                 yield proto.event_done(c)
                 return
 
-            yield await _emit(
-                f"Waiting for Promoted + VIP + Zimbra on {target}. "
-                f"This finishes as soon as they land, usually in well under a "
-                f"minute; {FAILBACK_TIMEOUT_SEC}s is the point at which it "
-                f"gives up, not how long it takes."
-            )
-            settled, settle_logs = await wait_failback_settled(target)
-            for line in settle_logs:
-                yield await _emit(line)
-            if not settled:
-                # If the stack already landed on the target despite settle
-                # reporting false, clear the temporary ban so the cluster is
-                # not left with a sticky constraint.
-                st_now = await gather_status()
-                if _stack_on_target(st_now, target):
+            # Everything from here until the ban is cleared runs with a
+            # -INFINITY constraint pinned on the node that is currently serving
+            # mail. Every handled failure below removes it. Nothing removed it
+            # if something RAISED - an asyncio timeout inside the settle poll, a
+            # subprocess error in gather_status, or the operator simply closing
+            # the browser tab, which closes this generator. The cluster would
+            # then be left unable to promote ANY node: DRBD with no Primary, the
+            # group unable to start, mail down on both, and nothing on screen
+            # naming the constraint that did it.
+            ban_cleared = False
+            try:
+                yield await _emit(
+                    f"Waiting for Promoted + VIP + Zimbra on {target}. "
+                    f"This finishes as soon as they land, usually in well under a "
+                    f"minute; {FAILBACK_TIMEOUT_SEC}s is the point at which it "
+                    f"gives up, not how long it takes."
+                )
+                settled, settle_logs = await wait_failback_settled(target)
+                for line in settle_logs:
+                    yield await _emit(line)
+                if not settled:
+                    # If the stack already landed on the target despite settle
+                    # reporting false, clear the temporary ban so the cluster is
+                    # not left with a sticky constraint.
+                    st_now = await gather_status()
+                    if _stack_on_target(st_now, target):
+                        yield await _emit(
+                            f"Settle reported incomplete, but stack is already on {target}; "
+                            f"clearing temporary ban on {DRBD_CLONE}"
+                        )
+                        c_clr, out_clr, err_clr = await _capture(
+                            ["pcs", "resource", "clear", DRBD_CLONE],
+                            timeout=120,
+                        )
+                        ban_cleared = c_clr == 0
+                        if out_clr:
+                            yield await _emit(out_clr)
+                        if err_clr:
+                            yield await _emit(err_clr, err=True)
+                        # Re-read the whole stack, not just `promoted`. Clearing a
+                        # ban makes Pacemaker recompute placement, and for a moment
+                        # `promoted` can read empty or stale while the transition
+                        # runs. Judging the move on that one field reported a
+                        # completed Move Master as FAILED, then fell through to the
+                        # failure branch and told the operator the Master had not
+                        # moved - while it was sitting on the target (live, 31 Aug
+                        # 2026). Give the transition a few polls to land.
+                        st_after = await gather_status()
+                        for _ in range(6):
+                            if c_clr != 0 or _stack_on_target(st_after, target):
+                                break
+                            await asyncio.sleep(FAILBACK_POLL_SEC)
+                            st_after = await gather_status()
+                        if c_clr == 0 and _stack_on_target(st_after, target):
+                            yield await _emit(f"Master move to {target} complete (recovered)")
+                            yield proto.event_done(0)
+                            return
+                        if c_clr == 0:
+                            # The stack was on the target a moment ago and is not
+                            # now. Say that, rather than "the Master was not moved",
+                            # which is a different and wrong story.
+                            yield await _emit(
+                                f"The stack reached {target} but did not stay there "
+                                f"(promoted={st_after.get('promoted')} "
+                                f"vip_node={st_after.get('vip_node')} "
+                                f"zimbra_node={st_after.get('zimbra_node')}). "
+                                "The temporary ban has been cleared.",
+                                err=True,
+                            )
+                            yield proto.event_done(1)
+                            return
+                    # The move failed and the stack is not on the target, so the
+                    # ban we placed is now pointing -INFINITY at the node that was
+                    # serving mail. Leaving it there means no node is allowed to be
+                    # Promoted: DRBD has no Primary, the group cannot start, and
+                    # mail is down on both nodes with nothing on screen naming the
+                    # constraint that did it. This used to ask the operator to run
+                    # `pcs resource clear` by hand, which is exactly the SSH-only
+                    # recovery this console exists to remove.
+                    #
+                    # Clearing is safe here: it only removes the temporary ban this
+                    # operation added, putting placement back where it was before we
+                    # started. The cluster then settles the Master wherever it can
+                    # actually run, which is the state the operator wants to be in
+                    # while they work out why the target would not take it.
                     yield await _emit(
-                        f"Settle reported incomplete, but stack is already on {target}; "
-                        f"clearing temporary ban on {DRBD_CLONE}"
+                        f"Move did not settle on {target}. Removing the temporary ban "
+                        f"so the cluster is not left unable to promote any node."
                     )
-                    c_clr, out_clr, err_clr = await _capture(
+                    c_undo, out_undo, err_undo = await _capture(
                         ["pcs", "resource", "clear", DRBD_CLONE],
                         timeout=120,
                     )
-                    if out_clr:
-                        yield await _emit(out_clr)
-                    if err_clr:
-                        yield await _emit(err_clr, err=True)
-                    # Re-read the whole stack, not just `promoted`. Clearing a
-                    # ban makes Pacemaker recompute placement, and for a moment
-                    # `promoted` can read empty or stale while the transition
-                    # runs. Judging the move on that one field reported a
-                    # completed Move Master as FAILED, then fell through to the
-                    # failure branch and told the operator the Master had not
-                    # moved - while it was sitting on the target (live, 31 Aug
-                    # 2026). Give the transition a few polls to land.
-                    st_after = await gather_status()
-                    for _ in range(6):
-                        if c_clr != 0 or _stack_on_target(st_after, target):
-                            break
-                        await asyncio.sleep(FAILBACK_POLL_SEC)
-                        st_after = await gather_status()
-                    if c_clr == 0 and _stack_on_target(st_after, target):
-                        yield await _emit(f"Master move to {target} complete (recovered)")
-                        yield proto.event_done(0)
-                        return
-                    if c_clr == 0:
-                        # The stack was on the target a moment ago and is not
-                        # now. Say that, rather than "the Master was not moved",
-                        # which is a different and wrong story.
+                    ban_cleared = c_undo == 0
+                    if out_undo:
+                        yield await _emit(out_undo)
+                    if err_undo:
+                        yield await _emit(err_undo, err=True)
+                    if c_undo == 0:
+                        st_undo = await gather_status()
                         yield await _emit(
-                            f"The stack reached {target} but did not stay there "
-                            f"(promoted={st_after.get('promoted')} "
-                            f"vip_node={st_after.get('vip_node')} "
-                            f"zimbra_node={st_after.get('zimbra_node')}). "
-                            "The temporary ban has been cleared.",
+                            f"Ban removed. promoted={st_undo.get('promoted')} "
+                            f"vip_node={st_undo.get('vip_node')} "
+                            f"drbd_uptodate={st_undo.get('drbd_uptodate')}"
+                        )
+                        yield await _emit(
+                            f"The Master was not moved to {target}. The cluster is "
+                            "back to the placement it had before this attempt.",
                             err=True,
                         )
-                        yield proto.event_done(1)
-                        return
-                # The move failed and the stack is not on the target, so the
-                # ban we placed is now pointing -INFINITY at the node that was
-                # serving mail. Leaving it there means no node is allowed to be
-                # Promoted: DRBD has no Primary, the group cannot start, and
-                # mail is down on both nodes with nothing on screen naming the
-                # constraint that did it. This used to ask the operator to run
-                # `pcs resource clear` by hand, which is exactly the SSH-only
-                # recovery this console exists to remove.
-                #
-                # Clearing is safe here: it only removes the temporary ban this
-                # operation added, putting placement back where it was before we
-                # started. The cluster then settles the Master wherever it can
-                # actually run, which is the state the operator wants to be in
-                # while they work out why the target would not take it.
-                yield await _emit(
-                    f"Move did not settle on {target}. Removing the temporary ban "
-                    f"so the cluster is not left unable to promote any node."
-                )
-                c_undo, out_undo, err_undo = await _capture(
+                    else:
+                        yield await _emit(
+                            f"pcs resource clear failed (exit {c_undo}). A ban on "
+                            f"{current} may still be in place, which stops ANY node "
+                            f"being promoted. Clear it as soon as you can: "
+                            f"pcs resource clear {DRBD_CLONE}",
+                            err=True,
+                        )
+                    yield proto.event_done(1)
+                    return
+
+                yield await _emit(f"pcs resource clear {DRBD_CLONE}")
+                c2, out2, err2 = await _capture(
                     ["pcs", "resource", "clear", DRBD_CLONE],
                     timeout=120,
                 )
-                if out_undo:
-                    yield await _emit(out_undo)
-                if err_undo:
-                    yield await _emit(err_undo, err=True)
-                if c_undo == 0:
-                    st_undo = await gather_status()
+                ban_cleared = c2 == 0
+                if out2:
+                    yield await _emit(out2)
+                if err2:
+                    yield await _emit(err2, err=True)
+                if c2 != 0:
                     yield await _emit(
-                        f"Ban removed. promoted={st_undo.get('promoted')} "
-                        f"vip_node={st_undo.get('vip_node')} "
-                        f"drbd_uptodate={st_undo.get('drbd_uptodate')}"
-                    )
-                    yield await _emit(
-                        f"The Master was not moved to {target}. The cluster is "
-                        "back to the placement it had before this attempt.",
+                        f"pcs resource clear failed (exit {c2}); Master is on {target} "
+                        "but the temporary ban may still be present",
                         err=True,
                     )
-                else:
+                    yield proto.event_done(c2)
+                    return
+
+                st = await gather_status()
+                yield await _emit(
+                    f"promoted_now={st.get('promoted')} vip_node={st.get('vip_node')} "
+                    f"drbd_uptodate={st.get('drbd_uptodate')}"
+                )
+                if not hosts_match(str(st.get("promoted") or ""), target):
                     yield await _emit(
-                        f"pcs resource clear failed (exit {c_undo}). A ban on "
-                        f"{current} may still be in place, which stops ANY node "
-                        f"being promoted. Clear it as soon as you can: "
-                        f"pcs resource clear {DRBD_CLONE}",
+                        f"After clear, Promoted is {st.get('promoted')}, not {target}",
                         err=True,
                     )
-                yield proto.event_done(1)
+                    yield proto.event_done(1)
+                    return
+                yield await _emit(f"Master move to {target} complete")
+                yield proto.event_done(0)
                 return
-
-            yield await _emit(f"pcs resource clear {DRBD_CLONE}")
-            c2, out2, err2 = await _capture(
-                ["pcs", "resource", "clear", DRBD_CLONE],
-                timeout=120,
-            )
-            if out2:
-                yield await _emit(out2)
-            if err2:
-                yield await _emit(err2, err=True)
-            if c2 != 0:
-                yield await _emit(
-                    f"pcs resource clear failed (exit {c2}); Master is on {target} "
-                    "but the temporary ban may still be present",
-                    err=True,
-                )
-                yield proto.event_done(c2)
-                return
-
-            st = await gather_status()
-            yield await _emit(
-                f"promoted_now={st.get('promoted')} vip_node={st.get('vip_node')} "
-                f"drbd_uptodate={st.get('drbd_uptodate')}"
-            )
-            if not hosts_match(str(st.get("promoted") or ""), target):
-                yield await _emit(
-                    f"After clear, Promoted is {st.get('promoted')}, not {target}",
-                    err=True,
-                )
-                yield proto.event_done(1)
-                return
-            yield await _emit(f"Master move to {target} complete")
-            yield proto.event_done(0)
-            return
+            except BaseException:
+                # Includes GeneratorExit and CancelledError: a closed tab must
+                # not leave the cluster pinned. No yields in here - an async
+                # generator may not yield while it is being closed - so this
+                # clears the ban silently and lets the exception carry on.
+                if not ban_cleared:
+                    try:
+                        await _capture(
+                            ["pcs", "resource", "clear", DRBD_CLONE], timeout=60
+                        )
+                    except BaseException:  # noqa: BLE001 - best effort teardown
+                        pass
+                raise
 
         yield await _emit(f"pcs node unstandby {target}")
         c, out, err = await _capture(["pcs", "node", "unstandby", target], timeout=120)
