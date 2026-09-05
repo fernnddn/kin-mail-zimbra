@@ -85,6 +85,7 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
         from ldap3 import ALL, Connection, Server, Tls
         from ldap3.core.exceptions import LDAPException
         from ldap3.utils.conv import escape_filter_chars
+        from ldap3.utils.dn import escape_rdn
     except ImportError:
         log.info("ad_auth user=%s result=fail reason=misconfigured missing_ldap3", ad_username)
         return AdAuthResult(False, "misconfigured", "ldap3 package not installed")
@@ -109,10 +110,21 @@ def verify_ad_password(ad_username: str, password: str, settings: AdSettings | N
 
     # Path A (matches optional zimbraAuthLdapBindDn): direct template bind.
     if cfg.bind_dn_template:
+        # The search path escapes its filter; this one built a DN by raw string
+        # substitution. A username carrying DN metacharacters ( , + = " \\ < > ; )
+        # changes the structure of the DN rather than the value inside it.
+        #
+        # Escaped only when the template is actually a DN. The other common
+        # form is a UPN - `%u@corp.example.test` - where the substitution is
+        # not a DN component at all and RFC 4514 escaping would corrupt a
+        # legitimate username. A DN template always contains an `=`; a UPN
+        # never does.
+        looks_like_dn = "=" in cfg.bind_dn_template
+        safe_user = escape_rdn(ad_username) if looks_like_dn else ad_username
         bind_dn = (
-            cfg.bind_dn_template.replace("%u", ad_username)
-            .replace("%n", ad_username)
-            .replace("%j", ad_username)
+            cfg.bind_dn_template.replace("%u", safe_user)
+            .replace("%n", safe_user)
+            .replace("%j", safe_user)
         )
         try:
             conn = Connection(
