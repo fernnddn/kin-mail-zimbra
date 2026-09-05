@@ -139,6 +139,55 @@ def attach_finish_only(live_nodes: list[str] | None) -> bool:
     return len(online) == 2
 
 
+def forget_host_keys(
+    targets: list[str], *, homes: list[str] | None = None
+) -> list[str]:
+    """Drop cached SSH host keys for addresses we are about to rebuild.
+
+    Ansible connects with StrictHostKeyChecking=accept-new, which accepts a
+    host it has never seen and REFUSES one whose key has changed. A
+    replacement mail node built on the address of the one it replaces is
+    exactly that second case, so attaching it failed on host key verification
+    - and the only clue was an ssh error buried in an ansible task.
+
+    Forgetting the key here is safe: the address is either brand new to this
+    console, or it belonged to a node this console has just been told is gone.
+    Returns the lines to show the operator.
+    """
+    import subprocess
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in targets:
+        target = (raw or "").strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        for home in homes if homes is not None else ("/root", str(Path.home())):
+            known = Path(home) / ".ssh" / "known_hosts"
+            if not known.is_file():
+                continue
+            try:
+                before = known.read_bytes()
+            except OSError:
+                continue
+            try:
+                subprocess.run(
+                    ["ssh-keygen", "-R", target, "-f", str(known)],
+                    check=False,
+                    capture_output=True,
+                    timeout=15,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            try:
+                if known.read_bytes() != before:
+                    lines.append(f"forgot the old SSH host key for {target}")
+            except OSError:
+                pass
+    return lines
+
+
 def plan_add_host(
     *,
     local_host: str,
@@ -196,7 +245,16 @@ def plan_add_host(
     if peer_ip and surv_ip and peer_ip == surv_ip:
         errors.append("new server IP must differ from the survivor")
     if peer_ip and retired_a and peer_ip == retired_a:
-        errors.append("new server IP must differ from the retired peer address")
+        # Rebuilding the replacement on the address of the node it replaces is
+        # the normal thing to do - the DNS record, the firewall rules and the
+        # addressing plan all still point there. This used to be refused
+        # outright, with no reason given. The real obstacle was the cached SSH
+        # host key, which is now forgotten before the attach runs.
+        notes.append(
+            f"{peer_ip} is the address the retired peer used. That is fine: the "
+            "old host key is forgotten before attaching. Make sure the old VM "
+            "is really gone and nothing else answers on that address."
+        )
     if peer_ip and vip and peer_ip == vip:
         errors.append("new server IP must not be the cluster VIP")
     if peer_ip and mon_ip and peer_ip == mon_ip:
@@ -531,6 +589,12 @@ async def cmd_add_host(args: dict[str, Any] | None = None) -> AsyncIterator[dict
                 yield await _emit("internal error: inventory would contain a secret", err=True)
                 yield proto.event_done(1)
                 return
+
+            # Before ansible connects. A replacement built on the retired
+            # peer's address presents a new host key, and accept-new refuses a
+            # changed one.
+            for line in forget_host_keys([plan.new_ip, plan.new_name]):
+                yield await _emit(line)
 
             _write_work_files(inv)
             inv_path = WORK_DIR / "inventory.yml"

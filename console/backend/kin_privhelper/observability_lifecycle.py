@@ -89,12 +89,24 @@ def plan_remove_observability(
 
     if not ident or status == "absent":
         errors.append("no Observability node is configured; nothing to remove")
-    if ssh_ok or reachable or status == "healthy":
+    elif reachable or status == "healthy":
         errors.append(
-            "Observability still answers on the qnetd port (or SSH). "
-            "Power off or delete that VM first, wait until Cluster shows "
-            "Observability unreachable, then Remove again. Graceful online "
-            "remove is not supported."
+            f"Observability ({ident}) is still answering on the qnetd port. "
+            "Power off or delete that VM, wait until the Cluster page shows it "
+            "unreachable, then Remove again. There is no graceful online "
+            "remove: this is forced cleanup of a witness that is already gone."
+        )
+    elif ssh_ok:
+        # The console gates Remove on the qnetd probe alone, so this case
+        # arrives with the button enabled and the Cluster page already saying
+        # "unreachable". Saying "it still answers on the qnetd port (or SSH)"
+        # then reads as a contradiction of what the operator is looking at.
+        errors.append(
+            f"qnetd is down on Observability ({ident}) but the VM itself is "
+            "still running - it accepted an SSH connection. Remove is forced "
+            "cleanup for a witness that is gone, and running it against a live "
+            "VM would leave that VM holding a stale SBD LUN and qnetd identity. "
+            "Power the VM off (or delete it), then Remove."
         )
     if ident and status == "unreachable" and not ssh_ok and not reachable:
         notes.append(
