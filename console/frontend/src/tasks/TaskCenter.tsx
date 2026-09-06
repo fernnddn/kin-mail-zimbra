@@ -17,45 +17,75 @@ import { activeAlertCount, type Alert } from "./alerts";
 
 const spin = keyframes`to { transform: rotate(360deg); }`;
 
-const Wrap = styled.div`
+const Wrap = styled.div<{ $rail?: boolean }>`
   position: relative;
   display: inline-flex;
+  ${(p) => (p.$rail ? "flex: 1 1 0; min-width: 0;" : "")}
 `;
 
-const IconBtn = styled.button<{ $tone: "running" | "failed" | "done" | "idle" }>`
+/* Two presentations, one behaviour. On the ops rail these are full-width rows
+   on charcoal; anywhere else they stay the bordered icon buttons they were.
+   Nothing below this line changes what they do. */
+const IconBtn = styled.button<{
+  $tone: "running" | "failed" | "done" | "idle";
+  $rail?: boolean;
+}>`
   position: relative;
-  border: 1px solid ${theme.line};
-  background: ${theme.bgElev};
-  border-radius: ${theme.radius.md};
-  width: 2.25rem;
-  height: 2.25rem;
+  border: ${(p) => (p.$rail ? "0" : `1px solid ${theme.line}`)};
+  border-left: ${(p) => (p.$rail ? "2px solid transparent" : "")};
+  background: transparent;
+  border-radius: ${(p) => (p.$rail ? "0" : theme.radius.sm)};
+  width: ${(p) => (p.$rail ? "100%" : "2.25rem")};
+  height: ${(p) => (p.$rail ? "2.5rem" : "2.25rem")};
+  padding: ${(p) => (p.$rail ? "0 1.25rem" : "0")};
+  gap: ${(p) => (p.$rail ? "0.6rem" : "0")};
+  font: inherit;
+  font-size: 0.85rem;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: ${(p) => (p.$rail ? "flex-start" : "center")};
   cursor: pointer;
-  /* Operator's scheme: in progress = orange, failed = red, finished = blue. */
+  /* In progress reads ochre, a failure reads oxide, and a finished job is
+     quiet. On the rail the resting state is paper at reduced strength. */
   color: ${(p) =>
     p.$tone === "failed"
-      ? theme.danger
+      ? p.$rail
+        ? "#E8B5AF"
+        : theme.danger
       : p.$tone === "running"
-        ? theme.warn
-        : p.$tone === "done"
-          ? theme.accent
+        ? p.$rail
+          ? "#D7B26A"
+          : theme.warn
+        : p.$rail
+          ? "rgba(244, 241, 234, 0.72)"
           : theme.surface[500]};
-  transition: background ${theme.motion.fast};
+  transition:
+    background ${theme.motion.fast} ease-out,
+    color ${theme.motion.fast} ease-out;
 
   &:hover {
-    background: ${theme.surface[50]};
+    background: ${(p) => (p.$rail ? "rgba(255, 255, 255, 0.05)" : theme.surface[100])};
+    color: ${(p) => (p.$rail ? theme.paper : "inherit")};
   }
 
   svg {
-    width: 1.15rem;
-    height: 1.15rem;
+    width: 1.05rem;
+    height: 1.05rem;
+    flex-shrink: 0;
   }
 `;
 
-const Badge = styled.span<{ $tone: "running" | "failed" | "done" }>`
-  position: absolute;
+const RailLabel = styled.span`
+  flex: 1 1 auto;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const Badge = styled.span<{ $tone: "running" | "failed" | "done"; $rail?: boolean }>`
+  position: ${(p) => (p.$rail ? "static" : "absolute")};
   top: -0.3rem;
   right: -0.3rem;
   min-width: 1.05rem;
@@ -63,8 +93,8 @@ const Badge = styled.span<{ $tone: "running" | "failed" | "done" }>`
   padding: 0 0.25rem;
   border-radius: ${theme.radius.full};
   background: ${(p) =>
-    p.$tone === "failed" ? theme.danger : p.$tone === "running" ? theme.warn : theme.accent};
-  color: #fff;
+    p.$tone === "failed" ? theme.oxide : p.$tone === "running" ? theme.warn : theme.ink};
+  color: ${theme.paper};
   font-size: 0.65rem;
   font-weight: 700;
   line-height: 1.05rem;
@@ -74,7 +104,8 @@ const Badge = styled.span<{ $tone: "running" | "failed" | "done" }>`
 const Spinner = styled.span`
   width: 0.85rem;
   height: 0.85rem;
-  border-radius: ${theme.radius.full};
+  /* radius.full is 2px on this theme; a spinner has to opt out of that. */
+  border-radius: 50%;
   border: 2px solid ${theme.surface[300]};
   border-top-color: ${theme.warn};
   animation: ${spin} 800ms linear infinite;
@@ -238,7 +269,14 @@ function TaskRow({ task, now }: { task: Task; now: number }) {
   );
 }
 
-export function TaskCenter({ alerts }: { alerts: Alert[] }) {
+export function TaskCenter({
+  alerts,
+  rail = false,
+}: {
+  alerts: Alert[];
+  /** Presentation only: full-width rows on the charcoal ops rail. */
+  rail?: boolean;
+}) {
   const { tasks, clearDone } = useTasks();
   const navigate = useNavigate();
   const [tasksOpen, setTasksOpen] = useState(false);
@@ -262,8 +300,9 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
 
   return (
     <>
-      <Wrap>
+      <Wrap $rail={rail}>
         <IconBtn
+          $rail={rail}
           type="button"
           $tone={
             activeAlertCount(alerts)
@@ -285,13 +324,14 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
           }}
         >
           <BellIcon />
+          {rail ? <RailLabel>Alerts</RailLabel> : null}
           {activeAlertCount(alerts) ? (
-            <Badge $tone={alerts.some((a) => a.severity === "danger") ? "failed" : "running"}>
+            <Badge $rail={rail} $tone={alerts.some((a) => a.severity === "danger") ? "failed" : "running"}>
               {activeAlertCount(alerts)}
             </Badge>
           ) : null}
         </IconBtn>
-        <Dropdown open={alertsOpen} onClose={() => setAlertsOpen(false)} align="right">
+        <Dropdown open={alertsOpen} onClose={() => setAlertsOpen(false)} align={rail ? "left" : "right"}>
           <PanelHead>Cluster alerts</PanelHead>
           <Scroll>
             {alerts.length === 0 ? (
@@ -333,8 +373,9 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
         </Dropdown>
       </Wrap>
 
-      <Wrap>
+      <Wrap $rail={rail}>
         <IconBtn
+          $rail={rail}
           type="button"
           $tone={tone}
           aria-label={runningN ? `${runningN} task(s) running` : "Tasks"}
@@ -346,9 +387,10 @@ export function TaskCenter({ alerts }: { alerts: Alert[] }) {
           }}
         >
           <TasksIcon />
-          {badgeCount ? <Badge $tone={badgeTone}>{badgeCount}</Badge> : null}
+          {rail ? <RailLabel>Tasks</RailLabel> : null}
+          {badgeCount ? <Badge $rail={rail} $tone={badgeTone}>{badgeCount}</Badge> : null}
         </IconBtn>
-        <Dropdown open={tasksOpen} onClose={() => setTasksOpen(false)} align="right">
+        <Dropdown open={tasksOpen} onClose={() => setTasksOpen(false)} align={rail ? "left" : "right"}>
           <PanelHead>
             <span>Tasks</span>
             {tasks.some((t) => t.state !== "running") ? (

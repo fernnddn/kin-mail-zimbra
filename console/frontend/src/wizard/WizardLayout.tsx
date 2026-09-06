@@ -61,7 +61,7 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
 
   &:hover {
     color: ${(p) => (p.$active ? theme.accent : theme.ink)};
-    background: ${(p) => (p.$active ? theme.accentSoft : "rgba(0, 97, 255, 0.05)")};
+    background: ${(p) => (p.$active ? theme.accentSoft : theme.surface[100])};
   }
 `;
 
@@ -83,16 +83,17 @@ const StepLock = styled.div<{ $active?: boolean; $done?: boolean }>`
 const StepNum = styled.span<{ $active?: boolean; $done?: boolean }>`
   width: 1.45rem;
   height: 1.45rem;
-  border-radius: 999px;
+  border-radius: ${theme.radius.sm};
   display: grid;
   place-items: center;
+  font-family: ${theme.mono};
   font-size: 0.72rem;
   font-weight: 700;
   flex-shrink: 0;
   background: ${(p) =>
-    p.$active ? theme.accent : p.$done ? "rgba(5, 150, 105, 0.18)" : theme.bgElev};
-  color: ${(p) => (p.$active ? "#fff" : p.$done ? theme.ok : theme.muted)};
-  border: 1px solid ${(p) => (p.$active ? theme.accent : theme.line)};
+    p.$active ? theme.ink : p.$done ? theme.okSoft : theme.bgElev};
+  color: ${(p) => (p.$active ? theme.paper : p.$done ? theme.ok : theme.muted)};
+  border: 1px solid ${(p) => (p.$active ? theme.ink : p.$done ? theme.ok : theme.line)};
   transition:
     background ${theme.motion.fast} ease-out,
     color ${theme.motion.fast} ease-out,

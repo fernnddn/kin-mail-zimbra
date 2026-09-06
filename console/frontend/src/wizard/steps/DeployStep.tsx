@@ -38,7 +38,7 @@ const StepCard = styled.div`
     border-color ${theme.motion.fast} ease-out;
 
   &:hover {
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    border-color: ${theme.surface[300]};
   }
 `;
 

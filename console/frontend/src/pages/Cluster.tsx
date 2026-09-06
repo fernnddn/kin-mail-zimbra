@@ -435,13 +435,6 @@ function toneColor(tone?: Tone): string {
   return theme.surface[200];
 }
 
-function toneSoftBg(tone?: Tone): string {
-  if (tone === "ok") return "rgba(16, 185, 129, 0.12)";
-  if (tone === "warn") return "rgba(217, 119, 6, 0.12)";
-  if (tone === "accent") return theme.accentSoft;
-  return theme.surface[100];
-}
-
 function toneFg(tone?: Tone): string {
   if (tone === "ok") return theme.ok;
   if (tone === "warn") return theme.warn;
@@ -449,20 +442,23 @@ function toneFg(tone?: Tone): string {
   return theme.surface[400];
 }
 
+/* A quiet mark, not a tile. This used to be a 2.6rem rounded square filled
+   with a tint of the card's tone, on fifteen cards at once, which turned an
+   overview into a wall of coloured chips. The glyph still helps you find the
+   card you want; the tile was doing nothing for it. */
 const IconChip = styled.div<{ $tone: Tone }>`
-  width: 2.6rem;
-  height: 2.6rem;
-  border-radius: ${theme.radius.md};
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-top: 0.1rem;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   color: ${(p) => toneFg(p.$tone)};
-  background: ${(p) => toneSoftBg(p.$tone)};
 
   svg {
-    width: 1.35rem;
-    height: 1.35rem;
+    width: 1.2rem;
+    height: 1.2rem;
   }
 `;
 
@@ -690,18 +686,17 @@ const OverviewCard = styled.div<{ $tone?: Tone }>`
   border: 1px solid ${theme.line};
   border-left: 3px solid ${(p) => toneColor(p.$tone)};
   background: ${theme.bgElev};
-  border-radius: ${theme.radius.md};
-  padding: 1.05rem 1.15rem;
-  box-shadow: ${theme.shadow.sm};
+  border-radius: ${theme.radius.sm};
+  padding: 0.85rem 1rem;
+  box-shadow: none;
   display: flex;
   align-items: flex-start;
-  gap: 0.9rem;
+  gap: 0.7rem;
   min-width: 0;
-  transition: border-color ${theme.motion.fast}, box-shadow ${theme.motion.fast};
+  transition: border-color ${theme.motion.fast} ease-out;
 
   &:hover {
     border-color: ${theme.surface[300]};
-    box-shadow: ${theme.shadow.md};
   }
 `;
 

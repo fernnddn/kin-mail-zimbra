@@ -72,8 +72,8 @@ const Log = styled.pre`
   white-space: pre-wrap;
   word-break: break-word;
   text-align: left;
-  background: #0b1220;
-  color: #e2e8f0;
+  background: ${theme.bgPanel};
+  color: ${theme.ink};
 `;
 
 type LastLogResponse = {

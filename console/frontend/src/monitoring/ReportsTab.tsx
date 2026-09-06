@@ -107,7 +107,7 @@ const PeriodBtn = styled.button<{ $on: boolean }>`
   font-weight: ${(p) => (p.$on ? 650 : 500)};
   cursor: pointer;
   background: ${(p) => (p.$on ? theme.accent : "transparent")};
-  color: ${(p) => (p.$on ? "#fff" : theme.ink)};
+  color: ${(p) => (p.$on ? theme.paper : theme.ink)};
   transition: background 120ms ease, color 120ms ease;
   &:hover:not(:disabled) {
     background: ${(p) => (p.$on ? theme.accent : theme.surface[100])};

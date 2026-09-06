@@ -13,18 +13,44 @@ body,
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: #d4d0c8 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d0c8;
+  border: 2px solid #f4f1ea;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 body {
   margin: 0;
-  background: #f8fafc;
-  color: #1e293b;
+  background: #f4f1ea;
+  color: #1a1916;
   color-scheme: light;
-  font-family: "Inter", "Inter var", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
-    -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: "Atkinson Hyperlegible", "Public Sans", -apple-system, "system-ui", "Segoe UI",
+    Helvetica, Arial, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ink on paper, inverted. */
+::selection {
+  background: #1a1916;
+  color: #f4f1ea;
+}
+
+/* Checkboxes and radios follow the ink, not the browser blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: #1a1916;
 }
 
 code {
@@ -33,14 +59,14 @@ code {
   font-size: 0.9em;
 }
 
+/* Opacity only. A panel that slides or scales into place reads as decoration
+   on a tool whose job is to tell you what a cluster is doing. */
 @keyframes kin-fade-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -53,11 +79,9 @@ code {
 @keyframes kin-scale-in {
   from {
     opacity: 0;
-    transform: scale(0.95);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -71,21 +95,22 @@ code {
   }
 }
 
-/* Opacity and transform only: both are composited, so this runs on the GPU
-   without repainting. It used to animate `filter: blur()` across the whole
-   page container - up to 1680px wide - which forces a full repaint every
-   frame and is what made navigation stutter on a modest VM. */
+/* Opacity only, and composited, so navigation does not repaint the page. It
+   used to animate `filter: blur()` across a container up to 1680px wide, which
+   forces a full repaint every frame and is what made navigation stutter on a
+   modest VM. The scale that replaced it is gone too: on paper a page that
+   zooms in reads as a glitch on a slow remote session. */
 @keyframes kin-page-in {
   from {
     opacity: 0;
-    transform: scale(0.97);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
+/* Ochre, so "here is the row you asked for" reads as a highlighter mark on
+   paper rather than a browser notification. */
 @keyframes kin-focus-flash {
   0%,
   100% {
@@ -94,18 +119,18 @@ code {
   }
   20%,
   60% {
-    background-color: rgb(254 243 199);
-    box-shadow: inset 3px 0 0 0 rgb(245 158 11);
+    background-color: rgba(154, 107, 18, 0.14);
+    box-shadow: inset 3px 0 0 0 #9a6b12;
   }
   40%,
   80% {
-    background-color: rgb(253 230 138);
-    box-shadow: inset 3px 0 0 0 rgb(217 119 6);
+    background-color: rgba(154, 107, 18, 0.22);
+    box-shadow: inset 3px 0 0 0 #9a6b12;
   }
 }
 
 .kin-fade-in {
-  animation: kin-fade-in 300ms ease-out;
+  animation: kin-fade-in 220ms ease-out;
 }
 
 .kin-scale-in {
@@ -113,7 +138,7 @@ code {
 }
 
 .kin-page-in {
-  animation: kin-page-in 350ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: kin-page-in 180ms ease-out;
 }
 
 .kin-focus-flash {

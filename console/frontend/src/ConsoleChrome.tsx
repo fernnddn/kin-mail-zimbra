@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import styled from "@emotion/styled";
-import { NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { api } from "./api";
 import { useAuth } from "./auth";
 import { useSetup } from "./setup";
@@ -9,160 +9,214 @@ import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { useAlerts } from "./tasks/AlertProvider";
 
+/* The ops shell: a charcoal rail down the left, paper to the right of it.
+   The rail is where the operator lives, so it holds navigation, the two live
+   surfaces (alerts and tasks) and the account menu, and it stays put while a
+   long cluster page scrolls. */
 const Frame = styled.div`
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: ${theme.bg};
+  background: ${theme.paper};
   color: ${theme.ink};
   font-family: ${theme.font};
-`;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
 
-const Top = styled.header`
-  min-height: 3.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.65rem 1rem;
-  padding: 0.55rem 1.5rem;
-  border-bottom: 1px solid color-mix(in srgb, ${theme.line} 60%, transparent);
-  background: ${theme.bgElev};
-  flex-shrink: 0;
-  /* Stays put while the page scrolls: the account menu, the alert bell and the
-     task list are needed from anywhere on a long page, and the task list in
-     particular is what tells you a job is still running. */
-  position: sticky;
-  top: 0;
-  z-index: 20;
-`;
-
-const BrandBlock = styled.div`
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  min-width: 0;
-  flex: 1 1 12rem;
-`;
-
-const LogoButton = styled.button`
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 0.1rem;
-  font: inherit;
-  min-width: 0;
-
-  span {
-    color: ${theme.muted};
-    font-size: 0.68rem;
-    font-weight: 500;
-    line-height: 1;
+  /* Below this the rail becomes a band across the top rather than a column.
+     Nothing is hidden, it just stops being a sidebar. */
+  @media (max-width: 860px) {
+    grid-template-columns: minmax(0, 1fr);
   }
 `;
 
-const Divider = styled.div`
-  width: 1px;
-  height: 1.75rem;
-  background: ${theme.line};
+const SetupFrame = styled.div`
+  min-height: 100vh;
+  background: ${theme.paper};
+  color: ${theme.ink};
+  font-family: ${theme.font};
+  display: flex;
+  flex-direction: column;
+`;
+
+/* First boot: brand and nothing else. There is no cluster to navigate to and
+   no account to manage until the install finishes. */
+const SetupTop = styled.header`
+  height: 3.25rem;
+  display: flex;
+  align-items: center;
+  padding: 0 1.75rem;
+  background: ${theme.bgElev};
+  border-bottom: 1px solid ${theme.line};
   flex-shrink: 0;
 `;
 
-const NavLinks = styled.nav`
+const Rail = styled.aside`
+  background: ${theme.rail};
+  color: ${theme.paper};
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  flex-wrap: wrap;
-  flex: 1 1 16rem;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+
+  @media (max-width: 860px) {
+    position: static;
+    height: auto;
+  }
 `;
 
-const NavItem = styled(NavLink)`
-  color: ${theme.surface[600]};
-  text-decoration: none;
+const RailBrand = styled.button`
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  padding: 0 1.25rem;
+  height: 3.75rem;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+`;
+
+const RailNav = styled.nav`
+  padding: 0.75rem 0;
+  flex: 1 1 auto;
+  min-height: 0;
+
+  @media (max-width: 860px) {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 0.25rem 0;
+  }
+`;
+
+/* A 2px oxide edge marks where you are. No filled pill, no blue. */
+const RailLink = styled(NavLink)`
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  height: 2.5rem;
+  padding: 0 1.25rem;
   font-size: 0.875rem;
-  font-weight: 500;
-  padding: 0.35rem 0.75rem;
-  border-radius: ${theme.radius.md};
-  border: 1px solid transparent;
+  color: rgba(244, 241, 234, 0.72);
+  text-decoration: none;
+  border-left: 2px solid transparent;
   transition:
     color ${theme.motion.fast} ease-out,
-    background ${theme.motion.fast} ease-out,
-    border-color ${theme.motion.fast} ease-out;
+    background ${theme.motion.fast} ease-out;
 
   &:hover {
-    background: ${theme.surface[50]};
-    color: ${theme.surface[800]};
+    color: ${theme.paper};
+    background: rgba(255, 255, 255, 0.04);
   }
 
   &.active {
-    background: color-mix(in srgb, ${theme.accent} 6%, transparent);
-    border-color: color-mix(in srgb, ${theme.accent} 20%, transparent);
-    color: ${theme.accent};
+    color: ${theme.paper};
+    border-left-color: ${theme.oxide};
+    background: rgba(255, 255, 255, 0.06);
+    font-weight: 600;
   }
 `;
 
-const Right = styled.div`
+const RailGroup = styled.div`
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.35rem 0;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  position: relative;
+  flex-shrink: 0;
 `;
 
-const UserButton = styled.button`
+const RailFoot = styled.div`
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.6rem;
+  position: relative;
+  flex-shrink: 0;
+`;
+
+const AccountButton = styled.button`
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.65rem;
   border: 0;
   background: transparent;
   cursor: pointer;
   font: inherit;
-  padding: 0.25rem 0.5rem 0.25rem 1rem;
-  margin-right: -0.5rem;
-  border-left: 1px solid ${theme.line};
-  border-radius: ${theme.radius.md};
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-radius: ${theme.radius.sm};
+  color: ${theme.paper};
   transition: background ${theme.motion.fast} ease-out;
 
   &:hover {
-    background: ${theme.surface[50]};
+    background: rgba(255, 255, 255, 0.05);
   }
 `;
 
-const UserMeta = styled.div`
-  text-align: right;
-  line-height: 1.2;
+const AccountMeta = styled.span`
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
 
   strong {
     display: block;
-    font-size: 0.875rem;
+    font-size: 0.83rem;
     font-weight: 600;
-    color: ${theme.surface[800]};
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   span {
     display: block;
-    font-size: 11px;
-    color: ${theme.surface[400]};
+    font-size: 0.72rem;
+    color: rgba(244, 241, 234, 0.55);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 `;
 
+const Main = styled.div`
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+`;
+
+const HintSlot = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.5rem 1.75rem 0;
+`;
+
+/* Ink band with an ochre or oxide edge. It sits above the page rather than
+   inside it, because it is true of the appliance and not of the screen. */
 const LicenseBanner = styled.div<{ $expired?: boolean }>`
   flex-shrink: 0;
-  padding: 0.7rem 1.5rem;
-  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 1.75rem;
+  font-size: 0.83rem;
   line-height: 1.45;
-  color: ${theme.ink};
-  background: ${(p) => (p.$expired ? "rgba(239, 68, 68, 0.12)" : theme.warnSoft)};
-  border-bottom: 1px solid
-    ${(p) =>
-      p.$expired
-        ? "color-mix(in srgb, " + theme.danger + " 35%, transparent)"
-        : "color-mix(in srgb, " + theme.warn + " 35%, transparent)"};
+  color: ${theme.paper};
+  background: ${theme.ink};
+  border-bottom: 2px solid ${(p) => (p.$expired ? theme.oxide : theme.warn)};
+
+  i {
+    width: 0.6rem;
+    height: 0.6rem;
+    flex-shrink: 0;
+    background: ${(p) => (p.$expired ? theme.oxide : theme.warn)};
+  }
+`;
+
+const BannerLink = styled(Link)`
+  margin-left: auto;
+  color: ${theme.paper};
+  text-decoration: underline;
+  white-space: nowrap;
 `;
 
 export function ConsoleChrome({
@@ -209,104 +263,111 @@ export function ConsoleChrome({
     };
   }, [user, setupMode]);
 
+  const railNav = (
+    <>
+      <RailLink to="/cluster" end>
+        Cluster
+      </RailLink>
+      {!deployed ? <RailLink to="/wizard">Wizard</RailLink> : null}
+      <RailLink to="/mailboxes" end>
+        Mailboxes
+      </RailLink>
+      {isSuper ? (
+        <RailLink to="/users" end>
+          Users
+        </RailLink>
+      ) : null}
+      {isSuper ? (
+        <RailLink to="/settings" end>
+          Settings
+        </RailLink>
+      ) : null}
+    </>
+  );
+
+  if (setupMode) {
+    return (
+      <SetupFrame>
+        <SetupTop>
+          <BrandLockup compact />
+        </SetupTop>
+        {children}
+      </SetupFrame>
+    );
+  }
+
   return (
     <Frame>
-      <Top>
-        <BrandBlock>
-          <LogoButton type="button" onClick={() => navigate(setupMode ? "/wizard" : "/cluster")}>
-            <BrandLockup compact />
-          </LogoButton>
-          {!setupMode ? (
-            <>
-              <Divider />
-              <NavLinks>
-                <NavItem to="/cluster" end>
-                  Cluster
-                </NavItem>
-                {!deployed && <NavItem to="/wizard">Wizard</NavItem>}
-                <NavItem to="/mailboxes" end>
-                  Mailboxes
-                </NavItem>
-                {isSuper && (
-                  <NavItem to="/users" end>
-                    Users
-                  </NavItem>
-                )}
-                {isSuper && (
-                  <NavItem to="/settings" end>
-                    Settings
-                  </NavItem>
-                )}
-              </NavLinks>
-            </>
-          ) : null}
-        </BrandBlock>
-        {!setupMode ? (
-          <Right>
-            {hint}
-            {user ? <TaskCenter alerts={alerts} /> : null}
-            {user ? (
-              <>
-                <UserButton
-                  type="button"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                >
-                  <UserMeta>
-                    <strong>{user.username}</strong>
-                    <span>{user.role_label || user.role}</span>
-                  </UserMeta>
-                  <Avatar name={user.username} size={36} />
-                </UserButton>
-                <Dropdown open={menuOpen} onClose={() => setMenuOpen(false)} align="right">
-                  <MenuItem
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      navigate("/security");
-                    }}
-                  >
-                    Security
-                  </MenuItem>
-                  <MenuItem
-                    type="button"
-                    data-danger="true"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      void logout().then(() => navigate("/login"));
-                    }}
-                  >
-                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"
-                      />
-                    </svg>
-                    Sign Out
-                  </MenuItem>
-                </Dropdown>
-              </>
-            ) : null}
-          </Right>
+      <Rail aria-label="Console navigation">
+        <RailBrand type="button" onClick={() => navigate("/cluster")}>
+          <BrandLockup compact light />
+        </RailBrand>
+        <RailNav>{railNav}</RailNav>
+        {user ? (
+          <RailGroup>
+            <TaskCenter alerts={alerts} rail />
+          </RailGroup>
         ) : null}
-      </Top>
-      {license?.status === "grace" ? (
-        <LicenseBanner>
-          License is in the 30-day grace period
-          {license.grace_until ? ` (until ${license.grace_until})` : ""}. New mailboxes and
-          console users cannot be created until a new license is applied. Mail already delivered
-          keeps working.
-        </LicenseBanner>
-      ) : null}
-      {license?.status === "expired" ? (
-        <LicenseBanner $expired>
-          License has expired. New mailboxes and console users cannot be created. Mail
-          already delivered keeps working. Apply a current license in Settings.
-        </LicenseBanner>
-      ) : null}
-      {children}
+        {user ? (
+          <RailFoot>
+            <AccountButton
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              <Avatar name={user.username} size={30} />
+              <AccountMeta>
+                <strong>{user.username}</strong>
+                <span>{user.role_label || user.role}</span>
+              </AccountMeta>
+            </AccountButton>
+            <Dropdown open={menuOpen} onClose={() => setMenuOpen(false)} align="left" drop="up">
+              <MenuItem
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  navigate("/security");
+                }}
+              >
+                Security
+              </MenuItem>
+              <MenuItem
+                type="button"
+                data-danger="true"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void logout().then(() => navigate("/login"));
+                }}
+              >
+                Sign out
+              </MenuItem>
+            </Dropdown>
+          </RailFoot>
+        ) : null}
+      </Rail>
+      <Main>
+        {license?.status === "grace" ? (
+          <LicenseBanner>
+            <i />
+            License is in the 30-day grace period
+            {license.grace_until ? ` (until ${license.grace_until})` : ""}. New mailboxes and
+            console users cannot be created until a new license is applied. Mail already
+            delivered keeps working.
+            {isSuper ? <BannerLink to="/settings">Settings</BannerLink> : null}
+          </LicenseBanner>
+        ) : null}
+        {license?.status === "expired" ? (
+          <LicenseBanner $expired>
+            <i />
+            License has expired. New mailboxes and console users cannot be created. Mail
+            already delivered keeps working.
+            {isSuper ? <BannerLink to="/settings">Settings</BannerLink> : null}
+          </LicenseBanner>
+        ) : null}
+        {hint ? <HintSlot>{hint}</HintSlot> : null}
+        {children}
+      </Main>
     </Frame>
   );
 }

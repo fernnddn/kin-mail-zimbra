@@ -1,18 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Button,
-  Err,
-  FieldLabel,
-  FieldRow,
-  Hint,
-  Input,
-  Lede,
-  NavRow,
-  PasswordInput,
-  Title,
-  WarnBox,
-} from "../../ui";
+import { Button, Err, FieldLabel, FieldRow, Hint, Input, Lede, NavRow, PasswordInput, RequiredMark, Title, WarnBox } from "../../ui";
 import { useWizard } from "../WizardContext";
 
 /** zmsetup rejects $ & | < > / ; ` and whitespace; also block ! * and quotes. */
@@ -79,7 +67,7 @@ export default function DomainStep() {
       <Title>Domain &amp; mail settings</Title>
       <Lede>
         Tell us the customer mail domain and the hostname users will use. Fields marked{" "}
-        <span style={{ color: "#ef4444" }}>*</span> are required.
+        <RequiredMark>*</RequiredMark> are required.
       </Lede>
       <FieldRow>
         <FieldLabel htmlFor="mail_domain" required>

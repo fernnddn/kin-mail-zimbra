@@ -1,81 +1,123 @@
 /** Shared Emotion theme tokens for the console (light UI only).
- * Palette, radius, shadow, and motion match the KIN ERP admin frontend.
+ *
+ * Paper, charcoal and oxide. The console is a tool used in a server room, not
+ * a SaaS dashboard: warm paper rather than cold white, hairline rules rather
+ * than floating cards, ink rather than a blue accent, and one loud colour
+ * (oxide) reserved for the action that commits something.
+ *
+ * The token NAMES are unchanged on purpose. Roughly 460 call sites across the
+ * app already reference them, and remapping the values carries the whole look
+ * without touching a single component's logic. `surface` keeps its 50 to 900
+ * shape and is simply re-cast onto the warm scale, so an existing
+ * `theme.surface[100]` background lands on recessed paper instead of cold
+ * grey.
  */
 
+/** Oxide. The primary commit and the destructive action are the same family:
+ * on this palette a red-brown IS the loud colour, and having two of them would
+ * make neither mean anything. */
 export const primary = {
-  50: "#edf5ff",
-  100: "#d9e8ff",
-  200: "#bcd7ff",
-  300: "#8ebfff",
-  400: "#599bff",
-  500: "#0061ff",
-  600: "#0061ff",
-  700: "#0052d4",
-  800: "#003e9e",
-  900: "#002a66",
+  50: "#FBF0EE",
+  100: "#F5DCD9",
+  200: "#E8B5AF",
+  300: "#DA8B82",
+  400: "#C85448",
+  500: "#B42318",
+  600: "#A11F15",
+  700: "#8F1C13",
+  800: "#6E150F",
+  900: "#4A0E0A",
 } as const;
 
+/** Warm neutrals, light to dark. 50 is raised paper, 900 is ink. */
 export const surface = {
-  50: "#f8fafc",
-  100: "#f1f5f9",
-  200: "#e2e8f0",
-  300: "#cbd5e1",
-  400: "#94a3b8",
-  500: "#64748b",
-  600: "#475569",
-  700: "#334155",
-  800: "#1e293b",
-  900: "#0f172a",
+  50: "#FBFAF7",
+  100: "#ECE8DF",
+  200: "#D4D0C8",
+  300: "#C4BFB4",
+  400: "#9B968D",
+  500: "#6B6760",
+  600: "#514D46",
+  700: "#3A3733",
+  800: "#2C2A26",
+  900: "#1A1916",
 } as const;
 
 export const theme = {
   primary,
   surface,
 
-  critical: "#ef4444",
-  high: "#f97316",
-  medium: "#eab308",
-  low: "#22c55e",
-  completed: "#10b981",
-  blueprint: "#0ea5e9",
+  /* Severity, kept for the alert and task surfaces that already use them. */
+  critical: primary[500],
+  high: "#9A6B12",
+  medium: "#9A6B12",
+  low: "#2F6F4E",
+  completed: "#2F6F4E",
+  blueprint: surface[500],
 
-  bg: surface[50],
-  bgElev: "#ffffff",
-  bgPanel: surface[50],
-  sidebar: "#eef2f7",
-  ink: surface[800],
+  /* Page and panels. */
+  paper: "#F4F1EA",
+  bg: "#F4F1EA",
+  bgElev: surface[50],
+  bgPanel: surface[100],
+  rail: surface[800],
+  railRaised: surface[700],
+  sidebar: surface[800],
+
+  ink: surface[900],
   muted: surface[500],
   line: surface[200],
-  accent: primary[500],
-  accentHover: primary[700],
-  accentSoft: "rgba(0, 97, 255, 0.10)",
-  danger: "#ef4444",
-  warn: "#d97706",
-  warnSoft: "rgba(217, 119, 6, 0.10)",
-  ok: "#10b981",
+
+  /* `accent` is the QUIET emphasis: the active tab, the current wizard step,
+   * the focus ring, a chart trace. On paper that is ink. It is deliberately
+   * NOT oxide, or every tab and every graph line would read as an alarm. */
+  accent: surface[900],
+  accentHover: surface[700],
+  accentSoft: "rgba(26, 25, 22, 0.06)",
+
+  /* `oxide` is the LOUD emphasis: the one button on a screen that commits
+   * something, and anything irreversible. */
+  oxide: primary[500],
+  oxideHover: primary[700],
+  oxideSoft: "rgba(180, 35, 24, 0.08)",
+
+  danger: primary[500],
+  dangerSoft: "rgba(180, 35, 24, 0.08)",
+  warn: "#9A6B12",
+  warnSoft: "rgba(154, 107, 18, 0.10)",
+  ok: "#2F6F4E",
+  okSoft: "rgba(47, 111, 78, 0.10)",
+
+  /* KIN blue survives as a brand mark only: a small square beside the
+   * lockup. Never a button, never an active nav fill. */
+  brand: "#0061FF",
 
   radius: {
-    sm: "6px",
-    md: "8px",
-    lg: "8px",
-    xl: "12px",
-    "2xl": "16px",
-    full: "999px",
+    sm: "2px",
+    md: "3px",
+    lg: "4px",
+    xl: "4px",
+    "2xl": "4px",
+    /* There are no pills on paper. Kept as a key so call sites still compile. */
+    full: "2px",
   },
+  /* Almost nothing. Separation comes from rules and left borders. The larger
+   * steps exist only so an overlay reads as above the page rather than
+   * printed on it. */
   shadow: {
-    sm: "0 1px 2px rgba(15, 23, 42, 0.06)",
-    md: "0 4px 12px rgba(15, 23, 42, 0.08)",
-    lg: "0 8px 24px rgba(15, 23, 42, 0.10)",
-    xl: "0 16px 36px rgba(15, 23, 42, 0.14)",
-    "2xl": "0 24px 48px rgba(15, 23, 42, 0.18)",
+    sm: "none",
+    md: "0 1px 0 rgba(26, 25, 22, 0.06)",
+    lg: "0 2px 6px rgba(26, 25, 22, 0.10)",
+    xl: "0 6px 20px rgba(26, 25, 22, 0.14)",
+    "2xl": "0 10px 32px rgba(26, 25, 22, 0.18)",
   },
   motion: {
     fast: "150ms",
-    base: "200ms",
-    slow: "250ms",
-    page: "350ms",
+    base: "180ms",
+    slow: "220ms",
+    page: "220ms",
   },
-  font: '"Inter", "Inter var", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif',
+  font: '"Atkinson Hyperlegible", "Public Sans", -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, "PingFang SC", "Noto Sans CJK SC", sans-serif',
   mono: '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, Monaco, Consolas, monospace',
 } as const;
 

@@ -5,52 +5,36 @@ import { useAuth } from "../auth";
 import { useEula } from "../eula";
 import { useSetup, wizardHomePath } from "../setup";
 import { theme } from "../styles/theme";
-import { BrandLockup, Button, Card, Err, Input, Label, PasswordInput, Shell, Title } from "../ui";
-
-const PageCol = styled.div`
-  width: min(360px, 100%);
-  min-height: calc(100vh - 4rem);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1.25rem;
-`;
+import {
+  BrandLockup,
+  Button,
+  Err,
+  GateAside,
+  GateAsideBody,
+  GateAsideFoot,
+  GateForm,
+  GateMain,
+  GateShell,
+  Input,
+  Label,
+  PasswordInput,
+  Title,
+} from "../ui";
 
 const Sub = styled.p`
-  margin: 0 0 1.5rem;
-  text-align: center;
-  font-size: 0.875rem;
-  color: ${theme.surface[400]};
+  margin: 0 0 1.6rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: ${theme.muted};
 `;
 
-const CenterTitle = styled(Title)`
-  text-align: center;
-  font-size: 1.25rem;
-  margin-bottom: 0.25rem;
+const Fields = styled.form`
+  /* One left edge for the label, the field and the button. Uneven padding
+     between them is the thing that makes a form look unfinished. */
+  display: block;
 `;
 
-const Foot = styled.div`
-  padding-top: 1.5rem;
-  text-align: center;
-  font-size: 0.75rem;
-  color: ${theme.surface[400]};
 
-  p {
-    margin: 0;
-  }
-
-  p + p {
-    margin-top: 0.15rem;
-    font-size: 10px;
-    color: ${theme.surface[300]};
-  }
-`;
-
-const Logo = styled.div`
-  display: flex;
-  justify-content: center;
-`;
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -88,15 +72,24 @@ export default function LoginPage() {
   }
 
   return (
-    <Shell>
-      <PageCol>
-        <Logo>
-          <BrandLockup />
-        </Logo>
-        <Card style={{ width: "100%" }}>
-          <form onSubmit={onSubmit}>
-            <CenterTitle>Welcome Back</CenterTitle>
-            <Sub>Sign in to the KIN Mail admin console</Sub>
+    <GateShell>
+      <GateAside>
+        <GateAsideBody>
+          <BrandLockup light />
+          <p>
+            The admin console for the mail servers on this site. Sign in to check the
+            cluster, add mailboxes, or take a node offline for maintenance.
+          </p>
+        </GateAsideBody>
+        <GateAsideFoot>
+          {new Date().getFullYear()} Karya Informasi Nusantara
+        </GateAsideFoot>
+      </GateAside>
+      <GateMain>
+        <GateForm>
+          <Fields onSubmit={onSubmit}>
+            <Title>Sign in</Title>
+            <Sub>Use your console account. This is not a mailbox password.</Sub>
             {error ? <Err>{error}</Err> : null}
             <Label htmlFor="username">Username</Label>
             <Input
@@ -105,8 +98,8 @@ export default function LoginPage() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="username"
               required
+              autoFocus
               disabled={busy}
             />
             <Label htmlFor="password">Password</Label>
@@ -116,20 +109,15 @@ export default function LoginPage() {
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter your password"
               required
               disabled={busy}
             />
             <Button type="submit" loading={busy} style={{ width: "100%" }}>
-              {busy ? "Signing in..." : "Sign In"}
+              {busy ? "Signing in" : "Sign in"}
             </Button>
-          </form>
-        </Card>
-        <Foot>
-          <p>KIN Mail Console</p>
-          <p>&copy; {new Date().getFullYear()} Karya Informasi Nusantara</p>
-        </Foot>
-      </PageCol>
-    </Shell>
+          </Fields>
+        </GateForm>
+      </GateMain>
+    </GateShell>
   );
 }

@@ -74,3 +74,16 @@ Thumbs.db
 # private key, or issue ledger in the product repo. Keep a local copy of
 # licensing-generator/ on the signing machine (gitignored entirely).
 licensing-generator/
+
+# Local visual design reference (Emergent mock, CRA + Tailwind). It is read
+# for its look only, never built or shipped, and it carries demo logins and a
+# mock store that must not reach production. Keep it local.
+kin-mail-design01/
+
+# Working notes for a multi-session task. Local scratch, not product docs.
+WORKING-NOTES-*.md
+
+# Temporary visual harness for rendering a page against stubbed fetch data.
+# Created and deleted per session; it stubs the API and must never ship.
+console/frontend/preview.html
+console/frontend/src/preview.tsx

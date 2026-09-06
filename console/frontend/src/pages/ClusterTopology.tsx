@@ -118,7 +118,7 @@ function NodeGlyph({
   vip?: string;
 }) {
   const stroke = placeholder ? MUTED : healthy ? OK : DOWN;
-  const fill = placeholder ? theme.surface[50] : "#fff";
+  const fill = placeholder ? theme.bgPanel : theme.bgElev;
   const addr = (ip || "").trim();
   const floating = (vip || "").trim();
   const left = cx - CARD_W / 2;
@@ -201,7 +201,7 @@ function LineLabel({ x, y, text }: { x: number; y: number; text: string }) {
   const w = text.length * 5.4 + 16;
   return (
     <g>
-      <rect x={x - w / 2} y={y - 9} width={w} height={18} rx={9} fill="#fff" />
+      <rect x={x - w / 2} y={y - 9} width={w} height={18} rx={2} fill={theme.paper} />
       <text
         x={x}
         y={y + 3.5}

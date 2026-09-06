@@ -126,7 +126,7 @@ const RangeBtn = styled.button<{ $on: boolean }>`
   border: 0;
   border-right: 1px solid ${theme.line};
   background: ${(p) => (p.$on ? theme.accent : "transparent")};
-  color: ${(p) => (p.$on ? "#fff" : theme.surface[600])};
+  color: ${(p) => (p.$on ? theme.paper : theme.surface[600])};
   font: inherit;
   font-size: 0.78rem;
   font-weight: 600;
@@ -444,8 +444,8 @@ const Tip = styled.div<{ $left: number }>`
   left: ${(p) => p.$left * 100}%;
   transform: translateX(${(p) => (p.$left > 0.75 ? "-100%" : p.$left < 0.25 ? "0" : "-50%")});
   pointer-events: none;
-  background: ${theme.surface[800]};
-  color: #fff;
+  background: ${theme.ink};
+  color: ${theme.paper};
   border-radius: ${theme.radius.sm};
   padding: 0.3rem 0.5rem;
   font-size: 0.72rem;

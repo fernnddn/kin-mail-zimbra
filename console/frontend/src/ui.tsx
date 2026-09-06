@@ -35,10 +35,7 @@ export const Shell = styled.div`
   padding: 2rem 1.25rem;
   position: relative;
   overflow: hidden;
-  background:
-    radial-gradient(1100px 520px at 8% -12%, ${theme.primary[100]} 0%, transparent 55%),
-    radial-gradient(900px 480px at 100% 0%, ${theme.surface[100]} 0%, transparent 48%),
-    linear-gradient(180deg, #f0f4fa 0%, #f7f9fc 48%, #ffffff 100%);
+  background: ${theme.paper};
   color: ${theme.ink};
   font-family: ${theme.font};
 
@@ -58,14 +55,95 @@ export const Shell = styled.div`
   }
 `;
 
+/* Gate screens: EULA, sign in, and the loading shells between them.
+ *
+ * A charcoal panel on the left carries the brand and one sentence saying what
+ * this machine is; the paper side carries the form. The sentence lives there
+ * so the form does not have to explain itself, which is how "Welcome Back /
+ * Sign in to the KIN Mail admin console" turns into "Sign in".
+ */
+export const GateShell = styled.div`
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  background: ${theme.paper};
+  color: ${theme.ink};
+  font-family: ${theme.font};
+
+  @media (max-width: 860px) {
+    /* Stacked, the charcoal band sizes to its own content instead of taking
+       half the screen and leaving the form below the fold. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+`;
+
+export const GateAside = styled.aside`
+  background: ${theme.rail};
+  color: ${theme.paper};
+  padding: 2.5rem 2.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2rem;
+
+  @media (max-width: 860px) {
+    padding: 1.5rem 1.75rem;
+    gap: 1rem;
+  }
+`;
+
+export const GateAsideBody = styled.div`
+  max-width: 34ch;
+
+  p {
+    margin: 1.5rem 0 0;
+    font-size: 1.02rem;
+    line-height: 1.55;
+    color: rgba(244, 241, 234, 0.82);
+  }
+
+  @media (max-width: 860px) {
+    max-width: none;
+
+    p {
+      margin-top: 0.9rem;
+      font-size: 0.92rem;
+    }
+  }
+`;
+
+export const GateAsideFoot = styled.p`
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: rgba(244, 241, 234, 0.45);
+
+  @media (max-width: 860px) {
+    display: none;
+  }
+`;
+
+export const GateMain = styled.main`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 2rem;
+  min-width: 0;
+`;
+
+export const GateForm = styled.div`
+  width: min(30rem, 100%);
+`;
+
 export const Card = styled.div`
   width: min(560px, 100%);
   background: ${theme.bgElev};
   border: 1px solid ${theme.line};
-  border-radius: ${theme.radius.xl};
-  padding: 1.75rem 1.5rem 1.5rem;
-  box-shadow: ${theme.shadow.sm};
-  animation: kin-scale-in ${theme.motion.fast} ease-out;
+  border-radius: ${theme.radius.lg};
+  padding: 1.6rem 1.5rem 1.4rem;
+  box-shadow: none;
+  animation: kin-fade-in ${theme.motion.base} ease-out;
 `;
 
 export const Brand = styled.p`
@@ -76,13 +154,17 @@ export const Brand = styled.p`
   margin: 0 0 0.35rem;
 `;
 
-const LockupImg = styled.img<{ $compact?: boolean }>`
+const LockupImg = styled.img<{ $compact?: boolean; $light?: boolean }>`
   display: block;
   height: ${(p) => (p.$compact ? "2.4rem" : "4.1rem")};
   width: auto;
   max-width: ${(p) => (p.$compact ? "11rem" : "16.5rem")};
   object-fit: contain;
-  object-position: left top;
+  object-position: left center;
+  /* The lockup is black artwork on transparent. On charcoal it is inverted
+     rather than swapped for a drawn shape, so the real mark is always what
+     ships: there is only one lockup file and it stays the source of truth. */
+  ${(p) => (p.$light ? "filter: invert(1) brightness(1.6);" : "")}
 `;
 
 const CompactLockup = styled.span`
@@ -95,20 +177,24 @@ const CompactLockup = styled.span`
 /** Official KIN Mail lockup. Compact height matches the image so the bar does not clip it. */
 export function BrandLockup({
   compact = false,
+  light = false,
   alt = "KIN Mail",
   ...rest
-}: { compact?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
-  const img = <LockupImg src={kinMailLogo} alt={alt} $compact={compact} {...rest} />;
+}: { compact?: boolean; light?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
+  const img = (
+    <LockupImg src={kinMailLogo} alt={alt} $compact={compact} $light={light} {...rest} />
+  );
   if (compact) return <CompactLockup>{img}</CompactLockup>;
   return img;
 }
 
 export const Title = styled.h1`
-  margin: 0 0 0.4rem;
-  font-size: 1.25rem;
+  margin: 0 0 0.35rem;
+  font-size: 1.55rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: ${theme.surface[800]};
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  color: ${theme.ink};
 `;
 
 export const Lede = styled.p`
@@ -139,26 +225,29 @@ export const OptionalMark = styled.span`
   font-size: 0.78rem;
 `;
 
+/* One hairline of ink, drawn just outside the border. The old 3px translucent
+   glow was the last blue thing on the page and it bled over neighbouring
+   fields on a dense form. */
 const focusRing = `
   &:focus {
     outline: none;
-    border-color: ${theme.accent};
-    box-shadow: 0 0 0 3px color-mix(in srgb, ${theme.accent} 10%, transparent);
+    border-color: ${theme.ink};
+    box-shadow: 0 0 0 1px ${theme.ink};
   }
   &:focus-visible {
     outline: none;
-    border-color: ${theme.accent};
-    box-shadow: 0 0 0 3px color-mix(in srgb, ${theme.accent} 10%, transparent);
+    border-color: ${theme.ink};
+    box-shadow: 0 0 0 1px ${theme.ink};
   }
 `;
 
 export const Input = styled.input`
   width: 100%;
-  border: 1px solid ${theme.surface[300]};
+  border: 1px solid ${theme.line};
   background: ${theme.bgElev};
   color: ${theme.ink};
-  border-radius: ${theme.radius.md};
-  padding: 0.625rem 1rem;
+  border-radius: ${theme.radius.sm};
+  padding: 0.45rem 0.7rem;
   font: inherit;
   font-size: 0.875rem;
   margin-bottom: 0.9rem;
@@ -312,34 +401,34 @@ export const Select = styled.select`
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "destructive";
 
+/* Oxide is the one loud colour on the page and it means "this commits
+   something": sign in, deploy, create the mailbox, apply the licence, remove
+   the host. Everything else is an ink outline. If two buttons on a screen are
+   oxide, one of them is wrong. */
+const isCommit = (v: ButtonVariant) =>
+  v === "primary" || v === "danger" || v === "destructive";
+
 const ButtonRoot = styled.button<{ $variant: ButtonVariant }>`
   border: ${(p) =>
-    p.$variant === "secondary"
-      ? `1px solid ${theme.surface[200]}`
-      : p.$variant === "ghost"
-        ? "1px solid transparent"
-        : "0"};
-  border-radius: ${theme.radius.md};
-  background: ${(p) =>
-    p.$variant === "ghost" || p.$variant === "secondary"
-      ? "transparent"
-      : p.$variant === "danger" || p.$variant === "destructive"
-        ? theme.danger
-        : theme.accent};
-  color: ${(p) =>
-    p.$variant === "ghost" || p.$variant === "secondary" ? theme.ink : "#fff"};
+    isCommit(p.$variant)
+      ? `1px solid ${theme.oxide}`
+      : p.$variant === "secondary"
+        ? `1px solid ${theme.ink}`
+        : "1px solid transparent"};
+  border-radius: ${theme.radius.sm};
+  background: ${(p) => (isCommit(p.$variant) ? theme.oxide : "transparent")};
+  color: ${(p) => (isCommit(p.$variant) ? theme.paper : theme.ink)};
   font: inherit;
   font-size: 0.875rem;
   font-weight: 600;
-  padding: 0.625rem 1rem;
+  padding: 0.45rem 0.9rem;
+  min-height: 2.25rem;
   cursor: pointer;
-  box-shadow: ${(p) => (p.$variant === "primary" ? theme.shadow.sm : "none")};
+  box-shadow: none;
   transition:
     background ${theme.motion.fast} ease-out,
     border-color ${theme.motion.fast} ease-out,
-    color ${theme.motion.fast} ease-out,
-    box-shadow ${theme.motion.fast} ease-out,
-    transform ${theme.motion.fast} ease-out;
+    color ${theme.motion.fast} ease-out;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -347,29 +436,27 @@ const ButtonRoot = styled.button<{ $variant: ButtonVariant }>`
 
   &:hover:not(:disabled) {
     background: ${(p) =>
-      p.$variant === "ghost"
-        ? theme.surface[50]
-        : p.$variant === "secondary"
-          ? theme.surface[50]
-          : p.$variant === "danger" || p.$variant === "destructive"
-            ? "#dc2626"
-            : theme.primary[700]};
-    box-shadow: ${(p) => (p.$variant === "primary" ? theme.shadow.md : "none")};
+      isCommit(p.$variant) ? theme.oxideHover : theme.surface[100]};
+    border-color: ${(p) => (isCommit(p.$variant) ? theme.oxideHover : theme.ink)};
   }
 
+  /* No press-scale. A button that shrinks reads as a toy on a tool that
+     removes cluster nodes. */
   &:active:not(:disabled) {
-    transform: scale(0.98);
+    background: ${(p) =>
+      isCommit(p.$variant) ? theme.oxideHover : theme.surface[200]};
   }
 
   &:disabled {
     opacity: 1;
     cursor: not-allowed;
-    transform: none;
     box-shadow: none;
-    background: ${theme.surface[100]};
+    background: transparent;
     color: ${theme.surface[400]};
-    border: 1px solid ${theme.surface[200]};
+    border: 1px solid ${theme.line};
   }
+
+  ${focusRing}
 `;
 
 export const Spinner = styled.span<{ $size?: number }>`
@@ -377,7 +464,10 @@ export const Spinner = styled.span<{ $size?: number }>`
   height: ${(p) => (p.$size ?? 14) / 16}rem;
   border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
   border-top-color: currentColor;
-  border-radius: ${theme.radius.full};
+  /* The one round thing in the product. radius.full is 2px on this theme
+     (there are no pills on paper), so a spinner reading it would be a
+     rotating square. */
+  border-radius: 50%;
   display: inline-block;
   animation: ${spin} 0.7s linear infinite;
   flex-shrink: 0;
@@ -404,13 +494,14 @@ export function Button({
 }
 
 const ErrBox = styled.div`
-  color: #cf1322;
+  color: ${theme.ink};
   font-size: 0.875rem;
   margin: 0 0 0.85rem;
-  padding: 0.625rem 1rem;
-  background: #fff1f0;
-  border: 1px solid #ffa39e;
-  border-radius: ${theme.radius.md};
+  padding: 0.625rem 0.95rem;
+  background: ${theme.oxideSoft};
+  border: 1px solid ${theme.line};
+  border-left: 3px solid ${theme.oxide};
+  border-radius: ${theme.radius.sm};
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
@@ -503,14 +594,15 @@ export const Choice = styled.button<{ selected?: boolean }>`
 `;
 
 export const WarnBox = styled.div`
-  border: 1px solid color-mix(in srgb, ${theme.warn} 35%, ${theme.line});
+  border: 1px solid ${theme.line};
+  border-left: 3px solid ${theme.warn};
   background: ${theme.warnSoft};
   color: ${theme.ink};
-  border-radius: ${theme.radius.md};
-  padding: 0.85rem 1rem;
+  border-radius: ${theme.radius.sm};
+  padding: 0.75rem 0.95rem;
   margin-bottom: 1rem;
   font-size: 0.88rem;
-  line-height: 1.45;
+  line-height: 1.5;
 
   strong {
     color: ${theme.warn};
@@ -567,16 +659,18 @@ export const LogPane = styled.pre`
   min-height: 220px;
   max-height: 360px;
   overflow: auto;
-  background: ${theme.surface[900]};
+  /* Recessed paper, not a black terminal. The log is part of the page, and
+     an operator reads it for minutes at a time. */
+  background: ${theme.bgPanel};
   border: 1px solid ${theme.line};
-  border-radius: ${theme.radius.md};
+  border-radius: ${theme.radius.sm};
   padding: 0.9rem 1rem;
-  color: ${theme.surface[300]};
+  color: ${theme.ink};
   font-family: ${theme.mono};
   font-size: 0.8rem;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
-  box-shadow: ${theme.shadow.sm};
+  box-shadow: none;
 `;
 
 /**
@@ -625,53 +719,54 @@ export function FieldLabel({
  * 1900px is not an improvement.
  */
 export const Page = styled.div<{ $wide?: boolean }>`
-  padding: 1.5rem 1.5rem 2rem;
-  max-width: ${(p) => (p.$wide ? "1680px" : "960px")};
+  padding: 1.6rem 1.75rem 2.5rem;
+  max-width: ${(p) => (p.$wide ? "1680px" : "1080px")};
   width: 100%;
   margin: 0 auto;
-  animation: kin-page-in ${theme.motion.page} cubic-bezier(0.16, 1, 0.3, 1);
+  animation: kin-page-in ${theme.motion.page} ease-out;
 `;
 
+/* The title sits on a heavy ink baseline. That rule is the page's masthead:
+   it says where you are without a coloured tile, a gradient or a shadow. */
 const HeaderRow = styled.div`
   display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.7rem;
+  margin-bottom: 1.35rem;
+  border-bottom: 2px solid ${theme.ink};
 `;
 
-const IconTile = styled.div<{ $from?: string; $to?: string }>`
-  width: 3.5rem;
-  height: 3.5rem;
-  border-radius: ${theme.radius.xl};
-  background: linear-gradient(
-    135deg,
-    ${(p) => p.$from || theme.accent} 0%,
-    ${(p) => p.$to || theme.primary[800]} 100%
-  );
-  color: #fff;
-  display: grid;
-  place-items: center;
+const HeaderActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   flex-shrink: 0;
-  box-shadow: ${theme.shadow.lg}, 0 8px 20px color-mix(in srgb, ${theme.accent} 25%, transparent);
 `;
 
 const HeaderText = styled.div`
   min-width: 0;
-  flex: 1;
+  flex: 1 1 20rem;
 
   h1 {
     margin: 0;
-    font-size: 1.25rem;
+    font-size: 1.55rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
-    color: ${theme.surface[800]};
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    color: ${theme.ink};
   }
 
+  /* Quieter and narrower than the title on purpose: it is the sentence that
+     explains the page, not a second heading. */
   p {
-    margin: 0.25rem 0 0;
-    font-size: 0.875rem;
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
     color: ${theme.muted};
-    line-height: 1.45;
+    line-height: 1.5;
+    max-width: 62ch;
   }
 `;
 
@@ -688,18 +783,20 @@ export function PageHeader({
   action?: ReactNode;
   gradient?: [string, string];
 }) {
+  /* `icon` and `gradient` are accepted and deliberately not drawn. Every page
+     used to open with a 3.5rem gradient tile and a coloured shadow, which is
+     decoration on a tool whose pages are already named. The props stay so no
+     call site has to change, and so the decision lives in one place rather
+     than being re-litigated per page. */
+  void icon;
+  void gradient;
   return (
     <HeaderRow>
-      {icon ? (
-        <IconTile $from={gradient?.[0]} $to={gradient?.[1]}>
-          {icon}
-        </IconTile>
-      ) : null}
       <HeaderText>
         <h1>{title}</h1>
         {subtitle ? <p>{subtitle}</p> : null}
       </HeaderText>
-      {action}
+      {action ? <HeaderActions>{action}</HeaderActions> : null}
     </HeaderRow>
   );
 }
@@ -733,9 +830,9 @@ const Thumb = styled.span<{ $on: boolean }>`
   left: 4px;
   width: 20px;
   height: 20px;
-  border-radius: ${theme.radius.full};
-  background: #fff;
-  box-shadow: ${theme.shadow.sm};
+  border-radius: ${theme.radius.sm};
+  background: ${theme.paper};
+  box-shadow: none;
   transform: translateX(${(p) => (p.$on ? "20px" : "0")});
   transition: transform ${theme.motion.base} ease-out;
 `;
@@ -800,13 +897,13 @@ export type StatusTone =
   | "warn";
 
 const TONE: Record<StatusTone, { fg: string; bg: string; border: string }> = {
-  critical: { fg: theme.critical, bg: "rgba(239, 68, 68, 0.10)", border: "rgba(239, 68, 68, 0.20)" },
-  high: { fg: theme.high, bg: "rgba(249, 115, 22, 0.10)", border: "rgba(249, 115, 22, 0.20)" },
-  medium: { fg: "#a16207", bg: "rgba(234, 179, 8, 0.12)", border: "rgba(234, 179, 8, 0.28)" },
-  low: { fg: theme.low, bg: "rgba(34, 197, 94, 0.10)", border: "rgba(34, 197, 94, 0.20)" },
-  completed: { fg: "#047857", bg: "rgba(16, 185, 129, 0.10)", border: "rgba(16, 185, 129, 0.20)" },
-  primary: { fg: theme.accent, bg: theme.accentSoft, border: "rgba(0, 97, 255, 0.20)" },
-  warn: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(217, 119, 6, 0.28)" },
+  critical: { fg: theme.oxide, bg: theme.oxideSoft, border: "rgba(180, 35, 24, 0.28)" },
+  high: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
+  medium: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
+  low: { fg: theme.ok, bg: theme.okSoft, border: "rgba(47, 111, 78, 0.26)" },
+  completed: { fg: theme.ok, bg: theme.okSoft, border: "rgba(47, 111, 78, 0.26)" },
+  primary: { fg: theme.ink, bg: theme.accentSoft, border: theme.surface[300] },
+  warn: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
   neutral: { fg: theme.surface[500], bg: theme.surface[100], border: theme.surface[200] },
 };
 
@@ -861,9 +958,9 @@ export const SkeletonCard = styled.div`
 const AvatarCircle = styled.div<{ $size: number }>`
   width: ${(p) => p.$size}px;
   height: ${(p) => p.$size}px;
-  border-radius: ${theme.radius.full};
-  background: ${theme.accent};
-  color: #fff;
+  border-radius: ${theme.radius.sm};
+  background: ${theme.ink};
+  color: ${theme.paper};
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -907,20 +1004,19 @@ const Catcher = styled.div`
   z-index: 40;
 `;
 
-const MenuPanel = styled.div<{ $align: "left" | "right" }>`
+const MenuPanel = styled.div<{ $align: "left" | "right"; $drop: "down" | "up" }>`
   position: absolute;
-  top: calc(100% + 0.375rem);
+  ${(p) => (p.$drop === "up" ? "bottom: calc(100% + 0.375rem);" : "top: calc(100% + 0.375rem);")}
   ${(p) => (p.$align === "right" ? "right: 0;" : "left: 0;")}
   min-width: 12rem;
   background: ${theme.bgElev};
   border: 1px solid ${theme.line};
-  border-radius: ${theme.radius.xl};
-  box-shadow: ${theme.shadow.xl};
+  border-radius: ${theme.radius.lg};
+  box-shadow: ${theme.shadow.lg};
   z-index: 50;
-  padding: 0.375rem 0;
+  padding: 0.25rem 0;
   overflow: hidden;
   animation: ${scaleIn} ${theme.motion.fast} ease-out;
-  transform-origin: top ${(p) => (p.$align === "right" ? "right" : "left")};
 `;
 
 export const MenuItem = styled.button`
@@ -943,11 +1039,11 @@ export const MenuItem = styled.button`
   }
 
   &[data-danger="true"] {
-    color: #dc2626;
+    color: ${theme.oxide};
   }
 
   &[data-danger="true"]:hover {
-    background: #fef2f2;
+    background: ${theme.oxideSoft};
   }
 
   svg {
@@ -966,18 +1062,22 @@ export function Dropdown({
   open,
   onClose,
   align = "left",
+  drop = "down",
   children,
 }: {
   open: boolean;
   onClose: () => void;
   align?: "left" | "right";
+  /** "up" for a trigger that sits at the bottom of the viewport, such as the
+   * account menu in the foot of the ops rail. */
+  drop?: "down" | "up";
   children: ReactNode;
 }) {
   if (!open) return null;
   return (
     <>
       <Catcher onClick={onClose} />
-      <MenuPanel $align={align} role="menu">
+      <MenuPanel $align={align} $drop={drop} role="menu">
         {children}
       </MenuPanel>
     </>
@@ -991,8 +1091,7 @@ const Backdrop = styled.button<{ $heavy?: boolean }>`
   border: 0;
   padding: 0;
   cursor: default;
-  background: ${(p) => (p.$heavy ? "rgba(15, 23, 42, 0.45)" : "rgba(15, 23, 42, 0.40)")};
-  backdrop-filter: blur(4px);
+  background: ${(p) => (p.$heavy ? "rgba(26, 25, 22, 0.55)" : "rgba(26, 25, 22, 0.42)")};
 `;
 
 const ModalWrap = styled.div`
@@ -1017,11 +1116,7 @@ const ModalPanel = styled.div<{ $elevated?: boolean }>`
 const AccentBar = styled.div<{ $tone: "danger" | "warn" | "primary" }>`
   height: 3px;
   background: ${(p) =>
-    p.$tone === "danger"
-      ? "linear-gradient(90deg, #ef4444, #e11d48)"
-      : p.$tone === "warn"
-        ? "linear-gradient(90deg, #fbbf24, #f97316)"
-        : `linear-gradient(90deg, ${theme.accent}, ${theme.primary[700]})`};
+    p.$tone === "danger" ? theme.oxide : p.$tone === "warn" ? theme.warn : theme.ink};
 `;
 
 export function Modal({
@@ -1100,18 +1195,19 @@ const ConfirmIcon = styled.div<{ $tone: "danger" | "warn" }>`
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  background: ${(p) => (p.$tone === "danger" ? "#fef2f2" : "#fffbeb")};
-  border: 1px solid ${(p) => (p.$tone === "danger" ? "#fee2e2" : "#fde68a")};
-  color: ${(p) => (p.$tone === "danger" ? theme.critical : theme.high)};
+  background: ${(p) => (p.$tone === "danger" ? theme.oxideSoft : theme.warnSoft)};
+  border: 1px solid ${(p) => (p.$tone === "danger" ? theme.oxide : theme.warn)};
+  color: ${(p) => (p.$tone === "danger" ? theme.oxide : theme.warn)};
 `;
 
 const WarnStrip = styled.div`
   margin: 0 1.5rem 1.25rem;
   padding: 0.65rem 0.85rem;
-  border-radius: ${theme.radius.md};
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
+  border-radius: ${theme.radius.sm};
+  background: ${theme.oxideSoft};
+  border: 1px solid ${theme.line};
+  border-left: 3px solid ${theme.oxide};
+  color: ${theme.ink};
   font-size: 0.8rem;
   line-height: 1.4;
 `;
