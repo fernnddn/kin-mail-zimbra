@@ -174,11 +174,12 @@ const CardLabel = styled.p`
 
 const BigValue = styled.p<{ $tone: "ok" | "warn" | "danger" }>`
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
+  font-family: ${theme.mono};
+  font-size: 1.4rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: ${(p) =>
-    p.$tone === "danger" ? theme.danger : p.$tone === "warn" ? theme.warn : theme.surface[800]};
+    p.$tone === "danger" ? theme.oxide : p.$tone === "warn" ? theme.warn : theme.ink};
 `;
 
 const Track = styled.div`
@@ -207,10 +208,11 @@ const ChartHead = styled.div`
 `;
 
 const ChartNow = styled.span`
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-family: ${theme.mono};
+  font-size: 0.88rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  color: ${theme.surface[800]};
+  color: ${theme.ink};
 `;
 
 const Stats = styled.div`
@@ -222,8 +224,9 @@ const Stats = styled.div`
   color: ${theme.muted};
 
   b {
-    color: ${theme.surface[700]};
-    font-weight: 650;
+    color: ${theme.ink};
+    font-family: ${theme.mono};
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
 `;
