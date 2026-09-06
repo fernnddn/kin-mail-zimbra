@@ -561,29 +561,35 @@ export const ChoiceGrid = styled.div`
   margin-bottom: 1rem;
 `;
 
+/* The chosen option carries a 3px ink edge and its title goes bold. A 1px ink
+   border against a 1px rule border was almost invisible, and on the topology
+   step that choice decides the whole deployment. */
 export const Choice = styled.button<{ selected?: boolean }>`
   text-align: left;
-  border: 1px solid ${(p) => (p.selected ? theme.accent : theme.line)};
+  border: 1px solid ${(p) => (p.selected ? theme.ink : theme.line)};
+  border-left: ${(p) => (p.selected ? `3px solid ${theme.ink}` : `1px solid ${theme.line}`)};
   background: ${(p) => (p.selected ? theme.accentSoft : theme.bgElev)};
   color: ${theme.ink};
-  border-radius: ${theme.radius.md};
-  padding: 0.95rem 1rem;
+  border-radius: ${theme.radius.sm};
+  padding: 0.9rem 1rem;
+  padding-left: ${(p) => (p.selected ? "calc(1rem - 2px)" : "1rem")};
   cursor: pointer;
   font: inherit;
-  box-shadow: ${theme.shadow.sm};
+  box-shadow: none;
   transition:
     border-color ${theme.motion.fast} ease-out,
-    background ${theme.motion.fast} ease-out,
-    box-shadow ${theme.motion.fast} ease-out;
+    background ${theme.motion.fast} ease-out;
 
   &:hover {
-    border-color: ${(p) => (p.selected ? theme.accent : theme.accentHover)};
-    box-shadow: ${theme.shadow.md};
+    border-color: ${theme.ink};
   }
+
+  ${focusRing}
 
   strong {
     display: block;
     margin-bottom: 0.25rem;
+    font-weight: ${(p) => (p.selected ? 700 : 600)};
   }
 
   span {
