@@ -2,7 +2,7 @@ import styled from "@emotion/styled";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { useSetup } from "../setup";
-import { Lede, Shell, Skeleton, Spinner, Err } from "../ui";
+import { BrandLockup, Lede, Shell, Skeleton, Spinner, Err } from "../ui";
 import { theme } from "../styles/theme";
 import { useDeploySession } from "./DeploySession";
 import { useWizard } from "./WizardContext";
@@ -19,22 +19,26 @@ const Body = styled.div`
   }
 `;
 
+/* Paper, not charcoal. First boot has no ops rail: the only navigation is the
+   list of steps, and it reads as a printed contents page. */
 const Sidebar = styled.aside`
-  background: ${theme.sidebar};
+  background: ${theme.paper};
   border-right: 1px solid ${theme.line};
-  padding: 1.25rem 0.85rem;
+  padding: 1.5rem 1.1rem;
   overflow: auto;
 
   @media (max-width: 860px) {
     border-right: 0;
     border-bottom: 1px solid ${theme.line};
+    padding: 1rem 1.1rem;
   }
 `;
 
 const SideTitle = styled.p`
-  margin: 0 0.55rem 0.75rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
+  margin: 0 0.6rem 0.9rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: ${theme.muted};
 `;
@@ -45,14 +49,15 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
   gap: 0.65rem;
   padding: 0.55rem 0.65rem;
   margin-bottom: 0.2rem;
-  border-radius: ${theme.radius.md};
+  border-radius: 0;
   text-decoration: none;
-  color: ${(p) => (p.$active ? theme.accent : theme.muted)};
+  color: ${(p) => (p.$active ? theme.ink : theme.muted)};
   background: ${(p) => (p.$active ? theme.accentSoft : "transparent")};
-  border: 1px solid ${(p) => (p.$active ? "color-mix(in srgb, " + theme.accent + " 20%, transparent)" : "transparent")};
-  font-size: 0.9rem;
-  font-weight: ${(p) => (p.$active ? 600 : 500)};
-  box-shadow: ${(p) => (p.$active ? "inset 3px 0 0 0 " + theme.accent : "none")};
+  border: 0;
+  border-left: 2px solid ${(p) => (p.$active ? theme.ink : "transparent")};
+  font-size: 0.88rem;
+  font-weight: ${(p) => (p.$active ? 650 : 500)};
+  box-shadow: none;
   transition:
     color ${theme.motion.fast} ease-out,
     background ${theme.motion.fast} ease-out,
@@ -60,7 +65,7 @@ const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
     box-shadow ${theme.motion.fast} ease-out;
 
   &:hover {
-    color: ${(p) => (p.$active ? theme.accent : theme.ink)};
+    color: ${theme.ink};
     background: ${(p) => (p.$active ? theme.accentSoft : theme.surface[100])};
   }
 `;
@@ -71,7 +76,8 @@ const StepLock = styled.div<{ $active?: boolean; $done?: boolean }>`
   gap: 0.65rem;
   padding: 0.55rem 0.65rem;
   margin-bottom: 0.2rem;
-  border-radius: ${theme.radius.md};
+  border-left: 2px solid transparent;
+  border-radius: 0;
   color: ${theme.muted};
   background: transparent;
   border: 1px solid transparent;
@@ -151,9 +157,21 @@ function furthestReachedIndex(currentStep: string): number {
 function LoadingPage({ text }: { text: string }) {
   return (
     <Shell>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
-        <Spinner $size={20} />
-        <Lede style={{ margin: 0 }}>{text}</Lede>
+      {/* The lockup keeps a slow /api/setup/status from looking like a blank
+          page. It is the same mark the rail and the gate screens use. */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "1.25rem",
+        }}
+      >
+        <BrandLockup compact />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <Spinner $size={16} />
+          <Lede style={{ margin: 0 }}>{text}</Lede>
+        </div>
       </div>
     </Shell>
   );

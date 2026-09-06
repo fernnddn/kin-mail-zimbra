@@ -147,8 +147,11 @@ const StatLabel = styled.p`
 
 const StatValue = styled.p`
   margin: 0;
-  font-size: 1.55rem;
-  font-weight: 660;
+  /* Figures are set in mono across the product, so a number in a report reads
+     the same as the same number in a log. */
+  font-family: ${theme.mono};
+  font-size: 1.5rem;
+  font-weight: 500;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   color: ${theme.ink};
@@ -258,6 +261,8 @@ const Th = styled.th<{ $num?: boolean }>`
 
 const Td = styled.td<{ $num?: boolean; $muted?: boolean }>`
   text-align: ${(p) => (p.$num ? "right" : "left")};
+  font-family: ${(p) => (p.$num ? theme.mono : "inherit")};
+  font-size: ${(p) => (p.$num ? "0.76rem" : "0.78rem")};
   padding: 7px 12px;
   white-space: nowrap;
   color: ${(p) => (p.$muted ? theme.muted : theme.ink)};

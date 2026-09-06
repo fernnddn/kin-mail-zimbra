@@ -26,7 +26,7 @@ import TopologyStep from "./wizard/steps/TopologyStep";
 import ZpushStep from "./wizard/steps/ZpushStep";
 import { DeploySessionProvider } from "./wizard/DeploySession";
 import { isHaOrchestrationLog } from "./wizard/deployPipeline";
-import { Lede, Shell, Spinner } from "./ui";
+import { BrandLockup, Lede, Shell, Spinner } from "./ui";
 import { TaskProvider } from "./tasks/TaskProvider";
 import { AlertProvider } from "./tasks/AlertProvider";
 import ActivityCenterPage from "./pages/ActivityCenter";
@@ -34,9 +34,21 @@ import ActivityCenterPage from "./pages/ActivityCenter";
 function LoadingShell({ text }: { text: string }) {
   return (
     <Shell>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.85rem" }}>
-        <Spinner $size={20} />
-        <Lede style={{ margin: 0 }}>{text}</Lede>
+      {/* The lockup keeps a slow /api/setup/status from looking like a blank
+          page. It is the same mark the rail and the gate screens use. */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "1.25rem",
+        }}
+      >
+        <BrandLockup compact />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <Spinner $size={16} />
+          <Lede style={{ margin: 0 }}>{text}</Lede>
+        </div>
       </div>
     </Shell>
   );
