@@ -88,6 +88,12 @@ export const theme = {
   ok: "#2F6F4E",
   okSoft: "rgba(47, 111, 78, 0.10)",
 
+  /* Severity as it reads ON THE CHARCOAL RAIL. Oxide and ochre are tuned for
+   * paper and go muddy on charcoal, so the rail gets lighter tints of the same
+   * two families rather than a different palette. */
+  oxideOnRail: primary[200],
+  warnOnRail: "#D7B26A",
+
   /* KIN blue survives as a brand mark only: a small square beside the
    * lockup. Never a button, never an active nav fill. */
   brand: "#0061FF",

@@ -87,7 +87,7 @@ const ProgressCounter = styled.span`
 
 const Track = styled.div`
   height: 8px;
-  border-radius: 999px;
+  border-radius: ${theme.radius.sm};
   background: ${theme.bgPanel};
   border: 1px solid ${theme.line};
   overflow: hidden;
@@ -96,7 +96,7 @@ const Track = styled.div`
 const Fill = styled.div<{ $pct: number; $failed?: boolean; $complete?: boolean }>`
   height: 100%;
   width: ${(p) => Math.min(100, Math.max(0, p.$pct))}%;
-  border-radius: 999px;
+  border-radius: ${theme.radius.sm};
   background: ${(p) => (p.$failed ? theme.danger : p.$complete ? theme.ok : theme.accent)};
   transition:
     width ${theme.motion.slow} ease-out,
@@ -137,7 +137,7 @@ const StageItem = styled.li<{ $state: "pending" | "active" | "done" | "failed" }
 const Dot = styled.span<{ $state: "pending" | "active" | "done" | "failed" }>`
   width: 0.55rem;
   height: 0.55rem;
-  border-radius: 999px;
+  border-radius: ${theme.radius.sm};
   flex-shrink: 0;
   background: ${(p) =>
     p.$state === "active"

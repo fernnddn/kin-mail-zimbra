@@ -185,6 +185,15 @@ export default function UsersPage() {
                       {row.auth_type === "ad" && row.ad_username && row.ad_username !== row.username
                         ? ` (${row.ad_username})`
                         : ""}
+                      {/* The API already returns this and nothing showed it, so a
+                          disabled account read exactly like a working one. */}
+                      {row.disabled ? (
+                        <span style={{ marginLeft: "0.5rem" }}>
+                          <StatusPill tone="warn" size="tag">
+                            disabled
+                          </StatusPill>
+                        </span>
+                      ) : null}
                     </td>
                     <td>
                       <StatusPill tone={row.auth_type === "ad" ? "primary" : "neutral"} size="tag">

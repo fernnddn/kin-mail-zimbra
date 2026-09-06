@@ -50,11 +50,11 @@ const IconBtn = styled.button<{
   color: ${(p) =>
     p.$tone === "failed"
       ? p.$rail
-        ? "#E8B5AF"
+        ? theme.oxideOnRail
         : theme.danger
       : p.$tone === "running"
         ? p.$rail
-          ? "#D7B26A"
+          ? theme.warnOnRail
           : theme.warn
         : p.$rail
           ? "rgba(244, 241, 234, 0.72)"
