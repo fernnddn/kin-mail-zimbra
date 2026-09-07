@@ -1874,7 +1874,31 @@ async def _push_peer_identity_files(
             "No auto-retry, no auto-rollback."
         )
         return False
-    notes.append("Synced server-id to the peer")
+
+    # Read it back rather than trusting the write. A pair whose two nodes hold
+    # different ids builds and reports success, and the drift only surfaces
+    # later as "That license was issued for a different Email Server ID" on
+    # whichever node the operator happened to open (live QA, 7 Sep 2026). The
+    # licence is issued against one id, so this has to be one id.
+    verify_code, verify_text = await _ssh_run(
+        host,
+        user,
+        password,
+        secrets,
+        "cat /etc/kin-mail/server-id 2>/dev/null | head -n 1",
+    )
+    peer_server_id = (verify_text or "").strip().splitlines()
+    peer_id = peer_server_id[0].strip() if peer_server_id else ""
+    if verify_code != 0 or peer_id != local_server_id:
+        notes.append(
+            "Wrote server-id to the peer but reading it back did not match "
+            f"(this node {local_server_id!r}, peer {peer_id!r}, exit "
+            f"{verify_code}). The pair would disagree about which appliance it "
+            "is, and a licence issued for one node would be rejected on the "
+            "other. Refusing to report the identity sync as done."
+        )
+        return False
+    notes.append("Synced server-id to the peer and verified it reads back")
 
     local_license_token = read_license_token()
     if local_license_token:

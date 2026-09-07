@@ -1145,10 +1145,17 @@ def _human_license_error(text: str) -> str:
     # serving right now.
     if "different email server" in low or "server_id" in low or "server id" in low:
         return (
-            "That license was issued for a different Email Server ID. Check the "
-            "Email Server ID shown on this page and ask KIN to reissue the "
-            "license for exactly that ID. On an HA pair both nodes must share "
-            "one Email Server ID."
+            "That license was issued for a different Email Server ID than the "
+            "one shown on this page. On an HA pair there are two ways to land "
+            "here. Either the key was issued for the other node, in which case "
+            "open the console on the node whose ID matches and apply it there: "
+            "applying it syncs the ID, the token and the seat count to the "
+            "peer, so it only has to be done once. Or the pair has drifted "
+            "onto two different IDs, which a pair should never have; compare "
+            "this ID with the one on the peer console, and if they differ "
+            "rebuild the identity by applying a valid key on the node the "
+            "licence was issued for. If neither fits, send KIN the ID shown "
+            "here and ask for a licence issued against it."
         )
     if "expired" in low:
         return "That license has expired. Ask KIN for a renewed license."

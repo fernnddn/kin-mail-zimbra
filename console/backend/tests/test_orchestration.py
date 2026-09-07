@@ -1364,6 +1364,20 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         "KIN_PEER_CFG_END\n"
     )
 
+    # sync_peer_ha_console_state reads the peer's server-id back after
+    # writing it, so a stub that answers every ssh call with the probe blob
+    # makes the identity check see "KIN_PEER_STATE_BEGIN" and rightly
+    # refuse. Answer the read-back with the id the push claims to have set.
+    def _ssh_side_effect(
+        self, peer_server_id: str = "fixed-server-id", blob: str | None = None
+    ):
+        async def _run(host, user, password, secrets, remote_cmd, **kwargs):
+            if "server-id" in remote_cmd:
+                return 0, peer_server_id + "\n"
+            return 0, self._PROBE_BLOB if blob is None else blob
+
+        return _run
+
     async def test_users_push_failure_writes_no_peer_marker(self) -> None:
         from unittest.mock import AsyncMock, patch
 
@@ -1373,7 +1387,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                new=AsyncMock(side_effect=self._ssh_side_effect()),
             ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1409,7 +1423,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
-                    new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                    new=AsyncMock(side_effect=self._ssh_side_effect()),
                 ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1469,7 +1483,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
-                    new=AsyncMock(return_value=(0, noop_blob)),
+                    new=AsyncMock(side_effect=self._ssh_side_effect(blob=noop_blob)),
                 ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1554,7 +1568,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
-                    new=AsyncMock(return_value=(0, noop_blob)),
+                    new=AsyncMock(side_effect=self._ssh_side_effect(blob=noop_blob)),
                 ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1611,7 +1625,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch(
                     "kin_privhelper.orchestration._ssh_run",
-                    new=AsyncMock(return_value=(0, noop_blob)),
+                    new=AsyncMock(side_effect=self._ssh_side_effect(blob=noop_blob)),
                 ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1641,6 +1655,57 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("/var/lib/kin-mail-console/license.token", dests)
         self.assertIn("/var/lib/kin-mail-console/session.secret", dests)
 
+    async def test_server_id_that_does_not_read_back_is_fatal(self) -> None:
+        """A pair holding two different ids must not report a clean build.
+
+        The write can succeed and the peer still end up on a different id.
+        Nothing noticed, the pair built green, and the drift only surfaced
+        later as "That license was issued for a different Email Server ID" on
+        whichever node the operator happened to open (live QA, 7 Sep 2026).
+        """
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, patch
+
+        from kin_console import settings as settings_mod
+        from kin_privhelper.orchestration import sync_peer_ha_console_state
+
+        host = OrchHost("mail2.example.test", "192.0.2.14", "mail2")
+        with tempfile.TemporaryDirectory() as td:
+            secret_path = Path(td) / "session.secret"
+            secret_path.write_text("fixed-session-secret\n", encoding="utf-8")
+            with (
+                patch(
+                    "kin_privhelper.orchestration._ssh_run",
+                    # Push says ok; the peer still reports a different id.
+                    new=AsyncMock(side_effect=self._ssh_side_effect("some-other-id")),
+                ),
+                patch(
+                    "kin_privhelper.orchestration.ensure_peer_console_runtime",
+                    new=AsyncMock(return_value=(True, ["peer console ok"])),
+                ),
+                patch(
+                    "kin_privhelper.console_users_sync.push_local_users_to_peer",
+                    new=AsyncMock(return_value=(True, "users ok")),
+                ),
+                patch(
+                    "kin_privhelper.deploy_state.ensure_server_id",
+                    return_value="fixed-server-id",
+                ),
+                patch.object(settings_mod.settings, "session_secret_file", secret_path),
+                patch(
+                    "kin_privhelper.orchestration._push_peer_text_file",
+                    new=AsyncMock(return_value=(0, "")),
+                ),
+            ):
+                ok, notes = await sync_peer_ha_console_state(host, "kin", "pw", [])
+
+        self.assertFalse(ok)
+        joined = " ".join(notes)
+        self.assertIn("did not match", joined)
+        self.assertIn("fixed-server-id", joined)
+        self.assertIn("some-other-id", joined)
+
     async def test_identity_push_failure_writes_no_peer_marker(self) -> None:
         from unittest.mock import AsyncMock, patch
 
@@ -1656,7 +1721,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                new=AsyncMock(side_effect=self._ssh_side_effect()),
             ),
                 patch(
                     "kin_privhelper.orchestration.ensure_peer_console_runtime",
@@ -1690,7 +1755,7 @@ class SyncPeerHaConsoleStateTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "kin_privhelper.orchestration._ssh_run",
-                new=AsyncMock(return_value=(0, self._PROBE_BLOB)),
+                new=AsyncMock(side_effect=self._ssh_side_effect()),
             ),
             patch(
                 "kin_privhelper.orchestration.ensure_peer_console_runtime",
