@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -435,6 +437,69 @@ async def put_wizard_draft(
 # --- Privileged execution via local privhelper (SSE) -------------------------
 
 # Browser may only pick these action names; each maps to a fixed whitelist cmd.
+# Long jobs go quiet for minutes at a time: Zimbra's installer between stages,
+# an SBD disarm waiting out the watchdog, ansible sitting on an apt lock it is
+# allowed to wait 900 seconds for. Nothing is wrong during those gaps, but an
+# idle TCP connection across a firewall is a connection that gets reaped, and
+# the operator then sees "Lost connection" on a job that is running perfectly
+# well. An SSE comment costs nothing and EventSource ignores it.
+SSE_HEARTBEAT_SEC = 15.0
+
+
+async def sse_with_heartbeat(
+    events: AsyncIterator[dict[str, Any]],
+    *,
+    is_disconnected: Callable[[], Awaitable[bool]],
+    heartbeat_sec: float = SSE_HEARTBEAT_SEC,
+) -> AsyncIterator[str]:
+    """Yield SSE frames, emitting a comment whenever the source goes quiet.
+
+    A pump task owns the source generator. The alternative, waiting on
+    `__anext__()` with a timeout, cancels that call when it expires and leaves
+    the generator half-consumed, which is a good way to lose an event or wedge
+    the stream.
+    """
+    import asyncio
+
+    queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1000)
+    finished = object()
+
+    async def pump() -> None:
+        try:
+            async for ev in events:
+                await queue.put(ev)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the client below
+            await queue.put(exc)
+        finally:
+            await queue.put(finished)
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=heartbeat_sec)
+            except asyncio.TimeoutError:
+                if await is_disconnected():
+                    break
+                yield ": keepalive\n\n"
+                continue
+            if item is finished:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            # Drop the SSE feed when the browser is gone. privhelperd keeps the
+            # privileged job running and last-log remains the catch-up path.
+            if await is_disconnected():
+                break
+            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
 _STREAM_ACTIONS: dict[str, str] = {
     "hardening_status": proto.CMD_RUN_HARDENING_STATUS,
     "apply_draft": proto.CMD_APPLY_WIZARD_DRAFT,
@@ -773,17 +838,16 @@ async def wizard_deploy_stream(
 
     async def event_gen():
         yield f"data: {json.dumps({'type': 'meta', 'cmd': cmd, 'action': action})}\n\n"
-        async for ev in run_command(
-            cmd,
-            actor.username,
-            socket_path=settings.privhelper_socket,
-            args=stream_args,
+        async for chunk in sse_with_heartbeat(
+            run_command(
+                cmd,
+                actor.username,
+                socket_path=settings.privhelper_socket,
+                args=stream_args,
+            ),
+            is_disconnected=request.is_disconnected,
         ):
-            # Drop the SSE feed when the browser is gone. privhelperd keeps the
-            # privileged job running and last-log remains the catch-up path.
-            if await request.is_disconnected():
-                break
-            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            yield chunk
 
     return StreamingResponse(
         event_gen(),
