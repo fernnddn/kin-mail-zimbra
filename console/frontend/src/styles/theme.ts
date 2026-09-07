@@ -93,7 +93,7 @@ export const theme = {
    * raised paper, and is still the same ochre to look at. A warning nobody
    * can read is worse than a hue that is a shade off the swatch. */
   warn: "#8A5E0B",
-  warnSoft: "rgba(148, 101, 12, 0.12)",
+  warnSoft: "rgba(138, 94, 11, 0.12)",
   ok: "#2F6F4E",
   okSoft: "rgba(47, 111, 78, 0.10)",
 
