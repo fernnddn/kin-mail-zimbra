@@ -611,13 +611,23 @@ def resolve_cluster_vip(
     return vip
 
 
-def _write_work_files(inventory_text: str) -> Path:
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(WORK_DIR, 0o700)
-    local_tmp = WORK_DIR / ".ansible" / "tmp"
+def _write_work_files(inventory_text: str, work_dir: Path | None = None) -> Path:
+    """Write inventory.yml and ansible.cfg for one run and return the directory.
+
+    `work_dir` exists because the default is SHARED. Build HA pair writes the
+    inventory once and then runs roughly fifteen playbooks against that one
+    file, so anything else writing it mid-pipeline silently changes the host
+    set the rest of the build targets. The HA pipeline takes no maintenance
+    lock, so a second caller cannot be excluded by locking alone: it has to
+    write somewhere else.
+    """
+    target = work_dir or WORK_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    os.chmod(target, 0o700)
+    local_tmp = target / ".ansible" / "tmp"
     local_tmp.mkdir(parents=True, exist_ok=True)
-    inv = WORK_DIR / "inventory.yml"
-    cfg = WORK_DIR / "ansible.cfg"
+    inv = target / "inventory.yml"
+    cfg = target / "ansible.cfg"
     inv.write_text(inventory_text, encoding="utf-8")
     cfg.write_text(
         render_ansible_cfg(local_tmp=local_tmp, roles_path=ANSIBLE_DIR / "roles"),
@@ -627,7 +637,7 @@ def _write_work_files(inventory_text: str) -> Path:
     os.chmod(cfg, 0o600)
     if "ansible_password:" in inventory_text and "lookup" not in inventory_text:
         raise RuntimeError("refusing to write an inventory that embeds ansible_password")
-    return WORK_DIR
+    return target
 
 
 async def _stream_redacted(

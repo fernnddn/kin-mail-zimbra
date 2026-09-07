@@ -16,6 +16,7 @@ to run on a healthy HA pair to repair a soft-failed `mail_monitoring` step.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -23,6 +24,13 @@ from typing import Any, AsyncIterator
 from . import protocol as proto
 
 PLAYBOOK = "playbooks/mail-monitoring.yml"
+# Never the shared orchestration directory. See the comment in the command.
+MONITORING_WORK_DIR = Path(
+    os.environ.get(
+        "KIN_MONITORING_WORK_DIR",
+        "/var/lib/kin-mail-privhelper/monitoring",
+    )
+)
 # Same shape as an inventory hostname elsewhere in the tree: a DNS label or
 # FQDN, nothing that could carry shell or YAML meaning.
 HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
@@ -65,10 +73,13 @@ async def cmd_install_monitoring(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run mail-monitoring.yml against this node and stream the output."""
     from .deploy_state import DEPLOY_LAST_LOG
-    from .maintenance import this_hostname
+    from .maintenance import (
+        release_maintenance_lock,
+        this_hostname,
+        try_lock_maintenance,
+    )
     from .orchestration import (
         ANSIBLE_DIR,
-        WORK_DIR,
         _ansible_bin,
         _playbook_path,
         _stream_redacted,
@@ -79,20 +90,39 @@ async def cmd_install_monitoring(
     args = args or {}
     check_only = bool(args.get("check"))
 
+    # Two separate guards, because neither is sufficient alone.
+    #
+    # The lock stops this overlapping Add/Remove Host and Add/Remove
+    # Observability, which all take it. Build HA pair takes NO lock, so the
+    # lock cannot stop that one; the private work directory does. Build HA pair
+    # writes its inventory once and runs roughly fifteen playbooks against that
+    # file, so writing the shared inventory.yml here mid-build would silently
+    # repoint the rest of the build at this node alone.
+    lock_fh = try_lock_maintenance()
+    if lock_fh is None:
+        yield proto.event_stderr(
+            "Refusing: another cluster operation is already running. Metrics "
+            "are additive and can wait; try again when it finishes.\n"
+        )
+        yield proto.event_done(1)
+        return
+
     hostname = this_hostname()
     try:
         inventory = local_inventory(hostname)
     except ValueError as exc:
+        release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc} (hostname={hostname!r})\n")
         yield proto.event_done(2)
         return
 
     yield await _emit(f"=== install monitoring on {hostname} ===")
     try:
-        work = _write_work_files(inventory)
+        work = _write_work_files(inventory, MONITORING_WORK_DIR)
         playbook = _playbook_path(PLAYBOOK)
         binary = _ansible_bin()
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc}\n")
         yield proto.event_done(2)
         return
@@ -101,7 +131,7 @@ async def cmd_install_monitoring(
     if check_only:
         argv.append("--check")
     env = {
-        "HOME": str(WORK_DIR),
+        "HOME": str(MONITORING_WORK_DIR),
         "ANSIBLE_CONFIG": str(work / "ansible.cfg"),
         "ANSIBLE_HOST_KEY_CHECKING": "False",
         "KIN_MAIL_DEPLOY_DIR": kin_mail_deploy_dir(),
@@ -109,17 +139,24 @@ async def cmd_install_monitoring(
     yield await _emit(f"ansible-playbook {PLAYBOOK}" + (" --check" if check_only else ""))
 
     exit_code = 1
-    async for ev in _stream_redacted(
-        argv,
-        cwd=ANSIBLE_DIR,
-        extra_env=env,
-        secrets=[],
-        transcript=Path(DEPLOY_LAST_LOG),
-    ):
-        if ev.get("type") == "done":
-            exit_code = int(ev.get("exit_code") if ev.get("exit_code") is not None else 1)
-        else:
-            yield ev
+    try:
+        async for ev in _stream_redacted(
+            argv,
+            cwd=ANSIBLE_DIR,
+            extra_env=env,
+            secrets=[],
+            transcript=Path(DEPLOY_LAST_LOG),
+        ):
+            if ev.get("type") == "done":
+                exit_code = int(
+                    ev.get("exit_code") if ev.get("exit_code") is not None else 1
+                )
+            else:
+                yield ev
+    finally:
+        # BaseException too: closing the browser tab throws GeneratorExit in
+        # here, and a lock left held would block every later cluster operation.
+        release_maintenance_lock(lock_fh)
 
     if exit_code == 0:
         yield await _emit(
