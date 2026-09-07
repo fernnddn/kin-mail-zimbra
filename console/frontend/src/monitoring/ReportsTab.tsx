@@ -525,11 +525,12 @@ export function ReportsTab() {
               <Empty>
                 No mail figures for this period.
                 <br />
-                On an appliance deployed before mail reporting existed, the
-                collector that produces these numbers is installed by re-running
-                the monitoring step of the deploy; figures start from the day it
-                first runs, not before. On a recent appliance there is simply
-                nothing further back to show yet.
+                These numbers come from the mail flow collector. If this
+                appliance has never collected metrics, add them with Install
+                monitoring on the Monitoring tab; figures start from the moment
+                it runs and nothing earlier is back-filled. On an appliance that
+                is already collecting, there is simply nothing further back to
+                show yet.
               </Empty>
             )}
           </Panel>

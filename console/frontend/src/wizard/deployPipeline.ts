@@ -1,3 +1,5 @@
+import { stripAnsi } from "./ansi";
+
 /**
  * Full-install stages in the same order as install/kin-mail.sh run_full_install().
  * Conditional skips (07 / 11) still count toward the planned Primary pipeline total.
@@ -117,6 +119,20 @@ export function shouldOfferHaPair(opts: {
   return opts.topology === "2vm" && opts.fullInstallComplete;
 }
 
+/** True when the transcript has entered this full-install stage. */
+export function logShowsFullInstallStage(log: string, script: string): boolean {
+  const plain = stripAnsi(log);
+  // Historic: `Running 01-preflight.sh` / `Running 09-hardening.sh (--os-only)`.
+  // Current run_stage (kin-mail.sh): `==> 01-preflight.sh` after ANSI strip.
+  // Matching the raw buffer without stripAnsi misses the heading: say() puts
+  // colour codes between `==>` and the script name, so Step 0/10 froze while
+  // the log tab was already in 03-install-zimbra.
+  return (
+    plain.includes(`Running ${script}`) ||
+    plain.includes(`==> ${script}`)
+  );
+}
+
 /** Derive install progress from streamed kin-mail.sh output. */
 export function parseInstallProgress(log: string): InstallProgress {
   if (isHaOrchestrationLog(log)) {
@@ -130,8 +146,7 @@ export function parseInstallProgress(log: string): InstallProgress {
 
   for (let i = 0; i < FULL_INSTALL_STAGES.length; i++) {
     const stage = FULL_INSTALL_STAGES[i];
-    // run_stage prints: Running 01-preflight.sh   or  Running 09-hardening.sh (--os-only)
-    if (log.includes(`Running ${stage.script}`)) {
+    if (logShowsFullInstallStage(log, stage.script)) {
       current = i + 1;
       label = stage.label;
       script = stage.script;

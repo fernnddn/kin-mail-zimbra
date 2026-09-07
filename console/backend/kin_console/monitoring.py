@@ -320,10 +320,13 @@ def _get(path: str, params: dict[str, str]) -> dict[str, Any]:
         except (ValueError, AttributeError):
             raise MonitoringError(f"Prometheus HTTP {exc.code}") from exc
     except (urllib.error.URLError, OSError) as exc:
+        # Do not say "re-run the deploy": a live appliance refuses that
+        # outright ("mail is already installed"), so it sent the operator down
+        # a dead end. Install monitoring is its own action on this tab.
         raise MonitoringError(
-            "Prometheus is not answering on 127.0.0.1:9090. Metrics are "
-            "collected by the kin-mail monitoring stack; re-run the deploy if "
-            "it was never installed."
+            "Prometheus is not answering on 127.0.0.1:9090, so this appliance "
+            "is not collecting metrics yet. Use Install monitoring on this tab "
+            "to add it; mail is unaffected either way."
         ) from exc
     try:
         return json.loads(raw.decode("utf-8", "replace"))

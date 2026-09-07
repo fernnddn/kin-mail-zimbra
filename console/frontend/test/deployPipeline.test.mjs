@@ -26,7 +26,9 @@ execFileSync(
    `--outfile=${bundle}`, "--log-level=error"],
   { stdio: "inherit" },
 );
-const { parseHaOrchProgress } = await import(pathToFileURL(bundle).href);
+const { parseHaOrchProgress, parseInstallProgress } = await import(
+  pathToFileURL(bundle).href
+);
 rmSync(out, { recursive: true, force: true });
 
 let pass = 0;
@@ -81,6 +83,35 @@ chk("a bare FINISH line parses on its own", [r.current, r.total, r.script], [3, 
 
 r = parseHaOrchProgress("");
 chk("empty log is not complete and not failed", [r.current, r.complete, r.failed], [0, false, false]);
+
+// Full-install bar: run_stage used to print "Running 01-preflight.sh". It now
+// prints `==> 01-preflight.sh` (with colour codes in the live SSE buffer).
+let p = parseInstallProgress(
+  "==> Console full install (KIN_CONSOLE_CONFIRMED=1)\n==> Full install\n",
+);
+chk("console heading alone stays at preparing 0/10", [p.current, p.label], [0, "Preparing..."]);
+
+p = parseInstallProgress("Running 01-preflight.sh\nRunning 02-prepare-os.sh\n");
+chk("historic Running lines still advance", [p.current, p.script], [2, "02-prepare-os.sh"]);
+
+p = parseInstallProgress(
+  "==> Console full install\n==> 01-preflight.sh\n==> 02-prepare-os.sh\n==> 03-install-zimbra.sh\n",
+);
+chk("current ==> headings advance to install mail software", [p.current, p.total, p.label], [
+  3,
+  10,
+  "Install mail software",
+]);
+
+p = parseInstallProgress(
+  "\u001b[36m==>\u001b[0m \u001b[1m01-preflight.sh\u001b[0m\n" +
+    "\u001b[36m==>\u001b[0m \u001b[1m02-prepare-os.sh\u001b[0m\n" +
+    "\u001b[36m==>\u001b[0m \u001b[1m03-install-zimbra.sh\u001b[0m\n",
+);
+chk("ANSI between ==> and the script name still counts", [p.current, p.label], [
+  3,
+  "Install mail software",
+]);
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

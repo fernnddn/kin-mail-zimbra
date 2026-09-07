@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { theme } from "../styles/theme";
-import { Button, Hint, Skeleton, SkeletonCard, WarnBox } from "../ui";
+import { Button, Hint, LogPane, Skeleton, SkeletonCard, WarnBox } from "../ui";
 import {
   areaPath,
   formatBytes,
@@ -297,6 +297,24 @@ const Axis = styled.div`
   position: relative;
   height: 1rem;
   margin-top: 0.2rem;
+`;
+
+/* The install action sits inside the warning that explains why it is there,
+   so the button and its consequences read as one thing. */
+const InstallRow = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+
+  span {
+    flex: 1 1 22rem;
+    min-width: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: ${theme.surface[600]};
+  }
 `;
 
 const Tick = styled.span<{ $at: number }>`
@@ -644,6 +662,12 @@ export function MonitoringTab() {
   const [host, setHost] = useState<HostFacts | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Installing the metrics stack from here. A single-server appliance never
+  // got it during deploy before 7 Sep 2026, and there was no way to add it
+  // afterwards without a full redeploy the appliance refuses to run.
+  const [installing, setInstalling] = useState(false);
+  const [installLog, setInstallLog] = useState("");
+  const [installDone, setInstallDone] = useState<"" | "ok" | "failed">("");
   const [unavailable, setUnavailable] = useState(false);
   const alive = useRef(true);
 
@@ -700,8 +724,9 @@ export function MonitoringTab() {
       setUnavailable(good.length === 0);
       if (good.length === 0) {
         setError(
-          "Metrics are not available on this node yet. They are collected by the " +
-            "built-in monitoring stack, which is installed as part of the deploy.",
+          "This appliance is not collecting metrics yet. Install monitoring " +
+            "below adds Prometheus and the mail flow collector on this node. " +
+            "Figures start from the moment it runs; nothing is back-filled.",
         );
       }
     } catch (err: unknown) {
@@ -709,6 +734,47 @@ export function MonitoringTab() {
     } finally {
       if (alive.current) setLoading(false);
     }
+  }, []);
+
+  /* Streams the same privhelper command Build HA pair runs as its metrics
+     step, against this node only. Additive: it installs packages and writes
+     loopback config, and touches no cluster or mail state. */
+  const installMonitoring = useCallback(() => {
+    setInstalling(true);
+    setInstallDone("");
+    setInstallLog("");
+    const es = new EventSource("/api/wizard/deploy/stream?action=install_monitoring");
+    let code: number | null = null;
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as {
+          type?: string;
+          data?: string;
+          exit_code?: number;
+          message?: string;
+        };
+        if ((data.type === "stdout" || data.type === "stderr") && data.data) {
+          setInstallLog((prev) => (prev + data.data).slice(-8000));
+        } else if (data.type === "error") {
+          setInstallLog((prev) => prev + `[error] ${data.message || ""}\n`);
+        } else if (data.type === "done") {
+          code = typeof data.exit_code === "number" ? data.exit_code : 1;
+          es.close();
+          setInstalling(false);
+          setInstallDone(code === 0 ? "ok" : "failed");
+        }
+      } catch {
+        /* ignore malformed SSE */
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      setInstalling(false);
+      if (code === null) {
+        setInstallDone("failed");
+        setInstallLog((prev) => prev + "Lost connection to the install stream.\n");
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -779,7 +845,48 @@ export function MonitoringTab() {
         </ExportSlot>
       </Bar>
 
-      {error ? <WarnBox>{error}</WarnBox> : null}
+      {error ? (
+        <WarnBox>
+          {error}
+          {unavailable ? (
+            <InstallRow>
+              <Button
+                type="button"
+                variant="primary"
+                loading={installing}
+                disabled={installing}
+                onClick={installMonitoring}
+              >
+                Install monitoring
+              </Button>
+              <span>
+                Adds Prometheus, node_exporter and the mail flow collector on
+                this node. All three listen on loopback only and are read
+                through this console, so nothing new is exposed. Mail keeps
+                running throughout.
+              </span>
+            </InstallRow>
+          ) : null}
+        </WarnBox>
+      ) : null}
+
+      {installLog ? (
+        <>
+          <LogPane>{installLog}</LogPane>
+          {installDone === "ok" ? (
+            <Hint>
+              Monitoring installed. Charts fill in as samples arrive, so give it
+              a minute and then reload this tab.
+            </Hint>
+          ) : null}
+          {installDone === "failed" ? (
+            <Hint>
+              The install did not finish. Mail is unaffected. The output above is
+              the whole run.
+            </Hint>
+          ) : null}
+        </>
+      ) : null}
 
       {host ? <HostPanel host={host} /> : null}
 

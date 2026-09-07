@@ -673,6 +673,9 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     if shutil.which("stdbuf"):
         argv = ["stdbuf", "-oL", "-eL", *argv]
     mark_full_install_started()
+    # Held back until the additive metrics tail below has run, so the console
+    # does not call the deploy finished and then keep streaming.
+    install_exit = 1
     try:
         async for ev in _stream_subprocess(
             argv,
@@ -683,6 +686,10 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
             follow_logs=[ZIMBRA_INSTALL_LOG],
             file_backed=True,
         ):
+            if ev.get("type") == "done":
+                raw = ev.get("exit_code")
+                install_exit = 1 if raw is None else int(raw)
+                continue
             yield ev
     finally:
         if full_install_in_progress():
@@ -692,6 +699,27 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
         else:
             append_unexpected_stop_if_needed()
             mark_full_install_finished()
+
+    # Metrics are what fill the Monitoring and Reports tabs. Build HA pair
+    # installs them as its own step; a single-server appliance had nothing that
+    # ever did, so both tabs stayed empty for the life of the box (live QA,
+    # 7 Sep 2026). Additive and last, on the same trade as the HA step: a
+    # package hiccup here reports loudly and must never turn a working deploy
+    # into a failed one.
+    if install_exit == 0:
+        try:
+            from .monitoring_install import cmd_install_monitoring as _install_metrics
+
+            async for ev in _install_metrics({}):
+                if ev.get("type") == "done":
+                    continue
+                yield ev
+        except Exception as exc:  # noqa: BLE001 - never fail a good deploy
+            yield proto.event_stderr(
+                f"Monitoring install could not run: {exc}. Mail is unaffected; "
+                "install it later from the Monitoring tab.\n"
+            )
+    yield proto.event_done(install_exit)
 
 
 async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
@@ -915,6 +943,15 @@ async def cmd_add_observability(
     args: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     from .observability_ops import cmd_add_observability as _run
+
+    async for ev in _run(args):
+        yield ev
+
+
+async def cmd_install_monitoring(
+    args: dict[str, Any] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    from .monitoring_install import cmd_install_monitoring as _run
 
     async for ev in _run(args):
         yield ev
@@ -1150,6 +1187,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_APPLY_WIZARD_DRAFT: _adapt(cmd_apply_wizard_draft),
     proto.CMD_RUN_HARDENING: _adapt(cmd_run_hardening),
     proto.CMD_RUN_FULL_INSTALL: _adapt(cmd_run_full_install),
+    proto.CMD_INSTALL_MONITORING: _adapt(cmd_install_monitoring),
     proto.CMD_CANCEL_FIREWALL_DEADMAN: _adapt(cmd_cancel_firewall_deadman),
     proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
     proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),

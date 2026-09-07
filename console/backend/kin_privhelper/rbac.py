@@ -36,6 +36,7 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "remove_observability",
         "add_observability",
         "store_observability_secrets",
+        "install_monitoring",
     }
 )
 

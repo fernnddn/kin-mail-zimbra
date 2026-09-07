@@ -28,9 +28,27 @@ KillMode=process
 # Prefer to OOM-kill something else before the install tree.
 OOMScoreAdjust=-500
 
-# Network isolation - this service must never listen on a TCP/UDP port.
-# (It binds a Unix socket under /run/kin-mail only.)
-PrivateTmp=true
+# PrivateTmp is deliberately OFF, and must stay off.
+#
+# It does two things this daemon cannot survive. First, it gives the unit its
+# own MOUNT NAMESPACE: a snapshot of the mount table taken when the unit
+# started. privhelperd runs the DRBD failover path, and a mount surviving in
+# another namespace keeps the backing device open while findmnt, fuser and
+# /proc/*/fd all read clean, so `drbdadm secondary` cannot release it. That is
+# the exact fault that blocked this product's failover for days.
+#
+# Second, the full install is a CHILD of this unit and KillMode=process keeps
+# it alive across a restart. 02-prepare-os.sh upgrades the base image, which
+# usually includes systemd; the daemon-reexec that follows tears down the
+# private tmpfs while the installer is still running inside it. apt then dies
+# with `mkstemp /tmp/...: No such file or directory` and `getcwd() failed`,
+# and the deploy stops in prepare-os looking like a DNS or mirror fault. Live,
+# 7 Sep 2026; the operator had to recreate /tmp by hand to get past it.
+#
+# The old comment here claimed PrivateTmp gave "network isolation". It does
+# not: it is a filesystem namespace and has no bearing on sockets. The daemon
+# listens on a Unix socket under /run/kin-mail and nothing here changes that.
+PrivateTmp=false
 ProtectHome=true
 # Ansible (HA orchestration) must not write under /root - ProtectHome makes it RO.
 # Do not bind /root/.ssh: maintenance preflight does not use inter-node SSH keys.

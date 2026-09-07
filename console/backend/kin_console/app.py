@@ -451,6 +451,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "remove_observability": proto.CMD_REMOVE_OBSERVABILITY,
     "add_observability": proto.CMD_ADD_OBSERVABILITY,
     "appliance_settings": proto.CMD_APPLY_APPLIANCE_SETTINGS,
+    "install_monitoring": proto.CMD_INSTALL_MONITORING,
 }
 
 
