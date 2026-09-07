@@ -147,3 +147,26 @@
   roles:
     - role: drbd_live_join
       tags: [addhost, livejoin]
+
+# -----------------------------------------------------------------------------
+# 5) NEW NODE - built-in metrics
+# -----------------------------------------------------------------------------
+# Last, and deliberately after the cluster work. Without this the replacement
+# node has no Prometheus, no node_exporter and no mail flow collector, so the
+# Monitoring and Reports tabs go blank the first time the VIP lands on it and
+# the operator sees monitoring "disappear" on a failover. Additive: it installs
+# packages and writes loopback config, and touches no cluster state.
+- name: Install built-in monitoring on the new node
+  hosts: mail_new_node
+  gather_facts: true
+  become: true
+  # apt-daily and unattended-upgrades hold the dpkg lock for minutes after a
+  # cloud image boots. The apt module's default is to wait 60s and then fail,
+  # which stops a deployment on a lock that clears itself. Applied per play so
+  # every role's package task inherits it without each one repeating it.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
+  roles:
+    - role: monitoring_stack
+      tags: [addhost, monitoring]
