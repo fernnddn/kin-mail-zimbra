@@ -70,13 +70,20 @@
 - name: Refuse to disarm while a mail node is already offline
   ansible.builtin.assert:
     that:
+      # Read it first, then judge it. An unreadable `pcs status` used to pass
+      # this check vacuously, which is the one direction a safety gate must
+      # never fail in.
+      - observability_pre_status.rc | default(1) == 0
+      - (observability_pre_status.stdout | default('')) | length > 0
       - >-
         'OFFLINE' not in
         (observability_pre_status.stdout | default('') | upper)
     fail_msg: >-
-      Refusing to disarm SBD: a mail node is already offline, so there is no
-      spare node to lose. Bring both nodes online first, then Remove
-      Observability. Mail is unaffected by waiting; the witness is already gone
-      and fencing is already unusable.
+      Refusing to disarm SBD: could not confirm both mail nodes are online.
+      Stopping sbd can reset a node, so there has to be a healthy one to carry
+      mail. Bring both nodes online, confirm `pcs status` reads cleanly, then
+      Remove Observability again. Mail is unaffected by waiting; the witness is
+      already gone and fencing is already unusable either way.
+      Seen rc={{ observability_pre_status.rc | default('none') }}.
   when: not ansible_check_mode
   tags: [observability, disarm, preflight]

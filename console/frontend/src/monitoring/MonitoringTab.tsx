@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { api } from "../api";
+import { isOpsRole, useAuth } from "../auth";
 import { theme } from "../styles/theme";
 import { Button, Hint, LogPane, Skeleton, SkeletonCard, WarnBox } from "../ui";
 import {
@@ -661,6 +662,14 @@ export function MonitoringTab() {
   const [charts, setCharts] = useState<SeriesResp[]>([]);
   const [host, setHost] = useState<HostFacts | null>(null);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  // Install is a privhelper command gated to the ops roles. Showing the button
+  // to a Customer Admin would only earn them a 403 from the stream.
+  const canInstall = isOpsRole(user?.role);
+  // The loader is a useCallback with no deps, so it cannot close over `user`
+  // without going stale on the first sign-in.
+  const userRef = useRef(user);
+  userRef.current = user;
   const [error, setError] = useState("");
   // Installing the metrics stack from here. A single-server appliance never
   // got it during deploy before 7 Sep 2026, and there was no way to add it
@@ -724,9 +733,12 @@ export function MonitoringTab() {
       setUnavailable(good.length === 0);
       if (good.length === 0) {
         setError(
-          "This appliance is not collecting metrics yet. Install monitoring " +
-            "below adds Prometheus and the mail flow collector on this node. " +
-            "Figures start from the moment it runs; nothing is back-filled.",
+          isOpsRole(userRef.current?.role)
+            ? "This appliance is not collecting metrics yet. Install monitoring " +
+              "below adds Prometheus and the mail flow collector on this node. " +
+              "Figures start from the moment it runs; nothing is back-filled."
+            : "This appliance is not collecting metrics yet. Ask KIN Support-Ops " +
+              "or a KIN Super Admin to add monitoring from this tab.",
         );
       }
     } catch (err: unknown) {
@@ -848,7 +860,7 @@ export function MonitoringTab() {
       {error ? (
         <WarnBox>
           {error}
-          {unavailable ? (
+          {unavailable && canInstall ? (
             <InstallRow>
               <Button
                 type="button"
