@@ -117,7 +117,8 @@ export const GateAsideFoot = styled.p`
   margin: 0;
   font-size: 0.74rem;
   line-height: 1.5;
-  color: rgba(244, 241, 234, 0.45);
+  /* 0.45 measures 3.81 on the charcoal panel, and this is still text. */
+  color: rgba(244, 241, 234, 0.6);
 
   @media (max-width: 860px) {
     display: none;
@@ -317,7 +318,9 @@ const PasswordToggle = styled.button`
   transform: translateY(-50%);
   border: 0;
   background: transparent;
-  color: ${theme.surface[400]};
+  /* Show/hide is an icon-only control, so the glyph itself carries the
+     meaning and owes 3:1. */
+  color: ${theme.muted};
   cursor: pointer;
   width: 2.1rem;
   height: 2.1rem;

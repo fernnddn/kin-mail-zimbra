@@ -304,7 +304,9 @@ const Tick = styled.span<{ $at: number }>`
   left: ${(p) => p.$at * 100}%;
   transform: translateX(${(p) => (p.$at === 0 ? "0" : p.$at === 1 ? "-100%" : "-50%")});
   font-size: 0.68rem;
-  color: ${theme.surface[400]};
+  /* Axis times are read, not decoration. surface[400] measures 2.82 on a
+     card and misses AA for text this small. */
+  color: ${theme.muted};
   white-space: nowrap;
 `;
 
@@ -535,7 +537,6 @@ function Chart({ data }: { data: SeriesResp }) {
           <svg
             viewBox={`0 0 ${W} ${H}`}
             width="100%"
-            height="auto"
             preserveAspectRatio="none"
             role="img"
             aria-label={`${data.label} over the last ${RANGE_LABELS[data.range] || data.range}`}

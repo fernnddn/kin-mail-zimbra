@@ -175,8 +175,10 @@ const HealthDot = styled.span<{ $ok: boolean }>`
   flex-shrink: 0;
 `;
 
+/* The only affordance saying this row opens, so it owes 3:1 as a non-text
+   control. It measured 2.61. */
 const HealthCaret = styled.span`
-  color: ${theme.surface[400]};
+  color: ${theme.muted};
   font-weight: 500;
   font-size: 0.75rem;
 `;

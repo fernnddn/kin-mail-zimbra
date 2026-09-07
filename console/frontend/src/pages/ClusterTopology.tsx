@@ -247,7 +247,7 @@ export function ClusterTopology({
           <Caption>Single mail server. Add a second server when you are ready for HA.</Caption>
         </Head>
         <SvgWrap>
-          <svg viewBox="0 0 760 172" width="100%" height="auto" role="img">
+          <svg viewBox="0 0 760 172" width="100%" role="img">
             <title>Single-server topology</title>
             <defs>
               <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
@@ -310,7 +310,7 @@ export function ClusterTopology({
         <Caption>DRBD between mail nodes. qdevice and SBD through Observability.</Caption>
       </Head>
       <SvgWrap>
-        <svg viewBox="0 0 760 344" width="100%" height="auto" role="img">
+        <svg viewBox="0 0 760 344" width="100%" role="img">
           <title>Cluster topology</title>
           <defs>
             <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">

@@ -95,7 +95,8 @@ const Meta = styled.p<{ $danger?: boolean }>`
 
 const When = styled.span`
   font-size: 0.75rem;
-  color: ${theme.surface[400]};
+  /* When something happened is content, so it has to clear AA. */
+  color: ${theme.muted};
   white-space: nowrap;
   flex-shrink: 0;
 `;
