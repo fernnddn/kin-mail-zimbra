@@ -147,7 +147,7 @@ function NodeGlyph({
         y={top}
         width={CARD_W}
         height={height}
-        rx={12}
+        rx={3}
         fill={fill}
         stroke={stroke}
         strokeWidth={placeholder ? 1.25 : 1.6}
@@ -177,8 +177,8 @@ function NodeGlyph({
             y={top + height - 28}
             width={Math.min(CARD_W - 2 * (textX - left) + 12, badge.length * 5.6 + 14)}
             height={17}
-            rx={8.5}
-            fill={floating ? "rgba(0, 97, 255, 0.10)" : theme.surface[100]}
+            rx={2}
+            fill={floating ? theme.accentSoft : theme.surface[100]}
           />
           <text
             x={textX}
@@ -251,7 +251,7 @@ export function ClusterTopology({
             <title>Single-server topology</title>
             <defs>
               <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(15,23,42,0.12)" />
+                <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(26, 25, 22, 0.10)" />
               </filter>
             </defs>
             <NodeGlyph
@@ -314,7 +314,7 @@ export function ClusterTopology({
           <title>Cluster topology</title>
           <defs>
             <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(15,23,42,0.12)" />
+              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(26, 25, 22, 0.10)" />
             </filter>
           </defs>
 

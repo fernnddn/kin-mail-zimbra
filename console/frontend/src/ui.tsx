@@ -154,17 +154,32 @@ export const Brand = styled.p`
   margin: 0 0 0.35rem;
 `;
 
-const LockupImg = styled.img<{ $compact?: boolean; $light?: boolean }>`
+const LockupImg = styled.img<{ $compact?: boolean }>`
   display: block;
   height: ${(p) => (p.$compact ? "2.4rem" : "4.1rem")};
   width: auto;
   max-width: ${(p) => (p.$compact ? "11rem" : "16.5rem")};
   object-fit: contain;
   object-position: left center;
-  /* The lockup is black artwork on transparent. On charcoal it is inverted
-     rather than swapped for a drawn shape, so the real mark is always what
-     ships: there is only one lockup file and it stays the source of truth. */
-  ${(p) => (p.$light ? "filter: invert(1) brightness(1.6);" : "")}
+`;
+
+/* The mark on a dark surface.
+ *
+ * It used to be `filter: invert(1) brightness(1.6)`, which is only safe on
+ * artwork that is uniformly dark. This lockup is not: it is a black shield
+ * holding a WHITE envelope and a RED dot. Inverting it produced a white blob
+ * with a black envelope and a CYAN dot, which is the wrong brand colour on the
+ * first screen anyone sees.
+ *
+ * So the artwork is never touched. It sits on a small paper plate instead,
+ * which keeps the real shield, the real envelope and the real red dot on any
+ * background and does not depend on how a browser chains filters. */
+const LockupPlate = styled.span`
+  display: inline-flex;
+  align-items: center;
+  background: ${theme.paper};
+  border-radius: ${theme.radius.sm};
+  padding: 0.3rem 0.55rem;
 `;
 
 const CompactLockup = styled.span`
@@ -181,11 +196,10 @@ export function BrandLockup({
   alt = "KIN Mail",
   ...rest
 }: { compact?: boolean; light?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
-  const img = (
-    <LockupImg src={kinMailLogo} alt={alt} $compact={compact} $light={light} {...rest} />
-  );
-  if (compact) return <CompactLockup>{img}</CompactLockup>;
-  return img;
+  const img = <LockupImg src={kinMailLogo} alt={alt} $compact={compact} {...rest} />;
+  const inner = compact ? <CompactLockup>{img}</CompactLockup> : img;
+  if (light) return <LockupPlate>{inner}</LockupPlate>;
+  return inner;
 }
 
 export const Title = styled.h1`
