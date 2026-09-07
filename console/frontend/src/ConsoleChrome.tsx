@@ -22,9 +22,13 @@ const Frame = styled.div`
   grid-template-columns: 232px minmax(0, 1fr);
 
   /* Below this the rail becomes a band across the top rather than a column.
-     Nothing is hidden, it just stops being a sidebar. */
+     Nothing is hidden, it just stops being a sidebar. The rows must be sized
+     explicitly: a single-column grid still stretches its rows over the 100vh
+     min-height, which inflates the rail band to half the screen before the
+     page itself starts. */
   @media (max-width: 860px) {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 `;
 
@@ -89,6 +93,7 @@ const RailNav = styled.nav`
     display: flex;
     flex-wrap: wrap;
     padding: 0.25rem 0;
+    flex: 0 0 auto;
   }
 `;
 
