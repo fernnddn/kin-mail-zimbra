@@ -781,7 +781,15 @@ const GaugeWrap = styled.div<{ $pulse?: boolean }>`
   width: 80px;
   height: 80px;
   flex-shrink: 0;
-  animation: ${(p) => (p.$pulse ? gaugePulse : "none")} 2.4s ease-in-out infinite;
+  /* Bounded on purpose. Every other animation in the console marks something
+     HAPPENING and stops when it stops; this one marked a STATE, so a cluster
+     that needed attention pulsed for as long as it took the operator to fix
+     it, which on this page can be hours. A permanent animation stops reading
+     as a signal and starts reading as a fault in the console itself. It draws
+     the eye on arrival and then settles; the tone colour and the wording carry
+     the state from there. */
+  animation: ${(p) => (p.$pulse ? gaugePulse : "none")} 2.4s ease-in-out 3;
+  animation-fill-mode: forwards;
 `;
 
 const GaugeSvg = styled.svg`
@@ -1354,13 +1362,19 @@ export default function ClusterPage() {
     };
   }, [refresh]);
 
+  /* Polling only runs on the Status tab, and every long operation switches to
+     the Activity log, so coming back to Status showed whatever the cluster
+     looked like before the run until the next tick happened to land. Refresh
+     on arrival, then keep polling. */
   useEffect(() => {
     if (tab !== "status") return;
-    const id = window.setInterval(() => {
+    const tick = () => {
       if (typeof document !== "undefined" && document.hidden) return;
       if (esRef.current || busyRef.current || refreshInFlightRef.current) return;
       void refresh().catch(() => undefined);
-    }, 12000);
+    };
+    tick();
+    const id = window.setInterval(tick, 12000);
     return () => window.clearInterval(id);
   }, [tab, refresh]);
 
@@ -1489,6 +1503,8 @@ export default function ClusterPage() {
         setLiveStep("");
         setMessage("Lost connection to the maintenance stream. The last output is on the Activity log tab.");
         endTaskWith(taskId, "failed", "lost connection to the stream");
+        // The run may well have finished on the node; show what is true now.
+        void refresh();
       }
     };
   }
@@ -1589,6 +1605,7 @@ export default function ClusterPage() {
         esRef.current = null;
         setBusy(false);
         setMessage("Lost connection to the remove-host stream.");
+        void refresh();
       }
     };
   }
@@ -1692,6 +1709,7 @@ export default function ClusterPage() {
             "finished, and if not it is safe to run Remove Observability " +
             "again once both nodes are back online.",
         );
+        void refresh();
       }
     };
   }
@@ -1742,6 +1760,7 @@ export default function ClusterPage() {
         esRef.current = null;
         setBusy(false);
         setMessage("Lost connection to the Add Observability stream.");
+        void refresh();
       }
     };
   }
