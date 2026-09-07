@@ -25,6 +25,7 @@ import {
   WarnBox,
 } from "../ui";
 import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
+import { stripMachineLines } from "./clusterLog";
 import { useTasks } from "../tasks/TaskProvider";
 import { MonitoringTab } from "../monitoring/MonitoringTab";
 import { ReportsTab } from "../monitoring/ReportsTab";
@@ -64,6 +65,12 @@ type ClusterSnap = {
   // is not the same as fencing being off.
   fencing_enabled?: boolean | null;
   node_ips?: Record<string, string>;
+  /** Peer recorded by a COMPLETED Remove Host. Absent if it stopped early. */
+  last_removed_peer?: { name?: string; ip?: string } | null;
+  /** True only for a live one-node HA survivor, not a fresh 1vm appliance. */
+  attach_peer_eligible?: boolean;
+  /** PEER_HOST_NAME from config: the node that should be in this pair. */
+  configured_peer?: string;
 };
 
 type StatusResp = {
@@ -177,6 +184,24 @@ const HealthDot = styled.span<{ $ok: boolean }>`
 
 /* The only affordance saying this row opens, so it owes 3:1 as a non-text
    control. It measured 2.61. */
+/* An action inside the warning that explains it: the operator was previously
+   told to press a button that no longer had a card to live on. */
+const FinishRemoveRow = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+
+  span {
+    flex: 1 1 24rem;
+    min-width: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: ${theme.surface[600]};
+  }
+`;
+
 const HealthCaret = styled.span`
   color: ${theme.muted};
   font-weight: 500;
@@ -1744,6 +1769,14 @@ export default function ClusterPage() {
   }
 
   const topology = cluster.topology === "2vm" ? "2vm" : cluster.topology === "1vm" ? "1vm" : "";
+  // Which node should be in this pair and is not. A completed Remove Host
+  // records last_removed_peer, but the half-removed state is exactly the case
+  // where it never got that far, so fall back to the configured peer.
+  const retiredPeerName = (
+    cluster.last_removed_peer?.name ||
+    cluster.configured_peer ||
+    ""
+  ).trim();
   const nodes = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers);
   const displayNodes =
     topology === "1vm"
@@ -1982,11 +2015,38 @@ export default function ClusterPage() {
               the cluster.
             </strong>{" "}
             Either Remove Host stopped before it finished, or the peer was taken
-            out by hand. Mail here is unaffected. Run <strong>Remove Host</strong>{" "}
-            once more against the retired node to finish tidying up: the cluster
-            steps are already done and safe to repeat, and it is the demote to a
-            single-server appliance that is missing. Once that completes, the
-            option to add a replacement node appears here.
+            out by hand. Mail here is unaffected. What is missing is the demote
+            to a single-server appliance; the cluster steps are already done and
+            safe to repeat. Once that completes, the option to add a replacement
+            node appears here.
+            {retiredPeerName ? (
+              <FinishRemoveRow>
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={busy || probing}
+                  onClick={() => openRemove(retiredPeerName)}
+                >
+                  Finish removing {retiredPeerName}
+                </Button>
+                <span>
+                  The retired node has no card on this page any more, so there
+                  was nothing left to press. This runs the same Remove Host
+                  against {retiredPeerName} to finish the demote.
+                </span>
+              </FinishRemoveRow>
+            ) : (
+              <>
+                {" "}
+                <strong>
+                  This console cannot name the retired node, so it cannot offer
+                  the button.
+                </strong>{" "}
+                PEER_HOST_NAME is empty in /etc/kin-mail/config. Finish the
+                demote from the peer console, or clear TOPOLOGY on this node by
+                hand.
+              </>
+            )}
           </WarnBox>
         ) : null}
         {cluster.drbd_link === "down" ? (
@@ -2221,7 +2281,7 @@ export default function ClusterPage() {
           <ReportsTab />
         ) : (
           <LogView aria-label="Maintenance log">
-            {log || "Status and transition output appears here."}
+            {stripMachineLines(log) || "Status and transition output appears here."}
           </LogView>
         )}
         {busy && liveStep ? (

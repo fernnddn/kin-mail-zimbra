@@ -1015,6 +1015,18 @@ def _config_vip_ip() -> str:
     return _config_value("CLUSTER_VIP_IP")
 
 
+def _config_peer_name() -> str:
+    """The peer this node is configured to pair with, from /etc/kin-mail/config.
+
+    Needed for the half-removed state. Remove Host records last-removed-peer
+    while DEMOTING the topology, so a run that stops before that leaves no
+    record at all, and the survivor is a lone node still calling itself a pair
+    with nothing on the page naming the node that should be there. PEER_HOST_NAME
+    survives precisely because the demote is what clears it.
+    """
+    return _config_value("PEER_HOST_NAME")
+
+
 async def _observability_snapshot(corosync_txt: str) -> dict[str, Any]:
     from .observability_status import (
         configured_observability_identity,
@@ -1526,6 +1538,7 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "vip_node": st.get("vip_node"),
             "last_removed_peer": last_removed or None,
             "attach_peer_eligible": attach_ok,
+            "configured_peer": _config_peer_name(),
             "package_stub": bool(st.get("package_stub")),
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))
