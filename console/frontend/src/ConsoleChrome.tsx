@@ -5,7 +5,7 @@ import { api } from "./api";
 import { useAuth } from "./auth";
 import { useSetup } from "./setup";
 import { theme } from "./styles/theme";
-import { Avatar, BrandLockup, Dropdown, MenuItem } from "./ui";
+import { Avatar, BrandLockup, Dropdown, focusRingOnDark, MenuItem } from "./ui";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { useAlerts } from "./tasks/AlertProvider";
 
@@ -76,6 +76,8 @@ const RailBrand = styled.button`
   align-items: center;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+  ${focusRingOnDark}
 `;
 
 const RailNav = styled.nav`
@@ -116,6 +118,8 @@ const RailLink = styled(NavLink)`
     background: rgba(255, 255, 255, 0.06);
     font-weight: 600;
   }
+
+  ${focusRingOnDark}
 `;
 
 const RailGroup = styled.div`
@@ -150,6 +154,8 @@ const AccountButton = styled.button`
   &:hover {
     background: rgba(255, 255, 255, 0.05);
   }
+
+  ${focusRingOnDark}
 `;
 
 const AccountMeta = styled.span`

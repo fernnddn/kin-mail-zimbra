@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { theme } from "../styles/theme";
-import { Dropdown } from "../ui";
+import { Dropdown, focusRingOnDark } from "../ui";
 import { useTasks } from "./TaskProvider";
 import {
   dropdownTasks,
@@ -73,6 +73,9 @@ const IconBtn = styled.button<{
     height: 1.05rem;
     flex-shrink: 0;
   }
+
+  /* On the rail the ring has to be paper; ink on charcoal is invisible. */
+  ${(p) => (p.$rail ? focusRingOnDark : "")}
 `;
 
 const RailLabel = styled.span`

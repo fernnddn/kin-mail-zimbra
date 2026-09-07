@@ -49,8 +49,8 @@ export const theme = {
 
   /* Severity, kept for the alert and task surfaces that already use them. */
   critical: primary[500],
-  high: "#9A6B12",
-  medium: "#9A6B12",
+  high: "#94650C",
+  medium: "#94650C",
   low: "#2F6F4E",
   completed: "#2F6F4E",
   blueprint: surface[500],
@@ -83,8 +83,14 @@ export const theme = {
 
   danger: primary[500],
   dangerSoft: "rgba(180, 35, 24, 0.08)",
-  warn: "#9A6B12",
-  warnSoft: "rgba(154, 107, 18, 0.10)",
+  /* The design's ochre is #9A6B12. On paper that measures 4.15 against
+   * #F4F1EA, which fails WCAG AA for normal text, and this colour carries
+   * warning WORDS: the WarnBox emphasis, the warn status pill, the disabled
+   * account tag. Six points darker per channel reaches 4.51 on paper and 4.88
+   * on raised paper and is the same ochre to look at. A warning nobody can
+   * read is worse than a hue that is a shade off the swatch. */
+  warn: "#94650C",
+  warnSoft: "rgba(148, 101, 12, 0.12)",
   ok: "#2F6F4E",
   okSoft: "rgba(47, 111, 78, 0.10)",
 

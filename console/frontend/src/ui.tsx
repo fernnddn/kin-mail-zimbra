@@ -239,25 +239,44 @@ export const OptionalMark = styled.span`
   font-size: 0.78rem;
 `;
 
-/* One hairline of ink, drawn just outside the border. The old 3px translucent
-   glow was the last blue thing on the page and it bled over neighbouring
-   fields on a dense form. */
+/* Ink, drawn just outside the border. The old 3px translucent glow was the
+   last blue thing on the page and it bled over neighbouring fields on a dense
+   form; 2px of solid ink is unmistakable without spreading. */
 const focusRing = `
   &:focus {
     outline: none;
     border-color: ${theme.ink};
-    box-shadow: 0 0 0 1px ${theme.ink};
+    box-shadow: 0 0 0 2px ${theme.ink};
   }
   &:focus-visible {
     outline: none;
     border-color: ${theme.ink};
-    box-shadow: 0 0 0 1px ${theme.ink};
+    box-shadow: 0 0 0 2px ${theme.ink};
+  }
+`;
+
+/* The same idea on charcoal. An ink ring on the rail measures about 1.3 against
+   the rail itself, so a keyboard user would see nothing at all; on a dark
+   surface the ring has to be paper. Exported because the rail lives in
+   ConsoleChrome and the task buttons live in TaskCenter. */
+export const focusRingOnDark = `
+  &:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 2px ${theme.paper};
+  }
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px ${theme.paper};
   }
 `;
 
 export const Input = styled.input`
   width: 100%;
-  border: 1px solid ${theme.line};
+  /* surface[300], not theme.line. The line token is the decorative hairline
+     that separates sections; a field is a control the operator has to find.
+     The restyle dropped this to that hairline and left a text input visibly
+     fainter than the select sitting under it on the same form. */
+  border: 1px solid ${theme.surface[300]};
   background: ${theme.bgElev};
   color: ${theme.ink};
   border-radius: ${theme.radius.sm};
@@ -382,7 +401,7 @@ export const TextArea = styled.textarea`
   border: 1px solid ${theme.surface[300]};
   background: ${theme.bgElev};
   color: ${theme.ink};
-  border-radius: ${theme.radius.md};
+  border-radius: ${theme.radius.sm};
   padding: 0.625rem 1rem;
   font: inherit;
   font-size: 0.875rem;
@@ -401,7 +420,7 @@ export const Select = styled.select`
   border: 1px solid ${theme.surface[300]};
   background: ${theme.bgElev};
   color: ${theme.ink};
-  border-radius: ${theme.radius.md};
+  border-radius: ${theme.radius.sm};
   padding: 0.625rem 1rem;
   font: inherit;
   font-size: 0.875rem;
@@ -467,7 +486,7 @@ const ButtonRoot = styled.button<{ $variant: ButtonVariant }>`
     box-shadow: none;
     background: transparent;
     color: ${theme.surface[400]};
-    border: 1px solid ${theme.line};
+    border: 1px solid ${theme.surface[300]};
   }
 
   ${focusRing}
@@ -580,8 +599,8 @@ export const ChoiceGrid = styled.div`
    step that choice decides the whole deployment. */
 export const Choice = styled.button<{ selected?: boolean }>`
   text-align: left;
-  border: 1px solid ${(p) => (p.selected ? theme.ink : theme.line)};
-  border-left: ${(p) => (p.selected ? `3px solid ${theme.ink}` : `1px solid ${theme.line}`)};
+  border: 1px solid ${(p) => (p.selected ? theme.ink : theme.surface[300])};
+  border-left: ${(p) => (p.selected ? `3px solid ${theme.ink}` : `1px solid ${theme.surface[300]}`)};
   background: ${(p) => (p.selected ? theme.accentSoft : theme.bgElev)};
   color: ${theme.ink};
   border-radius: ${theme.radius.sm};
@@ -624,8 +643,11 @@ export const WarnBox = styled.div`
   font-size: 0.88rem;
   line-height: 1.5;
 
+  /* Ink, for the same reason the warn pill is ink: ochre over its own wash
+     does not clear AA, and the 3px ochre edge already marks this as a
+     warning. */
   strong {
-    color: ${theme.warn};
+    color: ${theme.ink};
   }
 `;
 
@@ -918,12 +940,17 @@ export type StatusTone =
 
 const TONE: Record<StatusTone, { fg: string; bg: string; border: string }> = {
   critical: { fg: theme.oxide, bg: theme.oxideSoft, border: "rgba(180, 35, 24, 0.28)" },
-  high: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
-  medium: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
+  /* Ink on the ochre tint, not ochre on the ochre tint. Ochre text over its
+   * own 12 percent wash measures 3.88 against paper, which fails AA, and these
+   * pills are small text. The tint and the border still say "warning"; the
+   * word inside just has to be readable. Every other tone clears AA on its own
+   * tint and keeps its colour. */
+  high: { fg: theme.ink, bg: theme.warnSoft, border: "rgba(148, 101, 12, 0.30)" },
+  medium: { fg: theme.ink, bg: theme.warnSoft, border: "rgba(148, 101, 12, 0.30)" },
   low: { fg: theme.ok, bg: theme.okSoft, border: "rgba(47, 111, 78, 0.26)" },
   completed: { fg: theme.ok, bg: theme.okSoft, border: "rgba(47, 111, 78, 0.26)" },
   primary: { fg: theme.ink, bg: theme.accentSoft, border: theme.surface[300] },
-  warn: { fg: theme.warn, bg: theme.warnSoft, border: "rgba(154, 107, 18, 0.28)" },
+  warn: { fg: theme.ink, bg: theme.warnSoft, border: "rgba(148, 101, 12, 0.30)" },
   neutral: { fg: theme.surface[500], bg: theme.surface[100], border: theme.surface[200] },
 };
 
