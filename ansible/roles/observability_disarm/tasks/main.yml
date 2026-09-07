@@ -2,6 +2,10 @@
 # Phase 0 after an unplanned Observability loss. Mail stays up. Do not touch
 # Zimbra, DRBD, or Pacemaker mail resources. HA-RUNBOOK.md section 7.
 
+- name: Refuse to start unless a node reset would be survivable
+  ansible.builtin.include_tasks: preflight.yml
+  tags: [observability, disarm, preflight]
+
 - name: Pause Pacemaker fencing while the shared SBD device is gone
   ansible.builtin.command:
     cmd: pcs property set stonith-enabled=false
@@ -51,6 +55,43 @@
   when: not ansible_check_mode
   tags: [observability, disarm, sbd]
 
+# Tear the dead iSCSI session down BEFORE stopping sbd, not after.
+#
+# Remove Observability only runs once the witness is confirmed gone, so this
+# session is already dead. What is left of it is a kernel session that BLOCKS
+# I/O rather than erroring it, for the whole replacement_timeout. sbd's device
+# servant sits in that blocked I/O, sbd cannot reap it to shut down, systemd
+# eventually SIGKILLs the lot, and a killed sbd never writes the magic 'V' that
+# releases the watchdog. The watchdog then fires and the node resets, which is
+# exactly what took a live appliance down on 7 Sep 2026. Logging out first
+# makes that I/O fail immediately so sbd can exit cleanly and disarm its own
+# watchdog.
+- name: Log out of the retired Observability iSCSI portal
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ observability_iscsi_iqn }}
+      -p {{ observability_retired_ip }}:3260 --logout
+  register: observability_iscsi_logout
+  failed_when: false
+  changed_when: observability_iscsi_logout.rc == 0
+  when:
+    - observability_retired_ip | length > 0
+    - not ansible_check_mode
+  tags: [observability, disarm, iscsi]
+
+- name: Delete the retired Observability iSCSI node record
+  ansible.builtin.command:
+    cmd: >-
+      iscsiadm -m node -T {{ observability_iscsi_iqn }}
+      -p {{ observability_retired_ip }}:3260 --op delete
+  register: observability_iscsi_delete
+  failed_when: false
+  changed_when: observability_iscsi_delete.rc == 0
+  when:
+    - observability_retired_ip | length > 0
+    - not ansible_check_mode
+  tags: [observability, disarm, iscsi]
+
 - name: Build the SBD stop order (Unpromoted first)
   ansible.builtin.set_fact:
     observability_stop_hosts: >-
@@ -85,32 +126,6 @@
   failed_when: false
   when: not ansible_check_mode
   tags: [observability, disarm, sbd]
-
-- name: Log out of the retired Observability iSCSI portal
-  ansible.builtin.command:
-    cmd: >-
-      iscsiadm -m node -T {{ observability_iscsi_iqn }}
-      -p {{ observability_retired_ip }}:3260 --logout
-  register: observability_iscsi_logout
-  failed_when: false
-  changed_when: observability_iscsi_logout.rc == 0
-  when:
-    - observability_retired_ip | length > 0
-    - not ansible_check_mode
-  tags: [observability, disarm, iscsi]
-
-- name: Delete the retired Observability iSCSI node record
-  ansible.builtin.command:
-    cmd: >-
-      iscsiadm -m node -T {{ observability_iscsi_iqn }}
-      -p {{ observability_retired_ip }}:3260 --op delete
-  register: observability_iscsi_delete
-  failed_when: false
-  changed_when: observability_iscsi_delete.rc == 0
-  when:
-    - observability_retired_ip | length > 0
-    - not ansible_check_mode
-  tags: [observability, disarm, iscsi]
 
 - name: Install the quorum.device strip helper
   ansible.builtin.copy:

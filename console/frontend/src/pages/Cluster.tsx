@@ -1684,7 +1684,14 @@ export default function ClusterPage() {
         es.close();
         esRef.current = null;
         setBusy(false);
-        setMessage("Lost connection to the Remove Observability stream.");
+        setMessage(
+          "Lost connection to the Remove Observability stream. That usually " +
+            "means this node reset while SBD was being stopped. Reopen the " +
+            "console (the peer console, or the VIP once it lands) and check " +
+            "the Cluster page: if Observability is gone from it the run " +
+            "finished, and if not it is safe to run Remove Observability " +
+            "again once both nodes are back online.",
+        );
       }
     };
   }
@@ -2427,7 +2434,15 @@ export default function ClusterPage() {
                 {" "}
                 <strong>{obsRemoveProbe?.configured_ip || "the dead witness"}</strong>,
                 and leave mail running without a fencing device until you Add a
-                replacement.
+                replacement.{" "}
+                <strong>
+                  Stopping SBD can reset a mail node, and if that is the node
+                  serving this console you will lose this page mid-run.
+                </strong>{" "}
+                The run checks first that both replicas are UpToDate and that a
+                lone survivor would keep serving, and refuses if not, so a reset
+                costs a failover rather than mail. Expect it to take a couple of
+                minutes: it waits out the watchdog on each node in turn.
               </>
             )
           }

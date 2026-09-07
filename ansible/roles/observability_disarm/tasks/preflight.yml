@@ -1,0 +1,82 @@
+---
+# Stopping sbd on a node whose SBD device has already vanished can end with the
+# watchdog firing instead of being released: the servant is blocked on I/O to a
+# dead iSCSI session, sbd cannot reap it before systemd gives up, and the node
+# resets. The disarm loop already detects that after the fact (stop_one.yml
+# compares boot_id) and refuses to touch the second node, but by then one node
+# is gone.
+#
+# So the question this preflight answers is not "will a node reset" - it is
+# "if one does, does mail survive it". If the answer is no, do not start.
+# Live, 7 Sep 2026: a forced Remove Observability took a node down and the
+# console and Zimbra went with it.
+
+- name: Read cluster state before disarming
+  ansible.builtin.command:
+    cmd: pcs status --full
+  register: observability_pre_status
+  changed_when: false
+  failed_when: false
+  run_once: true
+  check_mode: false
+
+- name: Read DRBD state before disarming
+  ansible.builtin.command:
+    cmd: drbdadm status {{ observability_drbd_resource }}
+  register: observability_pre_drbd
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the no-quorum policy before disarming
+  ansible.builtin.command:
+    cmd: pcs property config no-quorum-policy
+  register: observability_pre_quorum
+  changed_when: false
+  failed_when: false
+  run_once: true
+  check_mode: false
+
+- name: Refuse to disarm unless both replicas are UpToDate
+  ansible.builtin.assert:
+    that:
+      - "'Diskless' not in (observability_pre_drbd.stdout | default(''))"
+      - "'Inconsistent' not in (observability_pre_drbd.stdout | default(''))"
+      - >-
+        (observability_pre_drbd.stdout | default('')).count('UpToDate') >= 2
+    fail_msg: >-
+      Refusing to disarm SBD: replication is not UpToDate on both nodes.
+      Stopping sbd here can reset a node, and losing a node while the replica
+      is behind loses the mail written since they diverged. Get
+      `drbdadm status {{ observability_drbd_resource }}` to UpToDate/UpToDate
+      on both nodes first, then Remove Observability again.
+      Seen: {{ observability_pre_drbd.stdout | default('(no output)') | trim }}
+  when: not ansible_check_mode
+  tags: [observability, disarm, preflight]
+
+- name: Refuse to disarm unless a lone survivor would keep serving mail
+  ansible.builtin.assert:
+    that:
+      - >-
+        'ignore' in (observability_pre_quorum.stdout | default('') | lower)
+    fail_msg: >-
+      Refusing to disarm SBD: no-quorum-policy is not `ignore`, so if a node
+      resets during this the survivor stops mail rather than carrying it
+      alone. Seen:
+      {{ observability_pre_quorum.stdout | default('(no output)') | trim }}
+  when: not ansible_check_mode
+  tags: [observability, disarm, preflight]
+
+- name: Refuse to disarm while a mail node is already offline
+  ansible.builtin.assert:
+    that:
+      - >-
+        'OFFLINE' not in
+        (observability_pre_status.stdout | default('') | upper)
+    fail_msg: >-
+      Refusing to disarm SBD: a mail node is already offline, so there is no
+      spare node to lose. Bring both nodes online first, then Remove
+      Observability. Mail is unaffected by waiting; the witness is already gone
+      and fencing is already unusable.
+  when: not ansible_check_mode
+  tags: [observability, disarm, preflight]

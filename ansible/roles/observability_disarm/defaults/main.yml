@@ -2,6 +2,9 @@
 # Watchdog disarm path needs ~35s; keep margin above msgwait/softdog settle.
 observability_watchdog_wait_sec: 55
 observability_retired_ip: ""
+# Checked before disarming: a node can reset while sbd is stopped, so the
+# replica has to be able to take over without losing mail.
+observability_drbd_resource: kin-zimbra
 observability_sbd_stop_order: ""
 observability_promoted: ""
 observability_corosync_conf: /etc/corosync/corosync.conf
