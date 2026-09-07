@@ -32,6 +32,13 @@ type Report = {
   busiest_day_accepted: number;
   days: number;
   unavailable: string[];
+  /** Whether the collector behind these numbers is still writing. */
+  mail_flow?: {
+    known: boolean;
+    stale: boolean;
+    age_seconds: number | null;
+    reason: string;
+  };
 };
 
 const PERIODS: { id: string; label: string }[] = [
@@ -455,6 +462,18 @@ export function ReportsTab() {
               );
             })}
           </Headline>
+
+          {/* Printed too, not marked no-print: a report handed to somebody
+              has to carry the caveat that produced it. */}
+          {report.mail_flow && (report.mail_flow.stale || !report.mail_flow.known) &&
+          report.mail_flow.reason ? (
+            <WarnBox role="status">
+              <strong>Read this before trusting the figures below.</strong>{" "}
+              {report.mail_flow.reason} Counters that stopped advancing are
+              counted as no traffic, so a quiet-looking period here may be a
+              collector that stopped rather than mail that did.
+            </WarnBox>
+          ) : null}
 
           {report.unavailable.length ? (
             <WarnBox>

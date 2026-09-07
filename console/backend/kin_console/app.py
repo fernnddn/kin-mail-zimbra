@@ -1233,7 +1233,12 @@ async def monitoring_host(
 
     from . import monitoring
 
-    return await asyncio.to_thread(monitoring.host_facts)
+    facts = await asyncio.to_thread(monitoring.host_facts)
+    # node_exporter republishes a textfile forever after its writer dies, so a
+    # stopped collector draws the same flat line as a quiet mail server. Ride
+    # the file's age along with the host facts the tab already fetches.
+    facts["mail_flow"] = await asyncio.to_thread(monitoring.mail_flow_freshness)
+    return facts
 
 
 @app.get("/api/monitoring/series")
@@ -1357,9 +1362,15 @@ async def reports_mail(
     if want not in reporting.PERIODS:
         raise HTTPException(status_code=400, detail=f"Unknown period: {want}")
     try:
-        return await asyncio.to_thread(reporting.build_report, want)
+        report = await asyncio.to_thread(reporting.build_report, want)
     except reporting.MonitoringError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # A month of zeroes because the collector died on day three is worse than
+    # no report at all, because it looks like an answer.
+    from . import monitoring
+
+    report["mail_flow"] = await asyncio.to_thread(monitoring.mail_flow_freshness)
+    return report
 
 
 @app.get("/api/reports/mail.csv")

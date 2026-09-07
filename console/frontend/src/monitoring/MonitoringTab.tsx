@@ -455,11 +455,19 @@ function HostPanel({ host }: { host: HostFacts }) {
 const W = 520;
 const H = 120;
 
+type MailFlowFreshness = {
+  known: boolean;
+  stale: boolean;
+  age_seconds: number | null;
+  reason: string;
+};
+
 type HostFacts = {
   cpu: { model: string; threads: number; cores: number; load: number[] };
   memory: { total_bytes: number; used_bytes: number; available_bytes: number; percent: number | null };
   disks: { mount: string; total_bytes: number; used_bytes: number; free_bytes: number; percent: number }[];
   uptime_seconds: number | null;
+  mail_flow?: MailFlowFreshness;
 };
 
 const Tip = styled.div<{ $left: number }>`
@@ -898,6 +906,12 @@ export function MonitoringTab() {
             </Hint>
           ) : null}
         </>
+      ) : null}
+
+      {host?.mail_flow?.stale || (host?.mail_flow && !host.mail_flow.known && host.mail_flow.reason) ? (
+        <WarnBox role="status">
+          <strong>Mail flow figures are not current.</strong> {host.mail_flow.reason}
+        </WarnBox>
       ) : null}
 
       {host ? <HostPanel host={host} /> : null}

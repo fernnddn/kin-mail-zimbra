@@ -422,3 +422,79 @@ class BatchRequestTests(unittest.TestCase):
         for empty in ("", "   ", ",,,"):
             with self.assertRaises(m.MonitoringError):
                 m.parse_metric_list(empty)
+
+
+class MailFlowFreshnessTests(unittest.TestCase):
+    """node_exporter republishes a textfile forever after its writer dies.
+
+    That makes a stopped collector draw exactly the same flat line as a quiet
+    mail server, and report a month of zeroes as though it were an answer. The
+    file's mtime is the only thing that still tells the truth.
+    """
+
+    def _with_vector(self, value):
+        from unittest.mock import patch
+
+        payload = {
+            "status": "success",
+            "data": {"result": [
+                {"metric": {"instance": "mail-a"}, "value": [0, str(value)]}
+            ]},
+        }
+        return patch.object(m, "_get", return_value=payload)
+
+    def test_a_recent_write_is_not_stale(self) -> None:
+        with self._with_vector(20):
+            got = m.mail_flow_freshness()
+        self.assertTrue(got["known"])
+        self.assertFalse(got["stale"])
+        self.assertEqual(got["reason"], "")
+
+    def test_a_collector_that_stopped_is_reported(self) -> None:
+        with self._with_vector(m.MAILFLOW_STALE_AFTER_SEC + 600):
+            got = m.mail_flow_freshness()
+        self.assertTrue(got["known"])
+        self.assertTrue(got["stale"])
+        self.assertIn("minutes ago", got["reason"])
+
+    def test_the_boundary_is_not_stale(self) -> None:
+        with self._with_vector(m.MAILFLOW_STALE_AFTER_SEC):
+            got = m.mail_flow_freshness()
+        self.assertFalse(got["stale"])
+
+    def test_no_file_at_all_says_so_without_crying_stale(self) -> None:
+        from unittest.mock import patch
+
+        empty = {"status": "success", "data": {"result": []}}
+        with patch.object(m, "_get", return_value=empty):
+            got = m.mail_flow_freshness()
+        self.assertFalse(got["known"])
+        self.assertFalse(got["stale"])
+        self.assertIn("Mail is unaffected", got["reason"])
+
+    def test_prometheus_being_down_degrades_instead_of_raising(self) -> None:
+        from unittest.mock import patch
+
+        with patch.object(
+            m, "_get", side_effect=m.MonitoringError("boom")
+        ):
+            got = m.mail_flow_freshness()
+        self.assertFalse(got["known"])
+        self.assertEqual(got["age_seconds"], None)
+
+    def test_the_youngest_node_wins_on_a_pair(self) -> None:
+        """The replica has no Postfix spool to read, so one node writing is
+        enough for the figures to be current."""
+        from unittest.mock import patch
+
+        payload = {
+            "status": "success",
+            "data": {"result": [
+                {"metric": {"instance": "mail-a"}, "value": [0, "30"]},
+                {"metric": {"instance": "mail-b"}, "value": [0, "99999"]},
+            ]},
+        }
+        with patch.object(m, "_get", return_value=payload):
+            got = m.mail_flow_freshness()
+        self.assertFalse(got["stale"])
+        self.assertEqual(got["age_seconds"], 30.0)

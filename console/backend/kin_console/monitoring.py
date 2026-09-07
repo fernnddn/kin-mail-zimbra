@@ -476,6 +476,66 @@ def fetch_range(metric: str, range_name: str, *, now: float) -> list[dict[str, A
     return parse_matrix(_get("/api/v1/query_range", params))
 
 
+# The file the mail flow collector writes into node_exporter's textfile dir.
+MAILFLOW_PROM_FILE = "kin_mail_flow.prom"
+# Six collection intervals. The timer runs every 30s, so anything past this is
+# not a slow tick, it is a collector that has stopped.
+MAILFLOW_STALE_AFTER_SEC = 180
+
+
+def mail_flow_freshness() -> dict[str, Any]:
+    """How long ago the mail flow collector last wrote its metrics.
+
+    This exists because of how node_exporter's textfile collector works: it
+    re-publishes whatever is in the file on every scrape, forever, whether or
+    not anything is still writing it. So a collector that died, or a disk that
+    filled, or a permissions change, leaves Prometheus recording the same
+    values every 15 seconds as though they were current. On the charts that is
+    a flat line, which is exactly what a quiet mail server looks like, and on a
+    monthly report it is a period that silently reports no traffic.
+
+    The file's own mtime is the one thing that still tells the truth, and
+    node_exporter publishes it for free.
+    """
+    query = (
+        f'time() - node_textfile_mtime_seconds{{file="{MAILFLOW_PROM_FILE}"}}'
+    )
+    try:
+        rows = parse_vector(_get("/api/v1/query", {"query": query}))
+    except MonitoringError as exc:
+        return {"known": False, "stale": False, "age_seconds": None, "reason": str(exc)}
+    ages = [float(r["value"]) for r in rows if r.get("value") is not None]
+    if not ages:
+        return {
+            "known": False,
+            "stale": False,
+            "age_seconds": None,
+            "reason": (
+                "No mail flow metrics file is being collected on this node. "
+                "Mail is unaffected, but the Reports tab has nothing to count."
+            ),
+        }
+    # Youngest wins: on a pair, one node writing is enough for the figures to
+    # be current, and the replica legitimately has no Postfix spool to read.
+    age = min(ages)
+    stale = age > MAILFLOW_STALE_AFTER_SEC
+    return {
+        "known": True,
+        "stale": stale,
+        "age_seconds": age,
+        "reason": (
+            (
+                "The mail flow collector last wrote "
+                f"{int(age // 60)} minutes ago. Anything on the Monitoring and "
+                "Reports tabs that comes from mail flow is that old, even "
+                "though the charts will keep drawing a line."
+            )
+            if stale
+            else ""
+        ),
+    }
+
+
 def fetch_instant(metric: str) -> list[dict[str, Any]]:
     if not known_metric(metric):
         raise MonitoringError(f"unknown metric {metric!r}")

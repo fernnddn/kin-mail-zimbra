@@ -345,12 +345,35 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(body)
         return 0
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    _write_atomic(out_dir / PROM_NAME, body)
-    _write_atomic(
-        state_path,
-        json.dumps({**pos, "counters": counters}, separators=(",", ":")) + "\n",
-    )
+    # Everything above is pure computation. Only the writes can fail here, and
+    # when they do (disk full, the textfile directory removed or its mode
+    # changed) the useful thing is one legible line in the journal every
+    # interval, not a Python traceback every interval. Exit non-zero so
+    # `systemctl status kin-mail-flow` shows the fault, and leave the previous
+    # .prom in place: stale numbers plus a stale mtime is a state the console
+    # can detect and report, whereas a truncated file is not.
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(
+            f"kin-mail-flow: cannot create textfile directory {out_dir}: {exc}",
+            file=sys.stderr,
+        )
+        return 3
+    try:
+        _write_atomic(out_dir / PROM_NAME, body)
+        _write_atomic(
+            state_path,
+            json.dumps({**pos, "counters": counters}, separators=(",", ":")) + "\n",
+        )
+    except OSError as exc:
+        print(
+            f"kin-mail-flow: cannot write metrics into {out_dir}: {exc}. "
+            "Mail is unaffected; the console reports these figures as stale "
+            "from the age of the last file written.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 
