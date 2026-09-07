@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type ComponentProps,
@@ -1156,6 +1157,52 @@ const ModalWrap = styled.div`
   padding: 1rem;
 `;
 
+/* Both dialogs declare aria-modal="true", which tells assistive tech the rest
+   of the page is inert. That is only true if focus actually goes into the
+   dialog, stays there while it is open, and returns where it came from on
+   close. Without this a keyboard user opening "Remove host" is left on the
+   body, tabbing through a rail the dialog has just declared hidden. */
+function useModalFocus(open: boolean) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusable = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]),' +
+            ' select:not([disabled]), textarea:not([disabled]),' +
+            ' [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+    (focusable()[0] ?? panel)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !panel) return;
+      const items = focusable();
+      if (items.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      if (e.shiftKey && at <= 0) {
+        e.preventDefault();
+        items[items.length - 1].focus();
+      } else if (!e.shiftKey && (at === -1 || at === items.length - 1)) {
+        e.preventDefault();
+        items[0].focus();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      restoreTo?.focus?.();
+    };
+  }, [open]);
+  return panelRef;
+}
+
 const ModalPanel = styled.div<{ $elevated?: boolean }>`
   width: min(${(p) => (p.$elevated ? "28rem" : "32rem")}, 100%);
   background: ${theme.bgElev};
@@ -1185,6 +1232,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const panelRef = useModalFocus(open);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1200,6 +1249,8 @@ export function Modal({
       <Backdrop type="button" aria-label="Close dialog" onClick={onClose} />
       <ModalWrap role="dialog" aria-modal="true">
         <ModalPanel
+          ref={panelRef}
+          tabIndex={-1}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -1292,6 +1343,7 @@ export function ConfirmModal({
   onConfirm: () => void;
 }) {
   const [remaining, setRemaining] = useState(0);
+  const panelRef = useModalFocus(open);
 
   useEffect(() => {
     if (!open) {
@@ -1329,7 +1381,7 @@ export function ConfirmModal({
         }}
       />
       <ModalWrap role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
-        <ModalPanel $elevated>
+        <ModalPanel ref={panelRef} tabIndex={-1} $elevated>
           <AccentBar $tone={variant} />
           <ConfirmBody>
             <ConfirmIcon $tone={variant}>
