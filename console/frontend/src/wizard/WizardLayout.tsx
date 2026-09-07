@@ -43,7 +43,12 @@ const SideTitle = styled.p`
   color: ${theme.muted};
 `;
 
-const StepLink = styled(Link)<{ $active?: boolean; $done?: boolean }>`
+/* Emotion only filters unknown props for string tags. Wrapping a component
+   forwards everything, so react-router spreads $active and $done onto the
+   anchor and the browser rejects them as attribute names. */
+const StepLink = styled(Link, {
+  shouldForwardProp: (prop) => prop !== "$active" && prop !== "$done",
+})<{ $active?: boolean; $done?: boolean }>`
   display: flex;
   align-items: center;
   gap: 0.65rem;

@@ -625,8 +625,11 @@ export const Choice = styled.button<{ selected?: boolean }>`
     font-weight: ${(p) => (p.selected ? 700 : 600)};
   }
 
+  /* Selecting a card washes it with 6 percent ink, which drags mute text on
+     it down to 4.43 against that wash. The description of the option you have
+     actually chosen has to stay readable, so it steps one stop darker. */
   span {
-    color: ${theme.muted};
+    color: ${(p) => (p.selected ? theme.surface[600] : theme.muted)};
     font-size: 0.86rem;
     line-height: 1.4;
   }

@@ -83,13 +83,16 @@ export const theme = {
 
   danger: primary[500],
   dangerSoft: "rgba(180, 35, 24, 0.08)",
-  /* The design's ochre is #9A6B12. On paper that measures 4.15 against
-   * #F4F1EA, which fails WCAG AA for normal text, and this colour carries
-   * warning WORDS: the WarnBox emphasis, the warn status pill, the disabled
-   * account tag. Six points darker per channel reaches 4.51 on paper and 4.88
-   * on raised paper and is the same ochre to look at. A warning nobody can
-   * read is worse than a hue that is a shade off the swatch. */
-  warn: "#94650C",
+  /* The design's ochre is #9A6B12, which measures 4.15 on paper and fails
+   * WCAG AA for normal text. This colour carries warning WORDS (the WarnBox
+   * emphasis, the warn status pill, the DNS panel's pending lookups, the
+   * disabled account tag), so it has to clear 4.5 on every paper tone it is
+   * printed on, not just the page itself. Recessed paper (#ECE8DF) is the
+   * strictest of the three because Cluster cards and the review panels use
+   * it. This value measures 5.07 on paper, 4.72 on recessed paper and 5.53 on
+   * raised paper, and is still the same ochre to look at. A warning nobody
+   * can read is worse than a hue that is a shade off the swatch. */
+  warn: "#8A5E0B",
   warnSoft: "rgba(148, 101, 12, 0.12)",
   ok: "#2F6F4E",
   okSoft: "rgba(47, 111, 78, 0.10)",
