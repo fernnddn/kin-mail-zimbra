@@ -1186,13 +1186,24 @@ function parseTaggedJson(log: string, prefix: string): Record<string, unknown> |
   return null;
 }
 
-function healthLines(cluster: ClusterSnap): HealthLine[] {
-  if (cluster.topology === "1vm") {
+function healthLines(cluster: ClusterSnap, topology: string): HealthLine[] {
+  // Same rule as clusterOverviewCards: only an explicit 2vm gets cluster
+  // health. This used to test cluster.topology === "1vm", which meant an
+  // UNKNOWN topology fell through to the pair branch while the card above it
+  // had already returned early and printed "Single server". The page then
+  // contradicted itself, and a healthy single server whose topology marker
+  // could not be read rendered as a dead cluster: DRBD not UpToDate, qdevice
+  // not voting, VIP not configured. Pacemaker is absent on 1vm by design, so
+  // reporting its absence as failure is reporting the design as an outage.
+  if (topology !== "2vm") {
     const name = cluster.local_host || "this server";
     return [
       {
         ok: true,
-        label: `Single server: ${name}`,
+        label:
+          topology === "1vm"
+            ? `Single server: ${name}`
+            : `Single server: ${name} (topology not recorded, cluster checks skipped)`,
       },
     ];
   }
@@ -1878,7 +1889,7 @@ export default function ClusterPage() {
   const standby = new Set(cluster.standby || []);
   const rejoining = new Set(cluster.rejoining || []);
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
-  const lines = healthLines(cluster);
+  const lines = healthLines(cluster, topology);
   const clusterOk = loaded && lines.every((l) => l.ok);
 
   function nodeCard(node: string) {
