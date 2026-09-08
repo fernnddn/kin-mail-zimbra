@@ -326,6 +326,23 @@ export default function SettingsPage() {
   const tlsExpiringSoon =
     (days != null && days <= EXPIRY_WARN_DAYS) || expiringSoon(tls.not_after);
   const tlsExpired = days != null ? days < 0 : (daysUntil(tls.not_after) ?? 1) < 0;
+  // What renewal actually means here depends entirely on the method, and this
+  // panel used to tell every appliance that "renewal uses the same DNS-01 flow
+  // as install". That is true for cloudflare only. On manual nothing renews
+  // the certificate at all, and on customer there is no Let's Encrypt lineage
+  // to renew. The install-time warning about that scrolls past in a transcript
+  // on day one; the console is the only place an operator looks on day sixty,
+  // which is when a certificate nobody is renewing becomes an outage.
+  const tlsMethod = (tls.method || "").trim();
+  const tlsAutoRenews = tlsMethod === "cloudflare";
+  const tlsRenewalNote =
+    tlsMethod === "cloudflare"
+      ? "Renewal is automatic: certbot renews over DNS-01 and the deploy hook loads the new certificate into Zimbra. The button below forces a renewal now."
+      : tlsMethod === "manual"
+        ? "Renewal is NOT automatic on this appliance. certbot manual mode needs a person to answer a DNS challenge for every renewal, so nothing will renew this certificate on its own. Start it yourself with time to spare."
+        : tlsMethod === "customer"
+          ? "This certificate came from your own certificate authority, not from Let's Encrypt, so there is nothing here to renew automatically. Get new files from that authority before this expires and install them with zmcertmgr. The button below only re-checks and re-deploys what is already on this host."
+          : "The TLS method could not be read on this host, so it is not known whether anything renews this certificate. Treat it as manual until that is confirmed.";
 
   return (
     <ConsoleChrome>
@@ -537,11 +554,16 @@ export default function SettingsPage() {
               date below.
             </WarnBox>
           ) : null}
+          {!tlsAutoRenews ? (
+            <WarnBox>
+              <strong>Nothing renews this certificate automatically.</strong>{" "}
+              {tlsRenewalNote}
+            </WarnBox>
+          ) : null}
           <Hint>
             {tlsLabel} Method: {tls.method || "unknown"}.
-            {tls.path ? ` Read from ${tls.path}.` : ""} Renewal uses the same
-            DNS-01 flow as install. When a TXT record is required, it appears
-            below in copy-paste form.
+            {tls.path ? ` Read from ${tls.path}.` : ""} {tlsRenewalNote} When a
+            TXT record is required, it appears below in copy-paste form.
           </Hint>
           <Button type="button" variant="primary" loading={busy === "tls"} onClick={() => void renewTls()}>
             Renew certificate
