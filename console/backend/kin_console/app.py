@@ -1421,15 +1421,17 @@ async def monitoring_series_batch(
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/reports/mail")
-async def reports_mail(
-    period: str = "",
-    _user: ConsoleUser = Depends(auth.require_console_user),
-) -> dict[str, object]:
-    """Mail totals and a per-day breakdown for a named period."""
+async def _build_mail_report(period: str) -> dict[str, object]:
+    """One report, with its data-quality context already attached.
+
+    Shared by the JSON and CSV endpoints on purpose. They used to assemble it
+    separately, and the CSV did not attach freshness at all, so the download
+    was a cleaner-looking answer than the screen it came from. Any future
+    caveat added here reaches both surfaces or neither.
+    """
     import asyncio
 
-    from . import reporting
+    from . import monitoring, reporting
 
     want = period or reporting.DEFAULT_PERIOD
     if want not in reporting.PERIODS:
@@ -1440,10 +1442,30 @@ async def reports_mail(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     # A month of zeroes because the collector died on day three is worse than
     # no report at all, because it looks like an answer.
-    from . import monitoring
-
     report["mail_flow"] = await asyncio.to_thread(monitoring.mail_flow_freshness)
+    # Whether anything ever installed the collector on this node. Freshness
+    # alone cannot say: a node that never had one has no file to be stale.
+    report["metrics_install"] = _metrics_install_state()
     return report
+
+
+def _metrics_install_state() -> dict[str, object]:
+    """Last known outcome of the built-in monitoring install. Never raises."""
+    try:
+        from kin_privhelper.monitoring_install import read_metrics_state
+
+        return read_metrics_state()
+    except Exception:  # noqa: BLE001 - a report must not 500 over its own caveat
+        return {"phase": "unknown", "exit_code": None, "reason": "", "installed": False}
+
+
+@app.get("/api/reports/mail")
+async def reports_mail(
+    period: str = "",
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Mail totals and a per-day breakdown for a named period."""
+    return await _build_mail_report(period)
 
 
 @app.get("/api/reports/mail.csv")
@@ -1452,21 +1474,16 @@ async def reports_mail_csv(
     _user: ConsoleUser = Depends(auth.require_console_user),
 ) -> Response:
     """The same report as a spreadsheet: one row per day."""
-    import asyncio
     from datetime import datetime
 
     from . import reporting
 
     want = period or reporting.DEFAULT_PERIOD
-    if want not in reporting.PERIODS:
-        raise HTTPException(status_code=400, detail=f"Unknown period: {want}")
-    try:
-        report = await asyncio.to_thread(reporting.build_report, want)
-    except reporting.MonitoringError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    body = reporting.to_csv(
-        list(report.get("daily") or []), reporting.report_csv_columns()
-    )
+    report = await _build_mail_report(want)
+    # report_csv, not to_csv: the download carries the same warnings the tab
+    # shows. A spreadsheet that outlives the screen it was exported from must
+    # not be the tidier lie.
+    body = reporting.report_csv(report)
     name = reporting.csv_filename(
         f"kin-mail-report-{want}",
         datetime.fromisoformat(str(report["start"])),

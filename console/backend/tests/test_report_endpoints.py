@@ -233,8 +233,15 @@ class ReportCsvEndpoint(unittest.TestCase):
         self.assertEqual(self._csv().headers["cache-control"], "no-store")
 
     def test_the_body_parses_as_csv_with_a_row_per_day(self) -> None:
+        # The table may be preceded by `#` data-quality notes (see
+        # reporting.report_csv). There is no Prometheus in this test, so
+        # freshness is unknown and the notes are expected here. Skipping the
+        # comment lines is what a spreadsheet import does with them.
         body = self._csv().body.decode("utf-8").lstrip("﻿")
-        rows = list(csv.reader(io.StringIO(body)))
+        table = "\r\n".join(
+            line for line in body.splitlines() if not line.startswith("#")
+        )
+        rows = list(csv.reader(io.StringIO(table)))
         self.assertEqual(rows[0][0], "Date")
         self.assertEqual(len(rows), 3, "header plus two days")
         self.assertEqual(len(rows[1]), len(R.REPORT_COLUMNS) + 1)

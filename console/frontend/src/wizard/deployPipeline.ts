@@ -7,6 +7,13 @@ import { stripAnsi } from "./ansi";
 export type InstallStage = {
   script: string;
   label: string;
+  /**
+   * Literal the transcript prints when this stage starts, for stages that are
+   * not a `kin-mail.sh` script and so never emit `==> <script>`. Built-in
+   * monitoring is the only one: it runs from the privhelper after the installer
+   * process has exited, and marks itself with KIN_METRICS_BEGIN / _END.
+   */
+  marker?: string;
 };
 
 /** Ordered stages executed by `kin-mail.sh --full-install` on a Primary host. */
@@ -21,6 +28,17 @@ export const FULL_INSTALL_STAGES: readonly InstallStage[] = [
   { script: "10-host-firewall.sh", label: "Host firewall" },
   { script: "11-admin-path-lockdown.sh", label: "Admin path lockdown" },
   { script: "05-healthcheck.sh", label: "Health check" },
+  // Not a kin-mail.sh script: the privhelper runs this after the installer
+  // exits, detached so an SSE drop cannot kill it. It is listed here because
+  // it was invisible before, and invisible is how a single-server appliance
+  // reported a finished, healthy deploy and then showed empty Monitoring and
+  // Reports tabs for the life of the box. The operator has to be able to see
+  // that this ran, and see it when it did not.
+  {
+    script: "install-monitoring",
+    label: "Built-in monitoring",
+    marker: "KIN_METRICS_BEGIN",
+  },
 ] as const;
 
 export const FULL_INSTALL_STAGE_COUNT = FULL_INSTALL_STAGES.length;
@@ -133,6 +151,32 @@ export function logShowsFullInstallStage(log: string, script: string): boolean {
   );
 }
 
+/** True when the transcript shows this stage started, script or marker. */
+export function logShowsStage(log: string, stage: InstallStage): boolean {
+  if (stage.marker) {
+    return stripAnsi(log).includes(stage.marker);
+  }
+  return logShowsFullInstallStage(log, stage.script);
+}
+
+/**
+ * What the built-in monitoring install did, read from the deploy transcript.
+ *
+ * "pending" is not "fine". It is the honest answer while the detached install
+ * is still running, and it is also what a killed privhelper leaves behind, so
+ * the UI must not render it as success.
+ */
+export function parseMetricsStage(
+  log: string,
+): "absent" | "pending" | "ok" | "failed" {
+  const plain = stripAnsi(log);
+  const end = plain.match(/KIN_METRICS_END exit=(\d+)/);
+  if (end) {
+    return end[1] === "0" ? "ok" : "failed";
+  }
+  return plain.includes("KIN_METRICS_BEGIN") ? "pending" : "absent";
+}
+
 /** Derive install progress from streamed kin-mail.sh output. */
 export function parseInstallProgress(log: string): InstallProgress {
   if (isHaOrchestrationLog(log)) {
@@ -146,7 +190,7 @@ export function parseInstallProgress(log: string): InstallProgress {
 
   for (let i = 0; i < FULL_INSTALL_STAGES.length; i++) {
     const stage = FULL_INSTALL_STAGES[i];
-    if (logShowsFullInstallStage(log, stage.script)) {
+    if (logShowsStage(log, stage)) {
       current = i + 1;
       label = stage.label;
       script = stage.script;
@@ -154,12 +198,28 @@ export function parseInstallProgress(log: string): InstallProgress {
   }
 
   const failed =
+    // A metrics install that exited non-zero. Mail is fine, but the appliance
+    // is not collecting anything, and a green checklist here is the lie.
+    /KIN_METRICS_END exit=(?!0\b)\d+/.test(stripAnsi(log)) ||
     /Pipeline stopped at /i.test(log) ||
     /Install stopped unexpectedly/i.test(log) ||
     /\[FAIL\]/.test(log) ||
     /^Refusing:/m.test(log) ||
     /Full install complete,\s*with warnings/i.test(log);
-  const complete = hasFullInstallCompleted(log);
+  // Mail being installed is not the whole deploy any more. kin-mail.sh prints
+  // "Full install complete" and exits, and only THEN does the privhelper run
+  // the built-in monitoring install, so treating the installer's own last line
+  // as the end of the pipeline is what let a 1vm appliance show a finished,
+  // green deploy over a metrics stage that was still running or had failed.
+  //
+  // "absent" still completes, deliberately. A 1vm deploy always writes a
+  // metrics marker now, including when the install could not be started at
+  // all, so absent means a transcript from before this existed or an HA run.
+  // Blocking on it would leave those sessions busy for ever, and a progress
+  // bar that never finishes is its own kind of lie.
+  const metrics = parseMetricsStage(log);
+  const complete =
+    hasFullInstallCompleted(log) && metrics !== "pending" && metrics !== "failed";
 
   if (complete && !failed) {
     return {

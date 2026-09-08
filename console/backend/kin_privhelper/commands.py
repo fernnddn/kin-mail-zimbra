@@ -731,11 +731,26 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
                 "Monitoring tab shows it when it lands, and has an Install "
                 "monitoring button if it does not.\n"
             )
+            if started != "started":
+                # It never got off the ground. Say so in the transcript's own
+                # vocabulary: the console reads KIN_METRICS_END to decide
+                # whether this deploy has monitoring, and a run that emits no
+                # marker at all is indistinguishable from an old transcript,
+                # which is how "no monitoring" reads as "nothing to report".
+                yield proto.event_stderr(
+                    f"Built-in monitoring did not start ({started}). Mail is "
+                    "unaffected. Use Install monitoring on the Monitoring "
+                    "tab.\n"
+                )
+                yield proto.event_stdout("KIN_METRICS_END exit=1 reason=not-started\n")
         except Exception as exc:  # noqa: BLE001 - never fail a good deploy
             yield proto.event_stderr(
                 f"Monitoring install could not be started: {exc}. Mail is "
                 "unaffected; install it from the Monitoring tab.\n"
             )
+            # Same reason as above: a deploy that tried and could not must not
+            # look like a deploy that was never expected to.
+            yield proto.event_stdout("KIN_METRICS_END exit=1 reason=not-started\n")
     yield proto.event_done(install_exit)
 
 

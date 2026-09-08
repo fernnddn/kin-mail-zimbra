@@ -26,9 +26,12 @@ execFileSync(
    `--outfile=${bundle}`, "--log-level=error"],
   { stdio: "inherit" },
 );
-const { parseHaOrchProgress, parseInstallProgress } = await import(
-  pathToFileURL(bundle).href
-);
+const {
+  parseHaOrchProgress,
+  parseInstallProgress,
+  parseMetricsStage,
+  FULL_INSTALL_STAGES,
+} = await import(pathToFileURL(bundle).href);
 rmSync(out, { recursive: true, force: true });
 
 let pass = 0;
@@ -89,7 +92,7 @@ chk("empty log is not complete and not failed", [r.current, r.complete, r.failed
 let p = parseInstallProgress(
   "==> Console full install (KIN_CONSOLE_CONFIRMED=1)\n==> Full install\n",
 );
-chk("console heading alone stays at preparing 0/10", [p.current, p.label], [0, "Preparing..."]);
+chk("console heading alone stays at preparing", [p.current, p.label], [0, "Preparing..."]);
 
 p = parseInstallProgress("Running 01-preflight.sh\nRunning 02-prepare-os.sh\n");
 chk("historic Running lines still advance", [p.current, p.script], [2, "02-prepare-os.sh"]);
@@ -97,9 +100,13 @@ chk("historic Running lines still advance", [p.current, p.script], [2, "02-prepa
 p = parseInstallProgress(
   "==> Console full install\n==> 01-preflight.sh\n==> 02-prepare-os.sh\n==> 03-install-zimbra.sh\n",
 );
+// Total is 11, not 10: built-in monitoring is now a listed stage. It runs
+// from the privhelper after the installer exits, and leaving it off the
+// checklist is how a 1vm appliance reported a finished deploy with nothing
+// collecting behind it.
 chk("current ==> headings advance to install mail software", [p.current, p.total, p.label], [
   3,
-  10,
+  11,
   "Install mail software",
 ]);
 
@@ -112,6 +119,73 @@ chk("ANSI between ==> and the script name still counts", [p.current, p.label], [
   3,
   "Install mail software",
 ]);
+
+// --- built-in monitoring is a visible stage ---------------------------------
+//
+// It runs from the privhelper AFTER kin-mail.sh exits, detached so that an SSE
+// drop cannot kill it. That detachment is why it was invisible: the deploy had
+// already reported success, so a metrics install that failed, timed out, or
+// never started produced an appliance that looked finished and healthy with
+// permanently empty Monitoring and Reports tabs. It is on the checklist now,
+// and a non-zero exit fails the run rather than passing quietly.
+
+const monitoringStage = FULL_INSTALL_STAGES[FULL_INSTALL_STAGES.length - 1];
+chk(
+  "built-in monitoring is the last listed stage",
+  [monitoringStage.script, monitoringStage.marker],
+  ["install-monitoring", "KIN_METRICS_BEGIN"],
+);
+
+const fullRun =
+  "==> 01-preflight.sh\n==> 02-prepare-os.sh\n==> 03-install-zimbra.sh\n" +
+  "==> 04-tls-dkim.sh\n==> 06-hybrid-auth.sh\n==> 07-zpush.sh\n" +
+  "==> 09-hardening.sh\n==> 10-host-firewall.sh\n" +
+  "==> 11-admin-path-lockdown.sh\n==> 05-healthcheck.sh\nFull install complete\n";
+
+// A transcript with no metrics marker at all is from before this stage
+// existed (or from the HA path). It completes rather than hanging the page;
+// a real 1vm deploy always emits a marker, including when it could not start.
+p = parseInstallProgress(fullRun);
+chk("a transcript with no metrics marker still completes", [p.total, p.complete], [11, true]);
+
+p = parseInstallProgress(fullRun + "KIN_METRICS_BEGIN host=mail1\n");
+chk("the monitoring stage becomes current when it starts", [p.current, p.label], [
+  11,
+  "Built-in monitoring",
+]);
+
+p = parseInstallProgress(fullRun + "KIN_METRICS_BEGIN host=mail1\nKIN_METRICS_END exit=0\n");
+chk("a clean metrics install does not fail the run", [p.current, p.failed], [11, false]);
+
+p = parseInstallProgress(fullRun + "KIN_METRICS_BEGIN host=mail1\nKIN_METRICS_END exit=2\n");
+chk("a failed metrics install fails the run", p.failed, true);
+
+// exit=10 must not be read as exit=1 followed by a stray 0, and exit=0 must
+// not match the failure pattern just because a digit follows.
+p = parseInstallProgress(fullRun + "KIN_METRICS_END exit=10\n");
+chk("a two-digit non-zero exit still fails", p.failed, true);
+
+chk("no metrics marker at all is absent", parseMetricsStage(fullRun), "absent");
+chk(
+  "begin without end is pending, not success",
+  parseMetricsStage(fullRun + "KIN_METRICS_BEGIN host=mail1\n"),
+  "pending",
+);
+chk(
+  "end zero is ok",
+  parseMetricsStage(fullRun + "KIN_METRICS_BEGIN\nKIN_METRICS_END exit=0\n"),
+  "ok",
+);
+chk(
+  "end non-zero is failed",
+  parseMetricsStage(fullRun + "KIN_METRICS_BEGIN\nKIN_METRICS_END exit=3\n"),
+  "failed",
+);
+chk(
+  "ANSI around the marker still counts",
+  parseMetricsStage("\u001b[36mKIN_METRICS_BEGIN\u001b[0m host=mail1\n"),
+  "pending",
+);
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

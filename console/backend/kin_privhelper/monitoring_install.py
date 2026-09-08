@@ -16,8 +16,10 @@ to run on a healthy HA pair to repair a soft-failed `mail_monitoring` step.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -34,6 +36,97 @@ MONITORING_WORK_DIR = Path(
 # Same shape as an inventory hostname elsewhere in the tree: a DNS label or
 # FQDN, nothing that could carry shell or YAML meaning.
 HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
+# Where the outcome of the detached run is recorded.
+#
+# The install is deliberately detached (see run_after_install), which means
+# nobody is awaiting it and its exit code has nowhere to go. Before this file
+# existed the result went into the transcript and then nowhere: the deploy had
+# already reported success, so a failed or timed-out metrics install left an
+# appliance that looked finished and healthy with permanently empty charts, and
+# the Reports tab counted a month of zeroes as though that were the answer.
+#
+# No secrets in it, so the console (a different user) can read it directly.
+METRICS_STATE_FILE = Path(
+    os.environ.get(
+        "KIN_METRICS_STATE_FILE",
+        "/var/lib/kin-mail-privhelper/metrics-state.json",
+    )
+)
+
+# running: started and not yet finished. ok: the playbook exited 0.
+# failed:  the playbook exited non-zero. timeout: it hit INSTALL_TIMEOUT_SEC.
+# error:   it could not be started at all.
+METRICS_PHASES = ("running", "ok", "failed", "timeout", "error")
+
+
+def record_metrics_state(
+    phase: str,
+    *,
+    exit_code: int | None = None,
+    reason: str = "",
+) -> bool:
+    """Persist how the detached metrics install is going. Never raises.
+
+    Best effort on purpose: this is called from a background task and from a
+    finally-ish path, and a full disk must not turn a metrics problem into a
+    deploy crash. A missing state file reads back as "unknown", which the
+    console already treats as "not proven installed".
+    """
+    if phase not in METRICS_PHASES:
+        return False
+    body = {
+        "phase": phase,
+        "exit_code": exit_code,
+        "reason": reason,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    try:
+        METRICS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = METRICS_STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(body), encoding="utf-8")
+        # Replace, so a reader never sees a half-written file.
+        tmp.replace(METRICS_STATE_FILE)
+        os.chmod(METRICS_STATE_FILE, 0o644)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def read_metrics_state() -> dict[str, Any]:
+    """What the last detached metrics install did. Never raises.
+
+    "unknown" covers both a node that never ran one and a state file that
+    cannot be read. Both mean the same thing to a caller deciding whether the
+    figures on screen can be trusted: nothing here proves metrics are running.
+    """
+    unknown: dict[str, Any] = {
+        "phase": "unknown",
+        "exit_code": None,
+        "reason": "",
+        "at": "",
+        "installed": False,
+    }
+    try:
+        raw = json.loads(METRICS_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return unknown
+    if not isinstance(raw, dict):
+        return unknown
+    phase = str(raw.get("phase") or "")
+    if phase not in METRICS_PHASES:
+        return unknown
+    exit_code = raw.get("exit_code")
+    return {
+        "phase": phase,
+        "exit_code": exit_code if isinstance(exit_code, int) else None,
+        "reason": str(raw.get("reason") or ""),
+        "at": str(raw.get("at") or ""),
+        # Only a completed, zero-exit run counts. "running" is not yet proof,
+        # and treating it as proof is how an in-flight install reads as done.
+        "installed": phase == "ok",
+    }
+
+
 # Ceiling for the detached run. The playbook is allowed to wait 900s on an
 # apt lock, plus package download and service start, so this is generous;
 # it exists only so a stuck run cannot hold the maintenance lock for ever.
@@ -105,22 +198,61 @@ def run_after_install() -> str:
             # other cluster operation with an explanation nobody can act on.
             # Cancelling raises into the generator, whose finally releases the
             # lock.
-            await asyncio.wait_for(_drain(), timeout=INSTALL_TIMEOUT_SEC)
+            exit_code = await asyncio.wait_for(_drain(), timeout=INSTALL_TIMEOUT_SEC)
         except asyncio.TimeoutError:
-            pass
-        except Exception:  # noqa: BLE001 - a detached task must not raise
-            pass
+            record_metrics_state(
+                "timeout",
+                reason=(
+                    "The metrics install was still running after "
+                    f"{INSTALL_TIMEOUT_SEC // 60} minutes and was given up on. "
+                    "Mail is unaffected. Use Install monitoring on the "
+                    "Monitoring tab to try again."
+                ),
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - a detached task must not raise
+            record_metrics_state(
+                "error",
+                reason=(
+                    f"The metrics install could not run ({exc.__class__.__name__}). "
+                    "Mail is unaffected. Use Install monitoring on the "
+                    "Monitoring tab to try again."
+                ),
+            )
+            return
+        # ok / failed are recorded by cmd_install_monitoring itself, so the
+        # manual Install monitoring button updates the same state and a repair
+        # actually clears a previous failure. Only the two outcomes it cannot
+        # see from the inside, timeout and could-not-start, are recorded here.
+        del exit_code
 
-    async def _drain() -> None:
-        async for _ev in cmd_install_monitoring({}):
+    async def _drain() -> int:
+        exit_code = 1
+        async for ev in cmd_install_monitoring({}):
             # Events are written to the transcript by _stream_redacted.
-            # Nothing is listening here, and that is the point.
-            pass
+            # Nothing is listening to them here, and that is the point; the
+            # exit code is the one thing that has to come back out.
+            if ev.get("type") == "done":
+                raw = ev.get("exit_code")
+                exit_code = 1 if raw is None else int(raw)
+        return exit_code
 
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        record_metrics_state(
+            "error",
+            reason=(
+                "The metrics install was never started (no event loop). Mail "
+                "is unaffected. Use Install monitoring on the Monitoring tab."
+            ),
+        )
         return "no event loop, metrics not started"
+    # Written before the task is created, so a privhelperd restart mid-install
+    # leaves "running" behind rather than nothing at all. "running" is not
+    # treated as installed anywhere, so a state that never advances reads as
+    # unproven, which is the truthful answer.
+    record_metrics_state("running")
     task = loop.create_task(_run())
     _BACKGROUND.add(task)
     task.add_done_callback(_BACKGROUND.discard)
@@ -163,6 +295,9 @@ async def cmd_install_monitoring(
             "Refusing: another cluster operation is already running. Metrics "
             "are additive and can wait; try again when it finishes.\n"
         )
+        # No state written: the lock refusal changed nothing on this node,
+        # and a node already collecting metrics must not be downgraded to
+        # "failed" because someone pressed the button at a busy moment.
         yield proto.event_stdout("KIN_METRICS_END exit=1 reason=locked\n")
         yield proto.event_done(1)
         return
@@ -225,13 +360,29 @@ async def cmd_install_monitoring(
         # here, and a lock left held would block every later cluster operation.
         release_maintenance_lock(lock_fh)
 
+    # State is written only for a real run. A --check run converges nothing,
+    # and stamping it would mark an appliance as collecting metrics on the
+    # strength of a rehearsal. The messages below are unchanged either way.
     if exit_code == 0:
+        if not check_only:
+            record_metrics_state("ok", exit_code=0)
         yield await _emit(
             "Monitoring installed. Prometheus and node_exporter are on loopback; "
             "charts fill in from now, and figures start from this moment rather "
             "than being back-filled."
         )
     else:
+        if not check_only:
+            record_metrics_state(
+                "failed",
+                exit_code=exit_code,
+                reason=(
+                    f"The metrics install failed (exit {exit_code}). Mail is "
+                    "unaffected, but the Monitoring and Reports tabs have "
+                    "nothing to count until it succeeds. Use Install "
+                    "monitoring on the Monitoring tab to try again."
+                ),
+            )
         yield await _emit(
             f"Monitoring install failed (exit {exit_code}). Mail is unaffected: "
             "this step only adds metrics collection.",

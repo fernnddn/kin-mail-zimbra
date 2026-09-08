@@ -229,7 +229,15 @@ ensure_admin_ips_for_firewall() {
   export KIN_ADMIN_IPS
 }
 
+# Set by run_firewall_stage_interactive when it returns success WITHOUT having
+# applied ufw. run_full_install turns that into a named warning in the closing
+# summary. A single internet-facing mail node that finished its deploy with no
+# host firewall, and said so only in one line twenty minutes up a scrolling
+# transcript, is reported to the operator as a clean install.
+FIREWALL_STAGE_SKIPPED=0
+
 run_firewall_stage_interactive() {
+  FIREWALL_STAGE_SKIPPED=0
   echo
   hr
   say "Host firewall (stage 10) - HIGH RISK"
@@ -261,6 +269,7 @@ run_firewall_stage_interactive() {
       warn "Perimeter firewall (FortiGate) remains your only protection at host level until you set Admin access IPs and re-run this stage."
       info "Console: run_script 10-host-firewall.sh apply"
       info "CLI:     sudo ./10-host-firewall.sh apply"
+      FIREWALL_STAGE_SKIPPED=1
       return 0
     fi
     # Console UI button is the operator confirm - never invent a silent default-yes
@@ -273,6 +282,7 @@ run_firewall_stage_interactive() {
     if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
       warn "Skipped 10-host-firewall.sh - host perimeter unchanged"
       info "Run later: sudo ./10-host-firewall.sh apply"
+      FIREWALL_STAGE_SKIPPED=1
       return 0
     fi
   fi
@@ -402,6 +412,13 @@ run_full_install() {
     fail "Pipeline stopped at 10-host-firewall.sh"
     return "$rc"
   }
+  # Skipping is allowed (no admin IPs yet, or the operator said no), but it is
+  # not a clean install. Naming it here puts it in the closing summary and
+  # flips the transcript to "complete, with warnings", which the console reads
+  # as needs-attention instead of proof that nothing does.
+  if [ "${FIREWALL_STAGE_SKIPPED:-0}" -eq 1 ]; then
+    soft_failed_stages+=("10-host-firewall.sh apply (skipped: host firewall not applied)")
+  fi
 
   # 11 - admin path lockdown on public 443 (Primary / mounted Zimbra only)
   if [ "$(full_install_zimbra_stage_action "$mid_handoff")" = "skip_mid_handoff" ]; then

@@ -104,8 +104,9 @@ export default function TopologyStep() {
     <>
       <Title>How many servers?</Title>
       <Lede>
-        Pick the layout for this customer. Most KIN Mail deployments use two servers for high
-        availability; one server is fine when the platform already keeps the host redundant.
+        Pick the layout for this customer. One server is the standard KIN Mail deployment and the
+        layout this release is built around. Two servers add active-passive high availability and
+        remain available on request, but they are not the default.
       </Lede>
       <ChoiceGrid>
         <Choice
@@ -113,10 +114,10 @@ export default function TopologyStep() {
           selected={draft.topology === "1vm"}
           onClick={() => void pick("1vm")}
         >
-          <strong>1 server</strong>
+          <strong>1 server (recommended)</strong>
           <span>
-            Single-node install. Best when the virtualization platform already provides host-level
-            redundancy.
+            Single-node install, with built-in monitoring and reporting from the first deploy. The
+            right choice when the virtualization platform already provides host-level redundancy.
           </span>
         </Choice>
         <Choice
@@ -124,9 +125,12 @@ export default function TopologyStep() {
           selected={draft.topology === "2vm"}
           onClick={() => void pick("2vm")}
         >
-          <strong>2 servers (recommended)</strong>
+          <strong>2 servers (optional)</strong>
           <span>
             Active-passive high availability with live data replication and automatic failover.
+            Needs a second mail server plus a separate Observability VM, and it is not the layout
+            this release is tuned for. Choose it only when high availability has been agreed for
+            this customer.
           </span>
         </Choice>
       </ChoiceGrid>

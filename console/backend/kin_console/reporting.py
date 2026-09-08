@@ -351,6 +351,92 @@ def _csv_cell(value: Any) -> Any:
     return value
 
 
+def data_quality_notes(report: dict[str, Any]) -> list[str]:
+    """Every reason this report might not mean what it appears to mean.
+
+    Built from the report payload rather than re-queried, so JSON and CSV can
+    never disagree about whether the numbers are trustworthy.
+
+    The order is the order an operator needs it: whether the collector is
+    installed at all, then whether it is still writing, then which individual
+    figures could not be fetched, then whether the period is simply empty.
+
+    A phase of "unknown" is deliberately not a note on its own. Appliances
+    deployed before the state file existed read back unknown while collecting
+    perfectly well, and mail_flow already reports a collector that is genuinely
+    absent. Warning on unknown would put a permanent scare on healthy boxes,
+    which is how a real warning stops being read.
+    """
+    notes: list[str] = []
+
+    install = report.get("metrics_install") or {}
+    phase = str(install.get("phase") or "")
+    if phase not in ("", "ok", "unknown"):
+        reason = str(install.get("reason") or "")
+        if phase == "running":
+            notes.append(
+                "The built-in monitoring install is still running on this "
+                "appliance. Figures below start from the moment it finishes."
+            )
+        else:
+            notes.append(
+                reason
+                or "The built-in monitoring install did not succeed on this "
+                "appliance, so these figures may be counting nothing."
+            )
+
+    flow = report.get("mail_flow") or {}
+    if not flow.get("known") or flow.get("stale"):
+        reason = str(flow.get("reason") or "")
+        if reason:
+            notes.append(reason)
+
+    unavailable = list(report.get("unavailable") or [])
+    if unavailable:
+        headings = [
+            REPORT_SERIES[key][0] if key in REPORT_SERIES else key
+            for key in unavailable
+        ]
+        notes.append(
+            "These figures could not be read and are blank rather than zero: "
+            + ", ".join(headings)
+            + "."
+        )
+
+    if report.get("no_data"):
+        notes.append(
+            "No samples at all were returned for this period. That is not the "
+            "same as no mail: it is what an appliance with no metrics "
+            "collection looks like."
+        )
+
+    return notes
+
+
+def report_csv(report: dict[str, Any]) -> str:
+    """The report as CSV, carrying the same warnings the JSON carries.
+
+    The CSV used to be built straight from the daily rows, which made it the
+    most dangerous surface in the console: a spreadsheet of clean zeroes, with
+    a confident filename and no hint that nothing had ever been collected, is
+    exactly the artefact that gets forwarded to somebody who was not there.
+    Whatever the Reports tab says on screen has to travel with the file.
+
+    Notes are `#` comment lines above the header. Spreadsheets import them as
+    text rather than silently dropping them, and a reader who opens the file in
+    anything at all sees them first.
+    """
+    notes = data_quality_notes(report)
+    prefix = ""
+    if notes:
+        lines = ["# WARNING: read these before using the figures below."]
+        lines += [f"# {note}" for note in notes]
+        lines.append("#")
+        prefix = "".join(f"{line}\r\n" for line in lines)
+    body = to_csv(list(report.get("daily") or []), report_csv_columns())
+    return prefix + body
+
+
 def report_csv_columns() -> list[tuple[str, str]]:
     return [("date", "Date")] + [
         (key, REPORT_SERIES[key][0]) for key in REPORT_COLUMNS
@@ -475,4 +561,11 @@ def build_report(period: str, *, now: datetime | None = None) -> dict[str, Any]:
         # Named rather than hidden: a summary with a silently missing column is
         # worse than one that says which number it could not get.
         "unavailable": failed,
+        # Absence, not emptiness. Prometheus answers a query about a metric it
+        # has never seen with a successful, empty result, so a node that never
+        # had the collector installed produces no error anywhere above: every
+        # total is None and every daily row is missing. Without this flag that
+        # is indistinguishable from a genuinely quiet month, and the console
+        # would render "no problems" over a pipeline that does not exist.
+        "no_data": all(totals.get(key) is None for key in REPORT_COLUMNS),
     }

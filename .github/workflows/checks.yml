@@ -394,3 +394,61 @@ jobs:
           from kin_privhelper import protocol, rbac, commands
           print('imports ok', app.title)
           "
+
+  # The backend unit tests on every interpreter that actually runs them.
+  #
+  # The console job above pins 3.11. The appliance is Ubuntu 22.04, which is
+  # Python 3.10, and those two disagree in ways that are invisible on 3.11:
+  # asyncio.TimeoutError is an alias of the builtin TimeoutError from 3.11
+  # onwards and a distinct class before it. A bare `except TimeoutError` around
+  # an `await asyncio.wait_for(...)` therefore passed every check here and
+  # caught nothing on the customer's box, which is how the deploy log's sidecar
+  # tail shipped dead in 0.1.7 and was found by running the suite on the
+  # workstation rather than in CI.
+  #
+  # 3.11 is kept, not replaced: it is what the console job builds against.
+  backend-interpreters:
+    name: Backend tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the appliance. 3.11 is what the console job uses.
+        python: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install backend requirements
+        run: |
+          set -euo pipefail
+          if [ ! -f console/backend/requirements.txt ]; then
+            echo "ERROR: console/backend/requirements.txt missing - refusing silent pass"
+            exit 1
+          fi
+          python -m pip install --upgrade pip
+          python -m pip install -r console/backend/requirements.txt
+
+      - name: Syntax and import check
+        run: |
+          set -euo pipefail
+          python -m compileall -q console/backend
+          PYTHONPATH=console/backend python -c "
+          from kin_console.app import app
+          from kin_privhelper import protocol, rbac, commands
+          print('imports ok', app.title)
+          "
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          count=$(find console/backend/tests -name 'test_*.py' -type f | wc -l)
+          if [ "${count:-0}" -lt 40 ]; then
+            echo "ERROR: found only ${count:-0} backend test modules - refusing a silent pass"
+            exit 1
+          fi
+          echo "running ${count} backend test modules on Python ${{ matrix.python }}"
+          PYTHONPATH=console/backend python -m unittest discover -s console/backend/tests -v
