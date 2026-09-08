@@ -2388,7 +2388,7 @@ export default function ClusterPage() {
             </>
           )
         ) : tab === "monitoring" ? (
-          <MonitoringTab />
+          <MonitoringTab externallyBusy={anyBusy} />
         ) : tab === "reports" ? (
           <ReportsTab />
         ) : (

@@ -146,6 +146,7 @@ async def cmd_install_monitoring(
             "Refusing: another cluster operation is already running. Metrics "
             "are additive and can wait; try again when it finishes.\n"
         )
+        yield proto.event_stdout("KIN_METRICS_END exit=1 reason=locked\n")
         yield proto.event_done(1)
         return
 
@@ -155,9 +156,15 @@ async def cmd_install_monitoring(
     except ValueError as exc:
         release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc} (hostname={hostname!r})\n")
+        yield proto.event_stdout("KIN_METRICS_END exit=2 reason=bad-hostname\n")
         yield proto.event_done(2)
         return
 
+    # Greppable markers. Metrics were missing after a deploy on 8 Sep 2026 and
+    # the transcript said nothing either way, so the cause had to be guessed
+    # at. KIN_METRICS_BEGIN / KIN_METRICS_END with an exit code means the next
+    # one is read, not inferred.
+    yield await _emit(f"KIN_METRICS_BEGIN host={hostname}")
     yield await _emit(f"=== install monitoring on {hostname} ===")
     try:
         work = _write_work_files(inventory, MONITORING_WORK_DIR)
@@ -166,6 +173,7 @@ async def cmd_install_monitoring(
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_stdout("KIN_METRICS_END exit=2 reason=setup\n")
         yield proto.event_done(2)
         return
 
@@ -212,4 +220,5 @@ async def cmd_install_monitoring(
             "this step only adds metrics collection.",
             err=True,
         )
+    yield proto.event_stdout(f"KIN_METRICS_END exit={exit_code}\n")
     yield proto.event_done(exit_code)

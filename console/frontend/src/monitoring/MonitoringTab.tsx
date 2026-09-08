@@ -664,7 +664,7 @@ function Chart({ data }: { data: SeriesResp }) {
   );
 }
 
-export function MonitoringTab() {
+export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boolean } = {}) {
   const [range, setRange] = useState("1h");
   const [ranges, setRanges] = useState<string[]>(["now", "1h", "6h", "24h", "7d", "30d", "1y"]);
   const [charts, setCharts] = useState<SeriesResp[]>([]);
@@ -874,7 +874,10 @@ export function MonitoringTab() {
                 type="button"
                 variant="primary"
                 loading={installing}
-                disabled={installing}
+                /* Also disabled when the helper is busy with something else,
+                   including a metrics install started by the deploy. Offering
+                   it then only earns a refusal from the daemon. */
+                disabled={installing || externallyBusy}
                 onClick={installMonitoring}
               >
                 Install monitoring
