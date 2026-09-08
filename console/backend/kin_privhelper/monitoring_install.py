@@ -45,11 +45,25 @@ HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
 # appliance that looked finished and healthy with permanently empty charts, and
 # the Reports tab counted a month of zeroes as though that were the answer.
 #
-# No secrets in it, so the console (a different user) can read it directly.
+# Under /var/lib/kin-mail-console, NOT /var/lib/kin-mail-privhelper.
+#
+# privhelperd writes this and the unprivileged console reads it, so it has to
+# live where the console can reach it. The privhelper directory is that
+# daemon's HOME and its secrets vault: provisioning-secrets.json and
+# observability-secrets.json sit there at 0600, it is created by whichever
+# code path touches it first with a bare mkdir, and nothing guarantees it is
+# traversable by kin-console. A directory the console cannot enter makes this
+# file unreadable no matter what mode the file itself has, which this repo has
+# already been bitten by once (see ensure_kin_mail_dir in deploy_state: a 0750
+# leftover made 0644 markers raise PermissionError). Reading it then fails,
+# the failure looks like "no record", and a no-record state is deliberately
+# silent, so a failed metrics install would warn nowhere at all. The
+# kin-mail-console directory is the one that already exists for markers the
+# console reads.
 METRICS_STATE_FILE = Path(
     os.environ.get(
         "KIN_METRICS_STATE_FILE",
-        "/var/lib/kin-mail-privhelper/metrics-state.json",
+        "/var/lib/kin-mail-console/metrics-state.json",
     )
 )
 
@@ -81,23 +95,54 @@ def record_metrics_state(
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     try:
+        # Create if absent, but never widen it. bootstrap.sh installs this
+        # directory as kin-console:kin-console 0750 on purpose: admin.hash,
+        # session.secret and tls/key.pem live here. The console owns it, so it
+        # can already traverse and read; forcing 0755 to "make sure" would
+        # publish the console's private material to every local user, which is
+        # a far worse bug than the one being fixed.
         METRICS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = METRICS_STATE_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(body), encoding="utf-8")
         # Replace, so a reader never sees a half-written file.
         tmp.replace(METRICS_STATE_FILE)
+        # 0644: this carries a phase, an exit code and an English sentence.
+        # No secret has any business in it, and the console must be able to
+        # read it without being in any particular group.
         os.chmod(METRICS_STATE_FILE, 0o644)
         return True
     except (OSError, TypeError, ValueError):
         return False
 
 
-def read_metrics_state() -> dict[str, Any]:
+def _state_age_seconds(at: str, *, now: datetime | None = None) -> float | None:
+    """Seconds since a recorded timestamp, or None if it cannot be read."""
+    try:
+        when = datetime.fromisoformat(at)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - when).total_seconds()
+
+
+def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
     """What the last detached metrics install did. Never raises.
 
-    "unknown" covers both a node that never ran one and a state file that
-    cannot be read. Both mean the same thing to a caller deciding whether the
-    figures on screen can be trusted: nothing here proves metrics are running.
+    Three read failures that are NOT the same thing, and used to be:
+
+    unknown     no file. A node that never ran one, or an appliance deployed
+                before this record existed. Callers treat it as unproven but
+                do not warn on it, because warning on every pre-existing box
+                is how a warning stops being read.
+    unreadable  the file is there and cannot be read, almost always because
+                the directory is not traversable by the console user. This
+                MUST NOT collapse into "unknown": that is the silent path
+                where a failed metrics install warns nowhere at all.
+    timeout     a "running" record too old to still be running. The task that
+                would have finished it died with privhelperd, so believing
+                "running" for ever leaves the console waiting on something
+                that is never coming back.
     """
     unknown: dict[str, Any] = {
         "phase": "unknown",
@@ -107,8 +152,28 @@ def read_metrics_state() -> dict[str, Any]:
         "installed": False,
     }
     try:
-        raw = json.loads(METRICS_STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        text = METRICS_STATE_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return unknown
+    except PermissionError:
+        return {
+            "phase": "unreadable",
+            "exit_code": None,
+            "at": "",
+            "installed": False,
+            "reason": (
+                "The console cannot read the monitoring install record at "
+                f"{METRICS_STATE_FILE}. Its directory must be readable and "
+                "executable by the console user. Until that is fixed there is "
+                "no way to tell whether metrics collection is working, so "
+                "treat the figures on this page as unverified."
+            ),
+        }
+    except OSError:
+        return unknown
+    try:
+        raw = json.loads(text)
+    except ValueError:
         return unknown
     if not isinstance(raw, dict):
         return unknown
@@ -116,11 +181,34 @@ def read_metrics_state() -> dict[str, Any]:
     if phase not in METRICS_PHASES:
         return unknown
     exit_code = raw.get("exit_code")
+    at = str(raw.get("at") or "")
+    reason = str(raw.get("reason") or "")
+
+    # A "running" record older than the ceiling the task itself honours cannot
+    # still be running: nothing would have left it in that state except
+    # privhelperd going away mid-install, which takes the detached task with
+    # it and leaves no one to write the outcome.
+    if phase == "running":
+        age = _state_age_seconds(at, now=now)
+        if age is not None and age > INSTALL_TIMEOUT_SEC:
+            return {
+                "phase": "timeout",
+                "exit_code": None,
+                "at": at,
+                "installed": False,
+                "reason": (
+                    "A monitoring install has been recorded as running since "
+                    f"{at} and cannot still be in progress. It was most likely "
+                    "interrupted. Mail is unaffected. Use Install monitoring "
+                    "on the Monitoring tab to run it again."
+                ),
+            }
+
     return {
         "phase": phase,
         "exit_code": exit_code if isinstance(exit_code, int) else None,
-        "reason": str(raw.get("reason") or ""),
-        "at": str(raw.get("at") or ""),
+        "reason": reason,
+        "at": at,
         # Only a completed, zero-exit run counts. "running" is not yet proof,
         # and treating it as proof is how an in-flight install reads as done.
         "installed": phase == "ok",

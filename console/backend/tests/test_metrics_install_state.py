@@ -22,8 +22,10 @@ These tests pin the contract the console reads:
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -159,6 +161,134 @@ class TheDetachedRunRecordsWhatItCannotSeeFromInside(unittest.TestCase):
         self.assertIn("no event loop", result)
         self.assertEqual(state["phase"], "error")
         self.assertFalse(state["installed"])
+
+
+class TheConsoleCanActuallyReadTheRecord(unittest.TestCase):
+    """privhelperd writes this as root; the console reads it as kin-console.
+
+    That crossing is the whole risk. If the console cannot read the file, the
+    read fails, the failure used to look identical to "no record", and a
+    no-record state is deliberately silent so that appliances from before this
+    existed are not covered in warnings. The result would have been a failed
+    metrics install that warns nowhere at all, which is precisely the lie the
+    record was added to prevent.
+    """
+
+    def test_the_record_is_not_kept_in_the_privhelper_secrets_directory(self) -> None:
+        # /var/lib/kin-mail-privhelper is privhelperd's HOME and holds
+        # provisioning-secrets.json and observability-secrets.json at 0600. It
+        # is created by whichever code path gets there first, with no chmod,
+        # so nothing guarantees the console can traverse it.
+        self.assertNotIn(
+            "kin-mail-privhelper",
+            str(mi.METRICS_STATE_FILE),
+            "the console-readable record must not live in the secrets vault",
+        )
+        self.assertIn("kin-mail-console", str(mi.METRICS_STATE_FILE))
+
+    def test_the_record_is_world_readable_because_it_holds_no_secret(self) -> None:
+        # privhelperd writes it as root and the console reads it as
+        # kin-console. 0644 is what makes that crossing work without granting
+        # the console anything else. It carries a phase, an exit code and an
+        # English sentence, so there is nothing in it to protect.
+        with _StateFile() as sf:
+            mi.record_metrics_state("ok", exit_code=0)
+            self.assertEqual(sf.path.stat().st_mode & 0o777, 0o644)
+
+    def test_writing_never_widens_the_console_data_directory(self) -> None:
+        # /var/lib/kin-mail-console is installed 0750 kin-console:kin-console
+        # by bootstrap.sh and holds admin.hash, session.secret and
+        # tls/key.pem. The console owns it and can already read it, so
+        # "making sure" by chmodding it to 0755 would publish that material to
+        # every local user: a far worse bug than the one this record fixes.
+        with _StateFile() as sf:
+            os.chmod(sf.path.parent, 0o750)
+            mi.record_metrics_state("ok", exit_code=0)
+            self.assertEqual(
+                sf.path.parent.stat().st_mode & 0o777,
+                0o750,
+                "the metrics record must not relax the console data directory",
+            )
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_an_unreadable_record_is_never_reported_as_no_record(self) -> None:
+        # The exact silent path. "unknown" is not warned about anywhere, so a
+        # permission problem must not be allowed to look like one.
+        with _StateFile() as sf:
+            mi.record_metrics_state("failed", exit_code=2, reason="playbook died")
+            os.chmod(sf.path.parent, 0o000)
+            try:
+                state = mi.read_metrics_state()
+            finally:
+                os.chmod(sf.path.parent, 0o755)
+        self.assertEqual(state["phase"], "unreadable")
+        self.assertFalse(state["installed"])
+        self.assertIn("cannot read", state["reason"])
+
+    def test_an_unreadable_record_produces_an_operator_warning(self) -> None:
+        # End to end: the phase has to survive into what the operator sees, or
+        # distinguishing it from "unknown" bought nothing.
+        from kin_console import reporting
+
+        notes = reporting.data_quality_notes(
+            {"metrics_install": {"phase": "unreadable", "reason": "The console cannot read it."}}
+        )
+        self.assertIn("The console cannot read it.", notes)
+
+    def test_every_bad_phase_the_operator_must_see_produces_a_warning(self) -> None:
+        # failed / timeout / error / not-started all have to reach the page.
+        # Derived from the phase list so a new one cannot be added silently.
+        from kin_console import reporting
+
+        for phase in ("failed", "timeout", "error", "unreadable"):
+            with self.subTest(phase=phase):
+                notes = reporting.data_quality_notes(
+                    {"metrics_install": {"phase": phase, "reason": f"{phase} happened"}}
+                )
+                self.assertTrue(notes, f"{phase} must warn the operator")
+
+
+class AStaleRunningRecordIsNotBelievedForEver(unittest.TestCase):
+    """privhelperd dying mid-install takes the detached task with it.
+
+    Nothing is then left to write the outcome, so the record stays "running".
+    Believing that for ever leaves the console waiting on a result that is
+    never coming, and "running" is not warned about as an error.
+    """
+
+    def test_a_fresh_running_record_is_still_running(self) -> None:
+        with _StateFile():
+            mi.record_metrics_state("running")
+            state = mi.read_metrics_state()
+        self.assertEqual(state["phase"], "running")
+
+    def test_a_running_record_older_than_the_ceiling_becomes_a_timeout(self) -> None:
+        with _StateFile():
+            mi.record_metrics_state("running")
+            later = datetime.now(timezone.utc) + timedelta(
+                seconds=mi.INSTALL_TIMEOUT_SEC + 60
+            )
+            state = mi.read_metrics_state(now=later)
+        self.assertEqual(state["phase"], "timeout")
+        self.assertFalse(state["installed"])
+        self.assertIn("interrupted", state["reason"])
+
+    def test_a_completed_record_is_never_aged_out(self) -> None:
+        # Only "running" is reconciled. A months-old successful install is
+        # still a successful install.
+        with _StateFile():
+            mi.record_metrics_state("ok", exit_code=0)
+            later = datetime.now(timezone.utc) + timedelta(days=400)
+            state = mi.read_metrics_state(now=later)
+        self.assertEqual(state["phase"], "ok")
+        self.assertTrue(state["installed"])
+
+    def test_an_unparsable_timestamp_does_not_age_anything_out(self) -> None:
+        with _StateFile() as sf:
+            sf.path.write_text(
+                json.dumps({"phase": "running", "at": "not a date"}), encoding="utf-8"
+            )
+            self.assertEqual(mi.read_metrics_state()["phase"], "running")
 
 
 class TheDeployAlwaysSaysWhatHappenedToMetrics(unittest.TestCase):
