@@ -639,6 +639,26 @@ export const Choice = styled.button<{ selected?: boolean }>`
   }
 `;
 
+/* Louder than WarnBox, and deliberately rare. WarnBox means "look at this
+   when you can". This one is for a state that is about to cost service or
+   data if the operator does nothing in the next minute, which on this
+   appliance means exactly one thing: a node that is going to reset itself. */
+export const DangerBox = styled.div`
+  border: 1px solid ${theme.oxide};
+  border-left: 3px solid ${theme.oxide};
+  background: ${theme.oxideSoft};
+  color: ${theme.ink};
+  border-radius: ${theme.radius.sm};
+  padding: 0.8rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+
+  strong {
+    color: ${theme.oxide};
+  }
+`;
+
 export const WarnBox = styled.div`
   border: 1px solid ${theme.line};
   border-left: 3px solid ${theme.warn};

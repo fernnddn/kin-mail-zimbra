@@ -82,6 +82,30 @@ def probe_payload(plan: Any, *, reachable: bool, ssh_ok: bool) -> dict[str, Any]
     }
 
 
+async def _tcp_open(ip: str, port: int, timeout: float = 3.0) -> bool:
+    """Is anything listening. Used to decide whether SSH is worth trying.
+
+    Each SSH attempt carries ConnectTimeout=12 and there are two candidate
+    accounts, so probing a powered-off VM burned about half a minute of dead
+    air before answering a question a TCP connect answers in one second. That
+    delay lands on the Remove Observability dialog, which is the screen an
+    operator is on precisely when the witness is already gone.
+    """
+    import asyncio
+
+    try:
+        fut = asyncio.open_connection(ip, port)
+        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except (OSError, asyncio.TimeoutError):
+        pass
+    return True
+
+
 async def _ssh_login(host: OrchHost, user_pass_pairs: list[tuple[str, str]]) -> tuple[str, str] | None:
     from .orchestration import _ssh_probe
 
@@ -163,22 +187,68 @@ async def cmd_remove_observability(
         return
 
     yield await _emit(f"=== remove_observability {op} ===")
-    st = await gather_status()
+    # Everything the probe learns is best-effort, and the screen that shows it
+    # is the one an operator reaches when the witness is ALREADY gone. If any
+    # of it raises, the dialog used to say "Probe did not return a result",
+    # which named nothing, suggested nothing, and left Remove Observability
+    # disabled with no way forward (live QA, 8 Sep 2026). Report the fault as
+    # the probe result instead.
+    try:
+        st = await gather_status()
+    except Exception as exc:  # noqa: BLE001
+        yield await _emit(
+            "REMOVE_OBS_PROBE_JSON:"
+            + json.dumps(
+                {
+                    "configured_ip": "",
+                    "status": "unknown",
+                    "errors": [
+                        "Could not read cluster status on this node "
+                        f"({exc}). Remove Observability needs it to decide "
+                        "whether the witness is really gone."
+                    ],
+                    "notes": [],
+                },
+                separators=(",", ":"),
+            )
+        )
+        yield proto.event_done(2)
+        return
     obs = st.get("observability") or {}
     identity = str(obs.get("ip") or "")
     reachable = bool(obs.get("reachable"))
-    secrets_map = load_secrets()
+    try:
+        secrets_map = load_secrets()
+    except Exception:  # noqa: BLE001 - no stored secrets is not a probe failure
+        secrets_map = {}
     root_pass = secrets_map.get("host_root_pass") or ""
     kin_pass = secrets_map.get("kin_user_pass") or ""
     ssh_ok = False
     if identity and valid_ipv4(identity):
-        ssh_ok = (
-            await _ssh_login(
-                OrchHost("observability", identity, "obs"),
-                list(ssh_password_candidates(kin_pass, root_pass)),
+        # Ask TCP first. If nothing answers on 22 the VM is off, and two SSH
+        # attempts at ConnectTimeout=12 would only take half a minute to agree.
+        if await _tcp_open(identity, 22):
+            try:
+                ssh_ok = (
+                    await _ssh_login(
+                        OrchHost("observability", identity, "obs"),
+                        list(ssh_password_candidates(kin_pass, root_pass)),
+                    )
+                    is not None
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Not being able to test SSH is not the same as the VM being
+                # alive, and it must not lose the whole probe.
+                yield await _emit(
+                    f"observability {identity}: SSH check could not run ({exc}); "
+                    "treating it as not reachable"
+                )
+                ssh_ok = False
+        else:
+            yield await _emit(
+                f"observability {identity}: nothing listening on 22, treating "
+                "the VM as gone without waiting on SSH"
             )
-            is not None
-        )
     plan = plan_remove_observability(
         identity=identity,
         reachable=reachable,

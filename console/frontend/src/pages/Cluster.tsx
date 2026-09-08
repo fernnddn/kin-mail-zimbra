@@ -10,6 +10,7 @@ import {
   Button,
   ClusterIcon,
   ConfirmModal,
+  DangerBox,
   Dropdown,
   FieldLabel,
   Hint,
@@ -2044,6 +2045,38 @@ export default function ClusterPage() {
           title="Cluster"
           subtitle="Take the peer mail node offline for planned work, or move the Master back after failover. You cannot Enter Maintenance or Remove Host on the server serving this console."
         />
+        {/* The one warning on this page that is about the next sixty seconds.
+            sbd is configured with SBD_PACEMAKER=yes, which lets it survive
+            losing its disk ONLY while the node is quorate. Lose the witness
+            (the SBD LUN and the qdevice vote come from the same VM) on a
+            cluster that is already down to one voting node, and sbd has
+            neither a disk nor quorum, so it does what it is built to do and
+            resets the node after SBD_WATCHDOG_TIMEOUT.
+
+            no-quorum-policy=ignore does NOT prevent this: that governs what
+            Pacemaker does with resources, not what sbd does with the watchdog.
+            An operator powered the Observability VM off on 8 Sep 2026, waited,
+            and the whole appliance went down with no warning anywhere. */}
+        {cluster.fencing_enabled === true &&
+        cluster.quorate === false &&
+        (cluster.observability || {}).reachable === false ? (
+          <DangerBox role="alert">
+            <strong>
+              This node is about to reset itself. Act now.
+            </strong>{" "}
+            Fencing is armed, the Observability VM is unreachable so sbd has
+            lost its device, and this node no longer has quorum. sbd tolerates
+            losing the device only while the node is quorate. With neither, it
+            reboots the node it is running on, and mail goes down with it.{" "}
+            <strong>
+              Power the Observability VM ({(cluster.observability || {}).ip || "the witness"})
+              back on now
+            </strong>{" "}
+            if you can: that restores both the device and the vote, and nothing
+            else is needed. If it is gone for good, run Remove Observability,
+            which disarms sbd first and is the supported way out of this.
+          </DangerBox>
+        ) : null}
         {/* A job the helper is running that this page did not start, or started
             before a reload. Without this the page looked idle, offered every
             button, and the daemon refused each one. */}
@@ -2494,7 +2527,13 @@ export default function ClusterPage() {
             ) : (obsRemoveProbe?.errors || []).length > 0 ? (
               <>{(obsRemoveProbe?.errors || []).join(" ")}</>
             ) : !obsRemoveProbe ? (
-              <>Probe did not return a result. Cancel and try again.</>
+              <>
+                The check could not finish, so this dialog cannot say whether
+                the witness is safe to remove. The Activity log tab has the
+                whole run and will name what failed. If this node is at risk of
+                resetting itself, the fastest fix is to power the Observability
+                VM back on rather than to keep retrying this.
+              </>
             ) : (
               <>
                 Observability is unreachable. This will disarm SBD on both mail
