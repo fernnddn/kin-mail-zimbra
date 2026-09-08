@@ -44,7 +44,16 @@ class AbsenceIsNotZero(unittest.TestCase):
         self.assertEqual(R.data_quality_notes(_report()), [])
 
     def test_no_samples_at_all_says_so(self) -> None:
-        notes = R.data_quality_notes(_report(no_data=True))
+        # The case this is about is an appliance with nothing collecting, so
+        # the fixture has to be that appliance. An empty period on a HEALTHY
+        # box is a different statement and has its own tests below.
+        notes = R.data_quality_notes(
+            _report(
+                no_data=True,
+                mail_flow={"known": False, "stale": False, "reason": "No collector here."},
+                metrics_install={"phase": "unknown", "installed": False, "reason": ""},
+            )
+        )
         self.assertTrue(notes)
         joined = " ".join(notes)
         self.assertIn("not the same as no mail", joined)
@@ -106,6 +115,59 @@ class AbsenceIsNotZero(unittest.TestCase):
         self.assertTrue(any("blank rather than zero" in n for n in notes))
 
 
+class AnEmptyPeriodMeansDifferentThingsOnDifferentBoxes(unittest.TestCase):
+    """The most ordinary case in the field is an empty period on a good box.
+
+    An appliance deployed three weeks ago, asked for last month, has no samples
+    for it and never will: figures start when collection starts and are not
+    back-filled. Telling that operator their appliance looks like it has no
+    metrics collection is a false alarm on a healthy machine, and a warning
+    that fires on healthy machines is one people learn to scroll past. That
+    costs exactly the occasions it is right.
+    """
+
+    def test_a_working_collector_gets_the_calm_explanation(self) -> None:
+        notes = R.data_quality_notes(_report(no_data=True))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("metrics collection is working on this appliance now", notes[0])
+        self.assertIn("never back-filled", notes[0])
+        self.assertNotIn("no metrics collection looks like", notes[0])
+
+    def test_an_absent_collector_still_gets_accused(self) -> None:
+        notes = R.data_quality_notes(
+            _report(
+                no_data=True,
+                mail_flow={"known": False, "stale": False, "reason": "No collector here."},
+                metrics_install={"phase": "unknown", "installed": False, "reason": ""},
+            )
+        )
+        self.assertTrue(any("no metrics collection looks like" in n for n in notes))
+
+    def test_a_failed_install_still_gets_accused(self) -> None:
+        # Collector may look fresh from a stale textfile while the install that
+        # would keep it current has failed. Do not let that read as calm.
+        notes = R.data_quality_notes(
+            _report(
+                no_data=True,
+                metrics_install={
+                    "phase": "failed",
+                    "installed": False,
+                    "reason": "The metrics install failed (exit 2).",
+                },
+            )
+        )
+        self.assertTrue(any("no metrics collection looks like" in n for n in notes))
+
+    def test_a_stale_collector_still_gets_accused(self) -> None:
+        notes = R.data_quality_notes(
+            _report(
+                no_data=True,
+                mail_flow={"known": True, "stale": True, "reason": "Last wrote 90 minutes ago."},
+            )
+        )
+        self.assertTrue(any("no metrics collection looks like" in n for n in notes))
+
+
 class TheCsvCarriesTheSameWarnings(unittest.TestCase):
     def _lines(self, report: dict) -> list[str]:
         return R.report_csv(report).splitlines()
@@ -153,7 +215,14 @@ class TheCsvCarriesTheSameWarnings(unittest.TestCase):
         # The worst case in the field: nothing was ever collected, so there is
         # not even a row to look wrong. An empty table with a confident
         # filename is exactly what gets forwarded.
-        body = R.report_csv(_report(daily=[], no_data=True))
+        body = R.report_csv(
+            _report(
+                daily=[],
+                no_data=True,
+                mail_flow={"known": False, "stale": False, "reason": "No collector here."},
+                metrics_install={"phase": "unknown", "installed": False, "reason": ""},
+            )
+        )
         self.assertIn("#", body)
         self.assertIn("no metrics collection", body)
 

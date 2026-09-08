@@ -404,11 +404,29 @@ def data_quality_notes(report: dict[str, Any]) -> list[str]:
         )
 
     if report.get("no_data"):
-        notes.append(
-            "No samples at all were returned for this period. That is not the "
-            "same as no mail: it is what an appliance with no metrics "
-            "collection looks like."
-        )
+        # What an empty period MEANS depends on whether anything is collecting.
+        #
+        # Accusing every empty period of a missing pipeline is a false alarm on
+        # the most ordinary case there is: an appliance deployed three weeks
+        # ago, asked for last month. Collection was working, the install
+        # succeeded, and the report still said this looks like a box with no
+        # metrics. A warning that fires on healthy appliances is one operators
+        # learn to scroll past, which costs exactly the times it is right.
+        collecting = bool(flow.get("known")) and not flow.get("stale")
+        installed_ok = phase == "ok"
+        if collecting and installed_ok:
+            notes.append(
+                "No samples were recorded in this period, although metrics "
+                "collection is working on this appliance now. That usually "
+                "means the period is older than the collector. Figures start "
+                "when collection starts and are never back-filled."
+            )
+        else:
+            notes.append(
+                "No samples at all were returned for this period. That is not "
+                "the same as no mail: it is what an appliance with no metrics "
+                "collection looks like."
+            )
 
     return notes
 
