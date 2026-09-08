@@ -34,6 +34,10 @@ MONITORING_WORK_DIR = Path(
 # Same shape as an inventory hostname elsewhere in the tree: a DNS label or
 # FQDN, nothing that could carry shell or YAML meaning.
 HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
+# Ceiling for the detached run. The playbook is allowed to wait 900s on an
+# apt lock, plus package download and service start, so this is generous;
+# it exists only so a stuck run cannot hold the maintenance lock for ever.
+INSTALL_TIMEOUT_SEC = 30 * 60
 
 
 def local_inventory(hostname: str) -> str:
@@ -93,11 +97,24 @@ def run_after_install() -> str:
 
     async def _run() -> None:
         try:
-            async for _ev in cmd_install_monitoring({}):
-                # Events are written to the transcript by _stream_redacted.
-                # Nothing is listening here, and that is the point.
-                pass
+            # Bounded, because this holds the maintenance lock for its whole
+            # run and nothing is watching it. The playbook waits up to 900s on
+            # an apt lock by design, so the ceiling has to clear that; what it
+            # must not do is sit there for ever, because a stuck metrics
+            # install would block Enter Maintenance, Remove Host and every
+            # other cluster operation with an explanation nobody can act on.
+            # Cancelling raises into the generator, whose finally releases the
+            # lock.
+            await asyncio.wait_for(_drain(), timeout=INSTALL_TIMEOUT_SEC)
+        except asyncio.TimeoutError:
+            pass
         except Exception:  # noqa: BLE001 - a detached task must not raise
+            pass
+
+    async def _drain() -> None:
+        async for _ev in cmd_install_monitoring({}):
+            # Events are written to the transcript by _stream_redacted.
+            # Nothing is listening here, and that is the point.
             pass
 
     try:

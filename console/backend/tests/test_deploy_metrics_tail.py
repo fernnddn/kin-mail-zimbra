@@ -1,14 +1,22 @@
-"""The metrics install must survive the browser going away.
+"""The metrics install runs detached, and has to behave itself there.
 
-A deploy on 8 Sep 2026 finished cleanly and still had no metrics. The operator
-had seen the log drop and reconnect during the package upgrade and thought
-nothing of it. What it cost was the tail: the install ran inline inside the
-generator feeding the SSE stream, so when the console broke out of that stream
-the generator was closed, GeneratorExit was raised at the streaming loop, and
-every line after it never ran.
+A deploy on 8 Sep 2026 finished cleanly and still had no metrics. My first
+reading was that the browser dropping its connection had killed the tail, and
+that was wrong: _drive_handler keeps consuming a handler after the client goes
+away, so privhelperd finishes the job either way (see
+test_handler_survives_disconnect). What actually happened to that deploy is
+still unknown, which is why the install now writes KIN_METRICS_BEGIN and
+KIN_METRICS_END markers into the transcript.
 
-These tests pin both halves: that an abandoned generator really does skip its
-tail (so nobody puts one back), and that the detached runner does not.
+The install was moved out of the deploy's generator anyway, because the
+operator asked for it not to hold the deploy open. That makes it a detached
+task, and a detached task has its own obligations: it must survive its caller,
+it must never raise into the event loop, and it must not hold the maintenance
+lock for ever. Those three are what these tests pin.
+
+The first test keeps a fact honest rather than testing our code: an abandoned
+generator really does skip everything after its loop. It is here so nobody
+reads the detached design as needless.
 """
 
 from __future__ import annotations
@@ -126,6 +134,52 @@ class DeployStillReportsItsOwnResultTests(unittest.TestCase):
         # No inline consumption: that is what lost the tail in the first place.
         self.assertNotIn("async for ev in _install_metrics", src)
 
+
+
+class DetachedRunIsBoundedTests(unittest.IsolatedAsyncioTestCase):
+    """A stuck metrics install must not hold the maintenance lock for ever.
+
+    It runs detached with nothing watching it, and it holds the single-flight
+    lock for its whole run, so a hang would block Enter Maintenance, Remove
+    Host and every other cluster operation with no way for the operator to
+    clear it.
+    """
+
+    async def test_a_hung_install_is_given_up_on(self) -> None:
+        from unittest.mock import patch
+
+        from kin_privhelper import monitoring_install
+
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hangs(_args: Any = None) -> AsyncIterator[dict[str, Any]]:
+            entered.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # This is where the real command's finally releases the lock.
+                cancelled.set()
+                raise
+            yield {"type": "done", "exit_code": 0}  # pragma: no cover
+
+        with (
+            patch.object(monitoring_install, "cmd_install_monitoring", hangs),
+            patch.object(monitoring_install, "INSTALL_TIMEOUT_SEC", 0.05),
+        ):
+            monitoring_install.run_after_install()
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await asyncio.wait_for(cancelled.wait(), timeout=5)
+
+        self.assertTrue(cancelled.is_set())
+
+    def test_the_ceiling_clears_the_apt_lock_wait(self) -> None:
+        """The playbook may legitimately wait 900s on a dpkg lock, so the
+        ceiling has to be comfortably above that or a normal slow run would be
+        killed."""
+        from kin_privhelper.monitoring_install import INSTALL_TIMEOUT_SEC
+
+        self.assertGreater(INSTALL_TIMEOUT_SEC, 900 * 1.5)
 
 if __name__ == "__main__":
     unittest.main()
