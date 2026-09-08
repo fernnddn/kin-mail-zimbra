@@ -2152,6 +2152,32 @@ async def cmd_run_ha_orchestration(
     yield emit_line("=== HA orchestration Slice 2 ===")
     yield emit_line(f"join_mode={join_mode} skip_remote_install={skip_remote}")
 
+    # Topology first, before anything on this host is touched.
+    #
+    # This already refused a single-node appliance, but it refused late:
+    # resolve_topology raises "Second server IP is missing" only AFTER the
+    # block below has re-enabled password SSH and after cluster secrets have
+    # been written to the vault. On 1vm that silently undoes the
+    # --revert-ssh-password step the single-node install runs at the end, so a
+    # stray call left an internet-facing mail server accepting SSH passwords
+    # again while the operator read "Refusing: Second server IP is missing"
+    # and reasonably concluded that nothing had happened.
+    #
+    # A single server has no peer to orchestrate. Say so before doing anything,
+    # not after.
+    from .deploy_state import saved_wizard_topology
+
+    if saved_wizard_topology() == "1vm":
+        yield emit_line(
+            "Refusing: this appliance is configured as a single server, so "
+            "there is no second node to build a pair with. Nothing on this "
+            "host has been changed. Switch the topology in the wizard first "
+            "if a second server is genuinely being added.",
+            err=True,
+        )
+        yield proto.event_done(1)
+        return
+
     # Every host in the rendered inventory - including this one - connects
     # over ansible_password (see render_inventory). A 1vm host that already
     # ran the post-install SSH revert (kin-mail.sh, single-node only) would
