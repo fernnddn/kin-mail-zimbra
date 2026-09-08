@@ -312,7 +312,13 @@ async def _watch_log_file(
             break
         try:
             await asyncio.wait_for(stop.wait(), timeout=max(0.05, poll_s))
-        except TimeoutError:
+        # Must stay asyncio.TimeoutError, not the builtin. The two are aliases
+        # only on Python 3.11+, which is what CI runs; the appliance is Ubuntu
+        # 22.04 on 3.10, where they are distinct and a bare "except
+        # TimeoutError" catches nothing. That let this poll loop die on the
+        # first idle tick, so a sidecar log the parent never echoes (zmsetup)
+        # stopped tailing and the operator watched a silent deploy.
+        except asyncio.TimeoutError:
             continue
 
 
