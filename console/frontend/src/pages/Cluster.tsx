@@ -1146,6 +1146,16 @@ function lastMeaningfulLine(chunk: string): string {
 
 /* Names for what the helper reports it is running. Same words the operator
    sees on the buttons, so "Remove Host is running" is unambiguous. */
+/* How long a pre-flight result stays a green light.
+   These checks gate Enter Maintenance and Move Master here, and they are a
+   snapshot: "both replicas UpToDate" and "peer_online" stay on screen exactly
+   as they were even after the peer has left the cluster and DRBD has gone
+   down. An operator saw precisely that, a wall of ticks next to a cluster that
+   had neither (live QA, 8 Sep 2026). Ten minutes is long enough to read the
+   result and act on it, short enough that it cannot vouch for a cluster that
+   has moved on. */
+const PREFLIGHT_FRESH_MS = 10 * 60 * 1000;
+
 const OPERATION_LABELS: Record<string, string> = {
   run_full_install: "Deploy",
   run_ha_orchestration: "Build HA pair",
@@ -1278,7 +1288,7 @@ export default function ClusterPage() {
   // as you looked at the other card - which is how a failed peer check ended
   // up invisible during the Phase 7 run, right next to an enabled Move Master.
   const [preflightByNode, setPreflightByNode] = useState<
-    Record<string, Record<string, PreflightCheck>>
+    Record<string, { checks: Record<string, PreflightCheck>; at: number }>
   >({});
   const [tab, setTab] = useState<
     "status" | "monitoring" | "reports" | "activity"
@@ -1335,6 +1345,14 @@ export default function ClusterPage() {
   const refreshInFlightRef = useRef(false);
   const busyRef = useRef(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  // A slow clock so a pre-flight result can go stale on screen without needing
+  // anything else to happen. Half the freshness window, so the switch is never
+  // more than that late.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -1478,7 +1496,10 @@ export default function ClusterPage() {
                 checks[k] = v as PreflightCheck;
               }
             }
-            setPreflightByNode((prev) => ({ ...prev, [target]: checks }));
+            setPreflightByNode((prev) => ({
+              ...prev,
+              [target]: { checks, at: Date.now() },
+            }));
           }
           const code = data.exit_code ?? 1;
           if (op === "preflight") {
@@ -1865,9 +1886,12 @@ export default function ClusterPage() {
     const isPromoted = cluster.promoted === node;
     const isOffline = offline.has(node);
     const isLocal = hostsMatch(node, cluster.local_host);
-    const pfForThis = preflightByNode[node] || null;
+    const pfEntry = preflightByNode[node] || null;
+    const pfAgeMs = pfEntry ? nowTick - pfEntry.at : 0;
+    const pfStale = !!pfEntry && pfAgeMs > PREFLIGHT_FRESH_MS;
+    const pfForThis = pfEntry ? pfEntry.checks : null;
     const pfFailed = pfForThis ? Object.values(pfForThis).some((c) => !c.ok) : false;
-    const pfPassed = !!pfForThis && !pfFailed;
+    const pfPassed = !!pfForThis && !pfFailed && !pfStale;
     const ip = ipForNode(node, cluster.node_ips, cluster.local_host);
     const isVip = Boolean(cluster.vip_ip) && cluster.vip_node === node;
     const canFailback =
@@ -1933,6 +1957,13 @@ export default function ClusterPage() {
             </>
           ) : null}
         </Kv>
+        {pfForThis && pfStale ? (
+          <CardHint>
+            <strong>These results are {Math.round(pfAgeMs / 60000)} minutes old.</strong>{" "}
+            They describe the cluster as it was when Check ran, not as it is
+            now. Run Check again before acting on them.
+          </CardHint>
+        ) : null}
         {pfForThis ? (
           <CheckList>
             {Object.entries(pfForThis).map(([name, check]) => (
@@ -1997,7 +2028,9 @@ export default function ClusterPage() {
                   <CardHint>
                     {pfFailed
                       ? "All checks must pass before you can enter maintenance or move the Master here."
-                      : "Run Check first to enable Enter Maintenance and Move Master here."}
+                      : pfStale
+                        ? "These checks are more than ten minutes old, so they no longer say anything about the cluster as it is now. Run Check again."
+                        : "Run Check first to enable Enter Maintenance and Move Master here."}
                   </CardHint>
                 ) : null}
                 {canFailback && !cluster.drbd_uptodate ? (
