@@ -1306,6 +1306,10 @@ export default function ClusterPage() {
   // tab it was an unlabelled spinner for the whole duration.
   const [liveStep, setLiveStep] = useState("");
   const [pendingFailback, setPendingFailback] = useState<string | null>(null);
+  // Entering maintenance takes a mail node out of the cluster. It used to run
+  // on a single click with nothing said first, which on a pair is one click
+  // away from having no redundancy at all (live QA, 8 Sep 2026).
+  const [pendingMaint, setPendingMaint] = useState<string | null>(null);
   // The Activity log is a running record, not a scratch buffer: every action
   // appends to it under a timestamped header so the operator can scroll back
   // and see where something went wrong. Capped so a long session cannot grow
@@ -1967,7 +1971,7 @@ export default function ClusterPage() {
                         !pfPassed ||
                         (!!cluster.maintenance_active && !isStandby)
                       }
-                      onClick={() => runStream("enter", node)}
+                      onClick={() => setPendingMaint(node)}
                     >
                       Enter Maintenance
                     </Button>
@@ -2422,6 +2426,31 @@ export default function ClusterPage() {
           }}
         />
         <ConfirmModal
+          open={!!pendingMaint}
+          title="Enter Maintenance"
+          message={
+            <>
+              Put <strong>{pendingMaint}</strong> into Pacemaker standby. Its
+              resources move off, and while it is in maintenance this pair is
+              running on one node with no redundancy.
+            </>
+          }
+          detail="Mail keeps running on the other node. Deploy and mailbox create stay blocked until you exit. Standby survives a reboot, so it stays in maintenance until you take it out again."
+          confirmLabel="Enter Maintenance"
+          variant="danger"
+          loading={busy}
+          onCancel={() => {
+            if (busy) return;
+            setPendingMaint(null);
+          }}
+          onConfirm={() => {
+            if (!pendingMaint || busy) return;
+            const target = pendingMaint;
+            setPendingMaint(null);
+            runStream("enter", target);
+          }}
+        />
+        <ConfirmModal
           open={!!pendingFailback}
           title="Move Master here"
           message={
@@ -2515,7 +2544,14 @@ export default function ClusterPage() {
           onConfirm={() => {
             if (!pendingRemove || !removeProbe || probing || busy) return;
             if ((removeProbe.errors || []).length > 0) return;
-            runRemove(pendingRemove);
+            // Close first, then run. Leaving the dialog up with a spinner sat
+            // on top of the Activity log for the whole job, which is the one
+            // thing the operator wants to watch (live QA, 8 Sep 2026). The
+            // run shows as the page banner and the log underneath.
+            const target = pendingRemove;
+            setPendingRemove(null);
+            setRemoveProbe(null);
+            runRemove(target);
           }}
         />
         <ConfirmModal
@@ -2575,6 +2611,11 @@ export default function ClusterPage() {
           onConfirm={() => {
             if (probing || busy) return;
             if (!obsRemoveProbe || (obsRemoveProbe.errors || []).length > 0) return;
+            // Close before running, same as Remove Host: this job waits out a
+            // watchdog on each node and the operator should be watching the
+            // log for it, not a spinner on a dialog.
+            setPendingObsRemove(false);
+            setObsRemoveProbe(null);
             runObsRemove();
           }}
         />

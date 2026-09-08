@@ -334,7 +334,17 @@ export function TaskCenter({
             </Badge>
           ) : null}
         </IconBtn>
-        <Dropdown open={alertsOpen} onClose={() => setAlertsOpen(false)} align={rail ? "left" : "right"}>
+        <Dropdown
+          open={alertsOpen}
+          onClose={() => setAlertsOpen(false)}
+          align={rail ? "left" : "right"}
+          /* In the rail these buttons sit at the BOTTOM of a full-height
+             sidebar, so opening downward opened off the bottom of the screen
+             and the operator had to scroll to find a panel they had just
+             opened (live QA, 8 Sep 2026: "it hides"). Same direction as the
+             account menu directly below it. */
+          drop={rail ? "up" : "down"}
+        >
           <PanelHead>Cluster alerts</PanelHead>
           <Scroll>
             {alerts.length === 0 ? (
@@ -393,7 +403,12 @@ export function TaskCenter({
           {rail ? <RailLabel>Tasks</RailLabel> : null}
           {badgeCount ? <Badge $rail={rail} $tone={badgeTone}>{badgeCount}</Badge> : null}
         </IconBtn>
-        <Dropdown open={tasksOpen} onClose={() => setTasksOpen(false)} align={rail ? "left" : "right"}>
+        <Dropdown
+          open={tasksOpen}
+          onClose={() => setTasksOpen(false)}
+          align={rail ? "left" : "right"}
+          drop={rail ? "up" : "down"}
+        >
           <PanelHead>
             <span>Tasks</span>
             {tasks.some((t) => t.state !== "running") ? (

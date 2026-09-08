@@ -164,7 +164,16 @@ def verify_license(
     if expected != payload_raw:
         raise ValueError("license payload is not in canonical form")
     if clean["server_id"] != str(server_id).strip():
-        raise ValueError("license is for a different Email Server ID")
+        # Name both. The signature has already been verified above, so the id
+        # in the token is provably what KIN issued and is not a secret. Saying
+        # only "a different Email Server ID" left the operator holding two
+        # opaque UUIDs and no way to tell which appliance the key belonged to
+        # (live QA, 8 Sep 2026).
+        raise ValueError(
+            "license is for a different Email Server ID: the key was issued "
+            f"for {clean['server_id']}, this server is "
+            f"{str(server_id).strip() or '(none)'}"
+        )
     clock = now or datetime.now(timezone.utc)
     expires_at = _parse_ts(clean["expires_at"])
     status = "active"

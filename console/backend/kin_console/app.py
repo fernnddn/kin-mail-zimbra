@@ -1208,19 +1208,28 @@ def _human_license_error(text: str) -> str:
     # the license must match the Email Server ID of the node the VIP is
     # serving right now.
     if "different email server" in low or "server_id" in low or "server id" in low:
+        # verify_license names both ids once the signature has checked out.
+        # Pass that straight through: two concrete UUIDs are the difference
+        # between "which appliance is this key for" and a dead end.
+        detail = ""
+        if "issued for" in low:
+            both = text.split(
+                "license is for a different Email Server ID: ", 1
+            )[-1].strip().rstrip(".")
+            detail = f" Specifically, {both}."
         return (
             "That license was issued for a different Email Server ID than the "
-            "one shown on this page. On an HA pair there are two ways to land "
-            "here. Either the key was issued for the other node, in which case "
-            "open the console on the node whose ID matches and apply it there: "
-            "applying it syncs the ID, the token and the seat count to the "
-            "peer, so it only has to be done once. Or the pair has drifted "
-            "onto two different IDs, which a pair should never have; compare "
-            "this ID with the one on the peer console, and if they differ "
-            "rebuild the identity by applying a valid key on the node the "
-            "licence was issued for. If neither fits, send KIN the ID shown "
-            "here and ask for a licence issued against it."
+            "one shown on this page." + detail + " On an HA pair there are two "
+            "ways to land here. Either the key belongs to the other node, in "
+            "which case open the console on the node whose ID matches and apply "
+            "it there: applying it syncs the ID, the token and the seat count "
+            "to the peer, so it only has to be done once. Or the pair has "
+            "drifted onto two different IDs, which a pair should never have. "
+            "If the ID above is not one you recognise at all, the appliance was "
+            "rebuilt since the key was issued, and KIN needs to reissue it for "
+            "the ID shown on this page."
         )
+
     if "expired" in low:
         return "That license has expired. Ask KIN for a renewed license."
     if "canonical" in low:
