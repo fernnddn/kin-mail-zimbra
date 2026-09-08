@@ -71,6 +71,9 @@ type ClusterSnap = {
   attach_peer_eligible?: boolean;
   /** PEER_HOST_NAME from config: the node that should be in this pair. */
   configured_peer?: string;
+  /** What the privileged helper is doing right now, if anything. Survives a
+   *  page reload, which this page's own `busy` state does not. */
+  privileged_run?: { running?: boolean; command?: string; seconds?: number };
 };
 
 type StatusResp = {
@@ -1140,6 +1143,24 @@ function lastMeaningfulLine(chunk: string): string {
   return line.length > 160 ? line.slice(0, 157) + "..." : line;
 }
 
+/* Names for what the helper reports it is running. Same words the operator
+   sees on the buttons, so "Remove Host is running" is unambiguous. */
+const OPERATION_LABELS: Record<string, string> = {
+  run_full_install: "Deploy",
+  run_ha_orchestration: "Build HA pair",
+  apply_wizard_draft: "Saving the wizard",
+  maintenance: "A maintenance operation",
+  remove_host: "Remove Host",
+  add_host: "Add host",
+  remove_observability: "Remove Observability",
+  add_observability: "Add Observability",
+  install_monitoring: "Install monitoring",
+  apply_appliance_settings: "Applying appliance settings",
+  create_mailbox: "A mailbox operation",
+  mutate_console_users: "A console user change",
+  run_hardening: "Hardening",
+};
+
 function parseTaggedJson(log: string, prefix: string): Record<string, unknown> | null {
   for (const line of log.split("\n")) {
     if (line.startsWith(prefix)) {
@@ -1794,6 +1815,16 @@ export default function ClusterPage() {
     }
   }
 
+  /* The helper runs one privileged job at a time. This page's own `busy` is
+     React state, so a reload forgot a job that was still running and the page
+     cheerfully re-offered Enter Maintenance and Remove Host; clicking them
+     earned a bare "busy" from the daemon with nothing saying what was holding
+     it (live QA, 8 Sep 2026). Trust the server as well as ourselves. */
+  const serverRun = cluster.privileged_run;
+  const serverBusy = !!serverRun?.running;
+  const anyBusy = busy || serverBusy;
+  const serverBusyLabel = OPERATION_LABELS[serverRun?.command || ""] || "An operation";
+
   const topology = cluster.topology === "2vm" ? "2vm" : cluster.topology === "1vm" ? "1vm" : "";
   // Which node should be in this pair and is not. A completed Remove Host
   // records last_removed_peer, but the half-removed state is exactly the case
@@ -1923,14 +1954,14 @@ export default function ClusterPage() {
                     Check
                   </Button>
                   {isStandby ? (
-                    <Button type="button" disabled={busy} onClick={() => runStream("exit", node)}>
+                    <Button type="button" disabled={anyBusy} onClick={() => runStream("exit", node)}>
                       Exit Maintenance
                     </Button>
                   ) : (
                     <Button
                       type="button"
                       disabled={
-                        busy ||
+                        anyBusy ||
                         isLocal ||
                         !pfPassed ||
                         (!!cluster.maintenance_active && !isStandby)
@@ -1944,7 +1975,7 @@ export default function ClusterPage() {
                     <Button
                       type="button"
                       variant="secondary"
-                      disabled={busy || !cluster.drbd_uptodate || !pfPassed}
+                      disabled={anyBusy || !cluster.drbd_uptodate || !pfPassed}
                       onClick={() => setPendingFailback(node)}
                     >
                       Move Master here
@@ -1980,7 +2011,7 @@ export default function ClusterPage() {
                 type="button"
                 variant="danger"
                 disabled={
-                  busy ||
+                  anyBusy ||
                   probing ||
                   isLocal ||
                   (!isOffline && !isStandby)
@@ -2013,6 +2044,24 @@ export default function ClusterPage() {
           title="Cluster"
           subtitle="Take the peer mail node offline for planned work, or move the Master back after failover. You cannot Enter Maintenance or Remove Host on the server serving this console."
         />
+        {/* A job the helper is running that this page did not start, or started
+            before a reload. Without this the page looked idle, offered every
+            button, and the daemon refused each one. */}
+        {serverBusy && !busy ? (
+          <WarnBox role="status">
+            <strong>{serverBusyLabel} is running on this server</strong>
+            {typeof serverRun?.seconds === "number" && serverRun.seconds > 0
+              ? ` (${
+                  serverRun.seconds >= 90
+                    ? `${Math.round(serverRun.seconds / 60)} minutes`
+                    : `${serverRun.seconds} seconds`
+                } so far)`
+              : ""}
+            . Only one privileged operation runs at a time, so the buttons stay
+            disabled until it finishes. It keeps running even if you close this
+            page; the Activity log tab has its output.
+          </WarnBox>
+        ) : null}
         {cluster.quorum_hint ? (
           <WarnBox role="alert">
             <strong>
@@ -2050,7 +2099,7 @@ export default function ClusterPage() {
                 <Button
                   type="button"
                   variant="primary"
-                  disabled={busy || probing}
+                  disabled={anyBusy || probing}
                   onClick={() => openRemove(retiredPeerName)}
                 >
                   Finish removing {retiredPeerName}
@@ -2200,7 +2249,7 @@ export default function ClusterPage() {
                   {ops && cluster.failcount_ok === false ? (
                     <MenuItem
                       type="button"
-                      disabled={busy}
+                      disabled={anyBusy}
                       onClick={() => {
                         setHealthOpen(false);
                         setPendingCleanup(true);
@@ -2213,7 +2262,7 @@ export default function ClusterPage() {
                     <MenuItem
                       type="button"
                       data-danger="true"
-                      disabled={busy}
+                      disabled={anyBusy}
                       onClick={() => {
                         setHealthOpen(false);
                         runStream("clearban", "");
@@ -2502,7 +2551,7 @@ export default function ClusterPage() {
               <Button type="button" variant="ghost" disabled={busy} onClick={() => setAddOpen(false)}>
                 Cancel
               </Button>
-              <Button type="button" disabled={busy} onClick={() => void submitAddForm()}>
+              <Button type="button" disabled={anyBusy} onClick={() => void submitAddForm()}>
                 Continue
               </Button>
             </>

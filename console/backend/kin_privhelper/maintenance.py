@@ -1015,6 +1015,20 @@ def _config_vip_ip() -> str:
     return _config_value("CLUSTER_VIP_IP")
 
 
+def _running_job_snapshot() -> dict[str, Any]:
+    """Ask the daemon what holds the single-flight slot.
+
+    Imported here rather than at module scope: daemon imports commands imports
+    this module, so a top-level import would be a cycle.
+    """
+    try:
+        from .daemon import running_job
+
+        return dict(running_job())
+    except Exception:  # noqa: BLE001 - status must never fail on this
+        return {"running": False, "command": "", "seconds": 0}
+
+
 def _config_peer_name() -> str:
     """The peer this node is configured to pair with, from /etc/kin-mail/config.
 
@@ -1539,6 +1553,12 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
             "last_removed_peer": last_removed or None,
             "attach_peer_eligible": attach_ok,
             "configured_peer": _config_peer_name(),
+            # What the helper is doing right now. The console's own idea of
+            # "busy" is React state that a page reload throws away, so after a
+            # refresh it re-offered Enter Maintenance and Remove Host while a
+            # job was still running and the operator got a bare "busy" with
+            # nothing saying what (live QA, 8 Sep 2026).
+            "privileged_run": _running_job_snapshot(),
             "package_stub": bool(st.get("package_stub")),
         }
         yield await _emit("CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":")))

@@ -703,21 +703,32 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     # Metrics are what fill the Monitoring and Reports tabs. Build HA pair
     # installs them as its own step; a single-server appliance had nothing that
     # ever did, so both tabs stayed empty for the life of the box (live QA,
-    # 7 Sep 2026). Additive and last, on the same trade as the HA step: a
-    # package hiccup here reports loudly and must never turn a working deploy
-    # into a failed one.
+    # 7 Sep 2026).
+    #
+    # DETACHED on purpose. The first version ran it inline here, and inline is
+    # inside the generator that feeds the browser's SSE stream: when that
+    # connection dropped during the long package upgrade, the generator was
+    # closed, GeneratorExit was thrown in at the streaming loop, and every line
+    # after it never ran. A deploy on 8 Sep 2026 finished perfectly and still
+    # had no metrics for exactly that reason, and the operator had watched the
+    # log drop and reconnect without knowing what it had cost. A task belongs
+    # to the event loop rather than to this generator, so it survives the
+    # client going away.
     if install_exit == 0:
         try:
-            from .monitoring_install import cmd_install_monitoring as _install_metrics
+            from .monitoring_install import run_after_install
 
-            async for ev in _install_metrics({}):
-                if ev.get("type") == "done":
-                    continue
-                yield ev
+            started = run_after_install()
+            yield proto.event_stdout(
+                "Installing built-in monitoring in the background "
+                f"({started}). It keeps running if this page goes away; the "
+                "Monitoring tab shows it when it lands, and has an Install "
+                "monitoring button if it does not.\n"
+            )
         except Exception as exc:  # noqa: BLE001 - never fail a good deploy
             yield proto.event_stderr(
-                f"Monitoring install could not run: {exc}. Mail is unaffected; "
-                "install it later from the Monitoring tab.\n"
+                f"Monitoring install could not be started: {exc}. Mail is "
+                "unaffected; install it from the Monitoring tab.\n"
             )
     yield proto.event_done(install_exit)
 

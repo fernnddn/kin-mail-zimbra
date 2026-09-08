@@ -29,6 +29,10 @@ _running = False
 # clear _running in its finally if a later Deploy already stole the slot.
 _run_gen = 0
 _running_since = 0.0
+# Which command holds the slot. The console asks for this so a page that was
+# reloaded mid-operation can still say what is running, instead of offering
+# buttons that fail with a bare "busy" (live QA, 8 Sep 2026).
+_running_cmd = ""
 _audit = logging.getLogger("kin_privhelper.audit")
 
 # Wizard pipeline: wait for a just-finished job instead of immediate busy.
@@ -213,19 +217,84 @@ def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> t
 
 
 def reset_run_slot_for_tests() -> None:
-    global _running, _run_gen, _running_since
+    global _running, _run_gen, _running_since, _running_cmd
     _running = False
     _run_gen = 0
     _running_since = 0.0
+    _running_cmd = ""
 
 
-def mark_run_slot_busy_for_tests() -> int:
+def mark_run_slot_busy_for_tests(cmd: str = "test") -> int:
     """Hold the helper lock without a real job (unit tests)."""
-    global _running, _run_gen, _running_since
+    global _running, _run_gen, _running_since, _running_cmd
     _run_gen += 1
     _running = True
     _running_since = time.monotonic() - 60.0
+    _running_cmd = cmd
     return _run_gen
+
+
+def running_job() -> dict[str, object]:
+    """What the single-flight slot is doing right now.
+
+    The console polls this so a page reloaded during a long operation still
+    knows one is in flight. Without it the console's only notion of "busy" was
+    a React state that a refresh threw away, so it re-offered Enter
+    Maintenance and Remove Host and the operator got a bare
+    "another privileged execution is in progress" with nothing saying what or
+    for how long (live QA, 8 Sep 2026).
+    """
+    if not _running:
+        return {"running": False, "command": "", "seconds": 0}
+    held = time.monotonic() - _running_since if _running_since else 0.0
+    return {
+        "running": True,
+        "command": _running_cmd,
+        "seconds": int(max(0.0, held)),
+    }
+
+
+# Friendly names for the busy message. A bare command id is not something an
+# operator should have to decode while a job they cannot see is holding the
+# helper.
+_CMD_LABELS = {
+    proto.CMD_RUN_FULL_INSTALL: "Deploy",
+    proto.CMD_RUN_HA_ORCHESTRATION: "Build HA pair",
+    proto.CMD_APPLY_WIZARD_DRAFT: "saving the wizard",
+    proto.CMD_MAINTENANCE: "a maintenance operation",
+    proto.CMD_REMOVE_HOST: "Remove Host",
+    proto.CMD_ADD_HOST: "Add host",
+    proto.CMD_REMOVE_OBSERVABILITY: "Remove Observability",
+    proto.CMD_ADD_OBSERVABILITY: "Add Observability",
+    proto.CMD_INSTALL_MONITORING: "Install monitoring",
+    proto.CMD_APPLY_APPLIANCE_SETTINGS: "applying appliance settings",
+    proto.CMD_CREATE_MAILBOX: "a mailbox operation",
+    proto.CMD_MUTATE_CONSOLE_USERS: "a console user change",
+    proto.CMD_RUN_HARDENING: "hardening",
+}
+
+
+def _busy_message() -> str:
+    """Say what is running and for how long, not just that something is.
+
+    "another privileged execution is in progress" told the operator nothing
+    they could act on: not what, not whether to wait, not whether it was their
+    own click from a page they had since reloaded (live QA, 8 Sep 2026).
+    """
+    job = running_job()
+    if not job.get("running"):
+        return "another privileged execution is in progress"
+    label = _CMD_LABELS.get(str(job.get("command") or ""), str(job.get("command") or "an operation"))
+    seconds = int(job.get("seconds") or 0)
+    if seconds >= 90:
+        how_long = f"for {seconds // 60} minutes"
+    else:
+        how_long = f"for {seconds} seconds"
+    return (
+        f"{label} is already running on this server ({how_long}). Only one "
+        "privileged operation runs at a time. Wait for it to finish, then try "
+        "again; the Cluster page shows it while it runs."
+    )
 
 
 async def acquire_run_slot(
@@ -241,7 +310,7 @@ async def acquire_run_slot(
     kin-mail.sh/zmsetup process remains, steal the stale lock so Deploy
     can run again.
     """
-    global _running, _run_gen, _running_since
+    global _running, _run_gen, _running_since, _running_cmd
     # pipeline_in_progress(), not full_install_in_progress(): the latter only
     # matches kin-mail.sh/zmsetup processes, so an HA orchestration run (which
     # is ansible-playbook + peer SSH, no such process on this host once disk
@@ -260,6 +329,7 @@ async def acquire_run_slot(
                 _run_gen += 1
                 _running = True
                 _running_since = time.monotonic()
+                _running_cmd = cmd
                 return _run_gen
             if not can_wait:
                 return None
@@ -276,6 +346,7 @@ async def acquire_run_slot(
                 _run_gen += 1
                 _running = True
                 _running_since = time.monotonic()
+                _running_cmd = cmd
                 token = _run_gen
         if steal:
             logging.getLogger("kin_privhelper").warning(
@@ -289,12 +360,13 @@ async def acquire_run_slot(
 
 
 async def release_run_slot(token: int | None) -> None:
-    global _running
+    global _running, _running_cmd
     if token is None:
         return
     async with _gate:
         if _run_gen == token:
             _running = False
+            _running_cmd = ""
 
 
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -430,7 +502,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             if slot_token is None:
                 await _send(
                     writer,
-                    proto.event_error("busy", "another privileged execution is in progress"),
+                    proto.event_error("busy", _busy_message()),
                 )
                 _audit_line(username, audit_cmd, "busy")
                 return

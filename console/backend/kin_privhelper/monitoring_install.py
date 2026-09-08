@@ -68,6 +68,48 @@ async def _emit(text: str, *, err: bool = False) -> dict[str, Any]:
     return await maint_emit(text, err=err)
 
 
+# Tasks spawned by run_after_install. Held so the event loop's only reference
+# is not a weak one: a task nobody keeps can be collected mid-run.
+_BACKGROUND: set[Any] = set()
+
+
+def run_after_install() -> str:
+    """Start the metrics install detached from whoever asked for it.
+
+    This has to outlive the request that triggers it. The deploy streams over
+    SSE, and when that connection drops (a proxy reaping an idle socket during
+    the long package upgrade, or the operator closing the tab) the console's
+    generator is closed, GeneratorExit is thrown into the command, and anything
+    written after the streaming loop never runs. That is exactly how a deploy
+    on 8 Sep 2026 finished cleanly and still had no metrics: the operator saw
+    the log drop and reconnect at "upgrading and updating package", and the
+    tail died with the first connection.
+
+    An asyncio task is owned by the loop, not by the generator that created it,
+    so it keeps running once the client is gone. Output goes to the deploy
+    transcript, which is what View logs reads.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        try:
+            async for _ev in cmd_install_monitoring({}):
+                # Events are written to the transcript by _stream_redacted.
+                # Nothing is listening here, and that is the point.
+                pass
+        except Exception:  # noqa: BLE001 - a detached task must not raise
+            pass
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return "no event loop, metrics not started"
+    task = loop.create_task(_run())
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return "started"
+
+
 async def cmd_install_monitoring(
     args: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
