@@ -235,6 +235,32 @@ if [ "$RC" -ne 0 ] && has "reason=resize2fs-failed"; then
   pass "a filesystem that will not grow is reported, not swallowed"
 else bad "resize2fs failure was not reported (rc=$RC)"; fi
 
+# --- a dry run must genuinely change nothing ---------------------------------
+# The mode exists so an operator, or this test suite, can see the exact command
+# sequence without a disk being touched. The rescan wrote straight to sysfs and
+# bypassed the guard, which made "dry run" not quite true.
+: > "$CALLS"
+FAKESYS="${WORK}/sys/class/block/sda/device"
+mkdir -p "$FAKESYS"; : > "${FAKESYS}/rescan"
+OUT=$(STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_ROOM" \
+  KIN_GROW_DRY_RUN=1 bash "$LIB" apply / 2>&1); RC=$?
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "(dry run)"; then
+  pass "a dry run reports the commands it would run"
+else bad "dry run did not report its plan (rc=$RC)"; fi
+if [ ! -s "${FAKESYS}/rescan" ]; then
+  pass "a dry run does not even poke the kernel rescan"
+else bad "dry run wrote to the sysfs rescan node"; fi
+# It still reads: findmnt, lsblk and parted are how it works out what it would
+# do, and a dry run that cannot plan is useless. What must not run is anything
+# that changes the disk.
+mutated=""
+for tool in growpart resize2fs xfs_growfs pvresize lvextend cryptsetup partx; do
+  grep -q "^${tool}" "$CALLS" && mutated="${mutated} ${tool}"
+done
+if [ -z "$mutated" ]; then
+  pass "a dry run runs no tool that changes the disk"
+else bad "dry run executed mutating tools:${mutated}"; fi
+
 # --- a directory on the system disk is not a second disk ---------------------
 # On a single-disk appliance /opt/zimbra lives on the root filesystem. Two rows
 # in the console would then be one disk under two names, and an operator could
@@ -276,6 +302,58 @@ fi
   if [ "$(id -u)" -eq 0 ]; then exit 0; fi
   printf '%s' "$OUT" | grep -q "reason=not-root" && [ "$RC" -ne 0 ]
 ) && pass "apply refuses to run without root" || bad "apply did not require root"
+
+# --- the real thing, when the machine allows it ------------------------------
+#
+# Everything above is stubbed, which proves the decisions and proves nothing
+# about growpart and resize2fs actually working. This builds a real disk out of
+# a file, puts a real ext4 filesystem on it that does not fill it, writes a
+# file, enlarges the backing image the way a hypervisor would, and runs the
+# real apply.
+#
+# It needs root and loop devices, so it skips politely rather than failing on a
+# machine that has neither. Skipping is honest; pretending is not.
+if [ "$(id -u)" -eq 0 ] && command -v losetup >/dev/null 2>&1    && command -v mkfs.ext4 >/dev/null 2>&1 && [ -e /dev/loop-control ]; then
+  RWORK="$(mktemp -d)"
+  RIMG="${RWORK}/disk.img"; RMNT="${RWORK}/mnt"; mkdir -p "$RMNT"
+  RLOOP=""
+  real_cleanup() {
+    umount "$RMNT" 2>/dev/null || true
+    [ -n "$RLOOP" ] && losetup -d "$RLOOP" 2>/dev/null || true
+    rm -rf "$RWORK"
+  }
+  if truncate -s 200M "$RIMG" 2>/dev/null      && RLOOP=$(losetup --find --show "$RIMG" 2>/dev/null)      && parted -s "$RLOOP" mklabel gpt >/dev/null 2>&1      && parted -s "$RLOOP" mkpart primary ext4 1MiB 100MiB >/dev/null 2>&1; then
+    partx -a "$RLOOP" >/dev/null 2>&1 || true
+    if mkfs.ext4 -q -F "${RLOOP}p1" >/dev/null 2>&1 && mount "${RLOOP}p1" "$RMNT" 2>/dev/null; then
+      before=$(df -BM --output=size "$RMNT" | tail -1 | tr -d ' M')
+      printf 'important mail
+' > "${RMNT}/mailbox.txt"
+      truncate -s 400M "$RIMG"; losetup -c "$RLOOP"
+      ( unset KIN_GROW_FINDMNT KIN_GROW_LSBLK KIN_GROW_PARTED KIN_GROW_GROWPART               KIN_GROW_PARTX KIN_GROW_RESIZE2FS KIN_GROW_XFS_GROWFS KIN_GROW_PVRESIZE               KIN_GROW_LVEXTEND KIN_GROW_CRYPTSETUP KIN_GROW_ALLOW_NONROOT
+        KIN_ZIMBRA_DIR="$RMNT" bash "$LIB" apply "$RMNT" >/dev/null 2>&1 )
+      after=$(df -BM --output=size "$RMNT" | tail -1 | tr -d ' M')
+      if [ "${after:-0}" -gt "${before:-0}" ]; then
+        pass "real disk: the filesystem grew from ${before}M to ${after}M"
+      else bad "real disk: the filesystem did not grow (${before}M to ${after}M)"; fi
+      if [ "$(cat "${RMNT}/mailbox.txt" 2>/dev/null)" = "important mail" ]; then
+        pass "real disk: data written before the resize is still there"
+      else bad "real disk: DATA WAS LOST across the resize"; fi
+      if touch "${RMNT}/after-probe" 2>/dev/null; then
+        pass "real disk: the filesystem stayed mounted and writable throughout"
+      else bad "real disk: filesystem is no longer writable"; fi
+    else
+      printf 'ok  real disk test skipped (could not make a test filesystem)
+'
+    fi
+  else
+    printf 'ok  real disk test skipped (no loop device available)
+'
+  fi
+  real_cleanup
+else
+  printf 'ok  real disk test skipped (needs root and loop devices)
+'
+fi
 
 if [ "$fails" -eq 0 ]; then
   printf 'All grow-disk tests passed\n'

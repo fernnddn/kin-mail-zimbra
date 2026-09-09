@@ -185,9 +185,13 @@ grow_plan() {
     return 1
   fi
 
+  # The bottom of the stack is a "disk" on a normal appliance and a "loop" on
+  # loop-backed storage. Insisting on the literal word "disk" refused loop
+  # devices outright, which is both a real layout somebody could be running and
+  # the only way to prove this whole chain end to end without a spare machine.
   local parts disks
   parts=$(printf '%s\n' "$types" | grep -c '^part$')
-  disks=$(printf '%s\n' "$types" | grep -c '^disk$')
+  disks=$(printf '%s\n' "$types" | grep -cE '^(disk|loop)$')
   if [ "$disks" -ne 1 ]; then
     fail many-disks \
       "${mp} spans ${disks} disks. Growing one of several is not something to do unattended."
@@ -199,7 +203,7 @@ grow_plan() {
     return 1
   fi
 
-  PLAN_DISK="/dev/$(printf '%s\n' "$chain" | awk '$2=="disk"{print $1}' | head -1)"
+  PLAN_DISK="/dev/$(printf '%s\n' "$chain" | awk '$2=="disk"||$2=="loop"{print $1}' | head -1)"
   if [ "$parts" -eq 1 ]; then
     PLAN_PART="/dev/$(printf '%s\n' "$chain" | awk '$2=="part"{print $1}' | head -1)"
   fi
@@ -299,7 +303,14 @@ grow_apply() {
   sysdev="${SYSFS}/class/block/${base}/device/rescan"
   if [ -w "$sysdev" ]; then
     say "==> rescanning ${PLAN_DISK}"
-    printf '1' > "$sysdev" 2>/dev/null || say "    (rescan not accepted, continuing)"
+    if [ "${KIN_GROW_DRY_RUN:-0}" = "1" ]; then
+      # A dry run that pokes the kernel is not a dry run. This is harmless in
+      # itself, but the whole value of the mode is being able to say that
+      # nothing at all happened.
+      say "    (dry run) echo 1 > ${sysdev}"
+    else
+      printf '1' > "$sysdev" 2>/dev/null || say "    (rescan not accepted, continuing)"
+    fi
   fi
 
   if [ -n "$PLAN_PART" ] && [ "$PLAN_FREE" -ge "$MIN_GROW_BYTES" ]; then
