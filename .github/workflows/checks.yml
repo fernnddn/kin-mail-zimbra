@@ -67,8 +67,22 @@ jobs:
           done < /tmp/kin-shell-suites.txt
           exit $fail
 
+      # shellcheck ships on the GitHub runner image, so the usual case needs no
+      # network at all. The previous version ran apt-get update first, which
+      # pulls every third-party repository preinstalled on the runner, and a
+      # hash mismatch in Google's Chrome repository failed this whole job for
+      # reasons that had nothing to do with this codebase (9 Sep 2026). A
+      # quality gate that goes red on somebody else's mirror teaches people to
+      # ignore red.
       - name: Install shellcheck
-        run: sudo apt-get -qq update && sudo apt-get -y install shellcheck
+        run: |
+          set -uo pipefail
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version | sed -n '2p'
+            exit 0
+          fi
+          sudo apt-get -qq update || echo "apt-get update had errors; trying the install anyway"
+          sudo apt-get -y install shellcheck
 
       # Errors fail the build. Warnings are reported but tolerated: these
       # scripts intentionally source a config file that shellcheck cannot see.
