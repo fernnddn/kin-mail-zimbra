@@ -880,7 +880,15 @@ const Track = styled.button<{ $on: boolean }>`
   position: relative;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background-color ${theme.motion.base} ease-out;
+  transition: background-color ${theme.motion.base} ${theme.motion.ease.standard};
+
+  /* Pressing it should feel like pressing something. Without this the only
+     feedback is the thumb arriving, which on a slow remote session can be
+     late enough that the operator clicks twice. */
+  &:active:not(:disabled) {
+    transform: scale(0.96);
+    transition: transform ${theme.motion.fast} ${theme.motion.ease.standard};
+  }
 
   &:disabled {
     opacity: 0.5;
@@ -903,7 +911,10 @@ const Thumb = styled.span<{ $on: boolean }>`
   background: ${theme.paper};
   box-shadow: none;
   transform: translateX(${(p) => (p.$on ? "20px" : "0")});
-  transition: transform ${theme.motion.base} ease-out;
+  /* Emphasis easing: the thumb travels a visible distance, and settling into
+     the end instead of stopping dead is what makes the control read as a
+     physical switch rather than two states swapped. */
+  transition: transform ${theme.motion.slow} ${theme.motion.ease.emphasis};
 `;
 
 export function Switch({

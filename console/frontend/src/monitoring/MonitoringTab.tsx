@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
+import { keyframes } from "@emotion/react";
 import { api } from "../api";
 import { isOpsRole, useAuth } from "../auth";
 import { theme } from "../styles/theme";
+import { useSlidingIndicator } from "./useSlidingIndicator";
 import { Button, Hint, LogPane, Skeleton, SkeletonCard, WarnBox } from "../ui";
 import {
   areaPath,
@@ -116,6 +118,7 @@ const ExportSlot = styled.div`
 `;
 
 const RangeGroup = styled.div`
+  position: relative;
   display: inline-flex;
   border: 1px solid ${theme.line};
   border-radius: ${theme.radius.md};
@@ -123,22 +126,64 @@ const RangeGroup = styled.div`
   background: ${theme.bgElev};
 `;
 
+/* The selected range is painted by this one element sliding between buttons,
+   rather than by each button turning its own background on and off.
+
+   Switching from 1 hour to 6 hours used to be an instant repaint in two
+   places at once, which reads as a flicker and gives no sense that the two
+   buttons are part of one control. A single travelling block is the thing the
+   eye follows, so the change registers as movement between two options
+   instead of two unrelated colour changes.
+
+   Position comes from measuring the active button, because the labels have
+   very different widths ("Now (live)" against "1 hour") and anything based on
+   an index would drift. */
+const RangeIndicator = styled.span<{ $x: number; $w: number; $ready: boolean }>`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: ${(p) => p.$w}px;
+  transform: translateX(${(p) => p.$x}px);
+  background: ${theme.accent};
+  border-radius: ${theme.radius.sm};
+  pointer-events: none;
+  /* Hidden until measured, so it cannot animate in from the left edge on
+     first paint. */
+  opacity: ${(p) => (p.$ready ? 1 : 0)};
+  transition:
+    transform ${theme.motion.slow} ${theme.motion.ease.emphasis},
+    width ${theme.motion.slow} ${theme.motion.ease.emphasis},
+    opacity ${theme.motion.fast} ${theme.motion.ease.standard};
+`;
+
 const RangeBtn = styled.button<{ $on: boolean }>`
+  position: relative;
+  z-index: 1;
   border: 0;
   border-right: 1px solid ${theme.line};
-  background: ${(p) => (p.$on ? theme.accent : "transparent")};
+  background: transparent;
   color: ${(p) => (p.$on ? theme.paper : theme.surface[600])};
   font: inherit;
   font-size: 0.78rem;
   font-weight: 600;
   padding: 0.4rem 0.75rem;
   cursor: pointer;
+  /* The label recolours a little faster than the block travels, so the text
+     is already readable against the accent by the time it arrives. */
+  transition:
+    color ${theme.motion.fast} ${theme.motion.ease.standard},
+    background-color ${theme.motion.fast} ${theme.motion.ease.standard};
 
   &:last-of-type {
     border-right: 0;
   }
   &:hover {
-    background: ${(p) => (p.$on ? theme.accent : theme.surface[50])};
+    background: ${(p) => (p.$on ? "transparent" : theme.surface[50])};
+  }
+  &:active {
+    transform: scale(0.97);
+    transition: transform ${theme.motion.fast} ${theme.motion.ease.standard};
   }
 `;
 
@@ -149,7 +194,30 @@ const Grid = styled.div`
   margin: 0 0 1.15rem;
 `;
 
+/* Charts arrive rather than appearing.
+
+   Changing the range replaces every chart at once. Without this the whole
+   grid repaints in a single frame, which looks like the page glitched rather
+   than like new data landing, and on a slow link it is genuinely hard to tell
+   whether the click registered. A short rise and fade is enough to say "this
+   is the answer to what you just asked for".
+
+   Keyed on the range in the JSX, so React remounts the grid and the animation
+   replays on every switch. Neutralised by the reduced-motion rule in
+   global.css like everything else. */
+const chartsEnter = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+`;
+
 const ChartGrid = styled.div`
+  animation: ${chartsEnter} ${theme.motion.slow} ${theme.motion.ease.standard} both;
   display: grid;
   gap: 0.85rem;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -666,7 +734,17 @@ function Chart({ data }: { data: SeriesResp }) {
 
 export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boolean } = {}) {
   const [range, setRange] = useState("1h");
+
   const [ranges, setRanges] = useState<string[]>(["now", "1h", "6h", "24h", "7d", "30d", "1y"]);
+
+  // One block slides between the range buttons. See useSlidingIndicator for
+  // why the position is measured rather than computed from an index.
+  const {
+    groupRef: rangeGroupRef,
+    activeRef: activeRangeRef,
+    indicator: pill,
+    ready: pillReady,
+  } = useSlidingIndicator<HTMLDivElement, HTMLButtonElement>([range, ranges]);
   const [charts, setCharts] = useState<SeriesResp[]>([]);
   const [host, setHost] = useState<HostFacts | null>(null);
   const [loading, setLoading] = useState(true);
@@ -836,9 +914,16 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
   return (
     <>
       <Bar>
-        <RangeGroup role="group" aria-label="Time range">
+        <RangeGroup role="group" aria-label="Time range" ref={rangeGroupRef}>
+          <RangeIndicator $x={pill.x} $w={pill.w} $ready={pillReady} aria-hidden="true" />
           {ranges.map((r) => (
-            <RangeBtn key={r} type="button" $on={r === range} onClick={() => setRange(r)}>
+            <RangeBtn
+              key={r}
+              ref={r === range ? activeRangeRef : undefined}
+              type="button"
+              $on={r === range}
+              onClick={() => setRange(r)}
+            >
               {RANGE_LABELS[r] || r}
             </RangeBtn>
           ))}
@@ -931,7 +1016,7 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
               <SectionTitle>{group.title}</SectionTitle>
               <SectionBlurb>{group.blurb}</SectionBlurb>
             </SectionHead>
-            <ChartGrid>
+            <ChartGrid key={range}>
               {inGroup.map((c) => (
                 <Chart key={c.metric} data={c} />
               ))}

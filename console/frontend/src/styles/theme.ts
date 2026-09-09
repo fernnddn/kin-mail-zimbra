@@ -131,6 +131,26 @@ export const theme = {
     base: "180ms",
     slow: "220ms",
     page: "220ms",
+    /* Easing curves, so movement in this console is one vocabulary rather
+       than whatever each component reached for.
+
+       standard   the default for a thing changing in place: colour, opacity,
+                  a fade. Decelerates into its final value.
+       emphasis   for something travelling a visible distance, like the pill
+                  under the time range buttons or a switch thumb. Slightly
+                  overshoots and settles, which is what makes movement read as
+                  physical instead of mechanical.
+       exit       leaving is faster than arriving, so a dismissed thing does
+                  not hold attention on its way out.
+
+       All of these are neutralised by the prefers-reduced-motion block in
+       global.css, so nobody who has asked the system for less movement gets
+       any of it. */
+    ease: {
+      standard: "cubic-bezier(0.2, 0, 0, 1)",
+      emphasis: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+      exit: "cubic-bezier(0.4, 0, 1, 1)",
+    },
   },
   font: '"Atkinson Hyperlegible", "Public Sans", -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, "PingFang SC", "Noto Sans CJK SC", sans-serif',
   mono: '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono", Menlo, Monaco, Consolas, monospace',

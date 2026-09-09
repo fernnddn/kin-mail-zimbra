@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { theme } from "../styles/theme";
+import { useSlidingIndicator } from "./useSlidingIndicator";
 import { Button, Hint, Skeleton, SkeletonCard, WarnBox } from "../ui";
 import { formatValue } from "./chart";
 
@@ -100,6 +101,7 @@ const Bar = styled.div`
 `;
 
 const PeriodGroup = styled.div`
+  position: relative;
   display: inline-flex;
   border: 1px solid ${theme.line};
   border-radius: ${theme.radius.md};
@@ -107,17 +109,45 @@ const PeriodGroup = styled.div`
   background: ${theme.bgElev};
 `;
 
+/* Same travelling block as the time range on the Monitoring tab, for the same
+   reason: two segmented controls in one console should not behave differently
+   from each other. See useSlidingIndicator. */
+const PeriodIndicator = styled.span<{ $x: number; $w: number; $ready: boolean }>`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: ${(p) => p.$w}px;
+  transform: translateX(${(p) => p.$x}px);
+  background: ${theme.accent};
+  border-radius: ${theme.radius.sm};
+  pointer-events: none;
+  opacity: ${(p) => (p.$ready ? 1 : 0)};
+  transition:
+    transform ${theme.motion.slow} ${theme.motion.ease.emphasis},
+    width ${theme.motion.slow} ${theme.motion.ease.emphasis},
+    opacity ${theme.motion.fast} ${theme.motion.ease.standard};
+`;
+
 const PeriodBtn = styled.button<{ $on: boolean }>`
+  position: relative;
+  z-index: 1;
   border: 0;
   padding: 7px 13px;
   font-size: 0.8rem;
   font-weight: ${(p) => (p.$on ? 650 : 500)};
   cursor: pointer;
-  background: ${(p) => (p.$on ? theme.accent : "transparent")};
+  background: transparent;
   color: ${(p) => (p.$on ? theme.paper : theme.ink)};
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background-color ${theme.motion.fast} ${theme.motion.ease.standard},
+    color ${theme.motion.fast} ${theme.motion.ease.standard};
   &:hover:not(:disabled) {
-    background: ${(p) => (p.$on ? theme.accent : theme.surface[100])};
+    background: ${(p) => (p.$on ? "transparent" : theme.surface[100])};
+  }
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+    transition: transform ${theme.motion.fast} ${theme.motion.ease.standard};
   }
   &:disabled {
     cursor: default;
@@ -335,6 +365,12 @@ function dayLabel(iso: string): string {
 
 export function ReportsTab() {
   const [period, setPeriod] = useState("last_month");
+  const {
+    groupRef: periodGroupRef,
+    activeRef: activePeriodRef,
+    indicator: periodPill,
+    ready: periodReady,
+  } = useSlidingIndicator<HTMLDivElement, HTMLButtonElement>([period]);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -399,10 +435,17 @@ export function ReportsTab() {
         </p>
       </PrintHead>
       <Bar className="no-print">
-        <PeriodGroup role="group" aria-label="Report period">
+        <PeriodGroup role="group" aria-label="Report period" ref={periodGroupRef}>
+          <PeriodIndicator
+            $x={periodPill.x}
+            $w={periodPill.w}
+            $ready={periodReady}
+            aria-hidden="true"
+          />
           {PERIODS.map((p) => (
             <PeriodBtn
               key={p.id}
+              ref={p.id === period ? activePeriodRef : undefined}
               type="button"
               $on={p.id === period}
               disabled={loading}

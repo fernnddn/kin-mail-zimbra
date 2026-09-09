@@ -145,6 +145,7 @@ const Tabs = styled.div`
 `;
 
 const TabBtn = styled.button<{ $on?: boolean }>`
+  position: relative;
   border: 0;
   background: transparent;
   padding: 0.45rem 0 0.7rem;
@@ -154,8 +155,32 @@ const TabBtn = styled.button<{ $on?: boolean }>`
   font-size: 0.875rem;
   font-weight: 600;
   color: ${(p) => (p.$on ? theme.accent : theme.surface[500])};
-  border-bottom: 2px solid ${(p) => (p.$on ? theme.accent : "transparent")};
+  /* Kept transparent so the tab row never changes height when the underline
+     appears; the visible rule is the pseudo-element below. */
+  border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  transition: color ${theme.motion.base} ${theme.motion.ease.standard};
+
+  &:hover {
+    color: ${(p) => (p.$on ? theme.accent : theme.surface[700])};
+  }
+
+  /* The underline grows out from the middle instead of appearing under the
+     new tab and vanishing from the old one in the same frame. Switching
+     between Status, Monitoring and Reports then reads as one control moving,
+     which is also what tells the operator the panel below is about to change. */
+  &::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: ${theme.accent};
+    transform: scaleX(${(p) => (p.$on ? 1 : 0)});
+    transform-origin: center;
+    transition: transform ${theme.motion.slow} ${theme.motion.ease.emphasis};
+  }
 `;
 
 const HealthWrap = styled.div`
