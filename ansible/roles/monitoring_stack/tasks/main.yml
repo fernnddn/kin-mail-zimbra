@@ -70,8 +70,21 @@
   when: not ansible_check_mode
   tags: [monitoring, mailflow]
 
+# ansible.builtin.systemd, NOT ansible.builtin.systemd_service.
+#
+# systemd_service is the newer name and it does not exist before ansible-core
+# 2.15. The appliance installs ansible-core from apt on Ubuntu 22.04, which is
+# 2.12, so this role failed on the box with "couldn't resolve module/action
+# 'ansible.builtin.systemd_service'" and exit 4, while CI (which pins
+# ansible-core >= 2.16) syntax-checked it clean. Monitoring therefore failed on
+# every single-server appliance, automatically and again when the operator
+# pressed Install monitoring, and the Reports tab stayed empty because the mail
+# flow collector below is what fills it (live QA Phase 12, 9 Sep 2026).
+#
+# systemd works on 2.12 and is still valid on current ansible-core, so it is
+# the spelling that runs everywhere this product is deployed.
 - name: Reload systemd after writing the mail flow units
-  ansible.builtin.systemd_service:
+  ansible.builtin.systemd:
     daemon_reload: true
   when:
     - not ansible_check_mode
@@ -104,7 +117,7 @@
   tags: [monitoring, mailflow]
 
 - name: Enable and start the mail flow timer
-  ansible.builtin.systemd_service:
+  ansible.builtin.systemd:
     name: kin-mail-flow.timer
     enabled: true
     state: started

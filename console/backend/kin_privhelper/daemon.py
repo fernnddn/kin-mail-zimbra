@@ -604,6 +604,22 @@ async def run() -> None:
     await _chmod_socket()
     log.info("listening on %s (mode 660 group %s)", SOCKET_PATH, SOCKET_GROUP)
 
+    # Monitoring is supposed to arrive with the first deploy and never need a
+    # second visit. When the automatic install fails, the only remaining route
+    # used to be a person pressing Install monitoring, and an appliance whose
+    # failure was caused by the product itself left that operator pressing a
+    # button that could not work. Picking it up here means a fixed appliance
+    # repairs itself on the next restart with nobody asked to do anything.
+    #
+    # Started after the socket is listening so it cannot delay accepting
+    # connections, and strictly bounded: see auto_install_decision.
+    try:
+        from .monitoring_install import resume_after_restart
+
+        log.info("metrics auto install: %s", resume_after_restart())
+    except Exception:  # noqa: BLE001 - never block startup on this
+        log.exception("metrics auto install check failed")
+
     async with server:
         await server.serve_forever()
 

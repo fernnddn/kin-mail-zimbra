@@ -78,6 +78,7 @@ def record_metrics_state(
     *,
     exit_code: int | None = None,
     reason: str = "",
+    attempts: int | None = None,
 ) -> bool:
     """Persist how the detached metrics install is going. Never raises.
 
@@ -88,11 +89,17 @@ def record_metrics_state(
     """
     if phase not in METRICS_PHASES:
         return False
+    if attempts is None:
+        # Carry the previous count forward. Only an explicit value changes it,
+        # so recording an outcome never silently resets the budget that stops
+        # a hopeless install being retried on every daemon start.
+        attempts = int(read_metrics_state().get("auto_attempts") or 0)
     body = {
         "phase": phase,
         "exit_code": exit_code,
         "reason": reason,
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "auto_attempts": max(0, int(attempts)),
     }
     try:
         # Create if absent, but never widen it. bootstrap.sh installs this
@@ -149,6 +156,7 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
         "exit_code": None,
         "reason": "",
         "at": "",
+        "auto_attempts": 0,
         "installed": False,
     }
     try:
@@ -160,6 +168,7 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
             "phase": "unreadable",
             "exit_code": None,
             "at": "",
+            "auto_attempts": 0,
             "installed": False,
             "reason": (
                 "The console cannot read the monitoring install record at "
@@ -195,6 +204,7 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
                 "phase": "timeout",
                 "exit_code": None,
                 "at": at,
+                "auto_attempts": int(raw.get("auto_attempts") or 0),
                 "installed": False,
                 "reason": (
                     "A monitoring install has been recorded as running since "
@@ -209,6 +219,7 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
         "exit_code": exit_code if isinstance(exit_code, int) else None,
         "reason": reason,
         "at": at,
+        "auto_attempts": int(raw.get("auto_attempts") or 0),
         # Only a completed, zero-exit run counts. "running" is not yet proof,
         # and treating it as proof is how an in-flight install reads as done.
         "installed": phase == "ok",
@@ -347,6 +358,69 @@ def run_after_install() -> str:
     return "started"
 
 
+# How many times the daemon will start a metrics install by itself before it
+# stops and leaves it to the operator. Three is enough to ride out a transient
+# apt lock, a slow mirror or a reboot in the middle of the first attempt, and
+# small enough that a genuinely broken install cannot hold the maintenance lock
+# for half an hour on every restart of a crash-looping daemon.
+MAX_AUTO_ATTEMPTS = 3
+
+
+def auto_install_decision() -> tuple[bool, str]:
+    """Should this daemon start a metrics install by itself, and why not.
+
+    Monitoring is meant to arrive with the first deploy and never need a second
+    visit. It did not: the role used a module the appliance's ansible-core
+    cannot resolve, so the automatic install failed, and from then on the only
+    way to get metrics was for a person to press Install monitoring, which
+    failed in exactly the same way. Fixing the module fixes new deployments.
+    Appliances that already have the failure recorded need something to pick it
+    up again, or that operator is pressing a button forever.
+
+    Deliberately narrow. It never runs before the deploy has finished, never
+    while an install is in flight, never on a node that already has metrics,
+    and never more than MAX_AUTO_ATTEMPTS times without a success in between.
+    """
+    from .deploy_state import is_full_install_complete
+
+    if not is_full_install_complete():
+        return False, "the first deploy has not finished yet"
+
+    state = read_metrics_state()
+    phase = str(state.get("phase") or "")
+    if phase == "ok":
+        return False, "metrics are already installed"
+    if phase == "running":
+        return False, "an install is already running"
+    if phase == "unreadable":
+        # privhelperd is root, so this means something stranger than a
+        # permission problem. Do not act blind.
+        return False, "the metrics record could not be read"
+
+    attempts = int(state.get("auto_attempts") or 0)
+    if attempts >= MAX_AUTO_ATTEMPTS:
+        return False, (
+            f"already tried {attempts} times without success; use Install "
+            "monitoring on the Monitoring tab once the cause is fixed"
+        )
+    return True, f"last state was {phase or 'unrecorded'}, attempt {attempts + 1}"
+
+
+def resume_after_restart() -> str:
+    """Start a metrics install on daemon startup if one is owed. Never raises."""
+    try:
+        go, why = auto_install_decision()
+        if not go:
+            return f"skipped: {why}"
+        attempts = int(read_metrics_state().get("auto_attempts") or 0)
+        # Counted before the run, not after. A daemon that dies mid-install
+        # must still consume its budget, or a crash loop retries for ever.
+        record_metrics_state("running", attempts=attempts + 1)
+        return f"starting: {why} ({run_after_install()})"
+    except Exception as exc:  # noqa: BLE001 - startup must not fail over this
+        return f"skipped: {exc.__class__.__name__}"
+
+
 async def cmd_install_monitoring(
     args: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -453,7 +527,9 @@ async def cmd_install_monitoring(
     # strength of a rehearsal. The messages below are unchanged either way.
     if exit_code == 0:
         if not check_only:
-            record_metrics_state("ok", exit_code=0)
+            # attempts=0: a success clears the automatic-retry budget, so a
+            # box that recovers is not carrying an old failure count around.
+            record_metrics_state("ok", exit_code=0, attempts=0)
         yield await _emit(
             "Monitoring installed. Prometheus and node_exporter are on loopback; "
             "charts fill in from now, and figures start from this moment rather "

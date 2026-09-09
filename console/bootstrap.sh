@@ -184,11 +184,32 @@ REPO_ANSIBLE="$(cd "${SCRIPT_DIR}/.." && pwd)/ansible"
 ANSIBLE_DST="${OPT_ROOT}/ansible"
 if [ -d "$REPO_ANSIBLE/playbooks" ]; then
   install -d -o root -g root -m 755 "$ANSIBLE_DST"
-  rsync -a --delete \
+  # --copy-unsafe-links matters, and only for one file.
+  #
+  # roles/monitoring_stack/files/kin-mail-flow-metrics.py is a symlink to
+  # ../../../../monitoring/mailflow/, which is OUTSIDE the tree being synced.
+  # rsync -a preserves symlinks rather than following them, and monitoring/ is
+  # not copied to the appliance at all, so the link landed here dangling and
+  # the role's "Install the mail flow collector" step would fail with "Could
+  # not find or access". That collector is what fills the Reports tab, so the
+  # whole reporting surface depended on a link that could not resolve. It was
+  # never seen in the field because the role failed to parse first, on an
+  # unrelated module name, and no task ran at all (live QA Phase 12).
+  #
+  # This flag materialises links that escape the source tree and leaves the
+  # five in-tree ones (shared DRBD templates, the rearm filter plugin) as
+  # links, which is what they should stay.
+  rsync -a --copy-unsafe-links --delete \
     --exclude 'inventory/lab.yml' \
     --exclude 'inventory/*.local.yml' \
     --exclude '*.retry' \
     "${REPO_ANSIBLE}/" "${ANSIBLE_DST}/"
+  if [ ! -r "${ANSIBLE_DST}/roles/monitoring_stack/files/kin-mail-flow-metrics.py" ]; then
+    fail "Mail flow collector missing under ${ANSIBLE_DST} after sync"
+    info "The Reports tab has nothing to count without it. Check that"
+    info "monitoring/mailflow/kin-mail-flow-metrics.py exists in the checkout."
+    exit 1
+  fi
   ok "Synced ansible → ${ANSIBLE_DST}"
 else
   warn "No sibling ansible/ next to console/ - HA orchestration needs ${ANSIBLE_DST}"

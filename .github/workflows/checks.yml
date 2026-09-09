@@ -242,17 +242,38 @@ jobs:
   # Catch playbook YAML/Jinja syntax errors. Not ansible-lint: default/galaxy
   # profiles fail on cosmetic nits (var-naming, meta author) already reviewed.
   ansible:
-    name: Ansible syntax
+    name: Ansible syntax (ansible-core ${{ matrix.ansible }})
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The version the APPLIANCE actually runs. console/bootstrap.sh
+          # installs ansible-core from apt, and Ubuntu 22.04 ships 2.12. This
+          # leg exists because monitoring_stack used
+          # ansible.builtin.systemd_service, which does not exist before 2.15:
+          # the job below syntax-checked it clean on a newer core while every
+          # single-server appliance failed the monitoring install with
+          # "couldn't resolve module/action" and exit 4, automatically and
+          # again when the operator pressed Install monitoring (live QA
+          # Phase 12, 9 Sep 2026). syntax-check resolves module names, so this
+          # leg reproduces that failure exactly.
+          # ansible-core 2.12 supports a Python 3.10 controller, not 3.11.
+          - ansible: "==2.12.10"
+            python: "3.10"
+          # What the repo targets going forward. Kept so newer syntax is still
+          # exercised; neither leg may be dropped for the other.
+          - ansible: ">=2.16,<2.19"
+            python: "3.11"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python }}"
 
       - name: Install ansible-core and yamllint
-        run: pip install 'ansible-core>=2.16,<2.19' yamllint
+        run: pip install 'ansible-core${{ matrix.ansible }}' yamllint
 
       - name: Playbook syntax-check
         working-directory: ansible
