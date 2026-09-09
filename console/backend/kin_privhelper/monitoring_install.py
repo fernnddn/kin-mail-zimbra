@@ -259,8 +259,38 @@ def local_inventory(hostname: str) -> str:
 
 
 async def _emit(text: str, *, err: bool = False) -> dict[str, Any]:
+    """Emit a line to the caller AND write it into the deploy transcript.
+
+    maintenance._emit only builds an event for whoever is listening on the
+    stream. That is enough for a command someone is watching, and it is not
+    enough for this one, because the install that matters most is the one
+    nobody is watching: the deploy starts it detached so an SSE drop cannot
+    kill it, and the draining loop then throws every event away.
+
+    The result was that KIN_METRICS_BEGIN and KIN_METRICS_END, the two markers
+    the console reads to decide whether this appliance has monitoring, never
+    reached the deploy log on an automatic install. Only the ansible-playbook
+    output did, because _stream_redacted writes that to the transcript itself.
+    The console then saw no marker at all, read that as "this transcript
+    predates the metrics stage", and showed a finished, green deploy over a
+    metrics install that had failed (live QA Phase 13, 9 Sep 2026).
+
+    Writing here rather than at the call sites, so a marker cannot be added
+    later that silently does not persist. Same approach as
+    orchestration.emit_line, which had to solve this exact problem.
+    """
+    from .deploy_state import DEPLOY_LAST_LOG
     from .maintenance import _emit as maint_emit
 
+    line = text if text.endswith("\n") else text + "\n"
+    try:
+        DEPLOY_LAST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEPLOY_LAST_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        # A transcript that cannot be written must not stop the install. The
+        # state file is the other, independent record of what happened.
+        pass
     return await maint_emit(text, err=err)
 
 
@@ -460,7 +490,7 @@ async def cmd_install_monitoring(
         # No state written: the lock refusal changed nothing on this node,
         # and a node already collecting metrics must not be downgraded to
         # "failed" because someone pressed the button at a busy moment.
-        yield proto.event_stdout("KIN_METRICS_END exit=1 reason=locked\n")
+        yield await _emit("KIN_METRICS_END exit=1 reason=locked")
         yield proto.event_done(1)
         return
 
@@ -470,7 +500,7 @@ async def cmd_install_monitoring(
     except ValueError as exc:
         release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc} (hostname={hostname!r})\n")
-        yield proto.event_stdout("KIN_METRICS_END exit=2 reason=bad-hostname\n")
+        yield await _emit("KIN_METRICS_END exit=2 reason=bad-hostname")
         yield proto.event_done(2)
         return
 
@@ -487,7 +517,7 @@ async def cmd_install_monitoring(
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc}\n")
-        yield proto.event_stdout("KIN_METRICS_END exit=2 reason=setup\n")
+        yield await _emit("KIN_METRICS_END exit=2 reason=setup")
         yield proto.event_done(2)
         return
 
@@ -552,5 +582,8 @@ async def cmd_install_monitoring(
             "this step only adds metrics collection.",
             err=True,
         )
-    yield proto.event_stdout(f"KIN_METRICS_END exit={exit_code}\n")
+    # Through _emit so the marker reaches the transcript. This is the line the
+    # console parses to decide whether monitoring landed, so it is the single
+    # most important line in this command and it must survive nobody listening.
+    yield await _emit(f"KIN_METRICS_END exit={exit_code}")
     yield proto.event_done(exit_code)

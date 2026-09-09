@@ -640,6 +640,25 @@ async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(int(code))
 
 
+def _deploy_line(text: str) -> dict[str, Any]:
+    """Yield a line to the stream and persist it in the deploy transcript.
+
+    Anything emitted after _stream_subprocess has finished reaches only
+    whoever is still listening. The console parses the transcript later, and
+    on a reload or in a second tab that is the only record there is, so a
+    marker that is not written there does not exist as far as the UI is
+    concerned.
+    """
+    line = text if text.endswith("\n") else text + "\n"
+    try:
+        DEPLOY_LAST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEPLOY_LAST_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+    return proto.event_stdout(line)
+
+
 async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     """Stream kin-mail.sh --full-install with KIN_CONSOLE_CONFIRMED=1 (dead-man still armed)."""
     from .maintenance import gather_status
@@ -742,7 +761,7 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
                     "unaffected. Use Install monitoring on the Monitoring "
                     "tab.\n"
                 )
-                yield proto.event_stdout("KIN_METRICS_END exit=1 reason=not-started\n")
+                yield _deploy_line("KIN_METRICS_END exit=1 reason=not-started")
         except Exception as exc:  # noqa: BLE001 - never fail a good deploy
             yield proto.event_stderr(
                 f"Monitoring install could not be started: {exc}. Mail is "
@@ -750,7 +769,7 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
             )
             # Same reason as above: a deploy that tried and could not must not
             # look like a deploy that was never expected to.
-            yield proto.event_stdout("KIN_METRICS_END exit=1 reason=not-started\n")
+            yield _deploy_line("KIN_METRICS_END exit=1 reason=not-started")
     yield proto.event_done(install_exit)
 
 
