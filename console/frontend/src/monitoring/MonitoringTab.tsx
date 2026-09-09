@@ -4,6 +4,7 @@ import { keyframes } from "@emotion/react";
 import { api } from "../api";
 import { isOpsRole, useAuth } from "../auth";
 import { theme } from "../styles/theme";
+import DiskExtend from "./DiskExtend";
 import { useSlidingIndicator } from "./useSlidingIndicator";
 import {
   Button,
@@ -806,18 +807,24 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
     };
   }, []);
 
-  useEffect(() => {
-    const loadHost = () =>
-      api<HostFacts>("/api/monitoring/host")
-        .then((h) => {
-          if (alive.current) setHost(h);
-        })
-        .catch(() => undefined);
-    loadHost();
-    // Point-in-time facts: cheap, and disk usage is the one people watch.
-    const id = window.setInterval(loadHost, 30000);
-    return () => window.clearInterval(id);
+  /* Host facts on demand as well as on a timer, so a disk that has just been
+     extended shows its new size immediately rather than up to thirty seconds
+     later. Watching a number not change is how an operator concludes a button
+     did nothing. */
+  const refreshHost = useCallback(() => {
+    api<HostFacts>("/api/monitoring/host")
+      .then((h) => {
+        if (alive.current) setHost(h);
+      })
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    refreshHost();
+    // Point-in-time facts: cheap, and disk usage is the one people watch.
+    const id = window.setInterval(refreshHost, 30000);
+    return () => window.clearInterval(id);
+  }, [refreshHost]);
 
   useEffect(() => {
     api<CatalogueResp>("/api/monitoring/catalogue")
@@ -1100,6 +1107,11 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
       ) : null}
 
       {host ? <HostPanel host={host} /> : null}
+
+      {/* Directly under the disk cards, because that is where an operator is
+          standing when they notice a disk is filling up. Ops only: this moves
+          a partition boundary on a live mail server. */}
+      {canInstall ? <DiskExtend onGrew={refreshHost} /> : null}
 
       {CHART_GROUPS.map((group) => {
         const inGroup = charts.filter((c) => group.metrics.includes(c.metric));

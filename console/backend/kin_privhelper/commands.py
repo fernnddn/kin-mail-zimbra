@@ -43,6 +43,10 @@ FIREWALL_CANDIDATES = (
     "install/10-host-firewall.sh",
     "10-host-firewall.sh",
 )
+GROW_DISK_CANDIDATES = (
+    "install/lib/grow-disk.sh",
+    "lib/grow-disk.sh",
+)
 CREATE_MAILBOX_CANDIDATES = (
     "install/08-create-mailbox.sh",
     "08-create-mailbox.sh",
@@ -104,6 +108,10 @@ def resolve_firewall() -> Path:
 
 def resolve_prepare_os() -> Path:
     return resolve_under_deploy(PREPARE_OS_CANDIDATES, "02-prepare-os.sh")
+
+
+def resolve_grow_disk() -> Path:
+    return resolve_under_deploy(GROW_DISK_CANDIDATES, "grow-disk.sh")
 
 
 def resolve_create_mailbox() -> Path:
@@ -773,6 +781,91 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     yield proto.event_done(install_exit)
 
 
+# The two filesystems an appliance runs out of, and the only two this command
+# will look at. The console sends a name, never a path: a request that can name
+# an arbitrary mountpoint is a request that can be aimed at the wrong disk.
+GROW_TARGETS = {
+    "system": "/",
+    "mail": os.environ.get("KIN_ZIMBRA_DIR", "/opt/zimbra"),
+}
+
+
+async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    """Grow a filesystem into space added to its disk by the hypervisor.
+
+    Two operations. "plan" reads the disk and says what it would do, changing
+    nothing; "apply" does it. The console always plans first and shows the
+    operator that plan, because the honest way to offer a destructive button is
+    to say what it will do before it does it.
+
+    Everything dangerous is decided in grow-disk.sh, which refuses rather than
+    guesses: it will not touch a partition that has another partition after it,
+    will not act on replicated storage, will not shrink anything, and has no
+    force flag. This wrapper adds the two things a shell script cannot: the
+    maintenance lock, so a resize cannot overlap a deploy or a cluster
+    operation, and the audit trail.
+    """
+    from .maintenance import release_maintenance_lock, try_lock_maintenance
+
+    args = args or {}
+    op = str(args.get("op") or "plan").strip().lower()
+    target = str(args.get("target") or "").strip().lower()
+
+    if op not in ("plan", "apply"):
+        yield proto.event_stderr("op must be plan or apply\n")
+        yield proto.event_done(2)
+        return
+    if target not in GROW_TARGETS:
+        yield proto.event_stderr(
+            "target must be system or mail (the console never sends a path)\n"
+        )
+        yield proto.event_done(2)
+        return
+
+    mountpoint = GROW_TARGETS[target]
+
+    try:
+        script = resolve_grow_disk()
+    except (FileNotFoundError, RuntimeError) as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(2)
+        return
+
+    # Planning is read-only, so it does not need the lock and must not be
+    # blocked by an unrelated operation: an operator looking at what WOULD
+    # happen while a deploy runs is exactly when they want to look.
+    if op == "plan":
+        async for ev in _stream_subprocess([str(script), "plan", mountpoint]):
+            yield ev
+        return
+
+    # Applying moves a partition boundary. It must never overlap a deploy, an
+    # Add or Remove Host, or a metrics install that is mid-apt.
+    lock_fh = try_lock_maintenance()
+    if lock_fh is None:
+        yield proto.event_stderr(
+            "Refusing: another operation is already running on this appliance. "
+            "A resize must not overlap it. Try again when it finishes.\n"
+        )
+        yield proto.event_done(1)
+        return
+    try:
+        yield proto.event_stdout(
+            f"Growing {mountpoint} into unused space on its disk. "
+            "Mail keeps running; nothing is unmounted.\n"
+        )
+        async for ev in _stream_subprocess(
+            [str(script), "apply", mountpoint],
+            transcript=DEPLOY_LAST_LOG,
+            transcript_reset=False,
+        ):
+            yield ev
+    finally:
+        # BaseException too: a closed browser tab throws GeneratorExit in here
+        # and a lock left held blocks every later operation.
+        release_maintenance_lock(lock_fh)
+
+
 async def cmd_cancel_firewall_deadman() -> AsyncIterator[dict[str, Any]]:
     """Explicit operator step: cancel ufw dead-man after verification (keeps ufw on)."""
     script = resolve_firewall()
@@ -1239,6 +1332,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_HARDENING: _adapt(cmd_run_hardening),
     proto.CMD_RUN_FULL_INSTALL: _adapt(cmd_run_full_install),
     proto.CMD_INSTALL_MONITORING: _adapt(cmd_install_monitoring),
+    proto.CMD_GROW_DISK: _adapt(cmd_grow_disk),
     proto.CMD_CANCEL_FIREWALL_DEADMAN: _adapt(cmd_cancel_firewall_deadman),
     proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
     proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),

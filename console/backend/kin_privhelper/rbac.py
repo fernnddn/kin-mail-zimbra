@@ -37,6 +37,8 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "add_observability",
         "store_observability_secrets",
         "install_monitoring",
+        # Moves a partition boundary on a live mail server.
+        "grow_disk",
     }
 )
 

@@ -517,6 +517,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "add_observability": proto.CMD_ADD_OBSERVABILITY,
     "appliance_settings": proto.CMD_APPLY_APPLIANCE_SETTINGS,
     "install_monitoring": proto.CMD_INSTALL_MONITORING,
+    "grow_disk": proto.CMD_GROW_DISK,
 }
 
 
@@ -814,6 +815,19 @@ async def wizard_deploy_stream(
             "data_disk": (request.query_params.get("data_disk") or "").strip(),
             "meta_disk": (request.query_params.get("meta_disk") or "").strip(),
         }
+    elif cmd == proto.CMD_GROW_DISK:
+        # A name, never a path. The helper maps the name to a mountpoint from
+        # its own table, so a crafted request cannot aim a partition resize at
+        # something the console was never meant to touch.
+        op = (request.query_params.get("op") or "plan").strip().lower()
+        target = (request.query_params.get("target") or "").strip().lower()
+        if op not in ("plan", "apply"):
+            raise HTTPException(status_code=400, detail="grow_disk op must be plan or apply")
+        if target not in ("system", "mail"):
+            raise HTTPException(
+                status_code=400, detail="grow_disk target must be system or mail"
+            )
+        stream_args = {"op": op, "target": target}
     elif cmd in (proto.CMD_REMOVE_OBSERVABILITY, proto.CMD_ADD_OBSERVABILITY):
         op = (request.query_params.get("op") or "apply").strip().lower()
         stream_args = {"op": op}

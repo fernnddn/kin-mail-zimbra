@@ -271,6 +271,7 @@ _CMD_LABELS = {
     proto.CMD_CREATE_MAILBOX: "a mailbox operation",
     proto.CMD_MUTATE_CONSOLE_USERS: "a console user change",
     proto.CMD_RUN_HARDENING: "hardening",
+    proto.CMD_GROW_DISK: "extending a disk",
 }
 
 
@@ -447,6 +448,10 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             audit_cmd = f"{cmd}:{aop}"
         elif cmd == proto.CMD_STORE_OBSERVABILITY_SECRETS:
             audit_cmd = f"{cmd}:redacted"
+        elif cmd == proto.CMD_GROW_DISK:
+            gop = str(args.get("op") or "plan")[:8]
+            gtarget = str(args.get("target") or "")[:16]
+            audit_cmd = f"{cmd}:{gop}" + (f":{gtarget}" if gtarget else "")
         elif cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS:
             section = str(args.get("section") or "")[:24]
             audit_cmd = f"{cmd}:{section}"

@@ -245,7 +245,8 @@ kin_block_pkg_service_start
 if kin_apt -y install \
   netcat-openbsd libidn12 libpcre3 libgmp10 libexpat1 libstdc++6 "$PERL_LIB" \
   unzip pax sysstat sqlite3 lsb-release dnsutils net-tools curl wget \
-  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup
+  dnsmasq tmux swaks tcpdump traceroute python3 parted e2fsprogs cryptsetup \
+  cloud-guest-utils xfsprogs lvm2
 then
   ok "Zimbra dependencies + test tools installed (${PERL_LIB})"
 else
