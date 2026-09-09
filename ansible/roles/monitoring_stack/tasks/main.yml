@@ -46,6 +46,28 @@
   when: not ansible_check_mode
   tags: [monitoring, config, mailflow]
 
+# This role must create every directory it writes into, including this one.
+#
+# /usr/local/libexec does not exist on a stock Ubuntu, and ansible.builtin.copy
+# does not create parent directories. It was created by corosync_qdevice, which
+# runs only in the two-server HA path, so on a 2vm appliance the HA build made
+# the directory first and monitoring worked by accident, while on the single
+# server this company actually sells the copy failed with "Destination
+# directory /usr/local/libexec does not exist" and the Reports tab had nothing
+# to count for the life of the box (live QA, 9 Sep 2026).
+#
+# A role that depends on another role having run first is a role that works on
+# whichever topology happened to be tested.
+- name: Create the directory the mail flow collector lives in
+  ansible.builtin.file:
+    path: "{{ monitoring_stack_mailflow_script | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [monitoring, mailflow]
+
 - name: Install the mail flow collector
   ansible.builtin.copy:
     src: kin-mail-flow-metrics.py
