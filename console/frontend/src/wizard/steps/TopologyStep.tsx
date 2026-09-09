@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Button,
@@ -13,6 +13,7 @@ import {
   NavRow,
   Title,
 } from "../../ui";
+import { HA_TOPOLOGY_OFFERED } from "../../featureFlags";
 import { useWizard } from "../WizardContext";
 import type { WizardDraft } from "../types";
 
@@ -28,6 +29,21 @@ export default function TopologyStep() {
   const navigate = useNavigate();
   const [fieldErr, setFieldErr] = useState("");
 
+  /* With one layout on offer, choosing it is not a decision, so the wizard
+     makes it. Leaving the step with nothing selected would refuse to continue
+     over a choice the operator was never shown. */
+  useEffect(() => {
+    if (!HA_TOPOLOGY_OFFERED && draft.topology !== "1vm") {
+      setLocal({
+        topology: "1vm",
+        peer_host_ip: "",
+        peer_host_name: "",
+        observability_vm_ip: "",
+        cluster_vip_ip: "",
+      });
+    }
+  }, [draft.topology, setLocal]);
+
   async function pick(topology: WizardDraft["topology"]) {
     setFieldErr("");
     if (topology === "1vm") {
@@ -39,7 +55,11 @@ export default function TopologyStep() {
 
   async function next() {
     if (!draft.topology) {
-      setFieldErr("Choose 1 server or 2 servers before continuing.");
+      setFieldErr(
+        HA_TOPOLOGY_OFFERED
+          ? "Choose 1 server or 2 servers before continuing."
+          : "Select the single server layout before continuing.",
+      );
       return;
     }
     if (draft.topology === "2vm" && !draft.peer_host_ip.trim()) {
@@ -104,9 +124,9 @@ export default function TopologyStep() {
     <>
       <Title>How many servers?</Title>
       <Lede>
-        Pick the layout for this customer. One server is the standard KIN Mail deployment and the
-        layout this release is built around. Two servers add active-passive high availability and
-        remain available on request, but they are not the default.
+        {HA_TOPOLOGY_OFFERED
+          ? "Pick the layout for this customer. One server is the standard KIN Mail deployment and the layout this release is built around. Two servers add active-passive high availability and remain available on request, but they are not the default."
+          : "This release deploys a single mail server. That is the layout KIN Mail is hardened and tuned for, and the one this appliance will run."}
       </Lede>
       <ChoiceGrid>
         <Choice
@@ -120,6 +140,7 @@ export default function TopologyStep() {
             right choice when the virtualization platform already provides host-level redundancy.
           </span>
         </Choice>
+        {HA_TOPOLOGY_OFFERED ? (
         <Choice
           type="button"
           selected={draft.topology === "2vm"}
@@ -133,6 +154,7 @@ export default function TopologyStep() {
             this customer.
           </span>
         </Choice>
+        ) : null}
       </ChoiceGrid>
       {draft.topology === "2vm" ? (
         <>
@@ -222,7 +244,11 @@ export default function TopologyStep() {
           </Hint>
         </>
       ) : null}
-      <Hint>Larger topologies are not offered in this wizard yet.</Hint>
+      <Hint>
+        {HA_TOPOLOGY_OFFERED
+          ? "Larger topologies are not offered in this wizard yet."
+          : "Two-server high availability is not offered in this release. It is planned, and an appliance deployed now does not have to be rebuilt for it."}
+      </Hint>
       <Err>{fieldErr || error}</Err>
       <NavRow>
         <span />

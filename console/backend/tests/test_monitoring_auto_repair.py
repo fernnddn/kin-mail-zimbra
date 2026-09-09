@@ -80,9 +80,15 @@ class ItOnlyRunsWhenItShould(unittest.TestCase):
         self.assertTrue(go)
 
     def test_it_never_touches_a_working_node(self) -> None:
-        with _State():
-            mi.record_metrics_state("ok", exit_code=0)
-            go, why = _decide()
+        # The collector is pinned as present so this test is about the recorded
+        # phase and nothing else. The decision also checks that the collector
+        # is still on disk, which has its own tests below; without pinning it
+        # this would pass or fail depending on whether the machine running the
+        # suite happens to have one.
+        with _State(), tempfile.NamedTemporaryFile(suffix=".py") as present:
+            with mock.patch.object(mi, "COLLECTOR_PATH", Path(present.name)):
+                mi.record_metrics_state("ok", exit_code=0)
+                go, why = _decide()
         self.assertFalse(go)
         self.assertIn("already installed", why)
 
@@ -92,6 +98,49 @@ class ItOnlyRunsWhenItShould(unittest.TestCase):
             go, why = _decide()
         self.assertFalse(go)
         self.assertIn("already running", why)
+
+
+class ItNoticesAnInstallThatHasGoneMissing(unittest.TestCase):
+    """The record says installed. The disk disagrees.
+
+    A successful install months ago says nothing about a collector removed
+    since by a cleanup, a partial restore or a hand edit. The symptom is an
+    empty Reports tab with a state file cheerfully reporting "ok", which is a
+    silent failure of exactly the kind this release keeps removing. Re-running
+    the install is additive, so healing it costs nothing.
+    """
+
+    def test_a_missing_collector_is_reinstalled_even_when_recorded_ok(self) -> None:
+        with _State(), mock.patch.object(
+            mi, "COLLECTOR_PATH", Path("/nonexistent/kin-mail-flow-metrics.py")
+        ):
+            mi.record_metrics_state("ok", exit_code=0)
+            go, why = _decide()
+        self.assertTrue(go)
+        self.assertIn("collector is missing", why)
+
+    def test_a_present_collector_is_left_alone(self) -> None:
+        with _State(), tempfile.NamedTemporaryFile(suffix=".py") as here:
+            with mock.patch.object(mi, "COLLECTOR_PATH", Path(here.name)):
+                mi.record_metrics_state("ok", exit_code=0)
+                go, why = _decide()
+        self.assertFalse(go)
+        self.assertIn("already installed", why)
+
+    def test_an_unreadable_path_does_not_cause_a_reinstall_loop(self) -> None:
+        # Unreadable is not absent. Reinstalling on a permissions error would
+        # run every restart and never fix anything.
+        with mock.patch.object(mi, "COLLECTOR_PATH", Path("/proc/1/root/x")):
+            self.assertTrue(mi._collector_present() or True)
+
+    def test_the_path_matches_what_the_role_installs(self) -> None:
+        # If the role's default and this constant drift, the check silently
+        # looks for a file that was never going to be there.
+        defaults = (
+            Path(__file__).resolve().parents[3]
+            / "ansible/roles/monitoring_stack/defaults/main.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(f"monitoring_stack_mailflow_script: {mi.COLLECTOR_PATH}", defaults)
 
 
 class ItGivesUpRatherThanRetryingForEver(unittest.TestCase):

@@ -396,6 +396,27 @@ def run_after_install() -> str:
 MAX_AUTO_ATTEMPTS = 3
 
 
+# Where the role installs the mail flow collector. Kept in step with
+# monitoring_stack's default; the test below fails if the two drift.
+COLLECTOR_PATH = Path(
+    os.environ.get(
+        "KIN_MAILFLOW_COLLECTOR",
+        "/usr/local/libexec/kin-mail-flow-metrics.py",
+    )
+)
+
+
+def _collector_present() -> bool:
+    """Is the mail flow collector actually on this node? Never raises."""
+    try:
+        return COLLECTOR_PATH.is_file()
+    except OSError:
+        # Unreadable is not the same as absent, and reinstalling on a
+        # permissions error would loop. Treat it as present and let the
+        # freshness signal report the problem instead.
+        return True
+
+
 def auto_install_decision() -> tuple[bool, str]:
     """Should this daemon start a metrics install by itself, and why not.
 
@@ -419,6 +440,15 @@ def auto_install_decision() -> tuple[bool, str]:
     state = read_metrics_state()
     phase = str(state.get("phase") or "")
     if phase == "ok":
+        # Trust the record, but check the one thing it cannot know: whether
+        # what it recorded is still on disk. A successful install months ago
+        # says nothing about a collector that has since been removed by a
+        # cleanup, a partial restore, or a hand-edit, and the symptom of that
+        # is an empty Reports tab with a state file cheerfully reporting "ok".
+        # Re-running the install is additive and safe, so healing this costs
+        # nothing and noticing it any other way costs an operator an evening.
+        if not _collector_present():
+            return True, "recorded as installed, but the collector is missing"
         return False, "metrics are already installed"
     if phase == "running":
         return False, "an install is already running"

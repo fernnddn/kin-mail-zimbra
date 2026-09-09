@@ -15,10 +15,6 @@ import { theme } from "./styles/theme";
 import { formatDeployLog } from "./wizard/ansi";
 import kinMailLogo from "./assets/kinmail-lockup-black.png";
 
-const spin = keyframes`
-  to { transform: rotate(360deg); }
-`;
-
 const scaleIn = keyframes`
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
@@ -496,18 +492,73 @@ const ButtonRoot = styled.button<{ $variant: ButtonVariant }>`
   ${focusRing}
 `;
 
+/* Three marks that breathe in sequence, not a rotating donut.
+   
+   The rotating border-circle is the default every framework ships, and it
+   looked borrowed here: this product is flat paper and ink, its corner radius
+   is 2px because there are no pills on paper, and a spinning ring was the one
+   piece of somebody else's design language in it. It also spins at a constant
+   rate whatever is happening, which reads as "frozen" the moment a task takes
+   longer than expected.
+   
+   A staggered fade says the same thing more quietly, sits still on the
+   baseline next to text, and matches the squares used everywhere else. The
+   $size prop is kept so every existing call site keeps working unchanged. */
+const march = keyframes`
+  0%, 80%, 100% { opacity: 0.2; transform: scaleY(0.7); }
+  40% { opacity: 1; transform: scaleY(1); }
+`;
+
 export const Spinner = styled.span<{ $size?: number }>`
-  width: ${(p) => (p.$size ?? 14) / 16}rem;
+  display: inline-flex;
+  align-items: center;
+  gap: ${(p) => Math.max(2, (p.$size ?? 14) / 5)}px;
   height: ${(p) => (p.$size ?? 14) / 16}rem;
-  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
-  border-top-color: currentColor;
-  /* The one round thing in the product. radius.full is 2px on this theme
-     (there are no pills on paper), so a spinner reading it would be a
-     rotating square. */
-  border-radius: 50%;
-  display: inline-block;
-  animation: ${spin} 0.7s linear infinite;
   flex-shrink: 0;
+  vertical-align: middle;
+
+  &::before,
+  &::after {
+    content: "";
+    width: ${(p) => Math.max(2, (p.$size ?? 14) / 4.5)}px;
+    height: ${(p) => (p.$size ?? 14) / 16}rem;
+    background: currentColor;
+    border-radius: 1px;
+    animation: ${march} 1.1s ${theme.motion.ease.standard} infinite;
+  }
+  &::before {
+    animation-delay: -0.22s;
+  }
+  &::after {
+    animation-delay: 0.22s;
+  }
+`;
+
+/* An indeterminate bar, for the places with room for something calmer than an
+   inline indicator: a long install where the operator wants to know the box is
+   still working without being made to stare at a spinning ring. */
+const sweep = keyframes`
+  0% { transform: translateX(-100%) scaleX(0.4); }
+  50% { transform: translateX(0%) scaleX(0.7); }
+  100% { transform: translateX(100%) scaleX(0.4); }
+`;
+
+export const ProgressTrack = styled.div`
+  position: relative;
+  height: 3px;
+  width: 100%;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 2px;
+`;
+
+export const ProgressSweep = styled.span`
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  border-radius: 2px;
+  transform-origin: center;
+  animation: ${sweep} 1.5s ${theme.motion.ease.standard} infinite;
 `;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {

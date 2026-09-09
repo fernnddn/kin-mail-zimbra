@@ -349,6 +349,18 @@ class OutcomeRates(unittest.TestCase):
         self.assertIn("event", R.REPORT_SERIES["deferred"][0].lower())
 
 
+def _table(body: str) -> list[list[str]]:
+    """The data rows of an export, with the provenance header skipped.
+
+    The export now opens with "#" comment lines naming the appliance, the
+    window and every metric in the file. A spreadsheet imports them as text and
+    a reader gets the context that a wall of numbers cannot carry on its own;
+    these tests care about the table underneath.
+    """
+    table = "\r\n".join(ln for ln in body.splitlines() if not ln.startswith("#"))
+    return [r for r in csv.reader(io.StringIO(table)) if r]
+
+
 class CsvOutput(unittest.TestCase):
     def test_the_header_matches_the_columns(self) -> None:
         body = R.to_csv([], R.report_csv_columns())
@@ -386,16 +398,28 @@ class CsvOutput(unittest.TestCase):
             }
         ]
         body = R.series_csv(charts)
-        rows = list(csv.reader(io.StringIO(body)))
+        rows = _table(body)
         self.assertEqual(
             rows[0],
-            ["timestamp_utc", "timestamp_local", "metric", "label", "unit", "instance", "value"],
+            [
+                "timestamp_utc",
+                "timestamp_local",
+                "metric",
+                "label",
+                "unit",
+                "unit_description",
+                "instance",
+                "value",
+            ],
         )
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[1][2], "cpu")
-        self.assertEqual(rows[1][6], "41.5")
+        self.assertEqual(rows[1][7], "41.5")
         # A gap must export as empty, not as the string "None".
-        self.assertEqual(rows[2][6], "")
+        self.assertEqual(rows[2][7], "")
+        # The raw token stays for machines; the words are for people.
+        self.assertEqual(rows[1][4], "percent")
+        self.assertEqual(rows[1][5], "percent")
 
     def test_a_gap_never_exports_as_the_word_none(self) -> None:
         body = R.series_csv(
@@ -409,13 +433,13 @@ class CsvOutput(unittest.TestCase):
             [{"metric": "m", "label": "M", "unit": "number",
               "series": [{"instance": "i", "points": [[1757000000, 1], [], None, [1]]}]}]
         )
-        rows = [r for r in csv.reader(io.StringIO(body)) if r]
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(_table(body)), 2)
 
     def test_an_empty_export_is_still_a_valid_csv(self) -> None:
         body = R.series_csv([])
-        rows = list(csv.reader(io.StringIO(body)))
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(_table(body)), 1, "header row only")
+        # Even with nothing to show, the file says what it is.
+        self.assertIn("# KIN Mail monitoring samples", body)
 
     def test_filenames_sort_and_carry_no_spaces(self) -> None:
         with _TZ("Asia/Jakarta"):

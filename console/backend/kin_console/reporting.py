@@ -461,47 +461,135 @@ def report_csv_columns() -> list[tuple[str, str]]:
     ]
 
 
+# Units as they are stored, and how to say them to a person or a model.
+_UNIT_WORDS = {
+    "per_min": "messages per minute",
+    "percent": "percent",
+    "bytes": "bytes",
+    "bytes_per_sec": "bytes per second",
+    "bits_per_sec": "bits per second",
+    "count": "count",
+    "seconds": "seconds",
+    "load": "load average",
+    "": "value",
+}
+
+
+def unit_words(unit: str) -> str:
+    """A raw unit token as words. Unknown units are passed through as-is."""
+    key = (unit or "").strip()
+    return _UNIT_WORDS.get(key, key or "value")
+
+
 def series_csv(
     charts: list[dict[str, Any]],
     *,
     tz_name: str = "",
+    host: str = "",
+    window: str = "",
+    generated_at: datetime | None = None,
 ) -> str:
     """Monitoring samples as CSV: one row per sample, long format.
 
     Long rather than a column per metric: the metrics do not share a timestamp
     grid once a node has been down, and a wide table would silently align
     samples that were minutes apart. Long format is also what a pivot table
-    wants.
+    wants, and what a model reading this file can group without guessing.
+
+    Two things this export did not have, both of which made it harder to read
+    than it needed to be.
+
+    It was ordered by metric, so the first four hundred rows were one series
+    and nothing could be compared at a moment in time without sorting the file
+    first. It is now ordered by timestamp, then metric, so every row for one
+    instant sits together and reading down the file is reading forward in time.
+
+    And it arrived with no context at all: no appliance, no window, no
+    timezone, and unit tokens like "per_min" that mean nothing to a reader who
+    was not there. There is now a short header saying what this is, in comment
+    lines a spreadsheet imports as text and a model reads as prose, plus a
+    legend naming every metric in the file with its units. Nothing about the
+    figures changed.
     """
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\r\n")
-    writer.writerow(
-        ["timestamp_utc", "timestamp_local", "metric", "label", "unit", "instance", "value"]
-    )
+    rows: list[tuple[float, str, list[Any]]] = []
+    legend: dict[str, tuple[str, str]] = {}
+    instances: set[str] = set()
+
     for chart in charts:
         metric = str(chart.get("metric") or "")
         label = str(chart.get("label") or "")
         unit = str(chart.get("unit") or "")
+        legend[metric] = (label, unit)
         for one in chart.get("series") or []:
             instance = str(one.get("instance") or "")
+            if instance:
+                instances.add(instance)
             for point in one.get("points") or []:
                 try:
                     ts, value = point[0], point[1]
                 except (TypeError, IndexError):
                     continue
                 when = datetime.fromtimestamp(float(ts), tz=timezone.utc)
-                writer.writerow(
-                    [
-                        when.strftime("%Y-%m-%d %H:%M:%S"),
-                        when.astimezone(appliance_zone()).strftime("%Y-%m-%d %H:%M:%S"),
+                rows.append(
+                    (
+                        float(ts),
                         metric,
-                        label,
-                        unit,
-                        instance,
-                        "" if value is None else value,
-                    ]
+                        [
+                            when.strftime("%Y-%m-%d %H:%M:%S"),
+                            when.astimezone(appliance_zone()).strftime("%Y-%m-%d %H:%M:%S"),
+                            metric,
+                            label,
+                            unit,
+                            unit_words(unit),
+                            instance,
+                            "" if value is None else value,
+                        ],
+                    )
                 )
-    return buf.getvalue()
+
+    # Time first, then metric, so one instant reads as one block.
+    rows.sort(key=lambda r: (r[0], r[1]))
+
+    clock = generated_at or now_local()
+    appliance = host or (sorted(instances)[0] if instances else "")
+    zone = tz_name or str(appliance_zone())
+
+    head = [
+        "# KIN Mail monitoring samples",
+        f"# appliance: {appliance or 'unknown'}",
+        f"# generated: {clock.strftime('%Y-%m-%d %H:%M:%S')} ({zone})",
+        f"# window: {window or 'unspecified'}",
+        f"# rows: {len(rows)}",
+        "#",
+        "# One row per sample per metric, ordered by time. Every metric is",
+        "# recorded independently, so a timestamp may not carry every metric.",
+        "# timestamp_utc is authoritative; timestamp_local is the same instant",
+        "# in the appliance's own timezone.",
+        "#",
+        "# Metrics in this file:",
+    ]
+    for metric in sorted(legend):
+        label, unit = legend[metric]
+        head.append(f"#   {metric} = {label} ({unit_words(unit)})")
+    head.append("#")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(
+        [
+            "timestamp_utc",
+            "timestamp_local",
+            "metric",
+            "label",
+            "unit",
+            "unit_description",
+            "instance",
+            "value",
+        ]
+    )
+    for _ts, _metric, row in rows:
+        writer.writerow(row)
+    return "".join(f"{line}\r\n" for line in head) + buf.getvalue()
 
 
 def csv_filename(prefix: str, start: datetime | None = None, end: datetime | None = None) -> str:

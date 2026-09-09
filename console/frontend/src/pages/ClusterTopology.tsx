@@ -1,4 +1,5 @@
 import styled from "@emotion/styled";
+import { HA_TOPOLOGY_OFFERED } from "../featureFlags";
 import { Button } from "../ui";
 import { theme } from "../styles/theme";
 import { charsThatFit, fitHostname, truncate } from "../lib/text";
@@ -244,7 +245,11 @@ export function ClusterTopology({
       <Wrap aria-label="Cluster topology">
         <Head>
           <Title>Topology</Title>
-          <Caption>Single mail server. Add a second server when you are ready for HA.</Caption>
+          <Caption>
+            {HA_TOPOLOGY_OFFERED
+              ? "Single mail server. Add a second server when you are ready for HA."
+              : "Single mail server. This appliance runs mail on one node."}
+          </Caption>
         </Head>
         <SvgWrap>
           <svg viewBox="0 0 760 172" width="100%" role="img">
@@ -265,7 +270,10 @@ export function ClusterTopology({
             />
           </svg>
         </SvgWrap>
-        {ops ? (
+        {/* Hidden for this release, not removed. Offering an operator a button
+            that starts building something not yet ready to sell is a promise
+            the release cannot keep; see featureFlags. */}
+        {ops && HA_TOPOLOGY_OFFERED ? (
           <Actions>
             <Button type="button" disabled={busy} onClick={onAdd}>
               Add a second server

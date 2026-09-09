@@ -256,6 +256,12 @@ class ReportCsvEndpoint(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
 
+def _metrics_table(body: str) -> list[list[str]]:
+    """Data rows of a metrics export, with the provenance header skipped."""
+    table = "\r\n".join(ln for ln in body.splitlines() if not ln.startswith("#"))
+    return [r for r in csv.reader(io.StringIO(table)) if r]
+
+
 class MetricsCsvEndpoint(unittest.TestCase):
     def _series(self, name: str, window: str, *, now: float):
         return [
@@ -272,11 +278,28 @@ class MetricsCsvEndpoint(unittest.TestCase):
             return _run(app_module.monitoring_series_csv(metrics=metrics, range=window))
 
     def test_it_exports_one_row_per_sample(self) -> None:
+        # The export opens with "#" provenance lines naming the appliance, the
+        # window and every metric present. The table underneath is unchanged in
+        # shape: one row per sample per metric.
         body = self._csv().body.decode("utf-8").lstrip("﻿")
-        rows = list(csv.reader(io.StringIO(body)))
+        rows = _metrics_table(body)
         self.assertEqual(rows[0][0], "timestamp_utc")
         # two metrics x two samples
         self.assertEqual(len(rows), 5)
+
+    def test_the_export_says_what_it_is(self) -> None:
+        body = self._csv().body.decode("utf-8").lstrip("﻿")
+        self.assertIn("# KIN Mail monitoring samples", body)
+        self.assertIn("# window:", body)
+        self.assertIn("# Metrics in this file:", body)
+
+    def test_rows_are_ordered_by_time_not_grouped_by_metric(self) -> None:
+        # Ordered by metric, the first hundreds of rows were one series and
+        # nothing could be compared at an instant without sorting the file
+        # first. Time order makes reading down the file reading forward.
+        rows = _metrics_table(self._csv().body.decode("utf-8").lstrip("﻿"))[1:]
+        stamps = [r[0] for r in rows]
+        self.assertEqual(stamps, sorted(stamps))
 
     def test_a_gap_exports_as_an_empty_cell(self) -> None:
         body = self._csv().body.decode("utf-8")
@@ -307,8 +330,7 @@ class MetricsCsvEndpoint(unittest.TestCase):
         with mock.patch.object(monitoring, "fetch_range", boom):
             resp = _run(app_module.monitoring_series_csv(metrics="cpu", range="1h"))
         body = resp.body.decode("utf-8").lstrip("﻿")
-        rows = [r for r in csv.reader(io.StringIO(body)) if r]
-        self.assertEqual(len(rows), 1, "header only")
+        self.assertEqual(len(_metrics_table(body)), 1, "header only")
 
     def test_it_is_a_download_and_uncached(self) -> None:
         resp = self._csv()

@@ -1528,7 +1528,9 @@ async def monitoring_series_csv(
         return {**monitoring.metric_meta(name), "series": series}
 
     charts = await asyncio.gather(*(one(n) for n in wanted))
-    body = reporting.series_csv(list(charts))
+    # The window and the appliance name travel with the file. Without them an
+    # export is a wall of numbers with no way to tell what it is a picture of.
+    body = reporting.series_csv(list(charts), window=window)
     return _csv_response(body, reporting.csv_filename(f"kin-mail-metrics-{window}"))
 
 

@@ -5,7 +5,16 @@ import { api } from "../api";
 import { isOpsRole, useAuth } from "../auth";
 import { theme } from "../styles/theme";
 import { useSlidingIndicator } from "./useSlidingIndicator";
-import { Button, Hint, LogPane, Skeleton, SkeletonCard, WarnBox } from "../ui";
+import {
+  Button,
+  Hint,
+  LogPane,
+  ProgressSweep,
+  ProgressTrack,
+  Skeleton,
+  SkeletonCard,
+  WarnBox,
+} from "../ui";
 import {
   areaPath,
   formatBytes,
@@ -370,7 +379,27 @@ const Axis = styled.div`
 
 /* The install action sits inside the warning that explains why it is there,
    so the button and its consequences read as one thing. */
+/* The install panel is the first thing an operator sees on a new appliance,
+   and it used to appear and vanish in a single frame. Arriving is part of
+   being legible: a panel that fades up reads as the page answering, where one
+   that snaps in reads as a layout glitch. */
+const panelEnter = keyframes`
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+`;
+
+const SettlingRow = styled.div`
+  animation: ${panelEnter} ${theme.motion.slow} ${theme.motion.ease.standard} both;
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0;
+  color: ${theme.surface[600]};
+  font-size: 0.86rem;
+  line-height: 1.5;
+`;
+
 const InstallRow = styled.div`
+  animation: ${panelEnter} ${theme.motion.slow} ${theme.motion.ease.standard} both;
   display: flex;
   align-items: flex-start;
   gap: 0.85rem;
@@ -763,6 +792,10 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
   const [installing, setInstalling] = useState(false);
   const [installLog, setInstallLog] = useState("");
   const [installDone, setInstallDone] = useState<"" | "ok" | "failed">("");
+  /* True between a successful install and the first samples arriving. The
+     stack is up but Prometheus has not scraped yet, so the charts are still
+     empty through no fault of anyone. */
+  const [settling, setSettling] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const alive = useRef(true);
 
@@ -860,6 +893,13 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
           es.close();
           setInstalling(false);
           setInstallDone(code === 0 ? "ok" : "failed");
+          /* Do not make the operator reload the page. The install finishing
+             is the start of the interesting part, not the end of it: the
+             stack is up but Prometheus has not scraped anything yet, so the
+             tab is still empty for a scrape interval or two. Telling somebody
+             to "give it a minute and reload" is asking them to do the polling
+             this component can do perfectly well itself. */
+          if (code === 0) setSettling(true);
         }
       } catch {
         /* ignore malformed SSE */
@@ -874,6 +914,50 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
       }
     };
   }, []);
+
+  /* Watch for the first samples after an install, then get out of the way.
+     
+     Bounded: a stack that is genuinely not going to produce data must not
+     leave this polling for ever, so it gives up after a few minutes and says
+     so plainly rather than spinning at the operator indefinitely. */
+  useEffect(() => {
+    if (!settling) return;
+    const startedAt = Date.now();
+    const giveUpAfterMs = 4 * 60 * 1000;
+    let stop = false;
+
+    const tick = async () => {
+      if (stop || !alive.current) return;
+      await load(range);
+      api<HostFacts>("/api/monitoring/host")
+        .then((h) => {
+          if (alive.current) setHost(h);
+        })
+        .catch(() => undefined);
+      if (stop || !alive.current) return;
+      if (Date.now() - startedAt > giveUpAfterMs) {
+        setSettling(false);
+      }
+    };
+
+    void tick();
+    const id = window.setInterval(() => void tick(), 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [settling, range, load]);
+
+  /* The moment real data arrives, the install panel has done its job. Clearing
+     it here rather than in the poller keeps it correct however the data turns
+     up, including a normal poll or a range change. */
+  useEffect(() => {
+    if (!unavailable && charts.length > 0) {
+      setSettling(false);
+      setInstallDone("");
+      setInstallLog("");
+    }
+  }, [unavailable, charts.length]);
 
   useEffect(() => {
     setLoading(true);
@@ -981,10 +1065,23 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
       {installLog ? (
         <>
           <LogPane>{installLog}</LogPane>
-          {installDone === "ok" ? (
+          {installDone === "ok" && settling ? (
+            <SettlingRow>
+              <ProgressTrack>
+                <ProgressSweep />
+              </ProgressTrack>
+              <span>
+                Monitoring installed. Waiting for the first samples, then this
+                tab fills in on its own. Nothing to reload and nothing else to
+                press.
+              </span>
+            </SettlingRow>
+          ) : null}
+          {installDone === "ok" && !settling ? (
             <Hint>
-              Monitoring installed. Charts fill in as samples arrive, so give it
-              a minute and then reload this tab.
+              Monitoring is installed. No samples arrived while this tab was
+              watching, which usually means the collector needs a little longer.
+              Leave the tab open, or come back shortly.
             </Hint>
           ) : null}
           {installDone === "failed" ? (

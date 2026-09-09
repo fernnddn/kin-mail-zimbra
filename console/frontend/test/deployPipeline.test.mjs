@@ -30,6 +30,7 @@ const {
   parseHaOrchProgress,
   parseInstallProgress,
   parseMetricsStage,
+  shouldOfferHaPair,
   FULL_INSTALL_STAGES,
 } = await import(pathToFileURL(bundle).href);
 rmSync(out, { recursive: true, force: true });
@@ -185,6 +186,30 @@ chk(
   "ANSI around the marker still counts",
   parseMetricsStage("\u001b[36mKIN_METRICS_BEGIN\u001b[0m host=mail1\n"),
   "pending",
+);
+
+// --- the two-server path is hidden for this release ------------------------
+//
+// Not deleted. An operator who finds a Build HA pair button, presses it and
+// hits a rough edge reasonably concludes the whole product is rough, so the
+// entry points are gated behind one flag while the code stays in the build.
+// This asserts the gate is actually closed, because a flag nothing reads is
+// the same as no flag.
+
+chk(
+  "Build HA pair is not offered even on a completed 2vm primary",
+  shouldOfferHaPair({ topology: "2vm", fullInstallComplete: true }),
+  false,
+);
+chk(
+  "and certainly not on a single server",
+  shouldOfferHaPair({ topology: "1vm", fullInstallComplete: true }),
+  false,
+);
+chk(
+  "nor before the install has finished",
+  shouldOfferHaPair({ topology: "2vm", fullInstallComplete: false }),
+  false,
 );
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);

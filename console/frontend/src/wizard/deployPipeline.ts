@@ -1,3 +1,4 @@
+import { HA_TOPOLOGY_OFFERED } from "../featureFlags";
 import { stripAnsi } from "./ansi";
 
 /**
@@ -134,6 +135,9 @@ export function shouldOfferHaPair(opts: {
   topology: string;
   fullInstallComplete: boolean;
 }): boolean {
+  // Hidden for this release. One gate, so every caller is covered at once and
+  // nothing has to remember to check the flag separately. See featureFlags.
+  if (!HA_TOPOLOGY_OFFERED) return false;
   return opts.topology === "2vm" && opts.fullInstallComplete;
 }
 
