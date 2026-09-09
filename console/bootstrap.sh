@@ -133,6 +133,44 @@ install -d -o root -g root -m 755 "$LOG_ROOT"
 touch "${LOG_ROOT}/privhelper.log"
 chown root:root "${LOG_ROOT}/privhelper.log"
 chmod 640 "${LOG_ROOT}/privhelper.log"
+
+# Nothing rotated these. privhelperd already logs through a WatchedFileHandler,
+# which exists precisely to cooperate with logrotate by reopening the file when
+# it is replaced, but no rotation was ever installed, so the audit log and the
+# cluster operations log grew for the life of the appliance. On a box expected
+# to run for years that ends as a full disk, and a full disk on a mail node
+# takes mail down, which is a far worse outcome than the missing history.
+#
+# The backup VM has had this since it shipped; the mail node had not.
+#
+# deploy-last.log is deliberately left out: it is truncated at the start of
+# every deploy, so it is already bounded, and rotating it mid-install would
+# take the transcript out from under the console's log viewer.
+cat > /etc/logrotate.d/kin-mail-console <<'ROTATE'
+/var/log/kin-mail/privhelper.log
+/var/log/kin-mail/cluster-ops.log
+{
+  weekly
+  rotate 52
+  compress
+  delaycompress
+  missingok
+  notifempty
+  create 0640 root root
+}
+
+/var/log/kin-mail-install.log {
+  monthly
+  rotate 6
+  compress
+  delaycompress
+  missingok
+  notifempty
+  create 0640 root root
+}
+ROTATE
+chmod 0644 /etc/logrotate.d/kin-mail-console
+ok "Log rotation installed (/etc/logrotate.d/kin-mail-console)"
 ok "Layout ready"
 
 say "4. Install application files"
