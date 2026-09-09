@@ -529,7 +529,16 @@ function HostPanel({ host }: { host: HostFacts }) {
               <K>Total</K>
               <V>{formatBytes(d.total_bytes)}</V>
             </Kv>
-            <Model>{d.mount}</Model>
+            <Model>
+              {d.mount}
+              {/* On a single-disk appliance /opt/zimbra is a directory on the
+                  root filesystem, so both cards show the same numbers. That is
+                  correct and it reads like a bug, and an operator who takes it
+                  for two disks will size the next one wrongly. */}
+              {label === "Mail storage" && host.disks_share_a_filesystem
+                ? " (on the system disk, not a separate volume)"
+                : ""}
+            </Model>
           </Card>
         ) : null,
       )}
@@ -566,6 +575,8 @@ type HostFacts = {
   disks: { mount: string; total_bytes: number; used_bytes: number; free_bytes: number; percent: number }[];
   uptime_seconds: number | null;
   mail_flow?: MailFlowFreshness;
+  /** True when mail storage is a directory on the system disk, not its own volume. */
+  disks_share_a_filesystem?: boolean;
 };
 
 const Tip = styled.div<{ $left: number }>`

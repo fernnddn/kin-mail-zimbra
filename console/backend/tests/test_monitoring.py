@@ -336,10 +336,19 @@ Buffers:          123456 kB
 
     def test_host_facts_shape_is_stable(self) -> None:
         # Must not raise on a host with no /proc (the dev machine).
+        #
+        # disks_share_a_filesystem was added deliberately: on a single-disk
+        # appliance /opt/zimbra is a directory on the root filesystem, so the
+        # two storage cards show identical figures, which is correct and reads
+        # like a bug. The console needs to be able to say so.
         facts = m.host_facts()
-        self.assertEqual(set(facts), {"cpu", "memory", "disks", "uptime_seconds"})
+        self.assertEqual(
+            set(facts),
+            {"cpu", "memory", "disks", "uptime_seconds", "disks_share_a_filesystem"},
+        )
         self.assertEqual(set(facts["cpu"]), {"model", "threads", "cores", "load"})
         self.assertIsInstance(facts["disks"], list)
+        self.assertIsInstance(facts["disks_share_a_filesystem"], bool)
 
 
 class DiagnosticMetricTests(unittest.TestCase):

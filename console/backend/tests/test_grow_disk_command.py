@@ -161,3 +161,61 @@ class TheHelperScriptIsShippedAndSane(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BothDiskLayoutsAreHandled(unittest.TestCase):
+    """A single-disk appliance and a two-disk one are different machines.
+
+    On one disk /opt/zimbra is a directory on the root filesystem, so the two
+    storage cards show identical figures and extending either grows both. On
+    two disks the data disk carries a 256 MiB replication meta partition at its
+    very end, so the mail partition is never the last one and new space lands
+    behind the meta rather than behind the data.
+
+    Both are correct layouts. What matters is that the console says which one
+    it is looking at, because an operator who reads a single disk as two will
+    size the next one wrongly, and one who is told only "something is in the
+    way" will think the feature is broken.
+    """
+
+    def test_the_host_facts_say_when_the_two_mounts_are_one_filesystem(self) -> None:
+        from kin_console import monitoring
+
+        self.assertTrue(monitoring.same_filesystem("/", "/"))
+        self.assertFalse(monitoring.same_filesystem("/", "/proc"))
+
+    def test_an_unreadable_path_is_not_reported_as_shared(self) -> None:
+        # Guessing "shared" for a path that cannot be read would put a note on
+        # a two-disk appliance saying it has one disk.
+        from kin_console import monitoring
+
+        self.assertFalse(monitoring.same_filesystem("/", "/definitely-not-here"))
+
+    def test_the_flag_reaches_the_payload(self) -> None:
+        from kin_console import monitoring
+
+        src = inspect.getsource(monitoring)
+        self.assertIn('"disks_share_a_filesystem": same_filesystem(', src)
+
+    def test_the_console_renders_the_note(self) -> None:
+        from pathlib import Path
+
+        tab = (
+            Path(__file__).resolve().parents[3]
+            / "console/frontend/src/monitoring/MonitoringTab.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("disks_share_a_filesystem", tab)
+        self.assertIn("not a separate volume", tab)
+
+    def test_the_helper_names_the_meta_partition_rather_than_guessing(self) -> None:
+        # The two-disk refusal has to name what is in the way. Its own test
+        # suite drives this against a fixture; this pins that the reason code
+        # exists at all, so it cannot be quietly folded back into the generic
+        # not-last-partition message.
+        from pathlib import Path
+
+        lib = (
+            Path(__file__).resolve().parents[3] / "install/lib/grow-disk.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("meta-partition-in-the-way", lib)
+        self.assertIn("drbd-meta", lib)

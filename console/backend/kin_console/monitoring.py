@@ -411,6 +411,14 @@ def memory_usage(meminfo: str) -> dict[str, Any]:
     }
 
 
+def same_filesystem(a: str, b: str) -> bool:
+    """Are these two paths on one filesystem? False if either cannot be read."""
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
 def disk_usage(path: str) -> dict[str, Any] | None:
     try:
         st = os.statvfs(path)
@@ -467,6 +475,11 @@ def host_facts() -> dict[str, Any]:
             for d in (disk_usage(MAIL_MOUNT), disk_usage(SYSTEM_MOUNT))
             if d is not None
         ],
+        # On a single-disk appliance /opt/zimbra is a directory on the root
+        # filesystem, not a volume of its own, so the two cards show identical
+        # figures. That is correct and it looks like a bug, and an operator who
+        # reads it as two disks will size the next one wrongly. Say it instead.
+        "disks_share_a_filesystem": same_filesystem(MAIL_MOUNT, SYSTEM_MOUNT),
         "uptime_seconds": parse_uptime(_read("/proc/uptime")),
     }
 

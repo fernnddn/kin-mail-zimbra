@@ -235,6 +235,48 @@ if [ "$RC" -ne 0 ] && has "reason=resize2fs-failed"; then
   pass "a filesystem that will not grow is reported, not swallowed"
 else bad "resize2fs failure was not reported (rc=$RC)"; fi
 
+# --- the two-disk appliance layout -------------------------------------------
+#
+# prepare-zimbra-data-disk.sh partitions a spare disk as
+#   mkpart zimbra-data 1MiB -256MiB
+#   mkpart drbd-meta  -256MiB 100%
+# so the mail data is partition 1 and a 256 MiB replication meta partition sits
+# at the very END. New space from the hypervisor therefore lands behind the
+# meta partition, not behind the data, and the data cannot be grown into it
+# without moving the meta partition. Refusing is right. Refusing while naming
+# what is in the way is the difference between an operator who knows what to do
+# and one who thinks the feature is broken.
+PARTED_TWO_DISK='BYT;
+/dev/sdb:214748364800B:scsi:512:512:gpt:VMware Virtual disk;
+1:1048576B:107105026047B:107103977472B:ext4:zimbra-data:;
+2:107105026048B:107374182399B:268435456B::drbd-meta:;'
+
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='sdb1 part
+sdb disk' STUB_PARTED="$PARTED_TWO_DISK" run plan /opt/zimbra
+if [ "$RC" -ne 0 ] && has "reason=meta-partition-in-the-way"; then
+  pass "two-disk layout: refuses the mail disk and names the meta partition"
+else bad "two-disk layout: gave a generic refusal or worse (rc=$RC): $OUT"; fi
+if printf '%s' "$OUT" | grep -q "system disk instead"; then
+  pass "two-disk layout: tells the operator what they can actually do"
+else bad "two-disk layout: refusal offers no way forward"; fi
+
+# The system disk on that same appliance must still be growable, because that
+# is where the space can safely go.
+STUB_SOURCE=/dev/sda2 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" \
+  STUB_PARTED="$PARTED_ROOM" run plan /
+if [ "$RC" -eq 0 ]; then
+  pass "two-disk layout: the system disk is still growable"
+else bad "two-disk layout: the system disk was refused too (rc=$RC)"; fi
+
+# A data disk with NO meta partition (a plain second disk) grows normally.
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='sdb1 part
+sdb disk' STUB_PARTED='BYT;
+/dev/sdb:214748364800B:scsi:512:512:gpt:disk;
+1:1048576B:107105026047B:107103977472B:ext4:zimbra-data:;' run plan /opt/zimbra
+if [ "$RC" -eq 0 ] && has "FREE_BYTES="; then
+  pass "a plain data disk with no meta partition grows normally"
+else bad "a plain data disk was refused (rc=$RC)"; fi
+
 # --- a dry run must genuinely change nothing ---------------------------------
 # The mode exists so an operator, or this test suite, can see the exact command
 # sequence without a disk being touched. The rescan wrote straight to sysfs and
@@ -282,11 +324,40 @@ else bad "wrongly reported a shared disk (rc=$RC)"; fi
 
 # --- it can never shrink -----------------------------------------------------
 
-if grep -qE 'resize2fs[^|]*-M|--shrink|resizepart|mkfs|sfdisk|wipefs|dd ' "$LIB"; then
+# Comments and double-quoted strings removed first, so this reads CODE. The
+# refusal messages are long English sentences that explain partition layouts,
+# and matching those made the guard fail on its own explanation rather than on
+# anything the library would ever run.
+CODE_ONLY="${WORK}/code-only.sh"
+sed 's/#.*$//; s/"[^"]*"//g' "$LIB" > "$CODE_ONLY"
+if grep -qE 'resize2fs[^|]*-M|--shrink|resizepart|mkfs|sfdisk|wipefs|\bdd\b' "$CODE_ONLY"; then
   bad "the library contains a shrinking or partition-writing command"
 else
-  pass "no shrink, mkfs, sfdisk or wipefs anywhere in the library"
+  pass "no shrink, mkfs, sfdisk or wipefs in the executable code"
 fi
+
+# Stronger than a keyword search: every external tool the library can run is
+# declared as a variable at the top, so the set of tools is enumerable. If a
+# destructive one is ever added, it has to appear here.
+# [A-Z_0-9], not [A-Z_]: KIN_GROW_RESIZE2FS has a digit in it, and the first
+# version of this pattern silently skipped that line. A guard that enumerates
+# tools while missing one is worse than none, because it reads as complete.
+TOOLS=$(grep -oE '^[A-Z_0-9]+="\$\{KIN_GROW_[A-Z_0-9]+:-[a-z_0-9.]+\}"' "$LIB" \
+        | sed 's/.*:-//; s/}"//' | grep -vE '^[0-9]+$' | sort -u | tr '\n' ' ')
+# Every tool the library documents as injectable must appear, or the
+# enumeration is not enumerating.
+for expect in findmnt lsblk parted growpart partx resize2fs xfs_growfs pvresize lvextend cryptsetup; do
+  case " $TOOLS " in
+    *" $expect "*) ;;
+    *) bad "tool enumeration missed ${expect}" ;;
+  esac
+done
+case " $TOOLS " in
+  *" mkfs"*|*" sfdisk"*|*" wipefs"*|*" dd "*)
+    bad "a destructive tool is wired into the library: $TOOLS" ;;
+  *)
+    pass "the only tools it can run are: ${TOOLS}" ;;
+esac
 
 # Comments stripped first: the header explains that there is deliberately no
 # force flag, and a guard that matches its own rationale is checking prose.

@@ -89,6 +89,19 @@ chain_types() { awk '{print $2}'; }
 
 # Last partition on a disk, and the bytes left after it.
 # Prints "PARTNUM PART_END DISK_SIZE FREE_BYTES", or nothing if unreadable.
+# Name of a numbered partition, from parted's machine output
+# (num:start:end:size:fstype:name:flags). Empty when unnamed or unreadable.
+partition_name() {
+  local disk="$1" want="$2" out line
+  out=$("$PARTED" -sm "$disk" unit B print 2>/dev/null) || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      "${want}:"*) printf '%s' "$line" | cut -d: -f6; return 0 ;;
+    esac
+  done <<< "$out"
+  return 0
+}
+
 # Returns 2 specifically when the table could not be read because of
 # permissions, which is a different problem from a table that is corrupt and
 # deserves a different sentence.
@@ -263,6 +276,19 @@ grow_plan() {
   # The one guard that matters most. growpart moves the END of a partition
   # forward; if anything lives after it, that data is inside the new boundary.
   if [ "$PLAN_PARTNUM" != "$last_num" ]; then
+    # The two-disk layout puts a 256 MiB replication meta partition at the very
+    # END of the data disk (mkpart drbd-meta -256MiB 100%), so the mail data
+    # partition is never the last one there and new space from the hypervisor
+    # lands after the meta partition rather than after the data. Saying only
+    # "something is after it" would leave the operator guessing at their own
+    # appliance's layout, so name it.
+    local tail_name
+    tail_name=$(partition_name "$PLAN_DISK" "$last_num")
+    if [ "$tail_name" = "drbd-meta" ]; then
+      fail meta-partition-in-the-way \
+        "${PLAN_PART} holds the mail data, and the replication meta partition (${PLAN_DISK}${last_num}) sits at the end of this disk behind it. New space added to this disk lands after that meta partition, so it cannot be given to the mail data without moving it, which is not something to do unattended on a live mail server. Add the space to the system disk instead, or ask KIN to restructure this disk during a maintenance window."
+      return 1
+    fi
     fail not-last-partition \
       "${PLAN_PART} is partition ${PLAN_PARTNUM} and partition ${last_num} sits after it. Growing it would run into that partition."
     return 1
