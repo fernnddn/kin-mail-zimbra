@@ -247,6 +247,40 @@ This does not remove FOSS rebuild lag; it makes the lag visible and owned.
 
 ---
 
+### Storage: one disk or two, and growing either
+
+A KIN Mail appliance can be built with a single disk or with a second, blank
+disk for mail data. Both are supported and they behave differently, so the
+console says which one it is looking at.
+
+With **one disk**, `/opt/zimbra` is a directory on the root filesystem. The two
+storage figures on the Monitoring tab are then the same number, which is
+correct and reads like a fault, so the card says so explicitly.
+
+With **two disks**, `02-prepare-os.sh` hands a unique blank spare to
+`install/lib/prepare-zimbra-data-disk.sh`, which partitions it as a large
+`zimbra-data` partition followed by a 256 MiB `drbd-meta` partition at the very
+end. The meta partition is unused on a single node and exists so the appliance
+can later become a replicated pair without being repartitioned. New disks are
+encrypted by default (`KIN_ENCRYPT_ZIMBRA_DATA_DISK=1`). No spare disk, or more
+than one, means Zimbra installs on the OS volume and the installer says so.
+
+After enlarging a disk in the hypervisor, the space is added from the console:
+Cluster, then Monitoring, then Extend a disk. It checks first, prints what it
+would do, and only then offers to do it. `install/lib/grow-disk.sh` does the
+work and is deliberately more refusal than action: it will not touch a
+partition that has another partition behind it, will not act on replicated or
+RAID storage, cannot shrink anything, and has no force flag.
+
+One consequence worth knowing before sizing a machine: on a two-disk appliance
+the mail partition is not the last one on its disk, because the meta partition
+sits at the end. Space added to that disk therefore lands behind the meta
+partition and cannot be given to the mail data without moving it, which is not
+done unattended. Add space to the system disk, or plan the data disk large
+enough at build time.
+
+---
+
 ## Deliberately out of scope
 
 No host firewall is enabled; perimeter control belongs on the network device.
@@ -272,7 +306,8 @@ repository automation remains out of scope here.
 
 - Ubuntu Server 22.04 or 24.04 LTS, 64-bit, minimal install
 - 2 vCPU / 8 GB RAM minimum; 4 vCPU / 16 GB recommended
-- 40 GB free minimum; a dedicated volume for `/opt/zimbra` is preferred
+- 40 GB free minimum; a dedicated blank volume for `/opt/zimbra` is preferred,
+  and is picked up automatically when exactly one unpartitioned spare is present
 - A static LAN address, and root or sudo access
 
 ---

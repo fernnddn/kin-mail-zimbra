@@ -80,10 +80,21 @@ fs_type()   { "$FINDMNT" -no FSTYPE --target "$1" 2>/dev/null | head -1; }
 
 # The device stack from the filesystem down to the physical disk, leaf first.
 # Each line is "NAME TYPE", e.g.
-#   ubuntu--vg-ubuntu--lv lvm
-#   sda3                  part
-#   sda                   disk
-device_chain() { "$LSBLK" -nsro NAME,TYPE "$1" 2>/dev/null; }
+#   /dev/mapper/ubuntu--vg-ubuntu--lv lvm
+#   /dev/sda3                         part
+#   /dev/sda                          disk
+#
+# PATH, not NAME. lsblk's NAME for a device-mapper node is the kernel name,
+# "ubuntu--vg-ubuntu--lv", and /dev/ubuntu--vg-ubuntu--lv does not exist: the
+# real nodes are under /dev/mapper. Building a path by pasting /dev/ in front
+# of NAME therefore produced a path that is right for a plain partition and
+# wrong for every LVM and LUKS layer, so lvextend and pvresize were being
+# handed something that could not be opened. lvextend failing is treated as
+# "nothing to add" and does not stop the run, so on an LVM appliance the resize
+# reported success while the filesystem had not grown at all. Ubuntu Server's
+# guided install uses LVM by default, so that is the common layout, not an
+# exotic one.
+device_chain() { "$LSBLK" -nsro PATH,TYPE "$1" 2>/dev/null; }
 
 chain_types() { awk '{print $2}'; }
 
@@ -192,7 +203,12 @@ grow_plan() {
   # drbd0, md0, md127: the number is part of the name, so the pattern has to
   # allow it. Matching bare "drbd" let a real DRBD device through, which is the
   # one device this must never touch.
-  if printf '%s\n' "$chain" | grep -qiE '(^| )(drbd[0-9]*|md[0-9]+|raid[0-9]*)( |$)'; then
+  # The boundary has to allow a leading slash as well as a space, because the
+  # chain carries full paths: /dev/drbd0 is preceded by "/", not by a space, so
+  # a space-only boundary stopped this guard firing on the exact device it
+  # exists to protect. md and raid keep their digit requirement so that
+  # /dev/mapper/... cannot match on the word "mapper".
+  if printf '%s\n' "$chain" | grep -qiE '(^|[ /])(drbd[0-9]*|md[0-9]+|raid[0-9]*)( |$)'; then
     fail replicated \
       "${mp} sits on replicated or RAID storage. Growing that is a cluster operation, not a disk one."
     return 1
@@ -216,14 +232,16 @@ grow_plan() {
     return 1
   fi
 
-  PLAN_DISK="/dev/$(printf '%s\n' "$chain" | awk '$2=="disk"||$2=="loop"{print $1}' | head -1)"
+  # The chain already carries full device paths, so nothing is pasted together
+  # here. See device_chain for why that matters.
+  PLAN_DISK="$(printf '%s\n' "$chain" | awk '$2=="disk"||$2=="loop"{print $1}' | head -1)"
   if [ "$parts" -eq 1 ]; then
-    PLAN_PART="/dev/$(printf '%s\n' "$chain" | awk '$2=="part"{print $1}' | head -1)"
+    PLAN_PART="$(printf '%s\n' "$chain" | awk '$2=="part"{print $1}' | head -1)"
   fi
   printf '%s\n' "$types" | grep -q '^crypt$' && \
-    PLAN_CRYPT="/dev/$(printf '%s\n' "$chain" | awk '$2=="crypt"{print $1}' | head -1)"
+    PLAN_CRYPT="$(printf '%s\n' "$chain" | awk '$2=="crypt"{print $1}' | head -1)"
   printf '%s\n' "$types" | grep -q '^lvm$' && \
-    PLAN_LVM="/dev/$(printf '%s\n' "$chain" | awk '$2=="lvm"{print $1}' | head -1)"
+    PLAN_LVM="$(printf '%s\n' "$chain" | awk '$2=="lvm"{print $1}' | head -1)"
 
   # On a single-disk appliance /opt/zimbra is not a separate volume, it is a
   # directory on the root filesystem. Both rows in the console would then be
@@ -257,6 +275,30 @@ grow_plan() {
   PLAN_PARTNUM="${PLAN_PART##*[!0-9]}"
   if [ -z "$PLAN_PARTNUM" ]; then
     fail no-partition-number "Could not read a partition number from ${PLAN_PART}."
+    return 1
+  fi
+
+  # Every tool this stack will need, checked now rather than discovered
+  # half-way through. 02-prepare-os installs cloud-guest-utils, but it only
+  # warns when a package fails, so an appliance can end up without growpart and
+  # nothing would say so until a resize stopped in the middle with "command not
+  # found" and a partition table already rewritten.
+  local missing=""
+  command -v "$GROWPART" >/dev/null 2>&1 || missing="${missing} growpart (cloud-guest-utils)"
+  case "$PLAN_FSTYPE" in
+    ext2|ext3|ext4) command -v "$RESIZE2FS" >/dev/null 2>&1 || missing="${missing} resize2fs (e2fsprogs)" ;;
+    xfs)            command -v "$XFS_GROWFS" >/dev/null 2>&1 || missing="${missing} xfs_growfs (xfsprogs)" ;;
+  esac
+  if [ -n "$PLAN_LVM" ]; then
+    command -v "$PVRESIZE" >/dev/null 2>&1 || missing="${missing} pvresize (lvm2)"
+    command -v "$LVEXTEND" >/dev/null 2>&1 || missing="${missing} lvextend (lvm2)"
+  fi
+  if [ -n "$PLAN_CRYPT" ]; then
+    command -v "$CRYPTSETUP" >/dev/null 2>&1 || missing="${missing} cryptsetup (cryptsetup)"
+  fi
+  if [ -n "$missing" ]; then
+    fail missing-tools \
+      "This appliance is missing the tools needed to grow ${mp}:${missing}. Install the packages named in brackets, then try again. Nothing has been changed."
     return 1
   fi
 
@@ -366,12 +408,24 @@ grow_apply() {
       fail pvresize-failed "Could not grow the physical volume on ${pv}."
       return 1
     }
-    run_step "extending the logical volume" "$LVEXTEND" -l +100%FREE "$PLAN_LVM" || {
-      # lvextend also exits non-zero when there is nothing free to add, which
-      # is not a failure worth stopping on: the filesystem step below is still
-      # worth running.
-      say "    (no free extents to add, continuing to the filesystem)"
-    }
+    # lvextend exits non-zero both when there is genuinely nothing to add and
+    # when it could not run at all. Treating every failure as "nothing to add"
+    # is what made a wrong device path silent: the extend never happened, the
+    # filesystem step found no new space, and the whole run still reported
+    # success. Only the specific "already this size" case is tolerated.
+    local lv_out lv_rc
+    lv_out=$(run_step "extending the logical volume" "$LVEXTEND" -l +100%FREE "$PLAN_LVM" 2>&1)
+    lv_rc=$?
+    say "$lv_out"
+    if [ "$lv_rc" -ne 0 ]; then
+      if printf '%s' "$lv_out" | grep -qiE 'matches existing size|already .* size|New size .* matches'; then
+        say "    (the volume is already using every free extent)"
+      else
+        fail lvextend-failed \
+          "Could not extend the logical volume ${PLAN_LVM} (exit ${lv_rc}). The filesystem was left alone rather than resized against a volume that did not grow."
+        return 1
+      fi
+    fi
   fi
 
   case "$PLAN_FSTYPE" in

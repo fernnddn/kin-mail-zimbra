@@ -62,7 +62,7 @@ make_stub partx 'exit 0'
 make_stub resize2fs 'exit ${STUB_RESIZE2FS_RC:-0}'
 make_stub xfs_growfs 'exit 0'
 make_stub pvresize 'exit 0'
-make_stub lvextend 'exit ${STUB_LVEXTEND_RC:-0}'
+make_stub lvextend 'printf "%s\n" "${STUB_LVEXTEND_OUT:-Size of logical volume changed}"; exit ${STUB_LVEXTEND_RC:-0}'
 make_stub cryptsetup 'exit 0'
 
 export KIN_GROW_FINDMNT="${BIN}/findmnt"
@@ -106,18 +106,22 @@ PARTED_ROOM_P3='BYT;
 2:2097152B:2149580287B:2147483136B:ext4::;
 3:2149580288B:53687091200B:51537510912B::;'
 
-CHAIN_PLAIN='sda2 part
-sda disk'
-CHAIN_LVM='ubuntu--vg-ubuntu--lv lvm
-sda3 part
-sda disk'
-CHAIN_LUKS='kin--vg-data lvm
-kin_crypt crypt
-sdb1 part
-sdb disk'
-CHAIN_DRBD='drbd0 disk
-sdb1 part
-sdb disk'
+# Full device paths, as lsblk's PATH column reports them. The NAME column
+# gives "ubuntu--vg-ubuntu--lv" for a device-mapper node, and /dev/ prefixed
+# onto that is a path that does not exist; using it meant lvextend and pvresize
+# were handed something unopenable on every LVM appliance.
+CHAIN_PLAIN='/dev/sda2 part
+/dev/sda disk'
+CHAIN_LVM='/dev/mapper/ubuntu--vg-ubuntu--lv lvm
+/dev/sda3 part
+/dev/sda disk'
+CHAIN_LUKS='/dev/mapper/kin--vg-data lvm
+/dev/mapper/kin_crypt crypt
+/dev/sdb1 part
+/dev/sdb disk'
+CHAIN_DRBD='/dev/drbd0 disk
+/dev/sdb1 part
+/dev/sdb disk'
 
 run() {  # run <action> <mountpoint>; output on stdout, rc in RC
   : > "$CALLS"
@@ -150,10 +154,10 @@ if [ "$RC" -ne 0 ] && has "reason=replicated"; then
   pass "refuses replicated storage, which is a cluster operation"
 else bad "did not refuse DRBD-backed storage"; fi
 
-STUB_CHAIN='sda2 part
-sda disk
-sdb1 part
-sdb disk' STUB_PARTED="$PARTED_ROOM" run plan /
+STUB_CHAIN='/dev/sda2 part
+/dev/sda disk
+/dev/sdb1 part
+/dev/sdb disk' STUB_PARTED="$PARTED_ROOM" run plan /
 if [ "$RC" -ne 0 ] && (has "reason=many-disks" || has "reason=many-partitions"); then
   pass "refuses a filesystem spanning more than one disk"
 else bad "did not refuse a multi-disk filesystem"; fi
@@ -199,7 +203,8 @@ STUB_SOURCE=/dev/mapper/kin--vg-data STUB_CHAIN="$CHAIN_LUKS" \
   STUB_PARTED='BYT;
 /dev/sdb:107374182400B:scsi:512:512:gpt:disk;
 1:1048576B:53687091200B:53686042624B::;' run apply /opt/zimbra
-if [ "$RC" -eq 0 ] && called "cryptsetup resize" && called "pvresize /dev/kin_crypt"; then
+if [ "$RC" -eq 0 ] && called "cryptsetup resize kin_crypt" \
+   && called "pvresize /dev/mapper/kin_crypt"; then
   pass "LUKS: the encrypted container is resized before the volume group"
 else bad "LUKS apply did not resize the container (rc=$RC)"; fi
 
@@ -224,16 +229,56 @@ if [ "$RC" -ne 0 ] && has "reason=growpart-failed" && ! called "resize2fs"; then
 else bad "carried on to the filesystem after growpart failed (rc=$RC)"; fi
 
 STUB_SOURCE=/dev/mapper/ubuntu--vg-ubuntu--lv STUB_CHAIN="$CHAIN_LVM" \
-  STUB_PARTED="$PARTED_ROOM_P3" STUB_LVEXTEND_RC=5 run apply /
+  STUB_PARTED="$PARTED_ROOM_P3" STUB_LVEXTEND_RC=5 \
+  STUB_LVEXTEND_OUT="New size (25599 extents) matches existing size (25599 extents)" run apply /
 if [ "$RC" -eq 0 ] && called "resize2fs"; then
-  pass "lvextend finding nothing to add still lets the filesystem grow"
-else bad "a no-op lvextend aborted the run (rc=$RC)"; fi
+  pass "lvextend saying the volume is already full size lets the filesystem grow"
+else bad "a genuine no-op lvextend aborted the run (rc=$RC)"; fi
+
+# The other half, and the one that made a wrong device path silent: lvextend
+# failing for any OTHER reason must stop, not shrug and report success.
+STUB_SOURCE=/dev/mapper/ubuntu--vg-ubuntu--lv STUB_CHAIN="$CHAIN_LVM" \
+  STUB_PARTED="$PARTED_ROOM_P3" STUB_LVEXTEND_RC=5 \
+  STUB_LVEXTEND_OUT="Failed to find logical volume" run apply /
+if [ "$RC" -ne 0 ] && has "reason=lvextend-failed" && ! called "resize2fs"; then
+  pass "an lvextend that really failed stops before the filesystem is touched"
+else bad "a failed lvextend was swallowed and the run reported success (rc=$RC)"; fi
+
+# The paths handed to the LVM tools must be the ones that exist on disk.
+STUB_SOURCE=/dev/mapper/ubuntu--vg-ubuntu--lv STUB_CHAIN="$CHAIN_LVM" \
+  STUB_PARTED="$PARTED_ROOM_P3" run apply /
+if called "lvextend -l +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv"; then
+  pass "lvextend is given the /dev/mapper path, not a pasted-together one"
+else bad "lvextend got a bad path: $(grep '^lvextend' "$CALLS")"; fi
 
 STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_ROOM" \
   STUB_RESIZE2FS_RC=1 run apply /
 if [ "$RC" -ne 0 ] && has "reason=resize2fs-failed"; then
   pass "a filesystem that will not grow is reported, not swallowed"
 else bad "resize2fs failure was not reported (rc=$RC)"; fi
+
+# --- a missing tool is caught before anything is touched ---------------------
+# 02-prepare-os installs cloud-guest-utils, but it only warns when a package
+# fails, so an appliance can end up without growpart. Discovering that half-way
+# through, with the partition table already rewritten, is the worst moment.
+STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_ROOM" \
+  KIN_GROW_GROWPART="${WORK}/definitely-not-installed" run plan /
+if [ "$RC" -ne 0 ] && has "reason=missing-tools" && has "cloud-guest-utils"; then
+  pass "a missing growpart is reported by name, with its package"
+else bad "a missing growpart was not caught up front (rc=$RC)"; fi
+
+STUB_FSTYPE=xfs STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_ROOM" \
+  KIN_GROW_XFS_GROWFS="${WORK}/definitely-not-installed" run plan /
+if [ "$RC" -ne 0 ] && has "xfsprogs"; then
+  pass "an xfs appliance is told it needs xfsprogs"
+else bad "a missing xfs_growfs was not caught (rc=$RC)"; fi
+
+# LVM tools are only required when the stack actually has LVM in it.
+STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_ROOM" \
+  KIN_GROW_LVEXTEND="${WORK}/definitely-not-installed" run plan /
+if [ "$RC" -eq 0 ]; then
+  pass "a plain appliance is not asked to install lvm2 it does not need"
+else bad "demanded LVM tools on a stack with no LVM (rc=$RC)"; fi
 
 # --- the two-disk appliance layout -------------------------------------------
 #
@@ -251,8 +296,8 @@ PARTED_TWO_DISK='BYT;
 1:1048576B:107105026047B:107103977472B:ext4:zimbra-data:;
 2:107105026048B:107374182399B:268435456B::drbd-meta:;'
 
-STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='sdb1 part
-sdb disk' STUB_PARTED="$PARTED_TWO_DISK" run plan /opt/zimbra
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='/dev/sdb1 part
+/dev/sdb disk' STUB_PARTED="$PARTED_TWO_DISK" run plan /opt/zimbra
 if [ "$RC" -ne 0 ] && has "reason=meta-partition-in-the-way"; then
   pass "two-disk layout: refuses the mail disk and names the meta partition"
 else bad "two-disk layout: gave a generic refusal or worse (rc=$RC): $OUT"; fi
@@ -269,8 +314,8 @@ if [ "$RC" -eq 0 ]; then
 else bad "two-disk layout: the system disk was refused too (rc=$RC)"; fi
 
 # A data disk with NO meta partition (a plain second disk) grows normally.
-STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='sdb1 part
-sdb disk' STUB_PARTED='BYT;
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='/dev/sdb1 part
+/dev/sdb disk' STUB_PARTED='BYT;
 /dev/sdb:214748364800B:scsi:512:512:gpt:disk;
 1:1048576B:107105026047B:107103977472B:ext4:zimbra-data:;' run plan /opt/zimbra
 if [ "$RC" -eq 0 ] && has "FREE_BYTES="; then
@@ -314,13 +359,38 @@ else bad "did not notice that /opt/zimbra is on the root filesystem (rc=$RC)"; f
 
 # And must NOT say it when they really are different volumes: a data disk of
 # its own is the layout this feature exists for.
-STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='sdb1 part
-sdb disk' STUB_PARTED='BYT;
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='/dev/sdb1 part
+/dev/sdb disk' STUB_PARTED='BYT;
 /dev/sdb:107374182400B:scsi:512:512:gpt:disk;
 1:1048576B:53687091200B:53686042624B:ext4::;' run plan /opt/zimbra
 if [ "$RC" -eq 0 ] && ! has "SHARED_WITH_ROOT=1"; then
   pass "does not claim a shared disk when the volumes are different"
 else bad "wrongly reported a shared disk (rc=$RC)"; fi
+
+# --- every refusal has to be readable ----------------------------------------
+# The console prints whatever comes back, with the KIN_GROW_ marker lines
+# stripped out. A refusal that emits only a machine reason therefore shows the
+# operator an empty panel, which is indistinguishable from the feature being
+# broken. Each one must carry a sentence a person can act on.
+short=""
+while IFS= read -r reason; do
+  # The sentence that follows this reason in the source, on the same call.
+  sentence=$(awk -v r="fail ${reason} " '
+    index($0, r) { found=1 }
+    found { line = line $0; if ($0 ~ /"/ && length(line) > length(r) + 5) { print line; exit } }
+  ' "$LIB" | grep -oE '"[^"]{2,}"' | head -1)
+  if [ "${#sentence}" -lt 32 ]; then
+    short="${short} ${reason}"
+  fi
+done < <(grep -oE 'fail [a-z-]+ ' "$LIB" | awk '{print $2}' | sort -u)
+if [ -z "$short" ]; then
+  pass "every refusal carries a sentence, not just a machine reason"
+else bad "refusals with no readable explanation:${short}"; fi
+
+reason_count=$(grep -oE 'fail [a-z-]+ ' "$LIB" | awk '{print $2}' | sort -u | wc -l)
+if [ "$reason_count" -ge 15 ]; then
+  pass "the library still distinguishes ${reason_count} separate refusal reasons"
+else bad "refusal reasons collapsed to ${reason_count}; specific beats generic here"; fi
 
 # --- it can never shrink -----------------------------------------------------
 
