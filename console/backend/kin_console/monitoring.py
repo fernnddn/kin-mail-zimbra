@@ -510,8 +510,25 @@ def mail_flow_freshness() -> dict[str, Any]:
     The file's own mtime is the one thing that still tells the truth, and
     node_exporter publishes it for free.
     """
+    # Matched with a regex, not equality.
+    #
+    # node_exporter labels this metric with the file it read, and whether that
+    # is the bare name or the full path under the textfile directory has
+    # differed between versions. An exact match on the bare name therefore
+    # finds nothing on an appliance that is collecting perfectly well, and the
+    # console then says "no mail flow metrics file is being collected" beside a
+    # Reports tab full of real figures. Two contradictory statements on one
+    # screen is worse than either alone: the operator cannot tell which to
+    # believe, and the honest warning stops being believed at all.
+    #
+    # The pattern accepts both shapes and cannot match a different collector's
+    # file, because the name is anchored at the end.
+    # Built outside the f-string: Python 3.10, which is the appliance's
+    # interpreter, refuses a backslash inside an f-string expression.
+    escaped = MAILFLOW_PROM_FILE.replace(".", r"\.")
     query = (
-        f'time() - node_textfile_mtime_seconds{{file="{MAILFLOW_PROM_FILE}"}}'
+        "time() - node_textfile_mtime_seconds"
+        '{file=~"(.*/)?' + escaped + '"}'
     )
     try:
         rows = parse_vector(_get("/api/v1/query", {"query": query}))

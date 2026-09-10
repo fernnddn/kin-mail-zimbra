@@ -42,6 +42,20 @@ const Blurb = styled.span`
   font-size: 0.82rem;
 `;
 
+/* One self-contained block per disk: the row, and whatever the appliance said
+   about it.
+
+   Spacing used to come from `Row + Row`, which only works while the rows are
+   actually adjacent. As soon as a result panel appeared under the first disk
+   the two rows stopped being siblings, the margin vanished, and the panel sat
+   on top of the row beneath it. Owning the spacing at the block level means it
+   cannot depend on what is or is not showing inside. */
+const TargetBlock = styled.div`
+  & + & {
+    margin-top: 0.6rem;
+  }
+`;
+
 const Row = styled.div`
   display: flex;
   align-items: center;
@@ -51,10 +65,6 @@ const Row = styled.div`
   border: 1px solid ${theme.line};
   border-radius: ${theme.radius.md};
   background: ${theme.bgElev};
-
-  & + & {
-    margin-top: 0.5rem;
-  }
 `;
 
 const RowName = styled.span`
@@ -80,21 +90,30 @@ const panelEnter = keyframes`
 
 const Result = styled.div<{ $tone: "ok" | "warn" | "muted" }>`
   animation: ${panelEnter} ${theme.motion.slow} ${theme.motion.ease.standard} both;
-  margin: 0.5rem 0 0;
+  margin: 0.4rem 0 0;
   padding: 0.6rem 0.75rem;
+  border: 1px solid ${theme.line};
   border-left: 3px solid
     ${(p) => (p.$tone === "ok" ? theme.ok : p.$tone === "warn" ? theme.warn : theme.line)};
-  background: ${theme.bgElev};
+  border-radius: ${theme.radius.md};
+  background: ${theme.paper};
   font-size: 0.85rem;
   line-height: 1.5;
+  /* Long refusals explain a partition layout in full sentences and have to
+     wrap, not run under the next thing on the page. */
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 `;
 
 const Working = styled.div`
   animation: ${panelEnter} ${theme.motion.slow} ${theme.motion.ease.standard} both;
   display: grid;
   gap: 0.45rem;
-  margin: 0.5rem 0 0;
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid ${theme.line};
+  border-radius: ${theme.radius.md};
+  background: ${theme.paper};
   color: ${theme.surface[600]};
   font-size: 0.85rem;
 `;
@@ -227,7 +246,7 @@ function TargetRow({
   const working = phase === "planning" || phase === "applying";
 
   return (
-    <>
+    <TargetBlock>
       <Row>
         <RowName>{target.name}</RowName>
         <Mount>{target.mount}</Mount>
@@ -287,7 +306,7 @@ function TargetRow({
         onConfirm={apply}
         onCancel={() => setConfirmOpen(false)}
       />
-    </>
+    </TargetBlock>
   );
 }
 
@@ -311,7 +330,7 @@ export default function DiskExtend({ onGrew }: { onGrew: () => void }) {
           onGrew={onGrew}
         />
       ))}
-      <Hint>
+      <Hint style={{ marginTop: "0.75rem" }}>
         Only the last partition on a disk can be extended, and only into space
         that follows it. If the appliance refuses, it will say why rather than
         guess.
