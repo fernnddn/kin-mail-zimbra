@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +23,12 @@ from typing import Any
 
 PROM_BASE = "http://127.0.0.1:9090"
 PROM_TIMEOUT_SEC = 8
+
+# Where the collectors write their .prom files. Same default as the Ansible
+# role; overridable so tests never read a real appliance path.
+TEXTFILE_DIR = os.environ.get(
+    "KIN_TEXTFILE_DIR", "/var/lib/node_exporter/textfile"
+)
 
 # name -> (label, unit, promql). {job} is filled with the scrape filter.
 # Rates use 5m so a 15s scrape still has enough samples after a restart.
@@ -481,7 +489,82 @@ def host_facts() -> dict[str, Any]:
         # reads it as two disks will size the next one wrongly. Say it instead.
         "disks_share_a_filesystem": same_filesystem(MAIL_MOUNT, SYSTEM_MOUNT),
         "uptime_seconds": parse_uptime(_read("/proc/uptime")),
+        # The gateway carries every message in and out. Its failure looks like
+        # perfect health from here - Zimbra up, CPU idle, queue climbing - so
+        # it belongs on the page an operator opens when something feels wrong.
+        "mail_gateway": gateway_health(),
     }
+
+
+# The file the gateway collector writes. Read directly rather than queried
+# through Prometheus: the answer is needed on a page that must still work when
+# Prometheus is not installed, and "is the gateway up" is a single current
+# value, not a range.
+GATEWAY_PROM_FILE = "kin_mail_gateway.prom"
+# Six collection intervals at 60s. Past this the collector has stopped, and a
+# stale "up" is worse than no answer.
+GATEWAY_STALE_AFTER_SEC = 360
+
+_GATEWAY_UP = re.compile(
+    r'^kin_mail_gateway_up\{host="(?P<host>[^"]*)",port="(?P<port>\d+)"\}\s+(?P<value>[01])'
+)
+_GATEWAY_LINKED = re.compile(r"^kin_mail_gateway_linked\s+([01])")
+_GATEWAY_RELAY = re.compile(r"^kin_mail_gateway_relay_configured\s+([01])")
+
+
+def gateway_health(*, now: float | None = None) -> dict[str, Any]:
+    """Whether the mail gateway is answering, from the collector's own file.
+
+    The gateway is the one component whose failure stops every message while
+    this appliance still looks healthy, so the Monitoring tab has to be able to
+    say so. Three states that must stay distinct:
+
+      collector never ran   -> unknown. Say so; do not imply anything.
+      collector ran, no link -> not linked. Normal right after a deploy.
+      collector ran, link down -> the alarm this whole thing exists for.
+    """
+    now = time.time() if now is None else now
+    path = os.path.join(TEXTFILE_DIR, GATEWAY_PROM_FILE)
+    out: dict[str, Any] = {
+        "known": False,
+        "linked": False,
+        "relay_configured": False,
+        "ports": {},
+        "host": "",
+        "stale": False,
+        "age_seconds": None,
+    }
+    try:
+        age = now - os.stat(path).st_mtime
+        body = _read(path)
+    except OSError:
+        return out
+    if not body:
+        return out
+
+    out["known"] = True
+    out["age_seconds"] = int(max(0.0, age))
+    out["stale"] = age > GATEWAY_STALE_AFTER_SEC
+    for line in body.splitlines():
+        m = _GATEWAY_UP.match(line)
+        if m:
+            out["ports"][m.group("port")] = m.group("value") == "1"
+            if m.group("host") and m.group("host") != "none":
+                out["host"] = m.group("host")
+            continue
+        m = _GATEWAY_LINKED.match(line)
+        if m:
+            out["linked"] = m.group(1) == "1"
+            continue
+        m = _GATEWAY_RELAY.match(line)
+        if m:
+            out["relay_configured"] = m.group(1) == "1"
+
+    # A stale file must not be read as a live "up". The collector stopping is
+    # itself something to show, not something to paper over.
+    if out["stale"]:
+        out["ports"] = {}
+    return out
 
 
 def fetch_range(metric: str, range_name: str, *, now: float) -> list[dict[str, Any]]:

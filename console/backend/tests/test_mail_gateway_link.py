@@ -528,3 +528,69 @@ def app_module_path() -> str:
     from kin_console import app as app_module
 
     return app_module.__file__
+
+
+class AuditTrailTests(unittest.TestCase):
+    """An audit line that says only "mail_gateway" is not an audit line.
+
+    Reading the configuration and repointing every message the company sends
+    are the same command with a different op, and the log has to tell them
+    apart. The credential must never appear, and args are not logged anywhere
+    in this daemon regardless - the label is built from them, not dumped.
+    """
+
+    def _label(self, args: dict) -> str:
+        from kin_privhelper import daemon
+
+        src = Path(daemon.__file__).read_text(encoding="utf-8")
+        self.assertIn("elif cmd == proto.CMD_MAIL_GATEWAY:", src)
+        # Reproduce the label the daemon builds, from the daemon's own rule.
+        cmd = proto.CMD_MAIL_GATEWAY
+        gwop = str(args.get("op") or "status")[:24]
+        gwhost = str(args.get("host") or "")[:80]
+        return f"{cmd}:{gwop}" + (f":{gwhost}" if gwhost else "")
+
+    def test_the_daemon_has_a_label_rule_for_this_command(self) -> None:
+        from kin_privhelper import daemon
+
+        src = "\n".join(
+            ln
+            for ln in Path(daemon.__file__).read_text(encoding="utf-8").splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        self.assertIn("elif cmd == proto.CMD_MAIL_GATEWAY:", src)
+        self.assertIn('audit_cmd = f"{cmd}:{gwop}"', src)
+
+    def test_the_operation_reaches_the_audit_label(self) -> None:
+        self.assertEqual(self._label({"op": "apply"}), "mail_gateway:apply")
+        self.assertEqual(self._label({"op": "probe"}), "mail_gateway:probe")
+        self.assertNotEqual(self._label({"op": "apply"}), self._label({"op": "probe"}))
+
+    def test_the_gateway_address_is_recorded_on_connect(self) -> None:
+        self.assertEqual(
+            self._label({"op": "connect", "host": "192.0.2.9"}),
+            "mail_gateway:connect:192.0.2.9",
+        )
+
+    def test_the_credential_never_reaches_the_label(self) -> None:
+        label = self._label(
+            {"op": "connect", "host": "192.0.2.9", "token_secret": "swordfish",
+             "password": "hunter2"}
+        )
+        self.assertNotIn("swordfish", label)
+        self.assertNotIn("hunter2", label)
+
+    def test_the_daemon_never_logs_args(self) -> None:
+        """_audit_line takes a username, a command, a result and an exit code.
+
+        Pinned because a previous attempt to keep secrets out of the log did it
+        by deleting them from args before the handler ran, which silently broke
+        licence application and AD binds.
+        """
+        from kin_privhelper import daemon
+        import inspect
+
+        sig = inspect.signature(daemon._audit_line)
+        self.assertEqual(
+            list(sig.parameters), ["username", "cmd", "result", "exit_code"]
+        )

@@ -45,3 +45,13 @@ monitoring_stack_mailflow_spool: /opt/zimbra/data/postfix/spool
 # Prometheus scrapes every 15s; collecting faster than that just burns IO on a
 # live mail node for samples nothing reads.
 monitoring_stack_mailflow_interval: 30s
+
+# The mail gateway in front of this appliance. Its failure is the one that
+# stops all mail while the appliance itself still looks healthy - Zimbra
+# running, CPU idle, queue quietly climbing - so it gets its own collector
+# rather than being inferred from the queue depth after the fact.
+#
+# 60s, not 30s: this one opens TCP connections to another machine, and a
+# faster probe buys nothing a scrape interval away.
+monitoring_stack_gateway_script: /usr/local/libexec/kin-mail-gateway-metrics.py
+monitoring_stack_gateway_interval: 60s

@@ -393,6 +393,25 @@ zimbra_local_domains() {
 }
 
 # -----------------------------------------------------------------------------
+# Reachability
+# -----------------------------------------------------------------------------
+# Every setting can be perfect and mail can still not move, because something
+# between the two machines drops the packets. That is the commonest real
+# failure when a gateway is introduced, and it is invisible in the API: PMG
+# will happily accept a relay target it cannot reach, and Zimbra will happily
+# queue for a relay host it cannot reach.
+#
+# bash's /dev/tcp rather than nc, which is not installed on a Zimbra node.
+tcp_probe() {
+  local host="$1" port="$2" secs="${3:-5}"
+  if [ -n "${KIN_PMG_TCP_PROBE:-}" ]; then
+    "$KIN_PMG_TCP_PROBE" "$host" "$port"
+    return $?
+  fi
+  timeout "$secs" bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null
+}
+
+# -----------------------------------------------------------------------------
 # Commands
 # -----------------------------------------------------------------------------
 desired_relay() { printf '%s:%s' "$GW_HOST" "$PMG_INT_PORT"; }
@@ -511,12 +530,38 @@ cmd_apply() {
   # The transport entry is what actually routes the domain at this appliance.
   # use_mx=0 for the same reason as relaynomx: the MX for this domain now
   # points back at the gateway.
-  api_del "/config/transport/${MAIL_DOMAIN}" >/dev/null 2>&1 || true
-  api_post /config/transport \
-    "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
-    "protocol=smtp" "use_mx=0" >/dev/null || {
-      fail api-failed "Could not write the transport entry: ${API_ERROR}"; return 2; }
-  ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25"
+  #
+  # This used to delete the entry and then create it. If the create failed -
+  # a wrong field name, a gateway that rebooted mid-apply - the domain was
+  # left with NO route at all, which is worse than the wrong route we started
+  # with. Update in place instead, and only fall back to delete-then-create
+  # when the update is genuinely not supported, re-checking afterwards that
+  # something is actually there.
+  local transports
+  transports=$(api_get /config/transport) || transports=""
+  if printf '%s' "$transports" | grep -q "\"${MAIL_DOMAIN}\""; then
+    if api_put "/config/transport/${MAIL_DOMAIN}" \
+         "host=${SERVER_IP}" "port=25" "protocol=smtp" "use_mx=0" >/dev/null; then
+      ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (updated)"
+    else
+      warn "The gateway would not update the transport entry (${API_ERROR}); replacing it."
+      api_del "/config/transport/${MAIL_DOMAIN}" >/dev/null 2>&1 || true
+      if ! api_post /config/transport \
+             "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
+             "protocol=smtp" "use_mx=0" >/dev/null; then
+        fail api-failed \
+          "Could not write the transport entry: ${API_ERROR}. The old entry was removed to replace it, so ${MAIL_DOMAIN} may now have NO route on the gateway. Fix this before mail arrives: Mail Proxy > Transports on the gateway."
+        return 2
+      fi
+      ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (replaced)"
+    fi
+  else
+    api_post /config/transport \
+      "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
+      "protocol=smtp" "use_mx=0" >/dev/null || {
+        fail api-failed "Could not write the transport entry: ${API_ERROR}"; return 2; }
+    ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25"
+  fi
 
   say "3. Letting this appliance relay out through the gateway"
   local nets
@@ -529,25 +574,57 @@ cmd_apply() {
     ok "trusted network ${SERVER_IP}/32"
   fi
 
-  say "4. Mail proxy settings"
+  say "4. Mail routing"
+  # Two writes, not one, and the split is deliberate.
+  #
+  # These five decide whether mail moves at all. They go alone so that one
+  # unrecognised field in the policy set below cannot take the routing down
+  # with it - PMG rejects a whole request when any parameter is invalid, and
+  # a single combined PUT meant a typo in "hide_received" would silently
+  # leave the relay unset.
   api_put /config/mail \
     "relay=${SERVER_IP}" \
     "relayport=25" \
     "relaynomx=1" \
     "int_port=${PMG_INT_PORT}" \
-    "ext_port=${PMG_EXT_PORT}" \
-    "verifyreceivers=550" \
-    "rejectunknown=1" \
+    "ext_port=${PMG_EXT_PORT}" >/dev/null || {
+      fail api-failed "Could not write the mail routing settings: ${API_ERROR}"; return 2; }
+  ok "relay ${SERVER_IP}:25, no MX lookup, internal port ${PMG_INT_PORT}"
+
+  say "5. Mail policy"
+  # Softer than the first draft of this, on purpose.
+  #
+  # verifyreceivers is 450, not 550. Both ask the mail server whether the
+  # recipient exists; 550 refuses permanently and the sender never tries
+  # again. If Zimbra is restarting, or LDAP is briefly unhappy, 550 throws
+  # away real mail for good. 450 tells the sender to come back, which costs
+  # a delay and loses nothing.
+  #
+  # rejectunknown is NOT set. It refuses senders whose client address has no
+  # reverse DNS, and plenty of small but legitimate senders do not have it.
+  # PMG's own default is off, and turning it on is a policy the customer
+  # should choose in the PMG UI, not one an installer imposes on their mail.
+  local policy_failed=0
+  api_put /config/mail \
+    "verifyreceivers=450" \
     "greylist=1" \
     "spf=1" \
     "tls=1" \
     "hide_received=1" \
     "before_queue_filtering=0" \
-    "banner=ESMTP KIN Mail Gateway" >/dev/null || {
-      fail api-failed "Could not write the mail proxy settings: ${API_ERROR}"; return 2; }
-  ok "relay ${SERVER_IP}:25, no MX lookup, internal port ${PMG_INT_PORT}"
+    "banner=ESMTP KIN Mail Gateway" >/dev/null || policy_failed=1
 
-  say "5. Making sure the gateway does not sign DKIM a second time"
+  if [ "$policy_failed" -eq 1 ]; then
+    # Mail still flows without these. Say so honestly rather than failing the
+    # whole apply and leaving the operator thinking nothing worked.
+    warn "The gateway refused the policy settings: ${API_ERROR}"
+    info "Mail routing is configured and mail will flow. Set spam policy, TLS and"
+    info "the banner by hand under Mail Proxy > Options on the gateway."
+  else
+    ok "recipient verification (soft), greylisting, SPF, outbound TLS, no header leak"
+  fi
+
+  say "6. Making sure the gateway does not sign DKIM a second time"
   api_put /config/admin "dkim_sign=0" >/dev/null || {
     fail api-failed "Could not turn off DKIM signing on the gateway: ${API_ERROR}"; return 2; }
   ok "gateway DKIM signing off (Zimbra signs; two signatures fail DMARC at some receivers)"
@@ -557,7 +634,7 @@ cmd_apply() {
     return 1
   fi
 
-  say "6. Pointing this appliance's outbound mail at the gateway"
+  say "7. Pointing this appliance's outbound mail at the gateway"
   local want cur
   want=$(desired_relay)
   cur=$(zimbra_relay_host)
@@ -569,7 +646,7 @@ cmd_apply() {
     ok "zimbraMtaRelayHost ${want}"
   fi
 
-  say "7. Trusting the gateway to hand mail in"
+  say "8. Trusting the gateway to hand mail in"
   local nets_now
   nets_now=$(zimbra_mynetworks)
   if printf ' %s ' "$nets_now" | grep -q " ${GW_HOST}/32 "; then
@@ -582,7 +659,7 @@ cmd_apply() {
     ok "zimbraMtaMyNetworks += ${GW_HOST}/32"
   fi
 
-  say "8. Reloading Postfix so the new relay takes effect"
+  say "9. Reloading Postfix so the new relay takes effect"
   # zmmtactl reload is a configuration reload, not a restart: connections in
   # flight are not dropped and the queue is untouched.
   if [ -n "$ZMPROV" ]; then
@@ -590,6 +667,40 @@ cmd_apply() {
   else
     su - zimbra -c 'zmmtactl reload' >/dev/null 2>&1 ||
       warn "Postfix did not reload cleanly; run 'su - zimbra -c \"zmmtactl reload\"' and check."
+  fi
+
+  say "10. Reading back the settings that matter"
+  # Writing a setting and the setting being set are different things, and the
+  # two below are the ones that silently destroy mail. Checking them now costs
+  # one API call and means "applied" is a claim we have evidence for.
+  local check_mail check_admin drift=0
+  check_mail=$(api_get /config/mail) || check_mail=""
+  if [ "$(json_field "$check_mail" data relaynomx || printf '0')" != "1" ]; then
+    warn "The gateway did not keep relaynomx=1. Left as it is, mail for this domain will loop."
+    drift=1
+  fi
+  if [ "$(json_field "$check_mail" data relay || printf '')" != "$SERVER_IP" ]; then
+    warn "The gateway did not keep relay=${SERVER_IP}. Filtered mail has nowhere to go."
+    drift=1
+  fi
+  check_admin=$(api_get /config/admin) || check_admin=""
+  if [ "$(json_field "$check_admin" data dkim_sign || printf '0')" != "0" ]; then
+    warn "The gateway is still signing DKIM. Two signatures fail DMARC at some receivers."
+    drift=1
+  fi
+  if [ "$drift" -eq 1 ]; then
+    fail settings-did-not-stick \
+      "The gateway accepted the writes but is not reporting them back. Do not move the MX record yet. Check Mail Proxy > Relaying on the gateway by hand."
+    return 2
+  fi
+  ok "the gateway reports back what we asked it to be"
+
+  say "11. Can the two machines actually reach each other"
+  if tcp_probe "$GW_HOST" "$PMG_INT_PORT"; then
+    ok "this appliance can reach ${GW_HOST}:${PMG_INT_PORT} (outbound mail has a path)"
+  else
+    warn "This appliance cannot open ${GW_HOST}:${PMG_INT_PORT}. Outbound mail will queue here."
+    info "Check the gateway is running and that nothing between the two blocks port ${PMG_INT_PORT}."
   fi
 
   record_state applied
@@ -689,6 +800,21 @@ cmd_verify() {
     warn "Zimbra is not installed here; the appliance side could not be checked."
   fi
 
+  say "Reachability"
+  # A warning, not a problem: this runs from the appliance, and an operator
+  # checking from elsewhere, or mid-maintenance on the gateway, should not see
+  # a red verify for a link that is correctly configured.
+  if tcp_probe "$GW_HOST" "$PMG_INT_PORT"; then
+    ok "this appliance can reach ${GW_HOST}:${PMG_INT_PORT}"
+  else
+    warn "This appliance cannot open ${GW_HOST}:${PMG_INT_PORT}. Outbound mail will queue here."
+  fi
+  if tcp_probe "$GW_HOST" "$PMG_EXT_PORT"; then
+    ok "the gateway is listening on ${PMG_EXT_PORT} for inbound mail"
+  else
+    warn "Nothing answers on ${GW_HOST}:${PMG_EXT_PORT}. Inbound mail has nowhere to arrive."
+  fi
+
   say "DNS"
   check_dns
 
@@ -757,7 +883,16 @@ cmd_revert() {
   ok "Reverted the appliance side."
   say ""
   say "The gateway is left configured; re-applying is then instant."
-  say "Move the MX record back to ${MAIL_HOST} or inbound mail still goes to the gateway."
+  say ""
+  say "TWO THINGS STILL HAVE TO HAPPEN, and neither is something this can do:"
+  say ""
+  say "  1. Move the MX record back to ${MAIL_HOST}, or inbound mail still"
+  say "     goes to a gateway this appliance no longer trusts."
+  say "  2. Re-run 10-host-firewall.sh apply. While a gateway was linked, port"
+  say "     25 was narrowed to accept mail from it only. Until that is re-run,"
+  say "     this appliance will refuse inbound mail from the internet."
+  say ""
+  say "Leaving either half-done stops mail. Do them together."
   return 0
 }
 

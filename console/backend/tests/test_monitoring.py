@@ -341,14 +341,28 @@ Buffers:          123456 kB
         # appliance /opt/zimbra is a directory on the root filesystem, so the
         # two storage cards show identical figures, which is correct and reads
         # like a bug. The console needs to be able to say so.
+        # mail_gateway was added for the same reason: the gateway carries every
+        # message in and out, and when it fails this appliance looks perfectly
+        # healthy from every other field here.
         facts = m.host_facts()
         self.assertEqual(
             set(facts),
-            {"cpu", "memory", "disks", "uptime_seconds", "disks_share_a_filesystem"},
+            {
+                "cpu",
+                "memory",
+                "disks",
+                "uptime_seconds",
+                "disks_share_a_filesystem",
+                "mail_gateway",
+            },
         )
         self.assertEqual(set(facts["cpu"]), {"model", "threads", "cores", "load"})
         self.assertIsInstance(facts["disks"], list)
         self.assertIsInstance(facts["disks_share_a_filesystem"], bool)
+        self.assertIsInstance(facts["mail_gateway"], dict)
+        # "known" false on a machine with no collector, never a missing key:
+        # the console has to tell "no reading" from "not linked" from "down".
+        self.assertIn("known", facts["mail_gateway"])
 
 
 class DiagnosticMetricTests(unittest.TestCase):

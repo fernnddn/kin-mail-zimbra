@@ -1,8 +1,12 @@
 # Handover: KIN Mail 0.1.10 — the mandatory mail gateway
 
-For whoever picks this up on **13 September 2026**. Written by Claude on the
-evening of 11 September 2026, after the decision that KIN Mail must put a
-Proxmox Mail Gateway in front of Zimbra.
+Parked as of 11 September 2026: the operator decided to keep the work with
+Claude for now. This is kept current anyway, so a handover is never a
+reconstruction. Written after the decision that KIN Mail must put a Proxmox
+Mail Gateway in front of Zimbra.
+
+**Re-read this against the code before using it.** It has already been
+overtaken twice in one evening.
 
 Read `MAIL-GATEWAY.md` first. It is the design: architecture, ports, DNS,
 every PMG setting and why, and the failure modes. This document is the state of
@@ -28,12 +32,17 @@ PMG's REST API and Zimbra's `zmprov`, and then proves the link works.
 | --- | --- | --- |
 | Design | `MAIL-GATEWAY.md` | complete |
 | Workhorse script | `install/lib/mail-gateway.sh` | complete, 47 tests pass |
-| Shell tests | `install/lib/test-mail-gateway.sh` | 47 assertions, all green |
+| Shell tests | `install/lib/test-mail-gateway.sh` | 60 assertions, all green |
 | Credential vault + status | `console/backend/kin_privhelper/mail_gateway.py` | complete |
 | Privhelper command | `cmd_mail_gateway` in `commands.py` | complete |
 | Protocol / RBAC / busy label | `protocol.py`, `rbac.py`, `daemon.py` | wired |
 | REST API | `/api/mail-gateway/{status,connect,trust,forget}` in `app.py` | complete |
-| Backend tests | `console/backend/tests/test_mail_gateway_link.py` | 46 tests, all green |
+| Backend tests | `console/backend/tests/test_mail_gateway_link.py` | 51 tests, all green |
+| Greenfield-deploy guard | `console/backend/tests/test_gateway_does_not_break_a_fresh_deploy.py` | 12 tests |
+| Gateway reachability collector | `monitoring/gateway/kin-mail-gateway-metrics.py` | complete |
+| Collector tests | `console/backend/tests/test_gateway_metrics.py` | 23 tests |
+| Monitoring tab card | `MonitoringTab.tsx` + `monitoring.gateway_health()` | complete |
+| Deployment runbook | `DEPLOY-WITH-GATEWAY.md` | complete |
 | Console page | `console/frontend/src/pages/MailGateway.tsx` | complete, builds clean |
 | Route + nav | `App.tsx`, `ConsoleChrome.tsx` | wired, ops roles only |
 | Firewall narrowing | `install/10-host-firewall.sh` | complete |
@@ -41,7 +50,7 @@ PMG's REST API and Zimbra's `zmprov`, and then proves the link works.
 | Ansible | `roles/mail_gateway_link`, `playbooks/mail-gateway.yml` | complete |
 | Version | 0.1.10 in both `__init__.py` and `package.json` | bumped |
 
-Full suite at the time of writing: **1182 backend tests**, **26 shell suites**,
+Full suite at the time of writing: **1222 backend tests**, **26 shell suites**,
 frontend `tsc` clean and `npm run build` clean.
 
 ---
@@ -143,21 +152,22 @@ the real mail volume.
    `verifyreceivers=550` (SMTP callout) instead, which gets most of the benefit
    without a bind account. Proper LDAP integration is the obvious 0.1.11
    feature.
-3. **The install pipeline does not call the gateway stage.** `05-healthcheck.sh`
-   *reports* a missing gateway as a failure and `10-host-firewall.sh` narrows
-   port 25 once one exists, but a fresh deploy does not stop and ask for a
-   gateway. Deciding whether it should is a product question: making it
-   blocking means no appliance can be deployed before its gateway VM exists.
-4. **No monitoring of the gateway.** The Monitoring tab knows nothing about
-   PMG. At minimum it should alert when the gateway stops answering, because
-   that is the failure that silently stops all mail.
-5. **`revert` does not undo the PMG side.** Deliberate — leaving PMG configured
+3. **The install pipeline does not stop and demand a gateway.** Deliberate, and
+   it should stay that way: a gateway VM cannot exist before the appliance
+   does, so a blocking gate would fail every first install. A missing link is
+   reported as BLOCKED by the healthcheck, with the next steps printed.
+   `test_gateway_does_not_break_a_fresh_deploy.py` pins this, including the
+   fact that `kin-mail.sh` aborts the pipeline on a non-zero healthcheck.
+4. **`revert` does not undo the PMG side.** Deliberate — leaving PMG configured
    is harmless and makes re-applying instant — but somebody will eventually ask
    for a full teardown.
 6. **The gateway's own hardening is unautomated.** Restricting :8006 to admin
    IPs, disabling root SSH password login, and installing a real certificate on
    PMG are all manual. A checklist exists in `MAIL-GATEWAY.md` §8; turning
-   it into a role would be worth doing.
+   it into a role would be worth doing, and `DEPLOY-WITH-GATEWAY.md` Phase 6
+   has the exact ufw rules in the meantime.
+6. **No PMG clustering.** One gateway is a single point of failure. Parked for
+   the same reason Zimbra HA is parked.
 
 ---
 
@@ -199,7 +209,7 @@ wastes a round trip.
 # shell suites
 for t in install/lib/test-*.sh; do bash "$t"; done
 
-# backend (1182 tests)
+# backend (1222 tests)
 PYTHONPATH=console/backend console/backend/.venv/bin/python \
   -m unittest discover -s console/backend/tests
 
@@ -241,3 +251,16 @@ wrong, not the test.
 - `compliant` requires an applied link, not merely a recorded one.
 - `apply` and `revert` take the maintenance lock; `probe`, `plan` and `verify`
   do not.
+- Routing and policy are **two** PUTs. PMG rejects a whole request when any
+  parameter is invalid, so one unrecognised policy field must not be able to
+  take the relay down with it.
+- `verifyreceivers` is `450`, never `550`. A permanent refusal throws real mail
+  away for good if Zimbra is merely restarting.
+- `rejectunknown` is never set by us. It is the customer's policy.
+- A transport entry is updated in place, never deleted and re-created: a failed
+  re-create leaves the domain with no route at all.
+- `apply` reads its own settings back before claiming success.
+- A missing gateway is BLOCKED in the healthcheck, never FAILED. FAILED aborts
+  the install pipeline on every greenfield deploy.
+- The audit label carries the operation, so a probe and an apply are
+  distinguishable, and never the credential.

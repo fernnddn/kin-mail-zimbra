@@ -386,9 +386,19 @@ esac
 
 # --- mail gateway ------------------------------------------------------------
 # From 0.1.10 a Proxmox Mail Gateway in front of this appliance is mandatory.
-# Reported as a failure, not a warning: a deployment that still holds port 25
-# to the internet itself is not the product we now ship, and an operator has
-# to see that before they hand the box over, not after.
+#
+# The severity here is deliberate and was got wrong once already. A fresh
+# appliance CANNOT have a gateway link: the gateway is a separate VM, and on a
+# greenfield install it does not exist yet. Failing here would stop the deploy
+# pipeline at its last stage on every single first install - the stage returns
+# non-zero and kin-mail.sh aborts.
+#
+# So: no gateway recorded at all is BLOCKED. It is a real requirement that is
+# genuinely outside this server, exactly like the DNS and outbound-SMTP items
+# above, and it is printed loudly as the next thing to do.
+#
+# A gateway that IS recorded but is not working is a FAILURE, because at that
+# point it is this server's configuration that is wrong, and mail is at risk.
 echo; say "Mail gateway"
 GW_CONF=/etc/kin-mail/mail-gateway.conf
 GW_STATE=/var/lib/kin-mail-console/mail-gateway-state.json
@@ -402,17 +412,23 @@ if [ -f "$GW_STATE" ]; then
 fi
 
 if [ -z "$gw_host" ]; then
-  f "No mail gateway is configured - this appliance is its own MX"
-  info "Console > Mail Gateway. See MAIL-GATEWAY.md for the whole pipeline."
+  b "No mail gateway is linked yet - this appliance is still its own MX"
+  info "This is the next thing to do, not an optional extra:"
+  info "  1. Install the Proxmox Mail Gateway VM and give it a fixed address."
+  info "  2. Console > Mail Gateway > Connect, then Plan, then Apply."
+  info "  3. Move the MX and SPF records to the gateway."
+  info "  4. Re-run 10-host-firewall.sh apply to close port 25 to everyone else."
+  info "See MAIL-GATEWAY.md for the whole pipeline."
 elif [ "$gw_enabled" != "1" ]; then
   f "A mail gateway is recorded (${gw_host}) but the link is disabled"
+  info "Console > Mail Gateway > Connect to re-enable it, or Revert to stand down cleanly."
 elif [ "$gw_phase" != "applied" ]; then
   f "The mail gateway link to ${gw_host} has never been applied (phase: ${gw_phase:-unknown})"
-  info "Console > Mail Gateway > Apply."
+  info "Console > Mail Gateway > Apply. Until then nothing is filtering this appliance's mail."
 else
   p "Mail gateway ${gw_host} is linked"
 
-  # Written and checked are different promises. These three are the settings
+  # Written and checked are different promises. Each of these is a setting
   # whose drift stops mail without saying anything.
   RELAY=$(su - zimbra -c "zmprov gs \$(zmhostname) zimbraMtaRelayHost" 2>/dev/null |
           sed -n 's/^zimbraMtaRelayHost: //p' | head -1 | tr -d ' \r')
@@ -422,10 +438,18 @@ else
     *)              f "zimbraMtaRelayHost is '${RELAY}', not the configured gateway ${gw_host}" ;;
   esac
 
-  case "$MYN" in
-    *"${gw_host}/32"*) p "The gateway is trusted to hand mail in" ;;
-    *) f "zimbraMtaMyNetworks does not include ${gw_host}/32 - inbound mail will be deferred" ;;
-  esac
+  # MYN comes from the open-relay check above. If Zimbra was not answering
+  # then it is empty here too, and reporting "the gateway is not trusted"
+  # would blame the wrong thing - the earlier checks already said Zimbra is
+  # down, and one root cause should not produce three failures.
+  if [ -z "$MYN" ]; then
+    b "Could not read zimbraMtaMyNetworks - Zimbra did not answer"
+  else
+    case "$MYN" in
+      *"${gw_host}/32"*) p "The gateway is trusted to hand mail in" ;;
+      *) f "zimbraMtaMyNetworks does not include ${gw_host}/32 - inbound mail will be deferred" ;;
+    esac
+  fi
 
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
     if ufw status 2>/dev/null | grep -E '^25/tcp[[:space:]]+ALLOW[[:space:]]+Anywhere' >/dev/null; then
@@ -437,6 +461,14 @@ else
   else
     b "ufw is not active - port 25 exposure was not checked"
   fi
+
+  # Configuration can be perfect and mail can still not move, because
+  # something between the two machines drops the packets.
+  if timeout 5 bash -c "exec 3<>/dev/tcp/${gw_host}/26" 2>/dev/null; then
+    p "The gateway answers on port 26 (outbound mail has a path)"
+  else
+    f "Cannot reach ${gw_host}:26 - outbound mail will queue on this appliance"
+  fi
 fi
 
 # --- summary -----------------------------------------------------------------
@@ -444,12 +476,20 @@ echo
 say "SUMMARY"
 printf '  %sPASS    : %d%s\n' "$GRN" "$PASS" "$RST"
 printf '  %sFAIL    : %d%s\n' "$RED" "$FAILED" "$RST"
-printf '  %sBLOCKED : %d  (network, not server)%s\n' "$YLW" "$BLOCKED" "$RST"
+printf '  %sBLOCKED : %d  (outside this server)%s\n' "$YLW" "$BLOCKED" "$RST"
 echo
 if [ "$FAILED" -eq 0 ] && [ "$BLOCKED" -eq 0 ]; then
   ok "All checks passed."
 elif [ "$FAILED" -eq 0 ]; then
-  warn "Server healthy. Remaining items are network constraints above."
+  # "Network constraints" used to be the whole story here. It is not any more:
+  # a missing mail gateway is blocked on the operator building a VM, not on a
+  # firewall somewhere, and calling it a network constraint would let it be
+  # read as somebody else's problem and left undone.
+  warn "Nothing is broken on this server. The blocked items above still need doing."
+  if [ -z "${gw_host:-}" ]; then
+    warn "The mail gateway is the important one. Until it is linked, this"
+    warn "appliance holds port 25 to the internet by itself."
+  fi
 else
   fail "There are failures that need to be fixed on the server."
 fi

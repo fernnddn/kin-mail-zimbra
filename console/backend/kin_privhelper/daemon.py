@@ -466,6 +466,15 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             # _set_license received an empty token, and an Active Directory
             # bind password was silently discarded the same way
             # (live Phase 5 QA). Never mutate args for logging's sake.
+        elif cmd == proto.CMD_MAIL_GATEWAY:
+            # Without this the audit log says only "mail_gateway", which makes
+            # someone looking at the configuration indistinguishable from
+            # someone repointing every message the company sends. The
+            # operation and the gateway address go in; the token never does,
+            # and args are not logged anywhere regardless (see the note below).
+            gwop = str(args.get("op") or "status")[:24]
+            gwhost = str(args.get("host") or "")[:80]
+            audit_cmd = f"{cmd}:{gwop}" + (f":{gwhost}" if gwhost else "")
         elif cmd == proto.CMD_MUTATE_CONSOLE_USERS:
             mop = str(args.get("op") or "")[:16]
             tgt = str(args.get("username") or "")[:80]

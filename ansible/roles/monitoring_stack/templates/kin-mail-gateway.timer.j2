@@ -1,0 +1,14 @@
+# Managed by Ansible role monitoring_stack (KIN Mail).
+[Unit]
+Description=Probe the KIN Mail gateway every {{ monitoring_stack_gateway_interval }}
+
+[Timer]
+# Slightly later than the mail flow timer so two collectors and a scrape do
+# not all land on the same second on a small appliance.
+OnBootSec=75s
+OnUnitActiveSec={{ monitoring_stack_gateway_interval }}
+AccuracySec=5s
+Unit=kin-mail-gateway.service
+
+[Install]
+WantedBy=timers.target

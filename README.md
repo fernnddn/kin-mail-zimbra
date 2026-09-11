@@ -314,11 +314,19 @@ gateway is defence at the perimeter, not a replacement for scanning mail that
 never leaves the appliance, and DKIM signing deliberately stays on Zimbra —
 the gateway is configured not to sign a second time.
 
-`05-healthcheck.sh` reports an appliance with no applied gateway link as a
-**failure**, not a warning.
+The Monitoring tab carries a **Mail gateway** card. The gateway failing looks
+like perfect health from everywhere else — Zimbra up, CPU idle, the queue
+quietly climbing — so the card exists to say why.
 
-The whole design — ports, DNS, every PMG setting and why, and the failure
-modes — is in [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md).
+`05-healthcheck.sh` reports an appliance with **no gateway linked yet** as
+BLOCKED rather than FAILED, because a gateway VM cannot exist before the
+appliance does and failing there would abort every first install. Once a
+gateway *is* recorded, anything wrong with the link is a **failure**.
+
+- [`DEPLOY-WITH-GATEWAY.md`](DEPLOY-WITH-GATEWAY.md) — step by step, in order,
+  from an empty VM to a verified gateway. Start here for a deployment.
+- [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) — the design: ports, DNS, every PMG
+  setting and why, and the failure modes.
 
 ---
 

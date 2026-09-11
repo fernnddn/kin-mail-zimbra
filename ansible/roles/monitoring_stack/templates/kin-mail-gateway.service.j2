@@ -1,0 +1,23 @@
+# Managed by Ansible role monitoring_stack (KIN Mail).
+[Unit]
+Description=KIN Mail gateway reachability collector
+Documentation=file://{{ monitoring_stack_gateway_script }}
+# The gateway is the component whose failure stops all mail while this
+# appliance looks perfectly healthy. Probing it before the network is up
+# would publish a false outage on every boot.
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ monitoring_stack_gateway_script }} \
+  --textfile-dir {{ monitoring_stack_textfile_dir }}
+Nice=10
+IOSchedulingClass=idle
+# Two TCP connects and one read of a config file. It does shell out to
+# zmprov, which is why ProtectHome is off - Zimbra's home is /opt/zimbra.
+ProtectSystem=strict
+ReadWritePaths={{ monitoring_stack_textfile_dir }}
+NoNewPrivileges=yes
+# Long enough for two 5s connect timeouts plus zmprov, short enough that a
+# hung probe can never overlap the next run of a 60s timer.
+TimeoutStartSec=45

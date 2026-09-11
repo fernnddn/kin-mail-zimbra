@@ -44,6 +44,41 @@ code_file="${KIN_TEST_FIXTURES}/${key}.code"
 body_file="${KIN_TEST_FIXTURES}/${key}.json"
 code=200
 [ -f "$code_file" ] && code=$(cat "$code_file")
+# The routing PUT and the policy PUT share a path, so a test that wants to
+# fail only the policy half has to be able to say so.
+case "${method} ${path}" in
+  "PUT /config/mail") case " $* " in *hide_received=*) code="${KIN_TEST_POLICY_PUT_CODE:-$code}" ;; esac ;;
+esac
+
+# A gateway that accepts a write and then keeps reporting the old value is a
+# real failure mode - and it is the one apply's read-back step exists to
+# catch - so the stub models a gateway whose writes actually stick. Set
+# KIN_TEST_WRITES_STICK=0 to model the broken one.
+if [ "${KIN_TEST_WRITES_STICK:-1}" = "1" ] && [ "${code#2}" != "$code" ]; then
+  case "${method} ${path}" in
+    "PUT /config/mail")
+      # Only the routing PUT establishes the routing values; the policy PUT
+      # must not be what makes relaynomx look right.
+      case " $* " in
+        *relaynomx=1*)
+          printf '%s' '{"data":{"relay":"192.0.2.20","relayport":25,"relaynomx":1,"int_port":26,"ext_port":25,"hide_received":0}}' \
+            > "${KIN_TEST_FIXTURES}/GET_config_mail.json" ;;
+        *hide_received=1*)
+          printf '%s' '{"data":{"relay":"192.0.2.20","relayport":25,"relaynomx":1,"int_port":26,"ext_port":25,"hide_received":1}}' \
+            > "${KIN_TEST_FIXTURES}/GET_config_mail.json" ;;
+      esac ;;
+    "PUT /config/admin")
+      printf '%s' '{"data":{"dkim_sign":0}}' > "${KIN_TEST_FIXTURES}/GET_config_admin.json" ;;
+    "POST /config/domains")
+      printf '%s' '{"data":[{"domain":"example.test"}]}' > "${KIN_TEST_FIXTURES}/GET_config_domains.json" ;;
+    "POST /config/mynetworks")
+      printf '%s' '{"data":[{"cidr":"192.0.2.20/32"}]}' > "${KIN_TEST_FIXTURES}/GET_config_mynetworks.json" ;;
+    "POST /config/transport"|"PUT /config/transport/example.test")
+      printf '%s' '{"data":[{"domain":"example.test","host":"192.0.2.20","port":25}]}' \
+        > "${KIN_TEST_FIXTURES}/GET_config_transport.json" ;;
+  esac
+fi
+
 if [ -f "$body_file" ]; then cat "$body_file"; else printf '{"data":{}}'; fi
 # access/ticket is fetched without -w, so only emit the code when asked.
 case " $* " in *" %{http_code} "*|*"%{http_code}"*) printf '\n%s' "$code" ;; esac
@@ -72,6 +107,19 @@ esac
 case "$1" in
   gacf) printf 'zimbraMtaMyNetworks: %s\n' "${KIN_TEST_ZNETS:-127.0.0.0/8}" ;;
   gad)  printf '%s\n' "${KIN_TEST_ZDOMAINS:-example.test}" ;;
+esac
+exit 0
+STUB
+
+# A stub TCP prober. The real one uses bash's /dev/tcp, which against a
+# documentation address blackholes for the full timeout on every call; the
+# suite went from two seconds to several minutes the moment probing was added.
+cat > "${BIN}/tcp-probe-stub" <<'STUB'
+#!/usr/bin/env bash
+printf 'tcp %s %s\n' "$1" "$2" >> "$KIN_TEST_CALLS"
+case "$2" in
+  26) exit "${KIN_TEST_TCP26:-0}" ;;
+  25) exit "${KIN_TEST_TCP25:-0}" ;;
 esac
 exit 0
 STUB
@@ -117,6 +165,7 @@ fixture_healthy() {
   printf '%s' '{"data":{"relay":"192.0.2.20","relayport":25,"relaynomx":1,"int_port":26,"ext_port":25,"hide_received":1}}' > "${FIX}/GET_config_mail.json"
   printf '%s' '{"data":[{"domain":"example.test"}]}' > "${FIX}/GET_config_domains.json"
   printf '%s' '{"data":[{"cidr":"192.0.2.20/32"}]}' > "${FIX}/GET_config_mynetworks.json"
+  printf '%s' '{"data":[{"domain":"example.test","host":"192.0.2.20","port":25}]}' > "${FIX}/GET_config_transport.json"
   printf '%s' '{"data":{"dkim_sign":0}}' > "${FIX}/GET_config_admin.json"
   printf '%s' '{"data":{"release":"8.1"}}' > "${FIX}/GET_version.json"
 }
@@ -126,6 +175,7 @@ fixture_fresh() {
   printf '%s' '{"data":{"relay":"","relayport":25,"relaynomx":0,"int_port":26,"ext_port":25,"hide_received":0}}' > "${FIX}/GET_config_mail.json"
   printf '%s' '{"data":[]}' > "${FIX}/GET_config_domains.json"
   printf '%s' '{"data":[]}' > "${FIX}/GET_config_mynetworks.json"
+  printf '%s' '{"data":[]}' > "${FIX}/GET_config_transport.json"
   printf '%s' '{"data":{"dkim_sign":0}}' > "${FIX}/GET_config_admin.json"
   printf '%s' '{"data":{"release":"8.1"}}' > "${FIX}/GET_version.json"
 }
@@ -141,6 +191,7 @@ run_gw() {
     KIN_MAIL_CONFIG="$APPCONF" \
     KIN_PMG_STATE_DIR="$STATE" \
     KIN_PMG_ZMPROV="${BIN}/zmprov-stub" \
+    KIN_PMG_TCP_PROBE="${BIN}/tcp-probe-stub" \
     KIN_PMG_TOKEN_SECRET="${KIN_TEST_SECRET-s3cr3t}" \
     KIN_TEST_FINGERPRINT="${KIN_TEST_FINGERPRINT:-AA:BB:CC}" \
     bash "$LIB" "$@" 2>&1
@@ -325,6 +376,105 @@ if [ "$rc" -ne 0 ] && case "$out" in *"reason=api-failed"*) true ;; *) false ;; 
 else
   bad "failed apply should exit non-zero with a reason (rc=${rc}): ${out}"
 fi
+
+# =============================================================================
+# The failures found in audit, which must not come back
+# =============================================================================
+
+# A gateway that accepts a write and keeps reporting the old value looks like a
+# success and is not one. Before the read-back step, apply said "applied" and
+# the compliance banner went green on a relay that was never set.
+fixture_fresh
+out=$(KIN_TEST_WRITES_STICK=0 run_gw apply); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"reason=settings-did-not-stick"*) true ;; *) false ;; esac; then
+  pass "a gateway whose writes do not stick is caught before apply claims success"
+else
+  bad "settings that do not stick should fail apply (rc=${rc}): ${out}"
+fi
+case "$out" in *"Do not move the MX record yet"*) pass "the operator is told not to move the MX on a half-applied link" ;;
+  *) bad "should warn against moving DNS: ${out}" ;; esac
+if [ -f "${STATE}/mail-gateway-state.json" ] && grep -q '"phase":"applied"' "${STATE}/mail-gateway-state.json" 2>/dev/null; then
+  bad "a failed apply recorded itself as applied"
+else
+  pass "a failed apply does not record itself as applied"
+fi
+
+# Routing and policy are written separately so one unrecognised policy field
+# cannot take the relay down with it. PMG rejects a whole request when any
+# parameter in it is invalid.
+fixture_fresh
+: > "$CALLS"
+out=$(run_gw apply)
+routing_puts=$(grep -c 'X PUT .*config/mail' "$CALLS" || true)
+if [ "${routing_puts:-0}" -ge 2 ]; then
+  pass "mail routing and mail policy are two separate writes"
+else
+  bad "routing and policy should not share one request (saw ${routing_puts} PUTs)"
+fi
+routing_line=$(grep -n 'X PUT .*config/mail' "$CALLS" | head -1 | cut -d: -f1)
+if grep -n 'X PUT .*config/mail' "$CALLS" | head -1 | grep -q 'relaynomx=1'; then
+  pass "routing is written first, so a policy problem cannot take it down"
+else
+  bad "the first PUT to /config/mail should carry the routing settings (line ${routing_line})"
+fi
+
+# A spam or TLS setting PMG does not recognise must not stop mail flowing.
+fixture_fresh
+out=$(KIN_TEST_POLICY_PUT_CODE=400 run_gw apply); rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "a rejected policy setting does not fail the whole apply"
+else
+  bad "policy failure should not fail apply (rc=${rc}): ${out}"
+fi
+case "$out" in *"Mail routing is configured and mail will flow"*)
+  pass "the operator is told exactly what did and did not get set" ;;
+  *) bad "a policy failure should say what still works: ${out}" ;; esac
+
+# Recipient verification must be soft. 550 refuses permanently: a Zimbra that
+# is merely restarting would make the sender give up on real mail for good.
+fixture_fresh
+out=$(run_gw apply)
+if grep -q 'verifyreceivers=450' "$CALLS"; then
+  pass "recipient verification defers rather than refusing mail for good"
+else
+  bad "verifyreceivers should be 450, not 550: $(grep -o 'verifyreceivers=[0-9]*' "$CALLS" | head -1)"
+fi
+
+# rejectunknown refuses senders with no reverse DNS. Plenty of small but real
+# senders have none, and PMG's own default is off. An installer must not
+# quietly impose that policy on a customer's mail.
+if grep -q 'rejectunknown=1' "$CALLS"; then
+  bad "apply should not turn on rejectunknown; that is the customer's policy"
+else
+  pass "apply does not impose reverse-DNS rejection on the customer"
+fi
+
+# Deleting a transport entry and then failing to re-create it leaves the domain
+# with no route at all - worse than the wrong route we started from.
+fixture_healthy
+: > "$CALLS"
+out=$(KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" run_gw apply)
+if grep -q 'X DELETE .*config/transport' "$CALLS"; then
+  bad "an existing transport entry was deleted rather than updated in place"
+else
+  pass "an existing transport entry is updated in place, never deleted first"
+fi
+
+# The commonest real failure is neither side's configuration: it is a firewall.
+fixture_healthy
+out=$(KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" \
+      KIN_TEST_ZDOMAINS="example.test" KIN_TEST_TCP26=1 run_gw verify)
+case "$out" in *"cannot open 192.0.2.9:26"*) pass "verify notices when outbound mail has no path to the gateway" ;;
+  *) bad "verify should probe the relay port: ${out}" ;; esac
+case "$out" in *"KIN_GW_VERIFY problems=0"*) pass "an unreachable port is a warning, not a config failure" ;;
+  *) bad "reachability should not fail verify: ${out}" ;; esac
+
+# Reverting narrows nothing back. If the firewall is left as it was, the
+# appliance refuses inbound mail from everyone except a gateway it no longer
+# trusts, and the operator has no way to know from here.
+out=$(run_gw revert)
+case "$out" in *"10-host-firewall.sh apply"*) pass "revert says the firewall must be re-run or inbound mail stops" ;;
+  *) bad "revert should mention the firewall: ${out}" ;; esac
 
 # =============================================================================
 # verify - every assertion here is a way mail stops

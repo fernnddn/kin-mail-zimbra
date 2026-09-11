@@ -135,8 +135,7 @@ ourselves.
 | `/config/mail` | `relaynomx` | `1` | deliver to that host, do not look up its MX — the MX now points back at PMG, so an MX lookup here is a loop |
 | `/config/mail` | `int_port` | `26` | port the mail node relays out on |
 | `/config/mail` | `ext_port` | `25` | inbound from the internet |
-| `/config/mail` | `verifyreceivers` | `550` | reject mail for addresses that do not exist rather than accepting and bouncing (backscatter) |
-| `/config/mail` | `rejectunknown` | `1` | refuse senders whose client hostname does not resolve |
+| `/config/mail` | `verifyreceivers` | `450` | ask the mail server whether the recipient exists, and **defer** if not. Not `550`: a permanent refusal throws real mail away for good if Zimbra happens to be restarting, where a deferral costs a delay and loses nothing. |
 | `/config/mail` | `greylist` | `1` | default on; cheap and effective |
 | `/config/mail` | `spf` | `1` | |
 | `/config/mail` | `dnsbl_sites` | `zen.spamhaus.org` | |
@@ -150,10 +149,23 @@ ourselves.
 | `/config/admin` | `dkim_sign` | `0` | **must stay off** — Zimbra already signed |
 
 `relaynomx=1` and `dkim_sign=0` are the two that silently break mail if they
-are wrong, so both are asserted in `verify`, not just written in `apply`.
+are wrong, so both are read back at the end of `apply` and asserted again in
+`verify`. Accepting a write and honouring it are different things, and an
+`apply` that claims success on a relay the gateway never kept is worse than
+one that fails.
+
+The settings are written in **two requests**, not one. PMG rejects an entire
+request when any parameter in it is invalid, so routing (`relay`, `relayport`,
+`relaynomx`, `int_port`, `ext_port`) goes first and alone: one unrecognised
+policy field cannot take mail delivery down with it. If the policy write is
+rejected, `apply` says so and still succeeds, because mail flows without it.
 
 ### Deliberately not set by KIN Mail
 
+- **`rejectunknown`.** It refuses senders whose client address has no reverse
+  DNS. Plenty of small but entirely legitimate senders have none, PMG's own
+  default is off, and an installer has no business imposing that policy on a
+  customer's mail. The operator can turn it on in the PMG UI.
 - **Quarantine lifetimes, rule database, custom SpamAssassin scores.** Site
   policy. The operator owns these in the PMG UI.
 - **PMG clustering.** Out of scope, exactly like Zimbra HA is out of scope.
@@ -227,7 +239,9 @@ front of whoever asked for it.
 | Mail node IP missing from PMG `mynetworks` | outbound mail rejected at :26 | asserted in `verify` |
 | Double DKIM signature | some receivers fail DMARC | PMG `dkim_sign` forced to `0`, asserted |
 | SPF not updated | outbound marked as spam | `verify` resolves the SPF record and warns with the exact string to set |
-| Gateway VM down | all inbound mail queues at the sender; outbound queues on Zimbra | monitoring alert; Zimbra's queue is visible on the Reports tab. **Single gateway is a single point of failure — this is accepted for 0.1.10 and stated plainly.** |
+| Gateway VM down | all inbound mail queues at the sender; outbound queues on Zimbra | the Monitoring tab's **Mail gateway** card probes ports 25 and 26 every minute and says "Not answering"; Zimbra's queue is on the Reports tab. **A single gateway is a single point of failure — accepted for 0.1.10 and stated plainly.** |
+| The gateway's settings are accepted but not honoured | `apply` says success; mail is lost at the gateway | `apply` reads `relay`, `relaynomx` and `dkim_sign` back and refuses with `settings-did-not-stick` rather than recording the link as applied |
+| Something between the two machines blocks the traffic | every setting is right and no mail moves | `apply` and `verify` open a TCP connection to the gateway on 25 and 26 and say so |
 | Operator reverts | | `mail-gateway.sh revert` restores the direct-MX configuration and prints the DNS change needed |
 
 ---
@@ -239,6 +253,32 @@ front of whoever asked for it.
 touch PMG, because leaving PMG configured is harmless and re-applying is then
 instant. The operator still has to move the MX record back. The console prints
 that instruction; it cannot do it.
+
+---
+
+## 10a. Monitoring
+
+A collector runs on the appliance every 60 seconds and publishes, through the
+same node_exporter textfile path as the mail flow metrics:
+
+```
+kin_mail_gateway_linked                 a link is configured and applied
+kin_mail_gateway_up{port="26"}          the relay port answered
+kin_mail_gateway_up{port="25"}          the inbound port answered
+kin_mail_gateway_probe_seconds{port=}   how long the connect took
+kin_mail_gateway_relay_configured       Zimbra really points at this gateway
+```
+
+A TCP connect, not an SMTP conversation: opening a session and dropping it
+every minute is how an address gets rate-limited by its own gateway.
+
+`relay_configured` is read from Zimbra with `zmprov`, not from our own state
+file, because the interesting failure is the two disagreeing and a metric
+sourced from the same file as the claim cannot show that.
+
+The console distinguishes four states and never collapses them: no reading at
+all, a reading that has gone stale (the collector stopped), linked-and-up, and
+linked-and-down. A stale "up" is not shown as up.
 
 ---
 

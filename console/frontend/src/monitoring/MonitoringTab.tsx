@@ -472,6 +472,72 @@ const Model = styled.p`
   word-break: break-word;
 `;
 
+/* Four states, and collapsing any two of them would mislead:
+     no collector      -> unknown. Say nothing else.
+     collector, stale  -> the collector stopped; the last reading is not news.
+     no link           -> normal right after a deploy, and not an alarm.
+     link down         -> the alarm this whole thing exists for. */
+function GatewayCard({ gw }: { gw?: MailGatewayHealth }) {
+  if (!gw || !gw.known) {
+    return (
+      <Card>
+        <CardLabel>Mail gateway</CardLabel>
+        <BigValue $tone="warn">Unknown</BigValue>
+        <Model>
+          No reading yet. Install monitoring, or wait for the first sample.
+        </Model>
+      </Card>
+    );
+  }
+  if (gw.stale) {
+    return (
+      <Card>
+        <CardLabel>Mail gateway</CardLabel>
+        <BigValue $tone="warn">No recent reading</BigValue>
+        <Model>
+          The probe last ran{" "}
+          {gw.age_seconds === null ? "a while" : formatDuration(gw.age_seconds)} ago.
+          A stale answer is not the same as a healthy one.
+        </Model>
+      </Card>
+    );
+  }
+  if (!gw.linked) {
+    return (
+      <Card>
+        <CardLabel>Mail gateway</CardLabel>
+        <BigValue $tone="warn">Not linked</BigValue>
+        <Model>
+          This appliance is still its own MX and holds port 25 to the internet.
+        </Model>
+      </Card>
+    );
+  }
+  const relay = gw.ports["26"];
+  const inbound = gw.ports["25"];
+  const bothUp = relay === true && inbound === true;
+  return (
+    <Card>
+      <CardLabel>Mail gateway</CardLabel>
+      <BigValue $tone={bothUp ? "ok" : "danger"}>{bothUp ? "Reachable" : "Not answering"}</BigValue>
+      <Kv>
+        <K>Relay (26)</K>
+        <V>{relay === undefined ? "-" : relay ? "answering" : "no answer"}</V>
+        <K>Inbound (25)</K>
+        <V>{inbound === undefined ? "-" : inbound ? "answering" : "no answer"}</V>
+      </Kv>
+      <Model>
+        {gw.host}
+        {!gw.relay_configured
+          ? " - this appliance is not relaying through it; check Mail Gateway > Verify"
+          : !bothUp
+            ? " - mail will queue until it answers again"
+            : ""}
+      </Model>
+    </Card>
+  );
+}
+
 function HostPanel({ host }: { host: HostFacts }) {
   const mail = host.disks.find((d) => d.mount !== "/");
   const system = host.disks.find((d) => d.mount === "/");
@@ -543,6 +609,12 @@ function HostPanel({ host }: { host: HostFacts }) {
         ) : null,
       )}
 
+      {/* The gateway carries every message in and out. When it fails, this
+          appliance looks perfectly healthy from every other card on this page:
+          Zimbra up, CPU idle, memory fine, and the queue quietly climbing.
+          This is the card that says why. */}
+      <GatewayCard gw={host.mail_gateway} />
+
       <Card>
         <CardLabel>Uptime</CardLabel>
         <BigValue $tone="ok">
@@ -569,12 +641,23 @@ type MailFlowFreshness = {
   reason: string;
 };
 
+type MailGatewayHealth = {
+  known: boolean;
+  linked: boolean;
+  relay_configured: boolean;
+  ports: Record<string, boolean>;
+  host: string;
+  stale: boolean;
+  age_seconds: number | null;
+};
+
 type HostFacts = {
   cpu: { model: string; threads: number; cores: number; load: number[] };
   memory: { total_bytes: number; used_bytes: number; available_bytes: number; percent: number | null };
   disks: { mount: string; total_bytes: number; used_bytes: number; free_bytes: number; percent: number }[];
   uptime_seconds: number | null;
   mail_flow?: MailFlowFreshness;
+  mail_gateway?: MailGatewayHealth;
   /** True when mail storage is a directory on the system disk, not its own volume. */
   disks_share_a_filesystem?: boolean;
 };

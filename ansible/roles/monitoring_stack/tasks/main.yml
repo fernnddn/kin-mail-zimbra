@@ -58,6 +58,12 @@
 #
 # A role that depends on another role having run first is a role that works on
 # whichever topology happened to be tested.
+# One task per directory, with the path written out rather than looped over.
+# It is more lines, and it keeps the derived guard in
+# test_roles_create_their_own_directories.py able to see what this role owns:
+# a `path: "{{ item }}"` tells that guard nothing, and a role whose
+# directories it cannot see is a role that can quietly go back to depending
+# on some other role having run first.
 - name: Create the directory the mail flow collector lives in
   ansible.builtin.file:
     path: "{{ monitoring_stack_mailflow_script | dirname }}"
@@ -67,6 +73,16 @@
     mode: "0755"
   when: not ansible_check_mode
   tags: [monitoring, mailflow]
+
+- name: Create the directory the gateway collector lives in
+  ansible.builtin.file:
+    path: "{{ monitoring_stack_gateway_script | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [monitoring, gateway]
 
 - name: Install the mail flow collector
   ansible.builtin.copy:
@@ -145,6 +161,74 @@
     state: started
   when: not ansible_check_mode
   tags: [monitoring, mailflow]
+
+# The gateway collector. Same directory, same textfile path, same systemd
+# spelling (ansible.builtin.systemd, never systemd_service - see above).
+- name: Install the gateway reachability collector
+  ansible.builtin.copy:
+    src: kin-mail-gateway-metrics.py
+    dest: "{{ monitoring_stack_gateway_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+  tags: [monitoring, gateway]
+
+- name: Install the gateway collector units
+  ansible.builtin.template:
+    src: "kin-mail-gateway.{{ item }}.j2"
+    dest: "/etc/systemd/system/kin-mail-gateway.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - service
+    - timer
+  register: monitoring_stack_gateway_units
+  when: not ansible_check_mode
+  tags: [monitoring, gateway]
+
+- name: Reload systemd after writing the gateway units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - monitoring_stack_gateway_units is changed
+  tags: [monitoring, gateway]
+
+# Deliberately tolerant. An appliance with no gateway linked yet is the normal
+# state right after a deploy, and the collector publishes zeros for that case -
+# which is the honest answer, and is what lets the console tell "not linked"
+# apart from "the collector never ran".
+- name: Take a first gateway sample so the tab is not empty on the first look
+  ansible.builtin.command:
+    cmd: >-
+      {{ monitoring_stack_gateway_script }}
+      --textfile-dir {{ monitoring_stack_textfile_dir }}
+  register: monitoring_stack_gateway_first
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags: [monitoring, gateway]
+
+- name: Report when the first gateway sample could not be taken
+  ansible.builtin.debug:
+    msg: >-
+      The gateway collector exited
+      {{ monitoring_stack_gateway_first.rc | default('?') }}. The timer is
+      still installed. This does not affect mail.
+  when:
+    - not ansible_check_mode
+    - (monitoring_stack_gateway_first.rc | default(0)) != 0
+  tags: [monitoring, gateway]
+
+- name: Enable and start the gateway timer
+  ansible.builtin.systemd:
+    name: kin-mail-gateway.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+  tags: [monitoring, gateway]
 
 # See the drop-in template for why: a private mount namespace on a unit that
 # starts after /opt/zimbra is mounted can pin the DRBD backing device and block
