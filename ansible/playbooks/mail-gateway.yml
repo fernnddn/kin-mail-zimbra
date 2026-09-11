@@ -1,0 +1,32 @@
+---
+# Link the mail nodes to the Proxmox Mail Gateway that fronts them.
+#
+# This does NOT install PMG. PMG is a Debian appliance and the mail node is
+# Ubuntu with Zimbra on it, so the gateway is its own VM, installed by the
+# operator from the official ISO. What this does is configure both sides of the
+# link and then prove it works.
+#
+# The API credential is not here and must never be added here: it is encrypted
+# in the privhelper vault and handed to the script in the environment for one
+# run. An API token in an inventory file is an API token in version control.
+#
+# Safe by default - the bare run plans and changes nothing:
+#
+#   ansible-playbook playbooks/mail-gateway.yml
+#   ansible-playbook playbooks/mail-gateway.yml -e mail_gateway_action=apply
+#   ansible-playbook playbooks/mail-gateway.yml -e mail_gateway_action=verify
+
+- name: Link the mail nodes to their mail gateway
+  hosts: mail_nodes
+  gather_facts: true
+  become: true
+  # This role installs nothing today, but apt-daily holds the dpkg lock for
+  # minutes after a boot and the apt module's default is to wait 60s and then
+  # fail. Set here so the invariant holds if the role ever gains a package
+  # task, rather than being remembered at that point.
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 900
+  roles:
+    - role: mail_gateway_link
+      tags: [gateway]

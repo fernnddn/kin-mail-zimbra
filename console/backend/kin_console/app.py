@@ -518,6 +518,7 @@ _STREAM_ACTIONS: dict[str, str] = {
     "appliance_settings": proto.CMD_APPLY_APPLIANCE_SETTINGS,
     "install_monitoring": proto.CMD_INSTALL_MONITORING,
     "grow_disk": proto.CMD_GROW_DISK,
+    "mail_gateway": proto.CMD_MAIL_GATEWAY,
 }
 
 
@@ -551,6 +552,21 @@ class AdSettingsBody(BaseModel):
     # authentication, so both halves need this account, not just the wizard.
     test_user: str = Field(default="", max_length=256)
     test_pass: str = Field(default="", max_length=256)
+
+
+class MailGatewayConnectBody(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    api_port: int = Field(default=8006, ge=1, le=65535)
+    auth: str = Field(default="token", max_length=16)
+    token_id: str = Field(default="", max_length=128)
+    token_secret: str = Field(default="", max_length=512)
+    user: str = Field(default="root@pam", max_length=128)
+    password: str = Field(default="", max_length=512)
+    cacert: str = Field(default="", max_length=512)
+
+
+class MailGatewayTrustBody(BaseModel):
+    fingerprint: str = Field(min_length=16, max_length=256)
 
 
 class LicenseApplyBody(BaseModel):
@@ -828,6 +844,17 @@ async def wizard_deploy_stream(
                 status_code=400, detail="grow_disk target must be system or mail"
             )
         stream_args = {"op": op, "target": target}
+    elif cmd == proto.CMD_MAIL_GATEWAY:
+        # Only the read-only and revert operations come through the streaming
+        # endpoint, because a query string ends up in access logs and browser
+        # history. "connect" carries the API token secret and is POST-only.
+        op = (request.query_params.get("op") or "status").strip().lower()
+        if op not in ("probe", "plan", "apply", "verify", "revert", "status"):
+            raise HTTPException(
+                status_code=400,
+                detail="mail_gateway stream allows probe, plan, apply, verify, revert or status",
+            )
+        stream_args = {"op": op}
     elif cmd in (proto.CMD_REMOVE_OBSERVABILITY, proto.CMD_ADD_OBSERVABILITY):
         op = (request.query_params.get("op") or "apply").strip().lower()
         stream_args = {"op": op}
@@ -1167,6 +1194,138 @@ async def api_settings_cloudflare_token(
             detail=str(result.get("error") or result.get("log") or "Could not store the token"),
         )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Mail gateway (Proxmox Mail Gateway in front of Zimbra, mandatory from 0.1.10)
+# ---------------------------------------------------------------------------
+@app.get("/api/mail-gateway/status")
+async def mail_gateway_status(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Where the gateway is and whether the link has actually been applied.
+
+    Ops-level like every other mail_gateway operation. The privhelper would
+    refuse a Customer Admin anyway; checking here means they get a 403 that
+    says so, instead of a body claiming no gateway is configured. Answering
+    "not configured" to someone who is merely not allowed to ask is the kind
+    of lie an operator acts on.
+
+    The response carries no secret: the token id is an identifier, and the
+    secret half never leaves privhelperd.
+    """
+    if not command_allowed(user.role, proto.CMD_MAIL_GATEWAY):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAIL_GATEWAY),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAIL_GATEWAY,
+        user.username,
+        args={"op": "status"},
+    )
+    parsed = _json_from_log(str(result.get("log") or ""), "KIN_GW_STATUS ")
+    if not parsed:
+        # Unknown is not the same as absent, and the page must not render a
+        # green or a red banner off a read that did not happen.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(
+                result.get("error")
+                or "The gateway status could not be read on this appliance."
+            ),
+        )
+    return parsed
+
+
+@app.post("/api/mail-gateway/connect")
+async def mail_gateway_connect(
+    body: MailGatewayConnectBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Record where the gateway is and encrypt its API credential.
+
+    POST, not a query string, precisely because the token secret is in it: a
+    streaming GET would leave the credential in the access log and in browser
+    history. The response says what was stored, never what the value was.
+    """
+    if not command_allowed(user.role, proto.CMD_MAIL_GATEWAY):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAIL_GATEWAY),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAIL_GATEWAY,
+        user.username,
+        args={
+            "op": "connect",
+            "host": body.host.strip(),
+            "api_port": body.api_port,
+            "auth": body.auth.strip().lower(),
+            "token_id": body.token_id.strip(),
+            "token_secret": body.token_secret,
+            "user": body.user.strip(),
+            "password": body.password,
+            "cacert": body.cacert.strip(),
+        },
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or result.get("log") or "could not record the gateway"),
+        )
+    return {"ok": True, "log": result.get("log")}
+
+
+@app.post("/api/mail-gateway/trust")
+async def mail_gateway_trust(
+    body: MailGatewayTrustBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Confirm the fingerprint of the gateway's certificate.
+
+    The operator types back, or clicks through, the fingerprint Probe printed.
+    Until that happens every operation against the gateway refuses - which is
+    the point: a mail gateway is a machine we hand every message to.
+    """
+    if not command_allowed(user.role, proto.CMD_MAIL_GATEWAY):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAIL_GATEWAY),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAIL_GATEWAY,
+        user.username,
+        args={"op": "trust_certificate", "fingerprint": body.fingerprint.strip()},
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or result.get("log") or "could not confirm the certificate"),
+        )
+    return {"ok": True, "log": result.get("log")}
+
+
+@app.post("/api/mail-gateway/forget")
+async def mail_gateway_forget(
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    if not command_allowed(user.role, proto.CMD_MAIL_GATEWAY):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_MAIL_GATEWAY),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_MAIL_GATEWAY,
+        user.username,
+        args={"op": "forget"},
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(result.get("error") or "could not clear the gateway credential"),
+        )
+    return {"ok": True, "log": result.get("log")}
 
 
 @app.post("/api/settings/license")

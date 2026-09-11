@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: KIN
+  description: Link this mail node to the Proxmox Mail Gateway that fronts it
+  license: proprietary
+  min_ansible_version: "2.12"
+dependencies: []

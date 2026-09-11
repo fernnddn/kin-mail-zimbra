@@ -11,7 +11,9 @@
  * The two-server, high-availability layout: DRBD replication, Pacemaker,
  * a quorum witness, a floating VIP, Build HA pair, Add host.
  *
- * Hidden for the 0.1.9 release. The single-server appliance is what this
+ * Hidden for the 0.1.9 release and still hidden in 0.1.10, which adds the
+ * mandatory mail gateway in front of the single-server appliance rather than
+ * a second server beside it. The single-server appliance is what this
  * release was hardened for and what is being sold; the pair is real but not
  * yet mature, and an operator who found the button, pressed it, and hit a
  * rough edge would reasonably conclude the whole product is rough. Hiding it

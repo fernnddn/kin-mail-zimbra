@@ -163,9 +163,55 @@ apply_rules() {
   ufw allow from "$CLUSTER_NET" to any port 22 proto tcp comment 'SSH cluster LAN'
 
   # Public mail (internet)
-  for p in 25 110 143 443 465 587 993 995; do
+  #
+  # Port 25 is the exception. From 0.1.10 a Proxmox Mail Gateway sits in front
+  # of this appliance and is the MX; inbound SMTP arrives from the gateway and
+  # from nowhere else. Narrowing it is the whole point of putting a gateway
+  # there: an attacker who breaks the SMTP surface lands on a filtering box
+  # with no mailboxes on it, not on the machine holding every message.
+  #
+  # It narrows only when a gateway is actually configured AND applied. An
+  # appliance that has not been linked yet keeps the open rule, because
+  # closing port 25 on a server that is still its own MX stops all inbound
+  # mail, and a firewall stage is not the place to discover that.
+  local gw_host="" gw_enabled="" gw_phase="" gw_addr=""
+  if [ -f /etc/kin-mail/mail-gateway.conf ]; then
+    gw_host=$(sed -n 's/^[[:space:]]*GATEWAY_HOST=//p' /etc/kin-mail/mail-gateway.conf |
+              tail -1 | tr -d "\"' \r")
+    gw_enabled=$(sed -n 's/^[[:space:]]*GATEWAY_ENABLED=//p' /etc/kin-mail/mail-gateway.conf |
+                 tail -1 | tr -d "\"' \r")
+  fi
+  if [ -f /var/lib/kin-mail-console/mail-gateway-state.json ]; then
+    gw_phase=$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+               /var/lib/kin-mail-console/mail-gateway-state.json | head -1)
+  fi
+
+  # ufw takes an address here, not a name. A gateway recorded by hostname has
+  # to be resolved now, and if it cannot be, the safe answer is to leave port
+  # 25 open rather than to silently stop accepting mail.
+  if [ -n "$gw_host" ]; then
+    case "$gw_host" in
+      *[!0-9.]*)
+        gw_addr=$(getent ahostsv4 "$gw_host" 2>/dev/null | awk 'NR==1{print $1}')
+        [ -n "$gw_addr" ] || warn "Could not resolve the gateway '${gw_host}' to an address."
+        ;;
+      *) gw_addr="$gw_host" ;;
+    esac
+  fi
+
+  for p in 110 143 443 465 587 993 995; do
     ufw allow "$p"/tcp comment "mail public ${p}"
   done
+
+  if [ -n "$gw_addr" ] && [ "$gw_enabled" = "1" ] && [ "$gw_phase" = "applied" ]; then
+    ufw allow from "$gw_addr" to any port 25 proto tcp comment 'SMTP from mail gateway'
+    ufw allow from "$CLUSTER_NET" to any port 25 proto tcp comment 'SMTP cluster LAN'
+    ok "Port 25 accepts mail from the gateway (${gw_addr}) and the LAN only"
+  else
+    ufw allow 25/tcp comment 'mail public 25 (no gateway configured)'
+    warn "Port 25 is open to the internet: no mail gateway is linked yet."
+    info "Console > Mail Gateway, then re-run this stage to narrow it."
+  fi
 
   # Admin console - NOT any (Zimbra :7071 + KIN console :CONSOLE_PORT)
   CONSOLE_PORT="${CONSOLE_PORT:-${KIN_CONSOLE_PORT:-9443}}"

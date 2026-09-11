@@ -1,0 +1,23 @@
+---
+# Linking this appliance to the Proxmox Mail Gateway in front of it.
+#
+# The role does not install PMG. It cannot: PMG is a Debian appliance and this
+# is Ubuntu with Zimbra on it, so the gateway is its own VM installed from the
+# official ISO. What the role does is configure both sides of the link and then
+# assert that it works - which is the part that is error-prone by hand.
+#
+# The credential is NOT an Ansible variable. It lives encrypted in the
+# privhelper vault, and the console passes it to the script in the environment
+# for the length of one run. Putting an API token in an inventory would defeat
+# the reason the vault exists.
+
+# Where the deploy tree is on the target. mail-gateway.sh lives under lib/.
+mail_gateway_deploy_dir: /opt/kin-mail-deploy
+
+# plan proves what would change without changing it; apply does it. Default is
+# the safe one, so a stray play cannot repoint a live mail server's relay.
+mail_gateway_action: plan
+
+# Fail the play when verify finds a problem. Every problem verify reports is a
+# way mail stops, so the default is yes.
+mail_gateway_fail_on_problems: true

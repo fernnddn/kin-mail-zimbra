@@ -272,6 +272,7 @@ _CMD_LABELS = {
     proto.CMD_MUTATE_CONSOLE_USERS: "a console user change",
     proto.CMD_RUN_HARDENING: "hardening",
     proto.CMD_GROW_DISK: "extending a disk",
+    proto.CMD_MAIL_GATEWAY: "a mail gateway operation",
 }
 
 

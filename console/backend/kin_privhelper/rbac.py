@@ -39,6 +39,8 @@ SENSITIVE_OPS_COMMANDS = frozenset(
         "install_monitoring",
         # Moves a partition boundary on a live mail server.
         "grow_disk",
+        # Repoints where every message this appliance sends and receives goes.
+        "mail_gateway",
     }
 )
 

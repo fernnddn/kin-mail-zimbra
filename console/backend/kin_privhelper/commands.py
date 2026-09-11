@@ -47,6 +47,10 @@ GROW_DISK_CANDIDATES = (
     "install/lib/grow-disk.sh",
     "lib/grow-disk.sh",
 )
+MAIL_GATEWAY_CANDIDATES = (
+    "install/lib/mail-gateway.sh",
+    "lib/mail-gateway.sh",
+)
 CREATE_MAILBOX_CANDIDATES = (
     "install/08-create-mailbox.sh",
     "08-create-mailbox.sh",
@@ -112,6 +116,10 @@ def resolve_prepare_os() -> Path:
 
 def resolve_grow_disk() -> Path:
     return resolve_under_deploy(GROW_DISK_CANDIDATES, "grow-disk.sh")
+
+
+def resolve_mail_gateway() -> Path:
+    return resolve_under_deploy(MAIL_GATEWAY_CANDIDATES, "mail-gateway.sh")
 
 
 def resolve_create_mailbox() -> Path:
@@ -1305,6 +1313,241 @@ async def cmd_ha_disk_preflight(
     yield proto.event_done(0 if result.get("ok") or result.get("build_allowed") else 2)
 
 
+async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
+    """Manage the Proxmox Mail Gateway that sits in front of this appliance.
+
+    Six operations reach the shell script and three never leave this process.
+
+    The three local ones are about the credential: "connect" validates the
+    operator's input and encrypts the API token into the vault, "forget" throws
+    it away, and "trust_certificate" records the fingerprint of the gateway's
+    self-signed certificate after a human has looked at it. None of them touch
+    mail, so none of them take the maintenance lock.
+
+    The other six run mail-gateway.sh. Reading operations - probe, plan, verify,
+    status - never take the lock either: an operator asking what WOULD happen
+    while a deploy is running is exactly when they want to ask. Apply and revert
+    repoint a live Postfix at a different relay, so they do take it.
+
+    The token secret is decrypted here, handed to one subprocess in its
+    environment, and redacted from the transcript. It is never an argument, so
+    it never appears in a process listing.
+    """
+    from . import mail_gateway as gw
+    from .maintenance import release_maintenance_lock, try_lock_maintenance
+
+    args = args or {}
+    op = str(args.get("op") or "status").strip().lower()
+    if op not in gw.ALL_OPS:
+        yield proto.event_stderr(
+            f"mail_gateway op must be one of {', '.join(gw.ALL_OPS)}, not {op!r}\n"
+        )
+        yield proto.event_done(2)
+        return
+
+    # ---- operations that never leave this process --------------------------
+    if op == "status":
+        # Answered here rather than by the script: status has to work when the
+        # credential is missing, when the gateway is unreachable, and before
+        # anything has ever been applied. Those are exactly the moments the
+        # console most needs an answer, and all three would fail a script that
+        # starts by authenticating.
+        try:
+            snapshot = await asyncio.to_thread(gw.status)
+        except Exception as exc:  # noqa: BLE001
+            yield proto.event_stderr(f"cannot read the gateway status: {exc}\n")
+            yield proto.event_done(1)
+            return
+        yield proto.event_stdout(
+            "KIN_GW_STATUS " + json.dumps(snapshot, separators=(",", ":")) + "\n"
+        )
+        yield proto.event_done(0)
+        return
+
+    if op == "forget":
+        gw.forget_credentials()
+        conf = gw.read_config()
+        if conf.get("GATEWAY_HOST"):
+            # A hand-edited config with a nonsense port must not turn "forget
+            # the credential" into an unhandled exception, which would leave
+            # the link enabled after the vault was already deleted.
+            raw_port = conf.get("GATEWAY_API_PORT") or 8006
+            gw.write_config(
+                host=conf.get("GATEWAY_HOST", ""),
+                api_port=int(raw_port) if gw.valid_port(raw_port) else 8006,
+                auth=conf.get("GATEWAY_AUTH", "token"),
+                token_id=conf.get("GATEWAY_TOKEN_ID", ""),
+                user=conf.get("GATEWAY_USER", "root@pam"),
+                cacert=conf.get("GATEWAY_CACERT", ""),
+                enabled=False,
+            )
+        yield proto.event_stdout(
+            "Gateway credential deleted and the link disabled. The gateway itself is "
+            "untouched, and this appliance still relays through it until you run revert.\n"
+        )
+        yield proto.event_done(0)
+        return
+
+    if op == "connect":
+        host = str(args.get("host") or "").strip()
+        auth = str(args.get("auth") or "token").strip().lower()
+        token_id = str(args.get("token_id") or "").strip()
+        user = str(args.get("user") or "root@pam").strip()
+        cacert = str(args.get("cacert") or "").strip()
+        api_port = args.get("api_port") or 8006
+        secret = str(args.get("token_secret") or "")
+        password = str(args.get("password") or "")
+
+        if not gw.valid_host(host):
+            yield proto.event_stderr(
+                "The gateway address has to be a hostname or an IP address.\n"
+            )
+            yield proto.event_done(2)
+            return
+        if not gw.valid_port(api_port):
+            yield proto.event_stderr("The gateway API port has to be a port number.\n")
+            yield proto.event_done(2)
+            return
+        if auth not in gw.AUTH_MODES:
+            yield proto.event_stderr("Authentication has to be token or ticket.\n")
+            yield proto.event_done(2)
+            return
+        if cacert and not Path(cacert).is_file():
+            yield proto.event_stderr(f"No CA bundle at {cacert}.\n")
+            yield proto.event_done(2)
+            return
+        if auth == "token":
+            if not gw.valid_token_id(token_id):
+                yield proto.event_stderr(
+                    "A PMG token id looks like root@pam!kinmail. Create one under "
+                    "Configuration > User Management > API Tokens on the gateway.\n"
+                )
+                yield proto.event_done(2)
+                return
+            if not secret:
+                yield proto.event_stderr("The API token secret is required.\n")
+                yield proto.event_done(2)
+                return
+            creds = {"token_secret": secret}
+        else:
+            if not password:
+                yield proto.event_stderr("A password is required for ticket authentication.\n")
+                yield proto.event_done(2)
+                return
+            creds = {"password": password}
+
+        try:
+            await asyncio.to_thread(gw.store_credentials, creds)
+            await asyncio.to_thread(
+                gw.write_config,
+                host=host,
+                api_port=int(api_port),
+                auth=auth,
+                token_id=token_id,
+                user=user,
+                cacert=cacert,
+                enabled=True,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            yield proto.event_stderr(f"cannot store the gateway credential: {exc}\n")
+            yield proto.event_done(1)
+            return
+        yield proto.event_stdout(
+            f"Gateway recorded: {host}:{int(api_port)} using {auth} authentication. "
+            "The credential is encrypted; the console never sees it again.\n"
+        )
+        yield proto.event_stdout("Run Probe next to confirm the gateway answers.\n")
+        yield proto.event_done(0)
+        return
+
+    if op == "trust_certificate":
+        conf = gw.read_config()
+        host = conf.get("GATEWAY_HOST", "")
+        fingerprint = str(args.get("fingerprint") or "").strip().upper()
+        if not host:
+            yield proto.event_stderr("No gateway is configured yet.\n")
+            yield proto.event_done(2)
+            return
+        # The fingerprint has to come back from the operator, not be taken from
+        # whatever answers the socket. Confirming a value the machine just
+        # invented is not confirmation.
+        if not fingerprint or any(
+            ch not in "0123456789ABCDEF:" for ch in fingerprint
+        ):
+            yield proto.event_stderr(
+                "Pass the SHA-256 fingerprint exactly as Probe printed it.\n"
+            )
+            yield proto.event_done(2)
+            return
+        try:
+            await asyncio.to_thread(gw.pin_fingerprint, host, fingerprint)
+        except OSError as exc:
+            yield proto.event_stderr(f"cannot record the fingerprint: {exc}\n")
+            yield proto.event_done(1)
+            return
+        yield proto.event_stdout(
+            f"Certificate confirmed for {host}. If it ever changes, every operation "
+            "here stops until you confirm the new one.\n"
+        )
+        yield proto.event_done(0)
+        return
+
+    # ---- operations that run the script ------------------------------------
+    try:
+        script = resolve_mail_gateway()
+    except (FileNotFoundError, RuntimeError) as exc:
+        yield proto.event_stderr(f"{exc}\n")
+        yield proto.event_done(2)
+        return
+
+    try:
+        creds = await asyncio.to_thread(gw.load_credentials)
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        yield proto.event_stderr(f"cannot read the gateway credential: {exc}\n")
+        yield proto.event_done(1)
+        return
+
+    extra_env: dict[str, str] = {}
+    redact: list[str] = []
+    if creds.get("token_secret"):
+        extra_env["KIN_PMG_TOKEN_SECRET"] = creds["token_secret"]
+        redact.append(creds["token_secret"])
+    if creds.get("password"):
+        extra_env["KIN_PMG_PASSWORD"] = creds["password"]
+        redact.append(creds["password"])
+
+    argv = [str(script), op]
+
+    if op in gw.READ_ONLY_OPS:
+        async for ev in _stream_subprocess(argv, extra_env=extra_env, secrets=redact):
+            yield ev
+        return
+
+    # apply and revert repoint a live Postfix. They must not overlap a deploy,
+    # an Add or Remove Host, a metrics install, or a disk resize.
+    lock_fh = try_lock_maintenance()
+    if lock_fh is None:
+        yield proto.event_stderr(
+            "Refusing: another operation is already running on this appliance. "
+            "Changing where mail is relayed must not overlap it. Try again when it finishes.\n"
+        )
+        yield proto.event_done(1)
+        return
+    try:
+        async for ev in _stream_subprocess(
+            argv,
+            extra_env=extra_env,
+            secrets=redact,
+            transcript=DEPLOY_LAST_LOG,
+            transcript_reset=False,
+        ):
+            yield ev
+    finally:
+        # BaseException too: a closed browser tab throws GeneratorExit in here
+        # and a lock left held blocks every later operation.
+        release_maintenance_lock(lock_fh)
+
+
 CommandHandler = Callable[[dict[str, Any]], AsyncIterator[dict[str, Any]]]
 
 
@@ -1333,6 +1576,7 @@ HANDLERS: dict[str, CommandHandler] = {
     proto.CMD_RUN_FULL_INSTALL: _adapt(cmd_run_full_install),
     proto.CMD_INSTALL_MONITORING: _adapt(cmd_install_monitoring),
     proto.CMD_GROW_DISK: _adapt(cmd_grow_disk),
+    proto.CMD_MAIL_GATEWAY: _adapt(cmd_mail_gateway),
     proto.CMD_CANCEL_FIREWALL_DEADMAN: _adapt(cmd_cancel_firewall_deadman),
     proto.CMD_GET_AUDIT_LOG: _adapt(cmd_get_audit_log),
     proto.CMD_GET_DEPLOY_LOG: _adapt(cmd_get_deploy_log),

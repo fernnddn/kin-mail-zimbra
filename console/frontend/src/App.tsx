@@ -10,6 +10,7 @@ import LoginPage from "./pages/Login";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 import SecurityPage from "./pages/Security";
+import MailGatewayPage from "./pages/MailGateway";
 import { WizardProvider } from "./wizard/WizardContext";
 import WizardLayout from "./wizard/WizardLayout";
 import AddSecondServerPage from "./wizard/AddSecondServer";
@@ -210,6 +211,16 @@ export default function App() {
                 <RequireEula>
                   <RequireAuth>
                     <ActivityCenterPage />
+                  </RequireAuth>
+                </RequireEula>
+              }
+            />
+            <Route
+              path="/mail-gateway"
+              element={
+                <RequireEula>
+                  <RequireAuth>
+                    <MailGatewayPage />
                   </RequireAuth>
                 </RequireEula>
               }

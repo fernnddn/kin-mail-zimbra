@@ -281,6 +281,47 @@ enough at build time.
 
 ---
 
+## Mail gateway (mandatory from 0.1.10)
+
+A Proxmox Mail Gateway sits in front of this appliance. It is the MX: inbound
+mail is filtered there before Zimbra sees it, outbound mail is relayed through
+it on the way out, and the mail node's port 25 accepts SMTP from the gateway
+and the LAN only. The machine holding every mailbox stops being the machine an
+attacker reaches first.
+
+```
+inbound    internet --MX--> gateway :25 --filter--> appliance :25
+outbound   appliance --relay--> gateway :26 --> internet
+internal   mailbox -> mailbox stays on the appliance and never reaches the gateway
+```
+
+KIN Mail does **not** install the gateway. PMG is a Debian appliance and this
+is Ubuntu with Zimbra on it, so the gateway is its own VM, installed from the
+official Proxmox ISO. What KIN Mail does is configure both sides of the link
+over PMG's REST API and Zimbra's `zmprov`, and then prove it works:
+
+- Console &rsaquo; **Mail Gateway** &rsaquo; Connect, with the gateway address
+  and a PMG API token. The token secret is encrypted into the privhelper vault
+  and never returned to the browser.
+- **Plan** reads both sides and changes nothing. **Apply** configures the
+  gateway, points outbound mail at it, and lets it hand mail in. Mail keeps
+  flowing throughout; nothing restarts.
+- The MX, SPF and PTR records still have to be changed at your registrar.
+  **Verify** reads them back and says which are still wrong.
+
+Zimbra's own amavis, SpamAssassin, ClamAV and opendkim stay enabled. The
+gateway is defence at the perimeter, not a replacement for scanning mail that
+never leaves the appliance, and DKIM signing deliberately stays on Zimbra —
+the gateway is configured not to sign a second time.
+
+`05-healthcheck.sh` reports an appliance with no applied gateway link as a
+**failure**, not a warning.
+
+The whole design — ports, DNS, every PMG setting and why, and the failure
+modes — is in [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md).
+
+---
+
 ## Deliberately out of scope
 
 No host firewall is enabled; perimeter control belongs on the network device.
@@ -288,7 +329,8 @@ If `ufw` is wanted, allow port 22 first so SSH is not cut.
 
 These scripts cannot resolve anything outside the server:
 
-- outbound SMTP permission (TCP 25, or 587 to a nominated relay)
+- outbound SMTP permission (TCP 25) from the mail gateway to the internet
+- installing the Proxmox Mail Gateway VM itself, and its own hardening
 - a stable public address with inbound DNAT to port 25
 - a PTR record matching the mail hostname
 - a policy route pinning the host to a single uplink

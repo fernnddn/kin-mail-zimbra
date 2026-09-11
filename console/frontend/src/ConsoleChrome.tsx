@@ -245,6 +245,9 @@ export function ConsoleChrome({
   const { deployed } = useSetup();
   const navigate = useNavigate();
   const isSuper = user?.role === "kin_super_admin";
+  // Support-Ops can run mail gateway operations too; the RBAC matrix puts
+  // mail_gateway in SENSITIVE_OPS_COMMANDS, which is both ops roles.
+  const isOps = isSuper || user?.role === "kin_support_ops";
   const [menuOpen, setMenuOpen] = useState(false);
   const alerts = useAlerts();
   const [license, setLicense] = useState<{
@@ -283,6 +286,14 @@ export function ConsoleChrome({
       <RailLink to="/mailboxes" end>
         Mailboxes
       </RailLink>
+      {/* Ops-level: the page repoints where every message this appliance sends
+          and receives goes, so a Customer Admin has no business in it. The
+          backend refuses them anyway; hiding it keeps the rail honest. */}
+      {isSuper || isOps ? (
+        <RailLink to="/mail-gateway" end>
+          Mail Gateway
+        </RailLink>
+      ) : null}
       {isSuper ? (
         <RailLink to="/users" end>
           Users

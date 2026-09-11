@@ -1,0 +1,90 @@
+---
+- name: Require the gateway helper on the mail node
+  ansible.builtin.stat:
+    path: "{{ mail_gateway_deploy_dir }}/lib/mail-gateway.sh"
+  register: mail_gateway_script
+  check_mode: false
+  tags: [gateway]
+
+- name: Fail if the gateway helper is missing
+  ansible.builtin.assert:
+    that:
+      - mail_gateway_script.stat.exists | default(false)
+      - mail_gateway_script.stat.isreg | default(false)
+    fail_msg: >-
+      mail-gateway.sh is not at
+      {{ mail_gateway_deploy_dir }}/lib/mail-gateway.sh on {{ inventory_hostname }}.
+      Set mail_gateway_deploy_dir to the tree that contains lib/, or re-run the
+      console bootstrap so the deploy tree is present.
+  tags: [gateway]
+
+- name: Require a recorded gateway before touching anything
+  ansible.builtin.stat:
+    path: /etc/kin-mail/mail-gateway.conf
+  register: mail_gateway_conf
+  check_mode: false
+  tags: [gateway]
+
+# Running apply with no gateway configured would produce a refusal rather than
+# damage, but a play that ends in a refusal is a play that told the operator
+# nothing useful. Say the actual problem here.
+- name: Fail if no gateway has been recorded in the console
+  ansible.builtin.assert:
+    that:
+      - mail_gateway_conf.stat.exists | default(false)
+    fail_msg: >-
+      No mail gateway is recorded on {{ inventory_hostname }}.
+      Open the console, go to Mail Gateway, and press Connect with the PMG
+      address and an API token first. The credential is deliberately not an
+      Ansible variable: it is encrypted in the privhelper vault.
+  tags: [gateway]
+
+- name: Validate the gateway configuration must be a recognised action
+  ansible.builtin.assert:
+    that:
+      - mail_gateway_action in ['plan', 'apply', 'verify']
+    fail_msg: "mail_gateway_action must be plan, apply or verify (got: {{ mail_gateway_action }})"
+  tags: [gateway]
+
+# changed_when is deliberate. plan and verify read; only apply can change
+# anything, and only when it actually reported a change.
+- name: "Run the gateway link: {{ mail_gateway_action }}"
+  ansible.builtin.command:
+    cmd: "{{ mail_gateway_deploy_dir }}/lib/mail-gateway.sh {{ mail_gateway_action }}"
+  register: mail_gateway_run
+  changed_when:
+    - mail_gateway_action == 'apply'
+    - "'KIN_GW_OK' in mail_gateway_run.stdout"
+  failed_when: false
+  check_mode: false
+  tags: [gateway]
+
+- name: Show what the gateway link reported
+  ansible.builtin.debug:
+    msg: "{{ mail_gateway_run.stdout_lines | default([]) }}"
+  tags: [gateway]
+
+# A refusal is not the same as a crash, and the operator needs to know which.
+# mail-gateway.sh prints its reason on a KIN_GW_REFUSED line precisely so this
+# does not have to guess from an exit code.
+- name: Fail with the gateway's own reason if it refused
+  ansible.builtin.assert:
+    that:
+      - "'KIN_GW_REFUSED' not in mail_gateway_run.stdout"
+    fail_msg: >-
+      The gateway link refused to proceed:
+      {{ mail_gateway_run.stdout_lines | default([]) | select('search', 'KIN_GW_REFUSED') | list }}
+  tags: [gateway]
+
+- name: Fail if verification found a way mail could stop
+  ansible.builtin.assert:
+    that:
+      - mail_gateway_run.rc | default(1) == 0
+    fail_msg: >-
+      The gateway link did not verify clean on {{ inventory_hostname }}.
+      Every problem listed above is a way mail stops, not a cosmetic
+      difference. See MAIL-GATEWAY.md for what each one means.
+  when:
+    - mail_gateway_action in ['apply', 'verify']
+    - mail_gateway_fail_on_problems | bool
+  tags: [gateway]

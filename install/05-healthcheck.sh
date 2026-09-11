@@ -384,6 +384,61 @@ case "$MYN" in
   *)             p "Not an open relay" ;;
 esac
 
+# --- mail gateway ------------------------------------------------------------
+# From 0.1.10 a Proxmox Mail Gateway in front of this appliance is mandatory.
+# Reported as a failure, not a warning: a deployment that still holds port 25
+# to the internet itself is not the product we now ship, and an operator has
+# to see that before they hand the box over, not after.
+echo; say "Mail gateway"
+GW_CONF=/etc/kin-mail/mail-gateway.conf
+GW_STATE=/var/lib/kin-mail-console/mail-gateway-state.json
+gw_host=""; gw_enabled=""; gw_phase=""
+if [ -f "$GW_CONF" ]; then
+  gw_host=$(sed -n 's/^[[:space:]]*GATEWAY_HOST=//p' "$GW_CONF" | tail -1 | tr -d "\"' \r")
+  gw_enabled=$(sed -n 's/^[[:space:]]*GATEWAY_ENABLED=//p' "$GW_CONF" | tail -1 | tr -d "\"' \r")
+fi
+if [ -f "$GW_STATE" ]; then
+  gw_phase=$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$GW_STATE" | head -1)
+fi
+
+if [ -z "$gw_host" ]; then
+  f "No mail gateway is configured - this appliance is its own MX"
+  info "Console > Mail Gateway. See MAIL-GATEWAY.md for the whole pipeline."
+elif [ "$gw_enabled" != "1" ]; then
+  f "A mail gateway is recorded (${gw_host}) but the link is disabled"
+elif [ "$gw_phase" != "applied" ]; then
+  f "The mail gateway link to ${gw_host} has never been applied (phase: ${gw_phase:-unknown})"
+  info "Console > Mail Gateway > Apply."
+else
+  p "Mail gateway ${gw_host} is linked"
+
+  # Written and checked are different promises. These three are the settings
+  # whose drift stops mail without saying anything.
+  RELAY=$(su - zimbra -c "zmprov gs \$(zmhostname) zimbraMtaRelayHost" 2>/dev/null |
+          sed -n 's/^zimbraMtaRelayHost: //p' | head -1 | tr -d ' \r')
+  case "$RELAY" in
+    "${gw_host}:"*) p "Outbound mail relays through the gateway (${RELAY})" ;;
+    "")             f "zimbraMtaRelayHost is empty - outbound mail bypasses the gateway" ;;
+    *)              f "zimbraMtaRelayHost is '${RELAY}', not the configured gateway ${gw_host}" ;;
+  esac
+
+  case "$MYN" in
+    *"${gw_host}/32"*) p "The gateway is trusted to hand mail in" ;;
+    *) f "zimbraMtaMyNetworks does not include ${gw_host}/32 - inbound mail will be deferred" ;;
+  esac
+
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    if ufw status 2>/dev/null | grep -E '^25/tcp[[:space:]]+ALLOW[[:space:]]+Anywhere' >/dev/null; then
+      f "Port 25 is still open to the internet despite the gateway"
+      info "Re-run 10-host-firewall.sh apply to narrow it to ${gw_host}."
+    else
+      p "Port 25 is not open to the internet"
+    fi
+  else
+    b "ufw is not active - port 25 exposure was not checked"
+  fi
+fi
+
 # --- summary -----------------------------------------------------------------
 echo
 say "SUMMARY"

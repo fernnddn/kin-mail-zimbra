@@ -31,6 +31,7 @@ CMD_MUTATE_CONSOLE_USERS = "mutate_console_users"
 CMD_APPLY_APPLIANCE_SETTINGS = "apply_appliance_settings"
 CMD_INSTALL_MONITORING = "install_monitoring"
 CMD_GROW_DISK = "grow_disk"
+CMD_MAIL_GATEWAY = "mail_gateway"
 ALLOWED_COMMANDS = frozenset(
     {
         CMD_GET_STATUS,
@@ -56,6 +57,7 @@ ALLOWED_COMMANDS = frozenset(
         CMD_APPLY_APPLIANCE_SETTINGS,
         CMD_INSTALL_MONITORING,
         CMD_GROW_DISK,
+        CMD_MAIL_GATEWAY,
     }
 )
 
