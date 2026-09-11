@@ -594,3 +594,131 @@ class AuditTrailTests(unittest.TestCase):
         self.assertEqual(
             list(sig.parameters), ["username", "cmd", "result", "exit_code"]
         )
+
+
+# ---------------------------------------------------------------------------
+# The gateway's two identities
+#
+# GATEWAY_HOST is how this appliance reaches the gateway - a LAN address in
+# every real deployment. What goes into DNS is what the internet sees. The
+# first version of this used one value for both, and a live deployment was
+# told to publish "v=spf1 ip4:10.x", which authorises nobody and would have
+# made every outbound message fail SPF (QA Phase 15, 11 September 2026).
+# ---------------------------------------------------------------------------
+class PublicIdentityTests(unittest.TestCase):
+    def test_a_private_address_is_refused_as_a_public_one(self) -> None:
+        for value in (
+            "10.10.40.101",
+            "192.168.1.10",
+            "172.16.0.5",
+            "172.31.255.254",
+            "127.0.0.1",
+            "169.254.1.1",
+            "0.0.0.0",
+            "239.1.1.1",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(
+                    gw.valid_public_ip(value),
+                    f"{value} in SPF authorises nobody",
+                )
+
+    def test_a_routable_address_is_accepted(self) -> None:
+        for value in ("198.51.100.38", "203.0.113.9", "8.8.8.8", "172.15.0.1", "172.32.0.1"):
+            with self.subTest(value=value):
+                self.assertTrue(gw.valid_public_ip(value))
+
+    def test_nothing_is_accepted_because_it_is_optional(self) -> None:
+        self.assertTrue(gw.valid_public_ip(""))
+        self.assertTrue(gw.valid_public_hostname(""))
+
+    def test_rubbish_is_refused(self) -> None:
+        for value in ("not-an-ip", "1.2.3", "1.2.3.4.5", "1.2.3.256", "1.2.3.-1", "0x1.2.3.4"):
+            with self.subTest(value=value):
+                self.assertFalse(gw.valid_public_ip(value))
+
+    def test_an_address_is_not_a_usable_mx_target(self) -> None:
+        """An MX record can only name a host. This is the operator's own point."""
+        for value in ("198.51.100.38", "10.10.40.101", "203.0.113.9"):
+            with self.subTest(value=value):
+                self.assertFalse(gw.valid_public_hostname(value))
+
+    def test_a_hostname_is_accepted(self) -> None:
+        for value in ("relay.example.test", "pmg.corp.example.com", "mx1.example.test"):
+            with self.subTest(value=value):
+                self.assertTrue(gw.valid_public_hostname(value))
+
+    def test_a_bare_label_is_refused(self) -> None:
+        # "relay" is not something the internet can resolve.
+        self.assertFalse(gw.valid_public_hostname("relay"))
+
+    def test_a_hostname_carrying_shell_metacharacters_is_refused(self) -> None:
+        for value in ("relay.example.test; id", "relay.example.test`id`", "a b.example.test"):
+            with self.subTest(value=value):
+                self.assertFalse(gw.valid_public_hostname(value))
+
+
+class ConnectRefusesAnUnpublishableIdentity(GatewayTempPaths):
+    def _connect(self, **extra) -> list[dict]:
+        args = {
+            "op": "connect",
+            "host": "192.0.2.9",
+            "token_id": "root@pam!kinmail",
+            "token_secret": "s",
+        }
+        args.update(extra)
+        return _drain(commands.cmd_mail_gateway(args))
+
+    def test_a_private_public_ip_is_refused_with_the_reason(self) -> None:
+        events = self._connect(public_ip="10.10.40.101")
+        self.assertEqual(_exit(events), 2)
+        self.assertIn("authorises nobody", _text(events))
+        self.assertFalse(gw.GATEWAY_CONF.exists())
+
+    def test_an_address_as_the_public_hostname_is_refused(self) -> None:
+        events = self._connect(public_host="198.51.100.38")
+        self.assertEqual(_exit(events), 2)
+        self.assertIn("cannot hold an IP address", _text(events))
+
+    def test_a_good_identity_is_written_to_the_config(self) -> None:
+        events = self._connect(
+            public_host="relay.example.test", public_ip="198.51.100.38"
+        )
+        self.assertEqual(_exit(events), 0)
+        body = gw.GATEWAY_CONF.read_text(encoding="utf-8")
+        self.assertIn('GATEWAY_PUBLIC_HOST="relay.example.test"', body)
+        self.assertIn('GATEWAY_PUBLIC_IP="198.51.100.38"', body)
+        self.assertTrue(gw.status()["public_identity_complete"])
+
+    def test_a_trailing_dot_from_a_dns_zone_is_tolerated(self) -> None:
+        events = self._connect(
+            public_host="relay.example.test.", public_ip="198.51.100.38"
+        )
+        self.assertEqual(_exit(events), 0)
+        self.assertIn('GATEWAY_PUBLIC_HOST="relay.example.test"', gw.GATEWAY_CONF.read_text())
+
+    def test_without_an_identity_the_console_says_it_cannot_print_dns(self) -> None:
+        events = self._connect()
+        self.assertEqual(_exit(events), 0)
+        self.assertIn("no DNS records can be printed", _text(events))
+        self.assertFalse(gw.status()["public_identity_complete"])
+
+    def test_greylisting_is_off_unless_asked_for(self) -> None:
+        """It defers the first message from every unseen sender by minutes."""
+        self._connect()
+        self.assertIn("GATEWAY_GREYLIST=0", gw.GATEWAY_CONF.read_text(encoding="utf-8"))
+        self.assertFalse(gw.status()["greylist"])
+
+    def test_greylisting_can_still_be_turned_on(self) -> None:
+        self._connect(greylist=True)
+        self.assertIn("GATEWAY_GREYLIST=1", gw.GATEWAY_CONF.read_text(encoding="utf-8"))
+        self.assertTrue(gw.status()["greylist"])
+
+    def test_forgetting_the_credential_keeps_the_public_identity(self) -> None:
+        # It is not a secret, it is a fact about the customer's DNS, and making
+        # them retype it after a credential rotation is pointless.
+        self._connect(public_host="relay.example.test", public_ip="198.51.100.38")
+        _drain(commands.cmd_mail_gateway({"op": "forget"}))
+        body = gw.GATEWAY_CONF.read_text(encoding="utf-8")
+        self.assertIn('GATEWAY_PUBLIC_HOST="relay.example.test"', body)
+        self.assertIn("GATEWAY_ENABLED=0", body)

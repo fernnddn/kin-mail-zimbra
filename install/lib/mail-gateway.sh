@@ -50,6 +50,30 @@ PMG_EXT_PORT="${KIN_PMG_EXT_PORT:-25}"
 PMG_INT_PORT="${KIN_PMG_INT_PORT:-26}"
 PMG_API_PORT_DEFAULT=8006
 
+# --- the tuning profile ------------------------------------------------------
+# Every value here differs from stock PMG, and every one is a trade. The
+# reasoning lives next to the setting that uses it; these are the numbers.
+#
+# Sizes are deliberately generous. In a scanner, a limit is not caution: data
+# past the limit is skipped UNSCANNED and delivered. The cost of a bigger limit
+# is CPU; the cost of a smaller one is a hole.
+PMG_MAX_MESSAGE_BYTES="${KIN_PMG_MAX_MESSAGE_BYTES:-52428800}"      # 50 MiB accepted
+PMG_MAX_SPAM_SCAN_BYTES="${KIN_PMG_MAX_SPAM_SCAN_BYTES:-524288}"    # 512 KiB scored (stock 256 KiB)
+PMG_MAX_SCAN_SIZE="${KIN_PMG_MAX_SCAN_SIZE:-157286400}"             # 150 MB total per file
+PMG_ARCHIVE_MAX_SIZE="${KIN_PMG_ARCHIVE_MAX_SIZE:-52428800}"        # 50 MB per archived file
+PMG_ARCHIVE_MAX_RECURSION="${KIN_PMG_ARCHIVE_MAX_RECURSION:-8}"     # zip-in-zip depth (stock 5)
+PMG_ARCHIVE_MAX_FILES="${KIN_PMG_ARCHIVE_MAX_FILES:-5000}"          # files per archive (stock 1000)
+# Encrypted archives and the like become heuristic hits; this is the spam score
+# they carry. 5 puts them over a default quarantine threshold without being an
+# automatic block.
+PMG_CLAMAV_HEURISTIC_SCORE="${KIN_PMG_CLAMAV_HEURISTIC_SCORE:-5}"
+# Long enough that a false positive survives somebody's holiday.
+PMG_SPAMQUAR_DAYS="${KIN_PMG_SPAMQUAR_DAYS:-14}"
+# Virus quarantine is evidence, and evidence is cheap to keep.
+PMG_VIRUSQUAR_DAYS="${KIN_PMG_VIRUSQUAR_DAYS:-30}"
+# Spamhaus ZEN covers the three lists most worth having in one lookup.
+PMG_DNSBL_SITES="${KIN_PMG_DNSBL_SITES:-zen.spamhaus.org}"
+
 say()  { printf '%s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 mark() { printf 'KIN_GW_%s\n' "$*"; }
@@ -86,6 +110,30 @@ load_config() {
   GW_USER=$(conf_get GATEWAY_USER "$GW_CONF" || printf 'root@pam')
   GW_CACERT=$(conf_get GATEWAY_CACERT "$GW_CONF" || printf '')
   GW_NATIVE_FILTERING=$(conf_get GATEWAY_NATIVE_FILTERING "$GW_CONF" || printf 'keep')
+
+  # The gateway has two identities and conflating them publishes a private
+  # address in SPF.
+  #
+  # GATEWAY_HOST is where this appliance TALKS to it: usually a LAN address,
+  # because the two machines sit on the same internal network and the console
+  # reaches the API over it. GATEWAY_PUBLIC_HOST and GATEWAY_PUBLIC_IP are
+  # what the INTERNET sees, and they are the only values that belong in DNS.
+  #
+  # The first version of this used GATEWAY_HOST for both, so a deployment
+  # with the gateway on 10.x was told to publish "v=spf1 ip4:10.x" - which
+  # authorises nothing, and would have made every outbound message fail SPF
+  # (live QA Phase 15, 11 Sep 2026).
+  GW_PUBLIC_HOST=$(conf_get GATEWAY_PUBLIC_HOST "$GW_CONF" || printf '')
+  GW_PUBLIC_IP=$(conf_get GATEWAY_PUBLIC_IP "$GW_CONF" || printf '')
+
+  # Greylisting defers the first message from any unseen sender triplet, and
+  # PMG's delay is hardcoded at a few minutes. It is genuinely good at cheap
+  # spam - and it is why inbound mail felt slow while outbound felt instant.
+  # Off by default: SpamAssassin, ClamAV, SPF and the DNSBLs all still run,
+  # and a mail system that takes five minutes to deliver the first message
+  # from a new correspondent is a mail system people complain about.
+  GW_GREYLIST=$(conf_get GATEWAY_GREYLIST "$GW_CONF" || printf '0')
+  case "$GW_GREYLIST" in 0|1) ;; *) GW_GREYLIST=0 ;; esac
 
   [ -n "$GW_API_PORT" ] || GW_API_PORT=$PMG_API_PORT_DEFAULT
 
@@ -264,6 +312,16 @@ resolve_tls() {
 # -----------------------------------------------------------------------------
 API_BASE=""
 CURL_TLS_ARGS=()
+# Why a file and not a variable.
+#
+# Half this script reads the API as `body=$(api_get /config/mail)`, and command
+# substitution runs in a SUBSHELL. An error message assigned to a variable in
+# there is gone by the time the caller looks at it, so every failing GET died
+# with "API_ERROR: unbound variable" instead of saying what the gateway
+# answered - a crash on exactly the path that exists to explain a failure.
+# A file outlives the subshell.
+API_ERROR_FILE="${TMPDIR:-/tmp}/kin-gw-api-error.$$"
+API_ERROR=""
 AUTH_HEADER=""
 CSRF_HEADER=""
 
@@ -321,6 +379,21 @@ else:
 ' "$@" 2>/dev/null
 }
 
+# Record and read the last API error. Written to a file so it survives the
+# subshell a command substitution creates.
+api_set_error() {
+  API_ERROR="$1"
+  printf '%s\n' "$1" > "$API_ERROR_FILE" 2>/dev/null || true
+}
+
+api_error() {
+  if [ -s "$API_ERROR_FILE" ]; then
+    head -1 "$API_ERROR_FILE"
+    return 0
+  fi
+  printf '%s' "${API_ERROR:-no reason given}"
+}
+
 # api_call <METHOD> <path> [field=value ...]
 # Prints the response body. Returns non-zero on transport or HTTP failure and
 # says which, because "it did not work" is not a diagnosis.
@@ -335,7 +408,7 @@ api_call() {
   done
   local raw code body
   raw=$("$CURL" "${args[@]}" "${API_BASE}${path}" 2>/dev/null) || {
-    API_ERROR="could not reach ${path}"
+    api_set_error "could not reach ${path}"
     return 1
   }
   code=$(printf '%s' "$raw" | tail -1)
@@ -343,13 +416,13 @@ api_call() {
   case "$code" in
     2*) API_BODY="$body"; printf '%s' "$body"; return 0 ;;
     401|403)
-      API_ERROR="the gateway refused the credential on ${path} (HTTP ${code}); the token may be revoked or lack permission"
+      api_set_error "the gateway refused the credential on ${path} (HTTP ${code}); the token may be revoked or lack permission"
       return 1 ;;
     501|404)
-      API_ERROR="the gateway has no ${path} (HTTP ${code}); this PMG version may be older than we support"
+      api_set_error "the gateway has no ${path} (HTTP ${code}); this PMG version may be older than we support"
       return 1 ;;
     *)
-      API_ERROR="the gateway answered HTTP ${code} on ${path}"
+      api_set_error "the gateway answered HTTP ${code} on ${path}"
       return 1 ;;
   esac
 }
@@ -393,6 +466,111 @@ zimbra_local_domains() {
 }
 
 # -----------------------------------------------------------------------------
+# The rule database
+# -----------------------------------------------------------------------------
+# PMG ships a factory rule set, and the rules are what actually act on a
+# verdict: scoring a message as a virus does nothing unless a rule says to
+# quarantine it. A gateway whose protective rules are switched off filters
+# beautifully and delivers everything anyway.
+#
+# Deliberately tolerant. The rule database is the one part of PMG a customer
+# legitimately customises, and an installer that rewrites it would throw away
+# their work. This looks, activates the factory rules that are merely switched
+# off, and otherwise reports. It never creates, edits or deletes a rule.
+RULES_WANTED="Virus:quarantine or block viruses
+Spam:quarantine or block spam
+Dangerous:block dangerous attachments"
+
+check_rules() {
+  local body
+  body=$(api_get /config/ruledb/rules) || {
+    warn "Could not read the gateway's rule database: $(api_error)"
+    info "Check Configuration > Mail Filter by hand: virus, spam and dangerous"
+    info "attachment rules must be active or nothing acts on what the scanners find."
+    return 0
+  }
+
+  local summary
+  summary=$(printf '%s' "$body" | "$PYTHON" -c '
+import json, sys
+
+# What each factory rule is for, keyed by a word that appears in its name.
+# Matching on a word rather than an exact name survives translation and the
+# small renames Proxmox has made between versions.
+WANTED = {
+    "virus": "viruses",
+    "spam": "spam",
+    "dangerous": "dangerous attachments",
+    "blacklist": "the blocklist",
+    "whitelist": "the welcomelist",
+}
+try:
+    data = json.load(sys.stdin).get("data") or []
+except Exception:
+    sys.exit(1)
+if not isinstance(data, list):
+    sys.exit(1)
+
+seen = []
+for rule in data:
+    if not isinstance(rule, dict):
+        continue
+    name = str(rule.get("name") or "")
+    low = name.lower()
+    for key, what in WANTED.items():
+        if key in low:
+            active = str(rule.get("active", "0")) in ("1", "True", "true")
+            seen.append((key, name, active, rule.get("id"), what))
+            break
+
+for key, name, active, rid, what in seen:
+    print("RULE\t%s\t%s\t%s\t%s" % (key, name, "1" if active else "0", rid))
+if not seen:
+    print("NONE")
+' 2>/dev/null) || summary=""
+
+  if [ -z "$summary" ]; then
+    warn "The gateway's rule database could not be read in a form we understand."
+    info "Check Configuration > Mail Filter by hand."
+    return 0
+  fi
+  if [ "$summary" = "NONE" ]; then
+    warn "No virus, spam or attachment rules were found on the gateway."
+    info "A gateway with no rules scans mail and then delivers all of it."
+    info "Restore the factory rules under Configuration > Mail Filter."
+    return 0
+  fi
+
+  local key name active rid missing=0
+  while IFS="$(printf '\t')" read -r _tag key name active rid; do
+    [ -n "${key:-}" ] || continue
+    if [ "$active" = "1" ]; then
+      ok "rule active: ${name}"
+      continue
+    fi
+    # Switched off, not absent. Turning a factory rule back on is a safe,
+    # reversible change; creating one would not be.
+    if [ -n "${rid:-}" ] && api_put "/config/ruledb/rules/${rid}" "active=1" >/dev/null; then
+      ok "rule re-activated: ${name}"
+    else
+      warn "rule INACTIVE: ${name} - and it could not be switched on ($(api_error))"
+      info "Turn it on under Configuration > Mail Filter, or nothing acts on what the scanners find."
+      missing=$((missing + 1))
+    fi
+  done <<EOF
+$(printf '%s\n' "$summary")
+EOF
+
+  case "$summary" in
+    *dangerous*) ;;
+    *) warn "No 'dangerous attachments' rule was found. Executable attachments may be delivered."
+       info "Zimbra still blocks executable extensions at its own MTA, so this is a"
+       info "second layer rather than the only one - but the gateway should have it." ;;
+  esac
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # Reachability
 # -----------------------------------------------------------------------------
 # Every setting can be perfect and mail can still not move, because something
@@ -416,6 +594,42 @@ tcp_probe() {
 # -----------------------------------------------------------------------------
 desired_relay() { printf '%s:%s' "$GW_HOST" "$PMG_INT_PORT"; }
 
+# What the world should see. Falls back to the management address only when
+# the operator has not said otherwise, and says so rather than pretending.
+public_name() {
+  if [ -n "${GW_PUBLIC_HOST:-}" ]; then printf '%s' "$GW_PUBLIC_HOST"; return 0; fi
+  printf '%s' "$GW_HOST"
+}
+
+public_addr() {
+  if [ -n "${GW_PUBLIC_IP:-}" ]; then printf '%s' "$GW_PUBLIC_IP"; return 0; fi
+  printf '%s' "$GW_HOST"
+}
+
+# An address nobody on the internet can route to. Publishing one of these in
+# SPF or pointing an MX at it is not a warning, it is a broken mail domain.
+is_private_addr() {
+  case "$1" in
+    10.*|127.*|192.168.*|169.254.*) return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+    fc*:*|fd*:*|fe80:*|::1) return 0 ;;
+  esac
+  return 1
+}
+
+# An MX record cannot hold an address - only a name - so the DNS advice has
+# to name something, and it must be a name that resolves publicly.
+public_identity_usable() {
+  local name addr ok_name=1 ok_addr=1
+  name=$(public_name)
+  addr=$(public_addr)
+  case "$name" in ''|*[0-9].[0-9]*) ok_name=0 ;; esac
+  case "$name" in *[a-zA-Z]*) ;; *) ok_name=0 ;; esac
+  is_private_addr "$addr" && ok_addr=0
+  [ -n "$addr" ] || ok_addr=0
+  [ "$ok_name" -eq 1 ] && [ "$ok_addr" -eq 1 ]
+}
+
 cmd_probe() {
   load_config
   require_config || return 2
@@ -423,7 +637,7 @@ cmd_probe() {
   api_login || return 2
 
   local body version
-  body=$(api_get /version) || { fail api-failed "$API_ERROR"; return 2; }
+  body=$(api_get /version) || { fail api-failed "$(api_error)"; return 2; }
   version=$(json_field "$body" data release) || version=$(json_field "$body" data version) || version="unknown"
   mark VERSION "$version"
   ok "Reached the gateway at ${GW_HOST}:${GW_API_PORT} and the credential works. PMG ${version}."
@@ -431,7 +645,7 @@ cmd_probe() {
   # A credential that can read but not write is the most annoying way to
   # discover a permissions problem: half-way through apply. Find out now.
   if ! api_get /config/mail >/dev/null; then
-    fail insufficient-permission "The credential cannot read /config/mail: ${API_ERROR}"
+    fail insufficient-permission "The credential cannot read /config/mail: $(api_error)"
     return 2
   fi
   ok "The credential can read the mail-proxy configuration."
@@ -446,7 +660,7 @@ cmd_plan() {
   api_login || return 2
 
   local body changes=0
-  body=$(api_get /config/mail) || { fail api-failed "$API_ERROR"; return 2; }
+  body=$(api_get /config/mail) || { fail api-failed "$(api_error)"; return 2; }
 
   plan_line() {
     local what="$1" now="$2" want="$3"
@@ -517,12 +731,12 @@ cmd_apply() {
   # lasts. Everything else can be late; this cannot.
   say "1. Teaching the gateway which domain it accepts mail for"
   local domains
-  domains=$(api_get /config/domains) || { fail api-failed "$API_ERROR"; return 2; }
+  domains=$(api_get /config/domains) || { fail api-failed "$(api_error)"; return 2; }
   if printf '%s' "$domains" | grep -q "\"${MAIL_DOMAIN}\""; then
     info "${MAIL_DOMAIN} already listed"
   else
     api_post /config/domains "domain=${MAIL_DOMAIN}" >/dev/null || {
-      fail api-failed "Could not add the relay domain: ${API_ERROR}"; return 2; }
+      fail api-failed "Could not add the relay domain: $(api_error)"; return 2; }
     ok "relay domain ${MAIL_DOMAIN}"
   fi
 
@@ -544,13 +758,13 @@ cmd_apply() {
          "host=${SERVER_IP}" "port=25" "protocol=smtp" "use_mx=0" >/dev/null; then
       ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (updated)"
     else
-      warn "The gateway would not update the transport entry (${API_ERROR}); replacing it."
+      warn "The gateway would not update the transport entry ($(api_error)); replacing it."
       api_del "/config/transport/${MAIL_DOMAIN}" >/dev/null 2>&1 || true
       if ! api_post /config/transport \
              "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
              "protocol=smtp" "use_mx=0" >/dev/null; then
         fail api-failed \
-          "Could not write the transport entry: ${API_ERROR}. The old entry was removed to replace it, so ${MAIL_DOMAIN} may now have NO route on the gateway. Fix this before mail arrives: Mail Proxy > Transports on the gateway."
+          "Could not write the transport entry: $(api_error). The old entry was removed to replace it, so ${MAIL_DOMAIN} may now have NO route on the gateway. Fix this before mail arrives: Mail Proxy > Transports on the gateway."
         return 2
       fi
       ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (replaced)"
@@ -559,7 +773,7 @@ cmd_apply() {
     api_post /config/transport \
       "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
       "protocol=smtp" "use_mx=0" >/dev/null || {
-        fail api-failed "Could not write the transport entry: ${API_ERROR}"; return 2; }
+        fail api-failed "Could not write the transport entry: $(api_error)"; return 2; }
     ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25"
   fi
 
@@ -570,7 +784,7 @@ cmd_apply() {
     info "${SERVER_IP}/32 already trusted"
   else
     api_post /config/mynetworks "cidr=${SERVER_IP}/32" >/dev/null || {
-      fail api-failed "Could not add ${SERVER_IP}/32 to the gateway's trusted networks: ${API_ERROR}"; return 2; }
+      fail api-failed "Could not add ${SERVER_IP}/32 to the gateway's trusted networks: $(api_error)"; return 2; }
     ok "trusted network ${SERVER_IP}/32"
   fi
 
@@ -588,7 +802,7 @@ cmd_apply() {
     "relaynomx=1" \
     "int_port=${PMG_INT_PORT}" \
     "ext_port=${PMG_EXT_PORT}" >/dev/null || {
-      fail api-failed "Could not write the mail routing settings: ${API_ERROR}"; return 2; }
+      fail api-failed "Could not write the mail routing settings: $(api_error)"; return 2; }
   ok "relay ${SERVER_IP}:25, no MX lookup, internal port ${PMG_INT_PORT}"
 
   say "5. Mail policy"
@@ -604,29 +818,118 @@ cmd_apply() {
   # reverse DNS, and plenty of small but legitimate senders do not have it.
   # PMG's own default is off, and turning it on is a policy the customer
   # should choose in the PMG UI, not one an installer imposes on their mail.
+  #
+  # greylist is off unless the operator asked for it. It defers the first
+  # message from every unseen sender for a few minutes - PMG's delay is
+  # hardcoded - and that is exactly what made inbound mail feel slow while
+  # outbound felt instant in live QA. Everything else below still runs.
   local policy_failed=0
   api_put /config/mail \
     "verifyreceivers=450" \
-    "greylist=1" \
+    "greylist=${GW_GREYLIST}" \
     "spf=1" \
     "tls=1" \
+    "tlslog=1" \
     "hide_received=1" \
     "before_queue_filtering=0" \
+    "dnsbl_sites=${PMG_DNSBL_SITES}" \
+    "dnsbl_threshold=1" \
+    "maxsize=${PMG_MAX_MESSAGE_BYTES}" \
     "banner=ESMTP KIN Mail Gateway" >/dev/null || policy_failed=1
 
   if [ "$policy_failed" -eq 1 ]; then
     # Mail still flows without these. Say so honestly rather than failing the
     # whole apply and leaving the operator thinking nothing worked.
-    warn "The gateway refused the policy settings: ${API_ERROR}"
+    warn "The gateway refused the policy settings: $(api_error)"
     info "Mail routing is configured and mail will flow. Set spam policy, TLS and"
     info "the banner by hand under Mail Proxy > Options on the gateway."
   else
-    ok "recipient verification (soft), greylisting, SPF, outbound TLS, no header leak"
+    if [ "$GW_GREYLIST" = "1" ]; then
+      ok "greylisting ON - cheap spam is refused, and a first message from a new"
+      info "correspondent is delayed a few minutes. That delay is not a fault."
+    else
+      ok "greylisting OFF - no first-contact delay; spam is judged on content instead"
+    fi
+    ok "soft recipient verification, SPF, DNSBL, outbound TLS, no header leak"
   fi
 
-  say "6. Making sure the gateway does not sign DKIM a second time"
+  say "6. Spam detection"
+  # Bayes and the auto-welcomelist are both OFF in stock PMG and both are the
+  # difference between a filter that guesses and one that learns. They are the
+  # single best defence against false positives, which is the failure mode that
+  # costs a business real money - a quarantined invoice is worse than a
+  # delivered advert.
+  #
+  # extract_text reads attachments (PDF, Office) so phishing that hides its
+  # payload in a document is scored on what it actually says.
+  if api_put /config/spam \
+       "use_bayes=1" \
+       "use_awl=1" \
+       "use_razor=1" \
+       "rbl_checks=1" \
+       "extract_text=1" \
+       "maxspamsize=${PMG_MAX_SPAM_SCAN_BYTES}" \
+       "clamav_heuristic_score=${PMG_CLAMAV_HEURISTIC_SCORE}" >/dev/null; then
+    ok "Bayesian learning, auto-welcomelist, Razor, blocklists, attachment text extraction"
+    info "Bayes needs traffic before it helps. Expect it to improve over the first weeks."
+  else
+    warn "The gateway refused the spam detector settings: $(api_error)"
+    info "Set them by hand under Configuration > Spam Detector."
+  fi
+
+  say "7. Virus and dangerous-attachment detection"
+  # archiveblockencrypted is the important one. A password-protected archive
+  # cannot be scanned, and "send the password in the next email" is how a
+  # large share of ransomware arrives. Flagging them is not the same as
+  # deleting them: they score as heuristic hits and land in quarantine, where
+  # the operator can look and release.
+  #
+  # The archive limits are raised rather than lowered on purpose: anything
+  # over a limit is skipped UNSCANNED, so a small limit is not caution, it is
+  # a hole. Nesting depth catches zip-inside-zip, the oldest evasion there is.
+  if api_put /config/clamav \
+       "archiveblockencrypted=1" \
+       "archivemaxsize=${PMG_ARCHIVE_MAX_SIZE}" \
+       "archivemaxrec=${PMG_ARCHIVE_MAX_RECURSION}" \
+       "archivemaxfiles=${PMG_ARCHIVE_MAX_FILES}" \
+       "maxscansize=${PMG_MAX_SCAN_SIZE}" \
+       "scriptedupdates=1" >/dev/null; then
+    ok "encrypted archives flagged, deeper nesting scanned, larger files still scanned"
+  else
+    warn "The gateway refused the virus detector settings: $(api_error)"
+    info "Set them by hand under Configuration > Virus Detector."
+  fi
+
+  say "8. Quarantine"
+  # Longer than stock, and for different reasons at each end. Spam quarantine
+  # is where a false positive waits to be noticed, and a week is not long
+  # enough to cover somebody's holiday. Virus quarantine is evidence.
+  #
+  # Links are not clickable and remote images do not load. A quarantine
+  # review page that renders a phishing link as a link, and fetches its
+  # tracking pixel, is a page that attacks the person reviewing it.
+  local quar_failed=0
+  api_put /config/spamquar \
+    "lifetime=${PMG_SPAMQUAR_DAYS}" \
+    "allowhrefs=0" \
+    "viewimages=0" \
+    "reportstyle=verbose" >/dev/null || quar_failed=1
+  api_put /config/virusquar \
+    "lifetime=${PMG_VIRUSQUAR_DAYS}" \
+    "allowhrefs=0" \
+    "viewimages=0" >/dev/null || quar_failed=1
+  if [ "$quar_failed" -eq 0 ]; then
+    ok "spam kept ${PMG_SPAMQUAR_DAYS} days, viruses ${PMG_VIRUSQUAR_DAYS} days, no live links or tracking images"
+  else
+    warn "The gateway refused some quarantine settings: $(api_error)"
+  fi
+
+  say "9. Protective rules"
+  check_rules
+
+  say "10. Making sure the gateway does not sign DKIM a second time"
   api_put /config/admin "dkim_sign=0" >/dev/null || {
-    fail api-failed "Could not turn off DKIM signing on the gateway: ${API_ERROR}"; return 2; }
+    fail api-failed "Could not turn off DKIM signing on the gateway: $(api_error)"; return 2; }
   ok "gateway DKIM signing off (Zimbra signs; two signatures fail DMARC at some receivers)"
 
   if ! zimbra_available; then
@@ -634,7 +937,7 @@ cmd_apply() {
     return 1
   fi
 
-  say "7. Pointing this appliance's outbound mail at the gateway"
+  say "11. Pointing this appliance's outbound mail at the gateway"
   local want cur
   want=$(desired_relay)
   cur=$(zimbra_relay_host)
@@ -646,7 +949,7 @@ cmd_apply() {
     ok "zimbraMtaRelayHost ${want}"
   fi
 
-  say "8. Trusting the gateway to hand mail in"
+  say "12. Trusting the gateway to hand mail in"
   local nets_now
   nets_now=$(zimbra_mynetworks)
   if printf ' %s ' "$nets_now" | grep -q " ${GW_HOST}/32 "; then
@@ -659,7 +962,7 @@ cmd_apply() {
     ok "zimbraMtaMyNetworks += ${GW_HOST}/32"
   fi
 
-  say "9. Reloading Postfix so the new relay takes effect"
+  say "13. Reloading Postfix so the new relay takes effect"
   # zmmtactl reload is a configuration reload, not a restart: connections in
   # flight are not dropped and the queue is untouched.
   if [ -n "$ZMPROV" ]; then
@@ -669,7 +972,7 @@ cmd_apply() {
       warn "Postfix did not reload cleanly; run 'su - zimbra -c \"zmmtactl reload\"' and check."
   fi
 
-  say "10. Reading back the settings that matter"
+  say "14. Reading back the settings that matter"
   # Writing a setting and the setting being set are different things, and the
   # two below are the ones that silently destroy mail. Checking them now costs
   # one API call and means "applied" is a claim we have evidence for.
@@ -695,7 +998,7 @@ cmd_apply() {
   fi
   ok "the gateway reports back what we asked it to be"
 
-  say "11. Can the two machines actually reach each other"
+  say "15. Can the two machines actually reach each other"
   if tcp_probe "$GW_HOST" "$PMG_INT_PORT"; then
     ok "this appliance can reach ${GW_HOST}:${PMG_INT_PORT} (outbound mail has a path)"
   else
@@ -707,10 +1010,25 @@ cmd_apply() {
   say ""
   ok "Gateway link applied."
   say ""
+  local pub_name pub_addr
+  pub_name=$(public_name)
+  pub_addr=$(public_addr)
   say "DNS still has to change, and only you can do that:"
-  say "  MX   ${MAIL_DOMAIN}.  10  <gateway hostname>"
-  say "  SPF  ${MAIL_DOMAIN}.  TXT \"v=spf1 ip4:${GW_HOST} ~all\""
-  say "  PTR  ${GW_HOST} -> the gateway's hostname"
+  if public_identity_usable; then
+    say "  A    ${pub_name}.  ->  ${pub_addr}"
+    say "  MX   ${MAIL_DOMAIN}.  10  ${pub_name}."
+    say "  SPF  ${MAIL_DOMAIN}.  TXT \"v=spf1 ip4:${pub_addr} ~all\""
+    say "  PTR  ${pub_addr}  ->  ${pub_name}   (ask the ISP)"
+  else
+    warn "No public identity is recorded for this gateway, so exact records cannot be printed."
+    say "  MX   ${MAIL_DOMAIN}.  10  <the gateway's PUBLIC hostname>"
+    say "  SPF  ${MAIL_DOMAIN}.  TXT \"v=spf1 ip4:<the gateway's PUBLIC address> ~all\""
+    say "  PTR  <public address>  ->  <public hostname>   (ask the ISP)"
+    say ""
+    say "  ${GW_HOST} is how THIS APPLIANCE reaches the gateway. Publishing it"
+    say "  would authorise nothing and every outbound message would fail SPF."
+    say "  Record the public hostname and address under Connect and re-run this."
+  fi
   say ""
   say "Then run Verify. Until the MX moves, inbound mail still arrives directly"
   say "and the gateway only handles what leaves."
@@ -727,7 +1045,7 @@ cmd_verify() {
   local body admin
 
   say "Gateway side"
-  body=$(api_get /config/mail) || { fail api-failed "$API_ERROR"; return 2; }
+  body=$(api_get /config/mail) || { fail api-failed "$(api_error)"; return 2; }
 
   assert_eq() {
     local what="$1" got="$2" want="$3" why="$4"
@@ -835,27 +1153,58 @@ cmd_verify() {
 check_dns() {
   command -v "$DIG" >/dev/null 2>&1 || { warn "dig is not installed; DNS was not checked."; return 0; }
 
+  local pub_name pub_addr
+  pub_name=$(public_name)
+  pub_addr=$(public_addr)
+
+  # Say this once, loudly, before any advice that depends on it. Advice built
+  # on a LAN address is worse than no advice: an operator who follows it
+  # publishes a record that authorises nothing.
+  if ! public_identity_usable; then
+    warn "This gateway has no public identity recorded, so the DNS advice below is a guess."
+    info "Set the gateway's public hostname and address in Console > Proxmox Mail Gateway."
+    info "An MX record can only name a host, never an address, and SPF must list"
+    info "the address the internet sees - not ${GW_HOST}, which is how this"
+    info "appliance reaches it on the local network."
+  fi
+
   local mx spf
   mx=$("$DIG" +short +time=5 MX "$MAIL_DOMAIN" 2>/dev/null | awk '{print $2}' | sed 's/\.$//' | tr '\n' ' ')
   if [ -z "$mx" ]; then
     warn "No MX record for ${MAIL_DOMAIN} could be resolved from here."
-  elif printf ' %s ' "$mx" | grep -q " ${GW_HOST} "; then
-    ok "dns.mx points at the gateway"
+    info "Set:  ${MAIL_DOMAIN}.  MX  10  ${pub_name}"
+  elif printf ' %s ' "$mx" | grep -q " ${pub_name} "; then
+    ok "dns.mx points at the gateway (${pub_name})"
   else
     warn "dns.mx for ${MAIL_DOMAIN} is '${mx}', not the gateway. Inbound mail still bypasses it."
-    info "Set:  ${MAIL_DOMAIN}.  MX  10  <gateway hostname>"
+    info "Set:  ${MAIL_DOMAIN}.  MX  10  ${pub_name}"
   fi
 
   spf=$("$DIG" +short +time=5 TXT "$MAIL_DOMAIN" 2>/dev/null | tr -d '"' | grep -i 'v=spf1' | head -1)
   if [ -z "$spf" ]; then
     warn "No SPF record for ${MAIL_DOMAIN}. Outbound mail from the gateway will be treated as suspicious."
-    info "Set:  ${MAIL_DOMAIN}.  TXT  \"v=spf1 ip4:${GW_HOST} ~all\""
-  elif printf '%s' "$spf" | grep -q "$GW_HOST"; then
-    ok "dns.spf authorises the gateway"
+    info "Set:  ${MAIL_DOMAIN}.  TXT  \"v=spf1 ip4:${pub_addr} ~all\""
+  elif printf '%s' "$spf" | grep -q "$pub_addr"; then
+    ok "dns.spf authorises the gateway (${pub_addr})"
   else
-    warn "SPF for ${MAIL_DOMAIN} does not mention the gateway (${GW_HOST}). Outbound mail now leaves from there."
+    warn "SPF for ${MAIL_DOMAIN} does not list ${pub_addr}. Outbound mail now leaves from there."
     info "Current: ${spf}"
-    info "Add:     ip4:${GW_HOST}"
+    info "Add:     ip4:${pub_addr}"
+  fi
+
+  # An A record that does not exist makes the MX unusable no matter how
+  # correct the MX itself is.
+  if [ -n "$pub_name" ] && printf '%s' "$pub_name" | grep -q '[a-zA-Z]'; then
+    local a
+    a=$("$DIG" +short +time=5 A "$pub_name" 2>/dev/null | head -1)
+    if [ -z "$a" ]; then
+      warn "${pub_name} has no A record. An MX pointing at it cannot be used."
+      info "Set:  ${pub_name}.  A  ${pub_addr}"
+    elif [ -n "${GW_PUBLIC_IP:-}" ] && [ "$a" != "$GW_PUBLIC_IP" ]; then
+      warn "${pub_name} resolves to ${a}, but the gateway's public address is recorded as ${GW_PUBLIC_IP}."
+    else
+      ok "dns.a ${pub_name} resolves to ${a}"
+    fi
   fi
   return 0
 }
@@ -972,5 +1321,8 @@ main() {
     *) fail unknown-action "No such action '${action}'. Try: probe, plan, apply, verify, revert, status."; return 2 ;;
   esac
 }
+
+cleanup() { rm -f "$API_ERROR_FILE" 2>/dev/null || true; }
+trap cleanup EXIT
 
 main "$@"

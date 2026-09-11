@@ -563,6 +563,10 @@ class MailGatewayConnectBody(BaseModel):
     user: str = Field(default="root@pam", max_length=128)
     password: str = Field(default="", max_length=512)
     cacert: str = Field(default="", max_length=512)
+    # What the internet sees, as opposed to how this appliance reaches it.
+    public_host: str = Field(default="", max_length=255)
+    public_ip: str = Field(default="", max_length=64)
+    greylist: bool = False
 
 
 class MailGatewayTrustBody(BaseModel):
@@ -1267,6 +1271,9 @@ async def mail_gateway_connect(
             "user": body.user.strip(),
             "password": body.password,
             "cacert": body.cacert.strip(),
+            "public_host": body.public_host.strip(),
+            "public_ip": body.public_ip.strip(),
+            "greylist": body.greylist,
         },
     )
     if not result.get("ok"):

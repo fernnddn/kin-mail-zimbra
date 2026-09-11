@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ IPV4_RE = re.compile(
     r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$"
 )
 
+
+log = logging.getLogger(__name__)
 
 def valid_ipv4(value: str) -> bool:
     return bool(IPV4_RE.match((value or "").strip()))
@@ -134,13 +137,41 @@ def default_draft() -> WizardDraft:
 
 
 def load_draft() -> WizardDraft:
+    """Read the wizard draft, and never raise.
+
+    Every wizard page goes through here. An unreadable draft used to raise
+    JSONDecodeError or a pydantic ValidationError straight out of the route,
+    which FastAPI turns into a 500 - so a single truncated file made the whole
+    wizard answer "internal server error" on every load, permanently, until
+    somebody deleted it over SSH. An operator whose deploy had partly failed hit
+    exactly that while trying to re-run it (live QA Phase 15, 11 Sep 2026).
+
+    A draft is a convenience: it remembers what was typed. Losing it costs the
+    operator some retyping. Refusing to render the console costs them the
+    machine. Degrade to an empty draft and keep the file, so it can still be
+    looked at afterwards.
+    """
     path = draft_path()
-    if not path.is_file():
+    try:
+        if not path.is_file():
+            return default_draft()
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log.warning("wizard draft at %s is unreadable (%s); starting from an empty one", path, exc)
         return default_draft()
-    raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
+        log.warning("wizard draft at %s is not an object; starting from an empty one", path)
         return default_draft()
-    return WizardDraft.model_validate(raw)
+    try:
+        return WizardDraft.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001 - pydantic raises its own type
+        log.warning(
+            "wizard draft at %s does not match this version's shape (%s); "
+            "starting from an empty one",
+            path,
+            exc,
+        )
+        return default_draft()
 
 
 def save_draft(draft: WizardDraft) -> WizardDraft:

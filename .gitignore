@@ -83,6 +83,16 @@ kin-mail-design01/
 # Working notes for a multi-session task. Local scratch, not product docs.
 WORKING-NOTES-*.md
 
+# Handover material for another tool or another engineer. It is written for
+# us, not for a customer: it names what is unfinished, what is untested, what
+# we got wrong and had to fix, and how this company works. A product clone
+# must not carry any of that. cursor-handover/ reached both public remotes in
+# d62cf6c on 11 Sep 2026 before this rule existed; keep copies on the
+# workstation only.
+cursor-handover/
+*-HANDOVER-*.md
+HANDOVER*.md
+
 # Temporary visual harness for rendering a page against stubbed fetch data.
 # Created and deleted per session; it stubs the API and must never ship.
 console/frontend/preview.html

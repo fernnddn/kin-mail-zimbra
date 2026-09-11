@@ -109,14 +109,31 @@ PMG. Pointing Outlook at PMG does not work and is not supported.
 Three records have to change, and KIN Mail cannot change them — they live at
 the registrar. The console prints exactly what to set and then verifies it.
 
-1. **A record** for the gateway: `pmg.example.com` → gateway IP.
-2. **MX record** for the domain: `example.com` MX 10 `pmg.example.com`.
-   The old MX pointing at the mail host is removed.
-3. **SPF** must now authorise the gateway, because outbound mail leaves from
-   the gateway's IP, not the mail host's:
-   `v=spf1 ip4:<pmg-ip> ~all`
-4. **rDNS/PTR** for the gateway IP should resolve to `pmg.example.com`, or a
-   good share of the internet will refuse the mail.
+### The gateway has two identities, and confusing them breaks mail
+
+`GATEWAY_HOST` is the address **this appliance** uses to reach the gateway.
+In a normal deployment the two machines share an internal network and that is a
+LAN address. `GATEWAY_PUBLIC_HOST` and `GATEWAY_PUBLIC_IP` are what the
+**internet** sees, and they are the only values that belong in DNS.
+
+The first version of this used one value for both. A live deployment was
+therefore told to publish an SPF record naming its `10.x` LAN address, which
+authorises nobody —
+every outbound message would have failed SPF. The console now asks for the
+public identity separately, refuses a private address for it, refuses a bare IP
+as the hostname (an MX record can only name a host), and prints no DNS records
+at all until it has both.
+
+1. **A record** for the gateway: `relay.example.com` → the gateway's **public**
+   address.
+2. **MX record** for the domain: `example.com` MX 10 `relay.example.com`.
+   The old MX pointing at the mail host is removed. An MX can only name a
+   host — this is why the public hostname is required and not optional.
+3. **SPF** must now authorise the gateway's **public** address, because
+   outbound mail leaves from there:
+   `v=spf1 ip4:<gateway public ip> ~all`
+4. **rDNS/PTR** for that address should resolve to `relay.example.com`, or a
+   good share of the internet will refuse the mail. Only the ISP can set it.
 
 DKIM and DMARC records are unchanged. DKIM signing stays on Zimbra.
 
@@ -136,7 +153,7 @@ ourselves.
 | `/config/mail` | `int_port` | `26` | port the mail node relays out on |
 | `/config/mail` | `ext_port` | `25` | inbound from the internet |
 | `/config/mail` | `verifyreceivers` | `450` | ask the mail server whether the recipient exists, and **defer** if not. Not `550`: a permanent refusal throws real mail away for good if Zimbra happens to be restarting, where a deferral costs a delay and loses nothing. |
-| `/config/mail` | `greylist` | `1` | default on; cheap and effective |
+| `/config/mail` | `greylist` | `0` | **off by default.** It defers the first message from any unseen sender triplet, and PMG's delay is hardcoded at a few minutes — which is exactly why inbound mail felt slow while outbound felt instant in live QA. Every other layer still runs. `GATEWAY_GREYLIST=1` turns it on for a site that wants it. |
 | `/config/mail` | `spf` | `1` | |
 | `/config/mail` | `dnsbl_sites` | `zen.spamhaus.org` | |
 | `/config/mail` | `tls` | `1` | opportunistic TLS outbound |
@@ -253,6 +270,70 @@ front of whoever asked for it.
 touch PMG, because leaving PMG configured is harmless and re-applying is then
 instant. The operator still has to move the MX record back. The console prints
 that instruction; it cannot do it.
+
+---
+
+## 9a. The tuning applied to the gateway
+
+Applying the link does not only route mail. A gateway that routes correctly and
+detects nothing is a hop, not a defence, so `apply` also configures the
+detection. Every value below differs from stock PMG and every one is a trade.
+
+### Spam detection (`/config/spam`)
+
+| Option | Stock | Ours | Why |
+| --- | --- | --- | --- |
+| `use_bayes` | `0` | `1` | A classifier that learns this estate's mail. The single biggest reduction in false positives, which is the failure that costs money — a quarantined invoice is worse than a delivered advert. Needs traffic before it helps. |
+| `use_awl` | `0` | `1` | Auto-welcomelist: smooths the score of senders with a history, so one unlucky message from a known correspondent is not quarantined. |
+| `use_razor` | `1` | `1` | Collaborative signatures. Kept. |
+| `rbl_checks` | `1` | `1` | Kept. |
+| `extract_text` | `0` | `1` | Reads text out of PDFs and Office attachments so phishing that hides its payload in a document is scored on what it actually says. |
+| `maxspamsize` | 256 KiB | 512 KiB | Anything past this is **not scored at all**. A small limit is not caution. |
+| `clamav_heuristic_score` | `3` | `5` | The score a heuristic hit carries — encrypted archives, chiefly. Enough to quarantine without being an automatic block. |
+
+### Virus and attachment detection (`/config/clamav`)
+
+| Option | Stock | Ours | Why |
+| --- | --- | --- | --- |
+| `archiveblockencrypted` | `0` | `1` | A password-protected archive **cannot be scanned**, and "the password is in the next email" is how a large share of ransomware arrives. Flagged, not deleted: it scores as a heuristic hit and lands in quarantine where the operator can look and release. |
+| `archivemaxsize` | 25 MB | 50 MB | Past the limit, files are skipped **unscanned** and delivered. |
+| `archivemaxrec` | `5` | `8` | Zip inside zip inside zip is the oldest evasion there is. |
+| `archivemaxfiles` | `1000` | `5000` | A zip bomb of 1001 small files would otherwise walk past the scanner. |
+| `maxscansize` | 100 MB | 150 MB | Same reasoning as `archivemaxsize`. |
+
+The cost of all five is CPU. The cost of the stock values is mail that arrives
+unscanned without anybody being told.
+
+### Quarantine (`/config/spamquar`, `/config/virusquar`)
+
+| Option | Stock | Ours | Why |
+| --- | --- | --- | --- |
+| spam `lifetime` | 7 days | 14 days | Where a false positive waits to be noticed. A week does not cover somebody's holiday. |
+| virus `lifetime` | 7 days | 30 days | Evidence, and evidence is cheap to keep. |
+| `allowhrefs` | `1` | `0` | A quarantine page that renders a phishing link as a clickable link attacks the person reviewing it. |
+| `viewimages` | `1` | `0` | Remote images are tracking pixels. Loading one confirms the address is live and read. |
+
+### The rule database
+
+Scoring a message as a virus does nothing unless a rule says to act on it. A
+gateway whose protective rules are switched off filters beautifully and
+delivers everything anyway.
+
+`apply` **reads** the rule database, reports which protective rules are active,
+and switches on a factory rule that is merely disabled. It never creates, edits
+or deletes a rule: the rule database is the one part of PMG a customer
+legitimately customises, and an installer that rewrote it would throw away
+their work. If it cannot be read, that is a warning and not a failure — mail
+still flows.
+
+### Not tuned, on purpose
+
+- **`rejectunknown`** — refuses senders with no reverse DNS. Plenty of small
+  but legitimate senders have none. The customer's policy, in the PMG UI.
+- **Custom SpamAssassin scores, rules, whitelists** — site policy.
+- **`max_filters`, `max_smtpd_in/out`** — PMG sizes these from the machine's
+  memory. Overriding them from here would be guessing at hardware we cannot
+  see.
 
 ---
 

@@ -144,8 +144,24 @@ route, and no amount of configuration on either machine will fix it.
 
 All of this is in the console: **Mail Gateway** in the left rail.
 
-**3.1 Connect.** Enter the gateway address, port `8006`, authentication
-*API token*, and the two values from 2.5. Press **Connect**.
+**3.1 Connect.** Console ▸ **Proxmox Mail Gateway**.
+
+Four things, and the first two are not the same as the last two:
+
+| Field | What it is |
+| --- | --- |
+| Address this console uses | how the **appliance** reaches the gateway — normally its LAN address |
+| API port | `8006` |
+| Public hostname | `relay.example.com` — what the **internet** sees. This is what the MX record will name. |
+| Public address | the routable address the internet reaches it on |
+
+Then authentication *API token* and the two values from 2.5. Press **Connect**.
+
+The public pair is not optional decoration. An MX record can only name a host,
+never an address, and an SPF record listing a private address authorises
+nobody. The console refuses a private address here, refuses a bare IP as the
+hostname, and will print no DNS records at all until it has both — rather than
+printing the LAN address and letting you publish it.
 
 The secret is encrypted on the appliance and never shown again — not to the
 browser, not in the logs, not in a process listing.
@@ -185,12 +201,28 @@ KIN_GW_OK relay domain example.com
 KIN_GW_OK transport example.com -> <appliance ip>:25
 KIN_GW_OK trusted network <appliance ip>/32
 KIN_GW_OK relay <appliance ip>:25, no MX lookup, internal port 26
+KIN_GW_OK greylisting OFF - no first-contact delay
+KIN_GW_OK soft recipient verification, SPF, DNSBL, outbound TLS, no header leak
+KIN_GW_OK Bayesian learning, auto-welcomelist, Razor, blocklists, attachment text extraction
+KIN_GW_OK encrypted archives flagged, deeper nesting scanned, larger files still scanned
+KIN_GW_OK spam kept 14 days, viruses 30 days, no live links or tracking images
+KIN_GW_OK rule active: ...
 KIN_GW_OK gateway DKIM signing off
 KIN_GW_OK zimbraMtaRelayHost <gateway ip>:26
 KIN_GW_OK zimbraMtaMyNetworks += <gateway ip>/32
 KIN_GW_OK the gateway reports back what we asked it to be
 KIN_GW_OK Gateway link applied.
 ```
+
+Apply does not only route mail. It also tunes the gateway's detection — see
+`MAIL-GATEWAY.md` §9a for every value and why. Two you will notice:
+
+- **Greylisting is off.** It defers the first message from any unseen sender
+  by a few minutes, and that is the usual answer to "why is inbound mail slow
+  when outbound is instant". Spam is judged on content instead. Turn it on
+  with the switch on the Apply card if your site wants it.
+- **Bayesian learning is on**, and it starts knowing nothing. Accuracy
+  improves over the first weeks as it sees your mail.
 
 If you see `KIN_GW_REFUSED reason=settings-did-not-stick`, **stop, and do not
 change DNS.** The gateway accepted the settings but is not reporting them back;
@@ -227,8 +259,15 @@ leaves from the gateway's address, so SPF has to say so. If you move the MX
 first and the SPF later, outbound mail is treated as forged in the gap.
 
 ```
-TXT   example.com.   "v=spf1 ip4:<gateway ip> ~all"
+TXT   example.com.   "v=spf1 ip4:<gateway PUBLIC ip> ~all"
 ```
+
+The gateway's **public** address, not the one the console talks to. The Mail
+Gateway page prints the exact record once you have given it the public pair;
+copy it from there rather than typing it.
+
+If the appliance also sends directly for anything, keep its address listed too:
+`"v=spf1 ip4:<gateway public ip> ip4:<appliance public ip> ~all"`.
 
 Check it: `dig +short TXT example.com`
 
@@ -355,6 +394,11 @@ check the MX record has actually propagated.
 ---
 
 ## If something goes wrong
+
+**Inbound mail is slow — minutes — while outbound is instant.**
+Greylisting. It is off by default in 0.1.10; if it is on, that delay is the
+feature working. Turn it off on the Apply card and re-apply. If it is already
+off, look at the gateway's Tracking Center to see where the time goes.
 
 **Mail stops arriving after moving the MX.**
 Check the gateway's mail queue (`Administration ▸ Queues`). If messages are

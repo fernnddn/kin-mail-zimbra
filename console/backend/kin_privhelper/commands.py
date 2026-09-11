@@ -1380,6 +1380,9 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
                 user=conf.get("GATEWAY_USER", "root@pam"),
                 cacert=conf.get("GATEWAY_CACERT", ""),
                 enabled=False,
+                public_host=conf.get("GATEWAY_PUBLIC_HOST", ""),
+                public_ip=conf.get("GATEWAY_PUBLIC_IP", ""),
+                greylist=conf.get("GATEWAY_GREYLIST") == "1",
             )
         yield proto.event_stdout(
             "Gateway credential deleted and the link disabled. The gateway itself is "
@@ -1395,6 +1398,9 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
         user = str(args.get("user") or "root@pam").strip()
         cacert = str(args.get("cacert") or "").strip()
         api_port = args.get("api_port") or 8006
+        public_host = str(args.get("public_host") or "").strip().rstrip(".")
+        public_ip = str(args.get("public_ip") or "").strip()
+        greylist = bool(args.get("greylist"))
         secret = str(args.get("token_secret") or "")
         password = str(args.get("password") or "")
 
@@ -1414,6 +1420,26 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
             return
         if cacert and not Path(cacert).is_file():
             yield proto.event_stderr(f"No CA bundle at {cacert}.\n")
+            yield proto.event_done(2)
+            return
+        # The public identity is what goes into DNS, and getting it wrong is
+        # not a cosmetic error: an MX cannot hold an address, and a private
+        # address in SPF authorises nobody.
+        if not gw.valid_public_hostname(public_host):
+            yield proto.event_stderr(
+                "The gateway's public hostname has to be a name an MX record can "
+                "point at, such as relay.example.com. An MX record cannot hold an "
+                "IP address.\n"
+            )
+            yield proto.event_done(2)
+            return
+        if not gw.valid_public_ip(public_ip):
+            yield proto.event_stderr(
+                "The gateway's public address has to be the address the internet "
+                "sees. A private address (10.x, 192.168.x, 172.16-31.x) published "
+                "in SPF authorises nobody, and every outbound message would fail "
+                "SPF.\n"
+            )
             yield proto.event_done(2)
             return
         if auth == "token":
@@ -1447,6 +1473,9 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
                 user=user,
                 cacert=cacert,
                 enabled=True,
+                public_host=public_host,
+                public_ip=public_ip,
+                greylist=greylist,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             yield proto.event_stderr(f"cannot store the gateway credential: {exc}\n")
@@ -1456,6 +1485,17 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
             f"Gateway recorded: {host}:{int(api_port)} using {auth} authentication. "
             "The credential is encrypted; the console never sees it again.\n"
         )
+        if public_host and public_ip:
+            yield proto.event_stdout(
+                f"Public identity: {public_host} at {public_ip}. DNS advice will "
+                "use these, never the address above.\n"
+            )
+        else:
+            yield proto.event_stdout(
+                "No public identity recorded. The gateway will still be configured, "
+                "but no DNS records can be printed: an MX cannot point at the local "
+                "address this console uses to reach it.\n"
+            )
         yield proto.event_stdout("Run Probe next to confirm the gateway answers.\n")
         yield proto.event_done(0)
         return

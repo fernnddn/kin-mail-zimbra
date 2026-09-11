@@ -178,6 +178,60 @@ def read_config() -> dict[str, str]:
     return out
 
 
+def valid_public_ip(value: str) -> bool:
+    """A routable IPv4 address, or nothing.
+
+    Deliberately refuses RFC1918 and loopback. This value is published in an
+    SPF record; a private address there authorises nobody, and every outbound
+    message fails SPF. A live deployment was told to publish "ip4:10.x"
+    because the console reused the management address here.
+    """
+    if not value:
+        return True
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if any(o < 0 or o > 255 for o in octets):
+        return False
+    if not all(p.isdigit() for p in parts):
+        return False
+    a, b = octets[0], octets[1]
+    if a in (10, 127, 0):
+        return False
+    if a == 192 and b == 168:
+        return False
+    if a == 172 and 16 <= b <= 31:
+        return False
+    if a == 169 and b == 254:
+        return False
+    if a >= 224:
+        return False
+    return True
+
+
+def valid_public_hostname(value: str) -> bool:
+    """A name an MX record can point at, or nothing.
+
+    An MX record cannot hold an address - only a name - so a bare IP here is
+    not a usable answer even when it is a public one.
+    """
+    if not value:
+        return True
+    if not valid_host(value):
+        return False
+    if "." not in value:
+        return False
+    labels = value.split(".")
+    if any(not lab for lab in labels):
+        return False
+    # All-numeric labels mean somebody typed an address.
+    return not all(lab.isdigit() for lab in labels)
+
+
 def write_config(
     *,
     host: str,
@@ -187,6 +241,9 @@ def write_config(
     user: str = "root@pam",
     cacert: str = "",
     enabled: bool = True,
+    public_host: str = "",
+    public_ip: str = "",
+    greylist: bool = False,
 ) -> None:
     """Write the non-secret half of the link configuration.
 
@@ -207,6 +264,13 @@ def write_config(
         f'GATEWAY_TOKEN_ID="{token_id}"\n'
         f'GATEWAY_USER="{user}"\n'
         f'GATEWAY_CACERT="{cacert}"\n'
+        "# What the internet sees. Only these two belong in DNS; GATEWAY_HOST\n"
+        "# is how this appliance reaches the gateway on the local network.\n"
+        f'GATEWAY_PUBLIC_HOST="{public_host}"\n'
+        f'GATEWAY_PUBLIC_IP="{public_ip}"\n'
+        "# Greylisting defers the first message from every unseen sender by a\n"
+        "# few minutes. Off by default: the other layers still run.\n"
+        f"GATEWAY_GREYLIST={'1' if greylist else '0'}\n"
     )
     tmp = GATEWAY_CONF.with_suffix(".tmp")
     tmp.write_text(body, encoding="utf-8")
@@ -269,6 +333,15 @@ def status() -> dict[str, Any]:
         "api_port": conf.get("GATEWAY_API_PORT", "8006"),
         "auth_mode": conf.get("GATEWAY_AUTH", "token"),
         "token_id": conf.get("GATEWAY_TOKEN_ID", ""),
+        "public_host": conf.get("GATEWAY_PUBLIC_HOST", ""),
+        "public_ip": conf.get("GATEWAY_PUBLIC_IP", ""),
+        "greylist": conf.get("GATEWAY_GREYLIST") == "1",
+        # Whether DNS advice can be given at all. Without both halves the
+        # console must not print records, because the only address it has is
+        # the one the internet cannot route to.
+        "public_identity_complete": bool(
+            conf.get("GATEWAY_PUBLIC_HOST") and conf.get("GATEWAY_PUBLIC_IP")
+        ),
         "credential_present": credential_present(),
         "certificate_pinned": bool(pinned_fingerprint(host)) if host else False,
         "phase": phase,

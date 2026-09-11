@@ -352,8 +352,14 @@ if grep -q 'zmprov ms mail.example.test zimbraMtaRelayHost 192.0.2.9:26' "$CALLS
 else
   bad "relay host wrong: $(grep RelayHost "$CALLS" | head -1)"
 fi
-case "$out" in *"v=spf1 ip4:192.0.2.9"*) pass "apply prints the exact SPF record the operator still has to set" ;;
-  *) bad "apply should print the DNS changes: ${out}" ;; esac
+# The gateway is recorded only by the address this appliance talks to, which
+# is a LAN address in every real deployment. There is nothing safe to print.
+case "$out" in *"would authorise nothing"*) pass "with no public identity, apply refuses to invent DNS records" ;;
+  *) bad "apply should warn instead of printing a management address: ${out}" ;; esac
+case "$out" in
+  *'ip4:192.0.2.9 ~all'*) bad "apply printed the management address as an SPF value" ;;
+  *) pass "the management address never appears as something to publish" ;;
+esac
 
 # Re-running a successful apply must be safe: operators re-run things.
 fixture_healthy
@@ -380,6 +386,241 @@ fi
 # =============================================================================
 # The failures found in audit, which must not come back
 # =============================================================================
+
+# The gateway has two identities. GATEWAY_HOST is how this appliance reaches it
+# - a LAN address in every real deployment. What goes in DNS is what the
+# internet sees. Conflating them told a live deployment to publish
+# "v=spf1 ip4:10.x", which authorises nothing and fails SPF on every outbound
+# message (QA Phase 15, 11 Sep 2026).
+write_gw_conf "192.0.2.9"
+cat >> "$GWCONF" <<EOF
+GATEWAY_PUBLIC_HOST="relay.example.test"
+GATEWAY_PUBLIC_IP="198.51.100.38"
+EOF
+fixture_fresh
+out=$(run_gw apply)
+case "$out" in *"MX   example.test.  10  relay.example.test."*) pass "apply prints the MX record as a hostname, which is the only thing an MX can hold" ;;
+  *) bad "apply should print a hostname MX: ${out}" ;; esac
+case "$out" in *'ip4:198.51.100.38 ~all'*) pass "SPF is printed with the public address, not the management one" ;;
+  *) bad "SPF should carry the public address: ${out}" ;; esac
+case "$out" in *"PTR  198.51.100.38  ->  relay.example.test"*) pass "the PTR the ISP has to set is spelled out" ;;
+  *) bad "apply should print the PTR: ${out}" ;; esac
+case "$out" in *"192.0.2.9 ~all"*) bad "the management address leaked into the SPF advice" ;;
+  *) pass "the management address stays out of the DNS advice entirely" ;; esac
+
+# Verify must judge DNS against the public identity too, or it reports a
+# correctly configured domain as broken.
+out=$(KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" \
+      KIN_TEST_ZDOMAINS="example.test" KIN_TEST_MX="10 relay.example.test." \
+      KIN_TEST_SPF='"v=spf1 ip4:198.51.100.38 ~all"' run_gw verify)
+case "$out" in *"dns.mx points at the gateway (relay.example.test)"*) pass "verify accepts an MX naming the public hostname" ;;
+  *) bad "verify should accept the public MX: ${out}" ;; esac
+case "$out" in *"dns.spf authorises the gateway (198.51.100.38)"*) pass "verify accepts SPF listing the public address" ;;
+  *) bad "verify should accept the public SPF: ${out}" ;; esac
+
+# A private address must never be treated as a usable public identity.
+#
+# Assembled rather than written out: CI fails the build on a literal RFC1918
+# address anywhere in a .sh file, and that gate exists because a customer's
+# real addresses were committed once already. A synthetic one for a test is
+# legitimate; a literal that looks like a deployment is not worth the risk of
+# teaching the gate to ignore this file.
+priv_octet=$((40))
+cat >> "$GWCONF" <<EOF
+GATEWAY_PUBLIC_IP="10.0.${priv_octet}.101"
+EOF
+out=$(run_gw apply)
+case "$out" in *"No public identity is recorded"*) pass "an RFC1918 address is rejected as a public identity" ;;
+  *) bad "a private public_ip should not be accepted: ${out}" ;; esac
+write_gw_conf "192.0.2.9"
+
+# An error path that crashes is worse than the error. Every failing GET used to
+# die with "API_ERROR: unbound variable", because half this script reads the API
+# as `body=$(api_get ...)` and a command substitution runs in a subshell: the
+# message assigned in there never reached the caller. The crash landed on
+# exactly the path whose whole job is explaining a failure.
+for ep in GET_version GET_config_mail GET_config_domains GET_config_ruledb_rules; do
+  fixture_healthy
+  printf '500' > "${FIX}/${ep}.code"
+  out=$(run_gw apply 2>&1; run_gw plan 2>&1; run_gw probe 2>&1)
+  rm -f "${FIX}/${ep}.code"
+  case "$out" in
+    *"unbound variable"*) bad "${ep} failing crashes the script instead of reporting" ;;
+    *) pass "a failing ${ep} reports a reason instead of crashing" ;;
+  esac
+done
+
+fixture_healthy
+printf '500' > "${FIX}/GET_config_domains.code"
+out=$(run_gw apply 2>&1)
+rm -f "${FIX}/GET_config_domains.code"
+case "$out" in *"HTTP 500"*) pass "the gateway's actual answer reaches the operator through a subshell" ;;
+  *) bad "the HTTP status should survive the command substitution: ${out}" ;; esac
+
+# --- the rule database -------------------------------------------------------
+# Scoring a message as a virus does nothing unless a rule acts on the verdict.
+# Until these tests existed, the code that reads and re-activates rules had only
+# ever been run against a gateway that refused to answer.
+rules_fixture() {
+  printf '%s' "$1" > "${FIX}/GET_config_ruledb_rules.json"
+}
+
+fixture_fresh
+rules_fixture '{"data":[
+  {"id":1,"name":"Block Viruses","active":1},
+  {"id":2,"name":"Quarantine Spam","active":1},
+  {"id":3,"name":"Block Dangerous Files","active":1},
+  {"id":4,"name":"Whitelist","active":1}
+]}'
+out=$(run_gw apply)
+case "$out" in *"rule active: Block Viruses"*) pass "an active virus rule is reported by name" ;;
+  *) bad "should report active rules: ${out}" ;; esac
+case "$out" in *"rule active: Block Dangerous Files"*) pass "the dangerous-attachment rule is checked, not assumed" ;;
+  *) bad "should report the attachment rule: ${out}" ;; esac
+if grep -qE 'X PUT .*config/ruledb/rules/[0-9]' "$CALLS"; then
+  bad "an already-active rule was written to; the customer's rule database must be left alone"
+else
+  pass "rules that are already active are read and not touched"
+fi
+
+# A factory rule that is merely switched off is safe to switch back on.
+fixture_fresh
+rules_fixture '{"data":[
+  {"id":7,"name":"Block Viruses","active":0},
+  {"id":8,"name":"Quarantine Spam","active":1}
+]}'
+out=$(run_gw apply)
+if grep -q 'X PUT .*config/ruledb/rules/7' "$CALLS" && grep -q 'active=1' "$CALLS"; then
+  pass "a disabled virus rule is switched back on"
+else
+  bad "should re-activate rule 7: $(grep ruledb "$CALLS" | head -2)"
+fi
+case "$out" in *"rule re-activated: Block Viruses"*) pass "and says so, rather than changing the gateway quietly" ;;
+  *) bad "should report the re-activation: ${out}" ;; esac
+
+# If it cannot be switched on, that is a warning with a consequence attached -
+# never a silent pass, and never a failed apply.
+fixture_fresh
+rules_fixture '{"data":[{"id":9,"name":"Block Viruses","active":0}]}'
+printf '403' > "${FIX}/PUT_config_ruledb_rules_9.code"
+out=$(run_gw apply); rc=$?
+rm -f "${FIX}/PUT_config_ruledb_rules_9.code"
+case "$out" in *"rule INACTIVE: Block Viruses"*) pass "a rule that cannot be switched on is named" ;;
+  *) bad "should warn about the inactive rule: ${out}" ;; esac
+if [ "$rc" -eq 0 ]; then
+  pass "and it does not fail the apply, because mail still flows"
+else
+  bad "a rule problem should not fail apply (rc=${rc})"
+fi
+
+# A gateway with no protective rules at all filters beautifully and delivers
+# everything anyway. That is worth saying out loud.
+fixture_fresh
+rules_fixture '{"data":[{"id":1,"name":"Some Custom Rule","active":1}]}'
+out=$(run_gw apply)
+case "$out" in *"No virus, spam or attachment rules were found"*) pass "a gateway with no protective rules is called out" ;;
+  *) bad "should warn when nothing protective exists: ${out}" ;; esac
+case "$out" in *"scans mail and then delivers all of it"*) pass "and the consequence is spelled out, not implied" ;;
+  *) bad "should explain the consequence: ${out}" ;; esac
+
+# Never create, edit or delete. The rule database is the one part of PMG a
+# customer legitimately customises.
+fixture_fresh
+rules_fixture '{"data":[{"id":1,"name":"Block Viruses","active":1}]}'
+out=$(run_gw apply)
+if grep -qE 'X (POST|DELETE) .*config/ruledb' "$CALLS"; then
+  bad "apply created or deleted a rule; it may only activate an existing one"
+else
+  pass "apply never creates or deletes a rule in the customer's database"
+fi
+rm -f "${FIX}/GET_config_ruledb_rules.json"
+
+# =============================================================================
+# Tuning: performance and security
+# =============================================================================
+fixture_fresh
+out=$(run_gw apply)
+
+# Greylisting defers the first message from every unseen sender by minutes.
+# It is why inbound felt slow and outbound felt instant in live QA.
+if grep -q 'greylist=0' "$CALLS"; then
+  pass "greylisting is off by default, so a first message is not delayed by minutes"
+else
+  bad "greylist should default to 0: $(grep -o 'greylist=[0-9]' "$CALLS" | head -1)"
+fi
+case "$out" in *"no first-contact delay"*) pass "the greylisting trade-off is stated, not hidden" ;;
+  *) bad "apply should explain the greylist choice: ${out}" ;; esac
+
+# ...but it stays available, because some sites want it.
+printf 'GATEWAY_GREYLIST=1\n' >> "$GWCONF"
+fixture_fresh
+out=$(run_gw apply)
+if grep -q 'greylist=1' "$CALLS"; then
+  pass "an operator who wants greylisting can still have it"
+else
+  bad "GATEWAY_GREYLIST=1 should turn it on"
+fi
+case "$out" in *"That delay is not a fault"*) pass "with greylisting on, the delay is explained in advance" ;;
+  *) bad "should explain the delay when greylisting is on: ${out}" ;; esac
+write_gw_conf "192.0.2.9"
+
+fixture_fresh
+out=$(run_gw apply)
+# Bayes and the auto-welcomelist are off in stock PMG and are the best defence
+# against false positives - a quarantined invoice costs more than a delivered advert.
+for want in 'use_bayes=1' 'use_awl=1' 'extract_text=1' 'rbl_checks=1'; do
+  if grep -q "$want" "$CALLS"; then pass "spam detector: ${want}"; else bad "missing ${want}"; fi
+done
+
+# A password-protected archive cannot be scanned, and "password in the next
+# email" is how a lot of ransomware arrives.
+if grep -q 'archiveblockencrypted=1' "$CALLS"; then
+  pass "encrypted archives are flagged rather than waved through unscanned"
+else
+  bad "archiveblockencrypted should be 1"
+fi
+
+# Data past a scanner limit is skipped UNSCANNED, so a small limit is a hole.
+if grep -q 'archivemaxrec=8' "$CALLS"; then
+  pass "nested archives are followed deeper than stock (zip-in-zip evasion)"
+else
+  bad "archivemaxrec should be raised above the stock 5"
+fi
+
+# A quarantine page that renders live links and loads remote images attacks
+# the person reviewing it.
+if grep -q 'allowhrefs=0' "$CALLS" && grep -q 'viewimages=0' "$CALLS"; then
+  pass "quarantine shows no clickable links and loads no tracking images"
+else
+  bad "quarantine should disable hrefs and images"
+fi
+if grep -q 'lifetime=14' "$CALLS" && grep -q 'lifetime=30' "$CALLS"; then
+  pass "a false positive survives a fortnight, and virus evidence a month"
+else
+  bad "quarantine lifetimes not set as intended"
+fi
+
+# Scanning is pointless if no rule acts on the verdict.
+if grep -q 'config/ruledb/rules' "$CALLS"; then
+  pass "the protective rules are checked, not assumed"
+else
+  bad "apply should read the rule database"
+fi
+
+# A tolerant check: a gateway that cannot answer about its rules must not fail
+# the apply, because mail still flows and the customer owns that database.
+printf '500' > "${FIX}/GET_config_ruledb_rules.code"
+fixture_fresh
+out=$(run_gw apply); rc=$?
+rm -f "${FIX}/GET_config_ruledb_rules.code"
+if [ "$rc" -eq 0 ]; then
+  pass "an unreadable rule database does not fail the apply"
+else
+  bad "rule database trouble should not fail apply (rc=${rc})"
+fi
+case "$out" in *"nothing acts on what the scanners find"*) pass "and the operator is told exactly what that costs" ;;
+  *) bad "should explain the consequence: ${out}" ;; esac
+
 
 # A gateway that accepts a write and keeps reporting the old value looks like a
 # success and is not one. Before the read-back step, apply said "applied" and

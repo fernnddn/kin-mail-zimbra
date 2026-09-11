@@ -325,6 +325,7 @@ gateway *is* recorded, anything wrong with the link is a **failure**.
 
 - [`DEPLOY-WITH-GATEWAY.md`](DEPLOY-WITH-GATEWAY.md) — step by step, in order,
   from an empty VM to a verified gateway. Start here for a deployment.
+- [`RELEASES.md`](RELEASES.md) — which release is ready for what, and why.
 - [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) — the design: ports, DNS, every PMG
   setting and why, and the failure modes.
 

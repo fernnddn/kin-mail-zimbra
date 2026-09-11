@@ -161,3 +161,108 @@ code {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- Paper -----------------------------------------------------------------
+   A monthly report gets printed, or saved as a PDF, and handed to somebody who
+   was not in the room. Until this existed, "Print / PDF" printed the console:
+   the navigation rail down the left of every page, the account menu, a layout
+   pinned to 100vh so everything past the first screen was simply gone, and no
+   margins. It looked like a screenshot because that is what it was.
+
+   These rules are global rather than per-page. Anything in this console that
+   is worth printing wants the same treatment, and a page that adds a print
+   button later should not have to rediscover all of this. */
+@media print {
+  @page {
+    margin: 14mm 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    /* Paper has no scrollbar and no viewport. A height here truncates the
+       document at one page. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* The console chrome is furniture, not content. */
+  [data-kin-rail],
+  nav[aria-label="Console navigation"] {
+    display: none !important;
+  }
+
+  /* The frame is a 100vh two-column grid on screen. On paper it is one column
+     that flows for as many pages as it needs. */
+  #root > div {
+    display: block !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  /* Sticky and fixed repeat an element on every page, or pin it over the
+     content. Neither is ever what a printed page wants.
+
+     Deliberately NOT `* { position: static }`: absolute positioning is load
+     bearing in the charts and in every marker drawn with ::before, and
+     flattening all of it turns a graph into a pile of overlapping text. Only
+     the two that misbehave on paper are reset. */
+  [style*="position: fixed"],
+  [style*="position:fixed"] {
+    position: static !important;
+  }
+
+  * {
+    box-shadow: none !important;
+    /* Backgrounds are dropped by default, which erases table header banding
+       and total rows - the two things that make a table readable. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Anything that scrolls on screen must open out on paper, or every row past
+     the visible dozen is lost without a trace. */
+  [class*="scroll"],
+  [style*="overflow"] {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  /* A sticky table header is repeated by `thead { display: table-header-group }`
+     below, which is the print-native way to do it. Left sticky as well, it
+     prints once and then floats over the rows. */
+  thead th,
+  thead tr {
+    position: static !important;
+  }
+
+  /* A row split across a page break is a row nobody can read. */
+  tr,
+  img,
+  svg {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* A link printed as a bare colour is just grey text. */
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+}

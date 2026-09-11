@@ -977,6 +977,7 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
     setInstallLog("");
     const es = new EventSource("/api/wizard/deploy/stream?action=install_monitoring");
     let code: number | null = null;
+    let alreadyRunning = false;
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data) as {
@@ -988,11 +989,26 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
         if ((data.type === "stdout" || data.type === "stderr") && data.data) {
           setInstallLog((prev) => (prev + data.data).slice(-8000));
         } else if (data.type === "error") {
-          setInstallLog((prev) => prev + `[error] ${data.message || ""}\n`);
+          const msg = String(data.message || "");
+          setInstallLog((prev) => prev + `[error] ${msg}\n`);
+          /* Pressing Install while the automatic install is already running is
+             not a failure, and reporting one is how an operator ends up
+             believing monitoring is broken on a box where it is busy working.
+             It happened in live QA: the button said it failed, a reload showed
+             monitoring present and healthy. Treat it as "already running" and
+             wait for the result instead. */
+          if (/Install monitoring is already running/i.test(msg)) {
+            alreadyRunning = true;
+          }
         } else if (data.type === "done") {
           code = typeof data.exit_code === "number" ? data.exit_code : 1;
           es.close();
           setInstalling(false);
+          if (alreadyRunning) {
+            setInstallDone("ok");
+            setSettling(true);
+            return;
+          }
           setInstallDone(code === 0 ? "ok" : "failed");
           /* Do not make the operator reload the page. The install finishing
              is the start of the interesting part, not the end of it: the

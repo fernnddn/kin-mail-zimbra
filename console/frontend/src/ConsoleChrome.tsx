@@ -102,9 +102,13 @@ const RailLink = styled(NavLink)`
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  height: 2.5rem;
-  padding: 0 1.25rem;
+  /* min-height, not height: "Proxmox Mail Gateway" is the longest label in
+     this rail and a fixed row height made it overflow its own box rather
+     than wrap. A nav item has to survive a long name. */
+  min-height: 2.5rem;
+  padding: 0.4rem 1.25rem;
   font-size: 0.875rem;
+  line-height: 1.3;
   color: rgba(244, 241, 234, 0.72);
   text-decoration: none;
   border-left: 2px solid transparent;
@@ -288,10 +292,15 @@ export function ConsoleChrome({
       </RailLink>
       {/* Ops-level: the page repoints where every message this appliance sends
           and receives goes, so a Customer Admin has no business in it. The
-          backend refuses them anyway; hiding it keeps the rail honest. */}
+          backend refuses them anyway; hiding it keeps the rail honest.
+
+          Named in full. "Mail Gateway" reads like something we wrote and
+          therefore support end to end; this is a Proxmox appliance the customer
+          runs, and the difference matters the first time somebody opens a
+          ticket about a spam rule. */}
       {isSuper || isOps ? (
         <RailLink to="/mail-gateway" end>
-          Mail Gateway
+          Proxmox Mail Gateway
         </RailLink>
       ) : null}
       {isSuper ? (
@@ -320,7 +329,10 @@ export function ConsoleChrome({
 
   return (
     <Frame>
-      <Rail aria-label="Console navigation">
+      {/* data-kin-rail is the hook the print stylesheet uses. A report handed
+          to somebody should be the report, not a screenshot of the console
+          with the navigation down the side of every page. */}
+      <Rail aria-label="Console navigation" data-kin-rail="">
         <RailBrand type="button" onClick={() => navigate("/cluster")}>
           <BrandLockup compact light />
         </RailBrand>
