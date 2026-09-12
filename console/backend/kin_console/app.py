@@ -847,7 +847,16 @@ async def wizard_deploy_stream(
             raise HTTPException(
                 status_code=400, detail="grow_disk target must be system or mail"
             )
-        stream_args = {"op": op, "target": target}
+        # Opt-in, and only alongside apply. A plan never deletes anything, so
+        # accepting the flag there would only make it look as though it might.
+        reclaim = (request.query_params.get("reclaim") or "").strip().lower()
+        if reclaim not in ("", "0", "1"):
+            raise HTTPException(status_code=400, detail="grow_disk reclaim must be 0 or 1")
+        if reclaim == "1" and op != "apply":
+            raise HTTPException(
+                status_code=400, detail="grow_disk reclaim only applies to apply"
+            )
+        stream_args = {"op": op, "target": target, "reclaim": reclaim}
     elif cmd == proto.CMD_MAIL_GATEWAY:
         # Only the read-only and revert operations come through the streaming
         # endpoint, because a query string ends up in access logs and browser

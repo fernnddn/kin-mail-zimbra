@@ -154,9 +154,70 @@ class TheHelperScriptIsShippedAndSane(unittest.TestCase):
             Path(__file__).resolve().parents[3] / "install/lib/grow-disk.sh"
         ).read_text(encoding="utf-8")
         code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
-        for dangerous in ("mkfs", "sfdisk", "wipefs", "resizepart", "--force"):
+        for dangerous in ("mkfs", "sfdisk", "resizepart", "--force"):
             with self.subTest(term=dangerous):
                 self.assertNotIn(dangerous, code)
+
+        # wipefs is allowed, and only in the form that erases nothing. `-n`
+        # lists signatures; without it the same command destroys them, and that
+        # single character is the whole difference between an inspection and a
+        # disaster.
+        # Only lines that actually INVOKE it. The declaration and the English
+        # in a refusal message both mention the word and neither runs anything.
+        for line in code.splitlines():
+            if '"$WIPEFS"' not in line:
+                continue
+            with self.subTest(line=line.strip()[:70]):
+                self.assertIn("-n", line, "wipefs must only ever be run with -n")
+
+    def test_deleting_a_partition_is_opt_in_and_guarded(self) -> None:
+        """The one deletion this script performs, and everything that gates it.
+
+        Freeing the reserved partition is what finally makes the mail disk
+        growable, and it is still a deletion. It has to be asked for by name,
+        and it has to refuse on anything that suggests the partition is in use.
+        """
+        from pathlib import Path
+
+        body = (
+            Path(__file__).resolve().parents[3] / "install/lib/grow-disk.sh"
+        ).read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+
+        self.assertIn("--reclaim-reserved", code)
+        # Off unless asked for.
+        self.assertIn('want_reclaim="${2:-0}"', code)
+        # Exactly one deletion, and it is inside the guarded function.
+        self.assertEqual(code.count("rm \"$lastnum\""), 1)
+        guards = code[code.index("reclaimable_reserved() {") :]
+        guards = guards[: guards.index("\n}")]
+        for needed in ("RECLAIM_MAX_BYTES", "BLKID", "WIPEFS", "holders", "fstab",
+                       "crypttab", "drbd"):
+            with self.subTest(guard=needed):
+                self.assertIn(needed, guards)
+
+    def test_the_reserved_partition_is_found_by_device_not_by_label(self) -> None:
+        """A label where a path belongs makes every safety check pass on nothing.
+
+        parted's machine output carries the partition LABEL in that field, so
+        the guards ran blkid, wipefs and findmnt against "meta" - a device that
+        does not exist - found nothing, and concluded the partition was safe to
+        delete. The loop-device test caught it; no stub could have.
+        """
+        from pathlib import Path
+
+        body = (
+            Path(__file__).resolve().parents[3] / "install/lib/grow-disk.sh"
+        ).read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+        self.assertIn("partition_device()", code)
+        # The reclaim path must use the device lookup, never the label one.
+        reclaim = code[code.index("reclaim_reserved() {") :]
+        reclaim = reclaim[: reclaim.index("\n}")]
+        self.assertIn("partition_device", reclaim)
+        self.assertNotIn("partition_name", reclaim)
+        # And it must verify the result really is a block device.
+        self.assertIn('[ -b "$path" ]', code)
 
 
 if __name__ == "__main__":
@@ -176,6 +237,11 @@ class BothDiskLayoutsAreHandled(unittest.TestCase):
     it is looking at, because an operator who reads a single disk as two will
     size the next one wrongly, and one who is told only "something is in the
     way" will think the feature is broken.
+
+    On the two-disk layout that second sentence used to be the end of the
+    story: the mail disk could never grow at all, because the reserved meta
+    partition sits behind it and nothing would move it. It can now be freed,
+    deliberately and separately - see the reclaim tests above.
     """
 
     def test_the_host_facts_say_when_the_two_mounts_are_one_filesystem(self) -> None:

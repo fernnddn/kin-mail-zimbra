@@ -101,6 +101,19 @@ PMG_DNSBL_SITES="${KIN_PMG_DNSBL_SITES:-}"
 # is deliberately outside it.
 PMG_DNSBL_RETURN_FILTER="${KIN_PMG_DNSBL_RETURN_FILTER:-127.0.0.[2..11]}"
 
+# How long the gateway keeps trying a message it cannot deliver yet.
+#
+# The default is Postfix's 5 days. That is a long time for the appliance behind
+# it to be down and nobody to have noticed, and it is also the window in which
+# a temporary problem quietly becomes a permanent one. 7 days is deliberately
+# LONGER, not shorter: a gateway that gives up during a weekend outage bounces
+# mail that would have been delivered on Monday, and a bounce cannot be undone.
+PMG_QUEUE_LIFETIME_DAYS="${KIN_PMG_QUEUE_LIFETIME_DAYS:-7}"
+# How long before the sender is told their message is still in the queue. Four
+# hours is long enough not to alarm anyone about a brief blip, short enough that
+# a real outage is visible to the people affected rather than only to us.
+PMG_DELAY_WARNING_HOURS="${KIN_PMG_DELAY_WARNING_HOURS:-4}"
+
 say()  { printf '%s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 mark() { printf 'KIN_GW_%s\n' "$*"; }
@@ -498,6 +511,126 @@ zimbra_mynetworks() {
 
 zimbra_local_domains() {
   zm gad 2>/dev/null | tr -d ' \r'
+}
+
+# -----------------------------------------------------------------------------
+# The two failures nobody goes looking for
+# -----------------------------------------------------------------------------
+
+# 1. The gateway quietly becoming an open relay.
+#
+# Anything in the gateway's trusted networks may send through it WITHOUT
+# authenticating. We add exactly one /32. But an operator debugging a delivery
+# problem at 2am adds "the office range", or a /16, or 0.0.0.0/0, and the
+# gateway is then a spam cannon with the company's name on it. Nothing warns
+# them: mail keeps flowing, and the first symptom is the sending address on
+# every blocklist a week later, which takes months to undo.
+#
+# Zimbra's own networks are already guarded this way in stage 09. The gateway
+# was not, and the gateway is the machine actually facing the internet.
+check_relay_scope() {
+  local nets bad
+  nets=$(api_get /config/mynetworks) || {
+    warn "Could not read the gateway's trusted networks."
+    return 0
+  }
+  bad=$(printf '%s' "$nets" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin).get("data") or []
+except Exception:
+    sys.exit(0)
+wide = []
+for row in data:
+    cidr = str((row or {}).get("cidr") or "") if isinstance(row, dict) else str(row)
+    if not cidr:
+        continue
+    if cidr in ("0.0.0.0/0", "::/0"):
+        wide.append(cidr)
+        continue
+    if "/" not in cidr:
+        continue
+    net, _, prefix = cidr.partition("/")
+    if not prefix.isdigit():
+        continue
+    bits = int(prefix)
+    if ":" in net:
+        if bits < 64:
+            wide.append(cidr)
+    elif bits < 24 and not net.startswith("127."):
+        wide.append(cidr)
+print(" ".join(wide))
+' 2>/dev/null) || bad=""
+
+  bad=$(printf '%s' "$bad" | tr -d '\n')
+  if [ -z "$bad" ]; then
+    ok "gateway.relay-scope is tight; nothing can relay through it unauthenticated except this appliance"
+    return 0
+  fi
+  note_problem
+  printf 'KIN_GW_PROBLEM %s expected=%s actual=%s\n' gateway.relay-scope "host or LAN sized" "$bad"
+  info "Anything in that range can send mail through this gateway without a password."
+  info "That is an open relay. It keeps working perfectly until the sending address"
+  info "is blocklisted everywhere, and undoing that takes months."
+  info "Narrow it under Mail Proxy > Networks on the gateway."
+  return 0
+}
+
+# 2. The gateway running out of disk.
+#
+# A PMG whose filesystem fills stops accepting mail outright, and the queue and
+# the quarantine are what fill it. This release deliberately LENGTHENED the
+# quarantine - spam 14 days, viruses 30 - which is the right call for recovering
+# a false positive and is also more disk than the defaults asked for. Having
+# made that trade, it would be careless not to check the machine can afford it.
+check_gateway_room() {
+  local nodes node body pct
+  nodes=$(api_get /nodes) || { warn "Could not ask the gateway about its disk."; return 0; }
+  node=$(printf '%s' "$nodes" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin).get("data") or []
+except Exception:
+    sys.exit(0)
+for row in data:
+    if isinstance(row, dict) and row.get("name"):
+        print(row["name"]); break
+' 2>/dev/null) || node=""
+  [ -n "$node" ] || { warn "Could not work out the gateway node name."; return 0; }
+
+  body=$(api_get "/nodes/${node}/status") || {
+    warn "Could not read disk usage from the gateway."
+    return 0
+  }
+  pct=$(printf '%s' "$body" | "$PYTHON" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin).get("data") or {}
+except Exception:
+    sys.exit(0)
+root = d.get("rootfs") or {}
+total = float(root.get("total") or 0)
+used = float(root.get("used") or 0)
+if total <= 0:
+    sys.exit(0)
+print(int(round(used * 100 / total)))
+' 2>/dev/null) || pct=""
+  case "$pct" in ''|*[!0-9]*) warn "The gateway did not report its disk usage."; return 0 ;; esac
+
+  if [ "$pct" -ge 90 ]; then
+    note_problem
+    printf 'KIN_GW_PROBLEM %s expected=%s actual=%s\n' gateway.disk "below 90%" "${pct}%"
+    info "A gateway with a full disk stops accepting mail altogether."
+    info "The quarantine is usually what fills it: this release keeps spam for"
+    info "${PMG_SPAMQUAR_DAYS} days and viruses for ${PMG_VIRUSQUAR_DAYS}. Give the VM more disk, or shorten"
+    info "those under Configuration > Spam Quarantine on the gateway."
+  elif [ "$pct" -ge 75 ]; then
+    warn "The gateway's disk is ${pct}% full. At 100% it stops accepting mail."
+    info "Quarantine retention is ${PMG_SPAMQUAR_DAYS} days for spam and ${PMG_VIRUSQUAR_DAYS} for viruses."
+  else
+    ok "gateway.disk is ${pct}% full, with room for the quarantine this release keeps"
+  fi
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -962,6 +1095,8 @@ cmd_apply() {
   local policy_failed=0
   api_put /config/mail \
     "verifyreceivers=450" \
+    "queue-lifetime=${PMG_QUEUE_LIFETIME_DAYS}" \
+    "dwarning=${PMG_DELAY_WARNING_HOURS}" \
     "greylist=${GW_GREYLIST}" \
     "spf=1" \
     "tls=1" \
@@ -989,7 +1124,11 @@ cmd_apply() {
     else
       ok "greylisting OFF - no first-contact delay; spam is judged on content instead"
     fi
-    ok "soft recipient verification, SPF, DNSBL, outbound TLS, no header leak"
+    ok "soft recipient verification, SPF, outbound TLS, no header leak"
+    ok "undeliverable mail is retried for ${PMG_QUEUE_LIFETIME_DAYS} days before it is given up on"
+    info "Longer than the default on purpose: a gateway that gives up during a"
+    info "weekend outage bounces mail that would have arrived on Monday, and a"
+    info "bounce cannot be taken back."
   fi
 
   say "6. Spam detection"
@@ -1256,6 +1395,10 @@ cmd_verify() {
   else
     warn "Zimbra is not installed here; the appliance side could not be checked."
   fi
+
+  say "Standing risks"
+  check_relay_scope
+  check_gateway_room
 
   say "Reachability"
   # A warning, not a problem: this runs from the appliance, and an operator

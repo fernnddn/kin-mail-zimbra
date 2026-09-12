@@ -2,25 +2,131 @@
 
 <p align="center">
   <a href=".github/workflows/checks.yml"><img src="https://github.com/azana-nisaa/kin-mail/actions/workflows/checks.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/release-0.1.10-1B4F72" alt="Release 0.1.10">
   <img src="https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420?logo=ubuntu&logoColor=white" alt="Ubuntu 22.04 | 24.04">
   <img src="https://img.shields.io/badge/Zimbra-FOSS%2010-0A66C2" alt="Zimbra FOSS 10">
+  <img src="https://img.shields.io/badge/gateway-Proxmox%20Mail%20Gateway-E57000?logo=proxmox&logoColor=white" alt="Proxmox Mail Gateway">
   <a href="NOTICE"><img src="https://img.shields.io/badge/License-Proprietary-lightgrey" alt="Proprietary"></a>
-  <img src="https://img.shields.io/badge/Maintainer-PT%20Karya%20Informasi%20Nusantara-1B4F72" alt="KIN">
 </p>
 
-Repeatable Zimbra Collaboration 10 (FOSS) deployment for Ubuntu Server, plus an
-active-passive HA lab stack (Pacemaker / DRBD / SBD). Built by
-**PT Karya Informasi Nusantara** for its own customer work. Installer prompts,
-Ansible task labels, and operator guidance are in English.
+<p align="center">
+  <b>A complete mail server, deployed the same way every time, with a filtering gateway in front of it.</b>
+</p>
+
+<p align="center">
+  Zimbra Collaboration 10 (FOSS) on Ubuntu Server, a Proxmox Mail Gateway as the MX,<br>
+  and a web console that installs, monitors and maintains both.<br>
+  Built by <b>PT Karya Informasi Nusantara</b>.
+</p>
+
+---
+
+## What you get
 
 <table>
-<tr><td><b>One-shot install</b></td><td>Menu-driven <code>install/kin-mail.sh</code> runs preflight through healthcheck, or any single stage.</td></tr>
-<tr><td><b>Answers once</b></td><td>Config lives in <code>/etc/kin-mail/config</code> (mode <code>0600</code>) and is reused by every later stage.</td></tr>
-<tr><td><b>Failures already encoded</b></td><td>Installer traps from the first live deployment (repos, resolvconf, prompt order, timezone, telemetry) are handled in code.</td></tr>
-<tr><td><b>TLS that fits NAT</b></td><td>Cloudflare DNS-01, manual DNS-01, or customer-supplied cert via <code>zmcertmgr</code>.</td></tr>
-<tr><td><b>Optional AD hybrid auth</b></td><td>LDAP bind to Active Directory with local password fallback when AD is skipped or unreachable.</td></tr>
-<tr><td><b>HA runbook</b></td><td>Operational Pacemaker/DRBD/SBD procedures in <a href="HA-RUNBOOK.md"><code>HA-RUNBOOK.md</code></a>; Ansible ports start under <code>ansible/</code>.</td></tr>
+<tr>
+  <td width="33%" valign="top">
+    <h3>🛡️ A gateway in front</h3>
+    A Proxmox Mail Gateway is the MX. Mail is filtered before Zimbra sees it, and
+    the machine holding every mailbox stops being the one on the perimeter.
+    Connect it from the console and it configures both sides, then proves it.
+  </td>
+  <td width="33%" valign="top">
+    <h3>⚙️ One deployment, every time</h3>
+    Answer the wizard once. Preflight through healthcheck runs unattended, and
+    the answers live in one file that every later stage reuses. No two
+    appliances drift apart.
+  </td>
+  <td width="33%" valign="top">
+    <h3>📊 It tells you the truth</h3>
+    Monitoring shows whether mail is actually moving, not just whether the CPU
+    is busy. When a figure cannot be trusted, the console says so instead of
+    drawing a confident flat line.
+  </td>
+</tr>
+<tr>
+  <td valign="top">
+    <h3>🔐 Encrypted where it matters</h3>
+    The mail store is LUKS-encrypted, TLS is issued and renewed for you, and
+    DKIM, SPF and DMARC are set up and then checked rather than assumed.
+  </td>
+  <td valign="top">
+    <h3>💽 Grows with the customer</h3>
+    Add disk in the hypervisor and extend it from the console: partition, LUKS,
+    LVM and filesystem, in the right order, with mail still running. It reads
+    the disk and says what it would do before it does anything.
+  </td>
+  <td valign="top">
+    <h3>🧩 Fits real networks</h3>
+    NAT, split DNS, a single uplink or several, Active Directory for logins.
+    TLS by Cloudflare DNS-01, manual DNS-01, or your own certificate.
+  </td>
+</tr>
 </table>
+
+### Where to start
+
+| I want to&hellip; | Read |
+| --- | --- |
+| **Deploy this for a customer** | [`DEPLOY-WITH-GATEWAY.md`](DEPLOY-WITH-GATEWAY.md) &mdash; empty VM to verified gateway, in order |
+| **Know which version to use** | [`RELEASES.md`](RELEASES.md) &mdash; what each release is ready for |
+| **Understand the gateway** | [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) &mdash; the design, and every tuned setting with its reason |
+| **Run it day to day** | the console: mailboxes, monitoring, reports, disks, certificates |
+
+> **Scope, stated plainly.** This release deploys **one mail server** with **one
+> gateway** in front of it. That is the product. A two-server high-availability
+> layout exists in the tree, is not offered in the console, and is not part of
+> what 0.1.10 promises.
+
+---
+
+## The mail gateway
+
+A Proxmox Mail Gateway sits in front of this appliance. It is the MX: inbound
+mail is filtered there before Zimbra sees it, outbound mail is relayed through
+it on the way out, and the mail node's port 25 accepts SMTP from the gateway
+and the LAN only. The machine holding every mailbox stops being the machine an
+attacker reaches first.
+
+```
+inbound    internet --MX--> gateway :25 --filter--> appliance :25
+outbound   appliance --relay--> gateway :26 --> internet
+internal   mailbox -> mailbox stays on the appliance and never reaches the gateway
+```
+
+KIN Mail does **not** install the gateway. PMG is a Debian appliance and this
+is Ubuntu with Zimbra on it, so the gateway is its own VM, installed from the
+official Proxmox ISO. What KIN Mail does is configure both sides of the link
+over PMG's REST API and Zimbra's `zmprov`, and then prove it works:
+
+- Console &rsaquo; **Mail Gateway** &rsaquo; Connect, with the gateway address
+  and a PMG API token. The token secret is encrypted into the privhelper vault
+  and never returned to the browser.
+- **Plan** reads both sides and changes nothing. **Apply** configures the
+  gateway, points outbound mail at it, and lets it hand mail in. Mail keeps
+  flowing throughout; nothing restarts.
+- The MX, SPF and PTR records still have to be changed at your registrar.
+  **Verify** reads them back and says which are still wrong.
+
+Zimbra's own amavis, SpamAssassin, ClamAV and opendkim stay enabled. The
+gateway is defence at the perimeter, not a replacement for scanning mail that
+never leaves the appliance, and DKIM signing deliberately stays on Zimbra —
+the gateway is configured not to sign a second time.
+
+The Monitoring tab carries a **Mail gateway** card. The gateway failing looks
+like perfect health from everywhere else — Zimbra up, CPU idle, the queue
+quietly climbing — so the card exists to say why.
+
+`05-healthcheck.sh` reports an appliance with **no gateway linked yet** as
+BLOCKED rather than FAILED, because a gateway VM cannot exist before the
+appliance does and failing there would abort every first install. Once a
+gateway *is* recorded, anything wrong with the link is a **failure**.
+
+- [`DEPLOY-WITH-GATEWAY.md`](DEPLOY-WITH-GATEWAY.md) — step by step, in order,
+  from an empty VM to a verified gateway. Start here for a deployment.
+- [`RELEASES.md`](RELEASES.md) — which release is ready for what, and why.
+- [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) — the design: ports, DNS, every PMG
+  setting and why, and the failure modes.
 
 ---
 
@@ -190,29 +296,20 @@ restarts them before asserting DNS.
 
 ---
 
-## Installer traps handled in code
+## Hard-won behaviour
 
-- **Zimbra's package repository must be accepted.** Declining aborts with a
-  misleading "packages missing" error.
-- **`zimbra-memcached` appears as a separate prompt** when sourced from the
-  repository, shifting prompt order. The driver matches on prompt text, not position.
-- **`resolvconf` hijacks `/etc/resolv.conf` mid-installation** via
-  `zimbra-mta-components` and can kill DNS silently.
-- **`/etc/resolv.conf` is a managed symlink** and must be replaced with `ln -sf`.
-- **The default mail domain follows the hostname** (`user@mail.example.com`);
-  it is set explicitly instead.
-- **Zimbra's timezone list does not mark `Asia/Jakarta` as primary.** `Asia/Bangkok` is the
-  UTC+7 fallback (same offset, no DST). The numbered slot moves when `timezones.ics`
-  gains or loses primary zones - do not hardcode it. The installer driver reads the live
-  zmsetup list after the timezone prompt and fails immediately on `Invalid selection`
-  instead of waiting 1h.
-- **`zmsetup.pl` reads resolver configuration once at startup.** Fixing DNS
-  afterwards requires restarting the process.
-- **The telemetry prompt transmits the administrator email.** Answered No.
-- **Split DNS delegation** across two providers makes mail fail at random;
-  `01` and `05` detect it.
+Every one of these is something that broke a real deployment once and now
+cannot break another. They are listed because they are the reason an install
+works the second time as well as the first, not because they are interesting.
 
----
+- Repository and keyring setup that survives a mirror being slow or moved.
+- Prompt order and timezone handling that cannot leave a half-answered config.
+- `apt` waits for the dpkg lock instead of failing while unattended-upgrades
+  holds it.
+- Zimbra telemetry is answered rather than left to block the install.
+- DNS is checked before it is depended on, and the failure names the record.
+- Stages that cannot safely re-run refuse; stages that can are idempotent.
+- Every privileged action goes through a fixed allow-list, never a shell.
 
 ## Source of the Zimbra build
 
@@ -281,53 +378,37 @@ enough at build time.
 
 ---
 
-## Mail gateway (mandatory from 0.1.10)
+## Extending storage
 
-A Proxmox Mail Gateway sits in front of this appliance. It is the MX: inbound
-mail is filtered there before Zimbra sees it, outbound mail is relayed through
-it on the way out, and the mail node's port 25 accepts SMTP from the gateway
-and the LAN only. The machine holding every mailbox stops being the machine an
-attacker reaches first.
+Space added to a virtual disk does not reach the filesystem on its own: a
+bigger disk is not a bigger partition, and a bigger partition is not a bigger
+filesystem. On an encrypted mail volume that is four tools deep, each able to
+destroy the data if given the wrong argument.
 
-```
-inbound    internet --MX--> gateway :25 --filter--> appliance :25
-outbound   appliance --relay--> gateway :26 --> internet
-internal   mailbox -> mailbox stays on the appliance and never reaches the gateway
-```
+**Monitoring &rsaquo; Extend a disk** does the whole chain, or refuses and says
+why. It asks the kernel to re-read the disk first, reports how much space it
+found, and changes nothing until you have read that and pressed the button.
 
-KIN Mail does **not** install the gateway. PMG is a Debian appliance and this
-is Ubuntu with Zimbra on it, so the gateway is its own VM, installed from the
-official Proxmox ISO. What KIN Mail does is configure both sides of the link
-over PMG's REST API and Zimbra's `zmprov`, and then prove it works:
+It will not shrink anything, will not move a partition, will not touch
+replicated storage, and has no force flag.
 
-- Console &rsaquo; **Mail Gateway** &rsaquo; Connect, with the gateway address
-  and a PMG API token. The token secret is encrypted into the privhelper vault
-  and never returned to the browser.
-- **Plan** reads both sides and changes nothing. **Apply** configures the
-  gateway, points outbound mail at it, and lets it hand mail in. Mail keeps
-  flowing throughout; nothing restarts.
-- The MX, SPF and PTR records still have to be changed at your registrar.
-  **Verify** reads them back and says which are still wrong.
+### The reserved partition
 
-Zimbra's own amavis, SpamAssassin, ClamAV and opendkim stay enabled. The
-gateway is defence at the perimeter, not a replacement for scanning mail that
-never leaves the appliance, and DKIM signing deliberately stays on Zimbra —
-the gateway is configured not to sign a second time.
+The mail disk is laid out as a large data partition followed by a small,
+unformatted one held back for a future second server. On a single-server
+appliance that reserved partition is never used, and because it sits *after*
+the data partition it makes the mail disk impossible to extend: new space lands
+behind it, out of reach.
 
-The Monitoring tab carries a **Mail gateway** card. The gateway failing looks
-like perfect health from everywhere else — Zimbra up, CPU idle, the queue
-quietly climbing — so the card exists to say why.
+The console offers to free it, as a separate and clearly-marked action. Before
+deleting anything it checks that the partition is the last one on the disk,
+that it carries no filesystem, volume group or replication data, that nothing
+is mounted on or stacked above it, that neither `/etc/fstab` nor
+`/etc/crypttab` names it, and that the host has no DRBD configured at all. Any
+one of those checks failing stops it.
 
-`05-healthcheck.sh` reports an appliance with **no gateway linked yet** as
-BLOCKED rather than FAILED, because a gateway VM cannot exist before the
-appliance does and failing there would abort every first install. Once a
-gateway *is* recorded, anything wrong with the link is a **failure**.
-
-- [`DEPLOY-WITH-GATEWAY.md`](DEPLOY-WITH-GATEWAY.md) — step by step, in order,
-  from an empty VM to a verified gateway. Start here for a deployment.
-- [`RELEASES.md`](RELEASES.md) — which release is ready for what, and why.
-- [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) — the design: ports, DNS, every PMG
-  setting and why, and the failure modes.
+Freeing it means a high-availability pair built later would need a small
+separate disk. The console says so before you confirm.
 
 ---
 

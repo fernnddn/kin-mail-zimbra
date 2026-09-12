@@ -2,8 +2,9 @@
 # =============================================================================
 # Grow a filesystem into space that was added to its disk by the hypervisor.
 #
-#   grow-disk.sh plan  <mountpoint>
-#   grow-disk.sh apply <mountpoint>
+#   grow-disk.sh plan   <mountpoint>
+#   grow-disk.sh apply  <mountpoint>
+#   grow-disk.sh apply  <mountpoint> --reclaim-reserved
 #
 # The operator enlarges a virtual disk in VMware, Proxmox or wherever, and the
 # guest keeps showing the old size, because a bigger disk is not a bigger
@@ -21,8 +22,9 @@
 #
 # WHAT IT WILL NOT DO, EVER
 #   shrink anything
-#   create, delete, reorder or move a partition
+#   move or reorder a partition, or change where one starts
 #   touch a partition that is not the last one on its disk
+#   delete a partition - with exactly one consented exception, below
 #   touch a device that DRBD or MD is using
 #   act on any mountpoint other than the ones named in ALLOWED_MOUNTS
 #
@@ -30,12 +32,39 @@
 # reading an explanation, and the unsafe outcome is a mail server that has lost
 # its data. There is no force flag on purpose.
 #
+# THE ONE EXCEPTION: --reclaim-reserved
+#
+# The installer lays the mail disk out as a big data partition followed by a
+# small unformatted partition reserved for a future second server (DRBD
+# metadata). On a single-server appliance - which is the product - that
+# reserved partition is never used, and because it sits AFTER the data
+# partition it makes the mail disk permanently ungrowable. Adding space in the
+# hypervisor does nothing: the free space lands after the reserved partition,
+# with the reserved partition in between (live QA Phase 17, 12 Sep 2026).
+#
+# --reclaim-reserved deletes that one partition so the data partition can
+# extend. It is opt-in, it is never implied by plan or by a bare apply, and it
+# refuses unless ALL of these hold:
+#
+#   the partition is the last one on the disk
+#   it sits immediately after the partition being grown
+#   it is smaller than RECLAIM_MAX_BYTES
+#   blkid and wipefs see NOTHING on it: no filesystem, no LVM, no DRBD
+#   it is not mounted, has no holders, and is not open by device-mapper
+#   it is named in neither /etc/fstab nor /etc/crypttab
+#   this host has no DRBD resource configured at all
+#
+# It does not recreate the partition afterwards. Building an HA pair later
+# needs a small separate disk, and saying that plainly is better than leaving
+# a hole nobody can explain.
+#
 # Injection points, all for tests. Nothing here should ever be set in
 # production; the defaults are the real tools.
 #   KIN_GROW_FINDMNT KIN_GROW_LSBLK KIN_GROW_PARTED KIN_GROW_GROWPART
 #   KIN_GROW_PARTX KIN_GROW_RESIZE2FS KIN_GROW_XFS_GROWFS KIN_GROW_PVRESIZE
 #   KIN_GROW_LVEXTEND KIN_GROW_CRYPTSETUP KIN_SYSFS_ROOT KIN_ZIMBRA_DIR
 #   KIN_GROW_ALLOW_NONROOT   skip the euid check (tests only)
+#   KIN_GROW_BLKID KIN_GROW_WIPEFS KIN_GROW_PROC_ROOT KIN_GROW_ETC_ROOT
 # =============================================================================
 set -uo pipefail
 
@@ -49,6 +78,14 @@ XFS_GROWFS="${KIN_GROW_XFS_GROWFS:-xfs_growfs}"
 PVRESIZE="${KIN_GROW_PVRESIZE:-pvresize}"
 LVEXTEND="${KIN_GROW_LVEXTEND:-lvextend}"
 CRYPTSETUP="${KIN_GROW_CRYPTSETUP:-cryptsetup}"
+BLKID="${KIN_GROW_BLKID:-blkid}"
+WIPEFS="${KIN_GROW_WIPEFS:-wipefs}"
+PROC_ROOT="${KIN_GROW_PROC_ROOT:-/proc}"
+ETC_ROOT="${KIN_GROW_ETC_ROOT:-/etc}"
+# DRBD metadata is 128 MiB per TiB of data; the installer reserves 256 MiB.
+# Anything materially larger is not the partition this is meant to reclaim,
+# and the safe response to "bigger than I expected" is to stop.
+RECLAIM_MAX_BYTES="${KIN_GROW_RECLAIM_MAX_BYTES:-2147483648}"   # 2 GiB
 SYSFS="${KIN_SYSFS_ROOT:-/sys}"
 ZIMBRA_DIR="${KIN_ZIMBRA_DIR:-/opt/zimbra}"
 
@@ -102,6 +139,46 @@ chain_types() { awk '{print $2}'; }
 # Prints "PARTNUM PART_END DISK_SIZE FREE_BYTES", or nothing if unreadable.
 # Name of a numbered partition, from parted's machine output
 # (num:start:end:size:fstype:name:flags). Empty when unnamed or unreadable.
+# The DEVICE NODE for a partition number, e.g. 2 -> /dev/sdb2, /dev/loop0p2,
+# /dev/nvme0n1p2.
+#
+# Not partition_name(), which returns parted's LABEL for the partition - "data",
+# "meta". Using that as a path made every safety check run against a device that
+# does not exist: blkid found no signature because there was no device, wipefs
+# found nothing, findmnt found nothing, and the guards all passed vacuously on
+# the way to deleting a real partition. Caught by the loop-device test, which is
+# exactly why that test exists.
+partition_device() {
+  local disk="$1" want="$2" base entry num path
+  base=$(basename "$disk")
+
+  # sysfs, because it is the kernel's own answer and it carries the partition
+  # NUMBER explicitly. lsblk cannot be asked for the number on util-linux 2.37,
+  # which is what Ubuntu 22.04 ships and what the appliance runs.
+  if [ -d "${SYSFS}/class/block/${base}" ]; then
+    for entry in "${SYSFS}/class/block/${base}"/*/partition; do
+      [ -r "$entry" ] || continue
+      num=$(cat "$entry" 2>/dev/null | tr -d '[:space:]')
+      [ "$num" = "$want" ] || continue
+      path="/dev/$(basename "$(dirname "$entry")")"
+      [ -b "$path" ] || continue
+      printf '%s' "$path"
+      return 0
+    done
+  fi
+
+  # Fall back to the usual naming, and only accept it if it really is a block
+  # device. Returning a path that does not exist is how every safety check
+  # below ends up passing on nothing at all.
+  case "$disk" in
+    *[0-9]) path="${disk}p${want}" ;;
+    *)      path="${disk}${want}" ;;
+  esac
+  [ -b "$path" ] || return 1
+  printf '%s' "$path"
+  return 0
+}
+
 partition_name() {
   local disk="$1" want="$2" out line
   out=$("$PARTED" -sm "$disk" unit B print 2>/dev/null) || return 0
@@ -163,6 +240,51 @@ disk_tail() {
 PLAN_MOUNT=""; PLAN_FS=""; PLAN_FSTYPE=""; PLAN_DISK=""; PLAN_PART=""
 PLAN_PARTNUM=""; PLAN_CRYPT=""; PLAN_LVM=""; PLAN_FREE=0
 
+# Ask the controller how big the disk is NOW.
+#
+# This has to happen BEFORE anything is measured, and it has to happen in plan
+# as well as apply. It used to sit inside grow_apply, after grow_plan had
+# already read the size - so the kernel was still reporting the capacity it
+# saw at boot, plan said "no unused space", and apply then skipped growpart
+# because plan had already decided there was nothing to do. An operator who
+# enlarged the disk in the hypervisor and pressed Check saw nothing, twice,
+# with no hint that a rescan was the missing step (live QA Phase 17,
+# 12 Sep 2026).
+#
+# It writes to a sysfs node, not to the disk. No sector is touched, no table
+# is written; the kernel re-reads the capacity the hypervisor is already
+# advertising. That is why it is safe in a plan that promises to change
+# nothing.
+rescan_disk() {
+  local disk="$1" base sysdev
+  [ -n "$disk" ] || return 0
+  base=$(basename "$disk")
+  sysdev="${SYSFS}/class/block/${base}/device/rescan"
+  if [ ! -w "$sysdev" ]; then
+    # Loop devices and some virtio setups have no rescan node. The hypervisor
+    # may already have notified the kernel, so this is not a failure.
+    return 0
+  fi
+  printf '1' > "$sysdev" 2>/dev/null || {
+    say "    (the kernel did not accept a rescan of ${disk}; continuing with the size it reports)"
+    return 0
+  }
+  # The capacity update is not instantaneous on every controller.
+  sleep 1
+  return 0
+}
+
+# The disk a mountpoint sits on, without doing any of the rest of the planning.
+# Needed because the rescan has to happen before the measuring, and the
+# measuring is what normally discovers the disk.
+disk_under() {
+  local mp="$1" fs chain
+  fs=$(fs_source "$mp") || return 1
+  [ -n "$fs" ] || return 1
+  chain=$(device_chain "$fs") || return 1
+  printf '%s\n' "$chain" | awk '$2=="disk"||$2=="loop" {print $1; exit}'
+}
+
 grow_plan() {
   local mp="$1"
   PLAN_MOUNT="$mp"; PLAN_FS=""; PLAN_FSTYPE=""; PLAN_DISK=""; PLAN_PART=""
@@ -171,6 +293,19 @@ grow_plan() {
   if ! allowed_mount "$mp"; then
     fail not-allowed "Only / and ${ZIMBRA_DIR} can be grown from here."
     return 1
+  fi
+
+  # Before measuring anything. See rescan_disk.
+  #
+  # Not in a dry run. "plan" promises to change nothing ON DISK, and a rescan
+  # honours that - it writes to a sysfs node, not to a sector. KIN_GROW_DRY_RUN
+  # makes a stronger promise, that nothing at all happens anywhere, and that
+  # mode exists so the refusals can be proved without a machine. The two
+  # promises are different and both worth keeping.
+  if [ "${KIN_GROW_SKIP_RESCAN:-0}" != "1" ] && [ "${KIN_GROW_DRY_RUN:-0}" != "1" ]; then
+    local probe_disk
+    probe_disk=$(disk_under "$mp" 2>/dev/null) || probe_disk=""
+    [ -n "$probe_disk" ] && rescan_disk "$probe_disk"
   fi
 
   PLAN_FS=$(fs_source "$mp")
@@ -333,6 +468,11 @@ grow_plan() {
     fi
     fail not-last-partition \
       "${PLAN_PART} is partition ${PLAN_PARTNUM} and partition ${last_num} sits after it. Growing it would run into that partition."
+    # A generic refusal here is true and useless. On the standard mail-disk
+    # layout the blocker is always the same 256 MiB partition reserved for a
+    # second server, and an operator who is told which partition and why can
+    # act on it.
+    report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
     return 1
   fi
 
@@ -359,27 +499,191 @@ run_step() {
   "$@"
 }
 
-grow_apply() {
-  local mp="$1" rc=0
-  grow_plan "$mp" || return 1
+# --- the reserved partition --------------------------------------------------
 
-  # Best effort: a disk enlarged while the guest was running still reports its
-  # old size until something asks the controller again. A failure here is not
-  # fatal, because the hypervisor may already have notified the kernel.
-  local base sysdev
-  base=$(basename "$PLAN_DISK")
-  sysdev="${SYSFS}/class/block/${base}/device/rescan"
-  if [ -w "$sysdev" ]; then
-    say "==> rescanning ${PLAN_DISK}"
-    if [ "${KIN_GROW_DRY_RUN:-0}" = "1" ]; then
-      # A dry run that pokes the kernel is not a dry run. This is harmless in
-      # itself, but the whole value of the mode is being able to say that
-      # nothing at all happened.
-      say "    (dry run) echo 1 > ${sysdev}"
-    else
-      printf '1' > "$sysdev" 2>/dev/null || say "    (rescan not accepted, continuing)"
+# Byte size and end offset of one partition, from the table we already read.
+part_field() {
+  local disk="$1" num="$2" field="$3" out line
+  out=$("$PARTED" -sm "$disk" unit B print 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in "${num}:"*) ;; *) continue ;; esac
+    printf '%s' "$line" | cut -d: -f"$field" | tr -d 'B'
+    return 0
+  done <<EOF
+$out
+EOF
+  return 1
+}
+
+# Is <part> the small, empty, never-used partition the installer reserved for a
+# second server? Prints a reason on stdout when it is NOT, so the caller can
+# say precisely what stopped it.
+#
+# Every check here answers "could this partition possibly contain something
+# somebody needs?" and the answer has to be no, on every one of them.
+reclaimable_reserved() {
+  local part="$1" disk="$2" num="$3" size sig holders base
+  base=$(basename "$part")
+
+  size=$(part_field "$disk" "$num" 4) || { printf 'its size could not be read'; return 1; }
+  case "$size" in ''|*[!0-9]*) printf 'its size could not be read'; return 1 ;; esac
+  if [ "$size" -gt "$RECLAIM_MAX_BYTES" ]; then
+    printf 'it is %s MiB, far larger than a reserved metadata partition' "$((size / 1024 / 1024))"
+    return 1
+  fi
+
+  # A filesystem, an LVM member, a DRBD superblock: anything blkid recognises
+  # means somebody is using it.
+  sig=$("$BLKID" -p -o value -s TYPE "$part" 2>/dev/null || true)
+  if [ -n "$(printf '%s' "$sig" | tr -d '[:space:]')" ]; then
+    printf 'it carries a %s signature' "$sig"
+    return 1
+  fi
+  sig=$("$WIPEFS" -n "$part" 2>/dev/null || true)
+  # wipefs prints a header even when it finds nothing; a data line names an
+  # offset, so look for one.
+  if printf '%s\n' "$sig" | grep -qE '^0x[0-9a-fA-F]+'; then
+    printf 'wipefs still sees a signature on it'
+    return 1
+  fi
+
+  if "$FINDMNT" -rno TARGET --source "$part" >/dev/null 2>&1; then
+    printf 'it is mounted'
+    return 1
+  fi
+
+  holders=$(ls "${SYSFS}/class/block/${base}/holders" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$holders" ]; then
+    printf 'something is stacked on top of it'
+    return 1
+  fi
+
+  if grep -qs -- "$part" "${ETC_ROOT}/fstab" 2>/dev/null; then
+    printf 'it is named in /etc/fstab'
+    return 1
+  fi
+  if grep -qs -- "$part" "${ETC_ROOT}/crypttab" 2>/dev/null; then
+    printf 'it is named in /etc/crypttab'
+    return 1
+  fi
+
+  # And this host must have no DRBD at all. A reserved partition on a machine
+  # that is actually replicating is not reserved, it is in use.
+  if [ -e "${PROC_ROOT}/drbd" ]; then
+    printf 'this host has DRBD loaded'
+    return 1
+  fi
+  if [ -d "${ETC_ROOT}/drbd.d" ] && ls "${ETC_ROOT}/drbd.d"/*.res >/dev/null 2>&1; then
+    printf 'this host has a DRBD resource configured'
+    return 1
+  fi
+
+  return 0
+}
+
+# Called from grow_plan when the only thing in the way is that reserved
+# partition. Says so in words, and marks it for the console.
+report_reserved_blocker() {
+  local disk="$1" datanum="$2" lastnum="$3"
+  local part reason
+  part=$(partition_device "$disk" "$lastnum") || part=""
+  [ -n "$part" ] || return 0
+  # Only the partition immediately after ours can be reclaimed; anything
+  # further out means the layout is not the one this understands.
+  if [ "$lastnum" -ne $((datanum + 1)) ]; then
+    return 0
+  fi
+  if reason=$(reclaimable_reserved "$part" "$disk" "$lastnum"); then
+    mark "RECLAIMABLE_RESERVED=${part}"
+    say ""
+    say "${part} is the small partition the installer reserved for a future second"
+    say "server. It has never been used, and because it sits after ${PLAN_PART} it is"
+    say "what stops this disk from growing. Freeing it would let ${PLAN_MOUNT} take the"
+    say "space you added."
+    say ""
+    say "Building an HA pair later would then need a small separate disk."
+  else
+    mark "RESERVED_NOT_RECLAIMABLE=${part}"
+    say ""
+    say "${part} sits after ${PLAN_PART} and cannot be freed automatically, because"
+    say "${reason}."
+  fi
+  return 0
+}
+
+# The one deletion this script will perform, and only when asked in words.
+reclaim_reserved() {
+  local disk="$1" datanum="$2" lastnum="$3" part reason
+  part=$(partition_device "$disk" "$lastnum") || part=""
+  if [ -z "$part" ]; then
+    fail reclaim-no-partition "Could not name the partition to free on ${disk}."
+    return 1
+  fi
+  if [ "$lastnum" -ne $((datanum + 1)) ]; then
+    fail reclaim-not-adjacent       "Partition ${lastnum} is not immediately after ${datanum}; this layout is not one to change unattended."
+    return 1
+  fi
+  if ! reason=$(reclaimable_reserved "$part" "$disk" "$lastnum"); then
+    fail reclaim-in-use "Refusing to free ${part}: ${reason}."
+    return 1
+  fi
+  say "==> freeing the reserved partition ${part} (${lastnum})"
+  if [ "${KIN_GROW_DRY_RUN:-0}" = "1" ]; then
+    say "    (dry run) ${PARTED} -s ${disk} rm ${lastnum}"
+    return 0
+  fi
+  if ! "$PARTED" -s "$disk" rm "$lastnum" >/dev/null 2>&1; then
+    fail reclaim-failed "parted would not remove partition ${lastnum} from ${disk}."
+    return 1
+  fi
+  "$PARTX" -u "$disk" >/dev/null 2>&1 || true
+  ok_line "reserved partition freed; ${PLAN_PART} can now extend"
+  return 0
+}
+
+ok_line() { printf 'KIN_GROW_OK %s\n' "$*"; }
+
+# Plan first so PLAN_DISK and PLAN_PARTNUM are known, then free the blocker.
+# grow_plan returns non-zero when there is nothing to do, which is exactly the
+# state we are here to change, so its exit code is not the decision.
+reclaim_preflight() {
+  local mp="$1" tail last_num
+  grow_plan "$mp" >/dev/null 2>&1 || true
+  if [ -z "${PLAN_DISK:-}" ] || [ -z "${PLAN_PARTNUM:-}" ]; then
+    fail reclaim-no-plan "Could not work out the layout of ${mp} well enough to free anything."
+    return 1
+  fi
+  tail=$(disk_tail "$PLAN_DISK") || {
+    fail reclaim-no-table "Could not read the partition table on ${PLAN_DISK}."
+    return 1
+  }
+  last_num=$(printf '%s' "$tail" | cut -d' ' -f1)
+  case "$last_num" in ''|*[!0-9]*) fail reclaim-no-table "Could not read the partition table on ${PLAN_DISK}."; return 1 ;; esac
+  if [ "$last_num" = "$PLAN_PARTNUM" ]; then
+    say "Nothing is in the way: ${PLAN_PART} is already the last partition."
+    return 0
+  fi
+  reclaim_reserved "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num" || return 1
+  return 0
+}
+
+grow_apply() {
+  local mp="$1" want_reclaim="${2:-0}" rc=0
+
+  # Reclaiming has to happen BEFORE planning, because planning is what decides
+  # there is no room, and the reserved partition is the reason there is none.
+  if [ "$want_reclaim" = "1" ]; then
+    if ! reclaim_preflight "$mp"; then
+      return 1
     fi
   fi
+
+  grow_plan "$mp" || return 1
+
+  # The rescan already happened, inside grow_plan, before the measuring. It
+  # used to be here - after the measuring - which made it useless: PLAN_FREE
+  # was computed from the pre-rescan size and the growpart below was then
+  # skipped for having nothing to do.
 
   if [ -n "$PLAN_PART" ] && [ "$PLAN_FREE" -ge "$MIN_GROW_BYTES" ]; then
     # growpart exits 1 and prints NOCHANGE when there is nothing to do, which
@@ -396,10 +700,40 @@ grow_apply() {
   fi
 
   if [ -n "$PLAN_CRYPT" ]; then
-    run_step "resizing the encrypted container" "$CRYPTSETUP" resize "$(basename "$PLAN_CRYPT")" || {
-      fail luks-failed "Could not resize the LUKS container on ${PLAN_CRYPT}."
-      return 1
-    }
+    # cryptsetup needs the volume key to resize, and where it gets one decides
+    # whether this works or hangs.
+    #
+    # With the key in the kernel keyring - the usual state after an unlock -
+    # `cryptsetup resize <name>` needs nothing further. Without it, cryptsetup
+    # PROMPTS, and a prompt inside a console stream is not a failure the
+    # operator sees: it is a spinner that never stops until the helper times
+    # out. That is what the loop-device test found.
+    #
+    # So: use the appliance's own keyfile when it is there, and pin stdin to
+    # /dev/null either way, so a prompt becomes an immediate, readable failure
+    # instead of a hang.
+    local crypt_name luks_key
+    crypt_name=$(basename "$PLAN_CRYPT")
+    luks_key="${KIN_LUKS_KEYFILE:-${ETC_ROOT}/kin-mail/luks-keyfile}"
+    if [ -r "$luks_key" ]; then
+      say "==> resizing the encrypted container (using the appliance keyfile)"
+      if [ "${KIN_GROW_DRY_RUN:-0}" = "1" ]; then
+        say "    (dry run) ${CRYPTSETUP} resize --key-file ${luks_key} ${crypt_name}"
+      elif ! "$CRYPTSETUP" resize --batch-mode --key-file "$luks_key" "$crypt_name" </dev/null; then
+        fail luks-failed \
+          "Could not resize the LUKS container on ${PLAN_CRYPT}, even with the appliance keyfile. The partition is already bigger; the filesystem was not touched."
+        return 1
+      fi
+    else
+      say "==> resizing the encrypted container"
+      if [ "${KIN_GROW_DRY_RUN:-0}" = "1" ]; then
+        say "    (dry run) ${CRYPTSETUP} resize ${crypt_name}"
+      elif ! "$CRYPTSETUP" resize --batch-mode "$crypt_name" </dev/null; then
+        fail luks-failed \
+          "Could not resize the LUKS container on ${PLAN_CRYPT}. cryptsetup wanted a key that is not in the kernel keyring and there is no keyfile at ${luks_key}. The partition is already bigger; the filesystem was not touched."
+        return 1
+      fi
+    fi
   fi
 
   if [ -n "$PLAN_LVM" ]; then
@@ -451,7 +785,19 @@ grow_apply() {
 # --- entry point -------------------------------------------------------------
 
 main() {
-  local action="${1:-}" mp="${2:-}"
+  local action="${1:-}" mp="${2:-}" flag="${3:-}" reclaim=0
+  case "$flag" in
+    ''|--reclaim-reserved) ;;
+    *)
+      fail unknown-option "No such option '${flag}'. The only one is --reclaim-reserved."
+      return 2
+      ;;
+  esac
+  [ "$flag" = "--reclaim-reserved" ] && reclaim=1
+  if [ "$reclaim" = "1" ] && [ "$action" != "apply" ]; then
+    fail reclaim-needs-apply "--reclaim-reserved only makes sense with apply."
+    return 2
+  fi
   case "$action" in
     plan|apply) ;;
     *)
@@ -474,7 +820,7 @@ main() {
     grow_plan "$mp"
     return $?
   fi
-  grow_apply "$mp"
+  grow_apply "$mp" "$reclaim"
   return $?
 }
 

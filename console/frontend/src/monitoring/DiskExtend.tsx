@@ -158,6 +158,25 @@ function freeBytes(log: string): number {
   return found ? Number(found[1]) : 0;
 }
 
+/**
+ * The mail disk is laid out as a big data partition followed by a small one
+ * the installer reserves for a future second server. On a single-server
+ * appliance that reserved partition is never used, and because it sits AFTER
+ * the data partition it makes the mail disk permanently ungrowable: space
+ * added in the hypervisor lands behind it and nothing can reach it.
+ *
+ * The helper says so by name when that is the only thing in the way.
+ */
+function reclaimableReserved(log: string): string {
+  const found = log.match(/KIN_GROW_RECLAIMABLE_RESERVED=(\S+)/);
+  return found ? found[1] : "";
+}
+
+function reservedButStuck(log: string): string {
+  const found = log.match(/KIN_GROW_RESERVED_NOT_RECLAIMABLE=(\S+)/);
+  return found ? found[1] : "";
+}
+
 function humanBytes(n: number): string {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
@@ -178,12 +197,18 @@ function TargetRow({
   const [phase, setPhase] = useState<Phase>("idle");
   const [log, setLog] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [reclaimOpen, setReclaimOpen] = useState(false);
 
   const stream = useCallback(
-    (op: "plan" | "apply", onEnd: (code: number, text: string) => void) => {
+    (
+      op: "plan" | "apply",
+      onEnd: (code: number, text: string) => void,
+      reclaim = false,
+    ) => {
       let text = "";
       const es = new EventSource(
-        `/api/wizard/deploy/stream?action=grow_disk&op=${op}&target=${target.id}`,
+        `/api/wizard/deploy/stream?action=grow_disk&op=${op}&target=${target.id}` +
+          (reclaim ? "&reclaim=1" : ""),
       );
       let code: number | null = null;
       es.onmessage = (ev) => {
@@ -230,20 +255,30 @@ function TargetRow({
     });
   }, [stream, onBusyChange]);
 
-  const apply = useCallback(() => {
-    setConfirmOpen(false);
-    setPhase("applying");
-    onBusyChange(true);
-    stream("apply", (code) => {
-      onBusyChange(false);
-      setPhase(code === 0 ? "done" : "failed");
-      if (code === 0) onGrew();
-    });
-  }, [stream, onBusyChange, onGrew]);
+  const apply = useCallback(
+    (reclaim = false) => {
+      setConfirmOpen(false);
+      setReclaimOpen(false);
+      setPhase("applying");
+      onBusyChange(true);
+      stream(
+        "apply",
+        (code) => {
+          onBusyChange(false);
+          setPhase(code === 0 ? "done" : "failed");
+          if (code === 0) onGrew();
+        },
+        reclaim,
+      );
+    },
+    [stream, onBusyChange, onGrew],
+  );
 
   const free = freeBytes(log);
   const summary = readable(log);
   const working = phase === "planning" || phase === "applying";
+  const reserved = reclaimableReserved(log);
+  const reservedStuck = reservedButStuck(log);
 
   return (
     <TargetBlock>
@@ -259,6 +294,18 @@ function TargetRow({
             onClick={() => setConfirmOpen(true)}
           >
             Extend by {humanBytes(free)}
+          </Button>
+        ) : reserved ? (
+          /* The one case where "Check again" would just repeat itself for
+             ever: the disk has room, and a partition nobody uses is in the
+             way. Offer the thing that actually helps. */
+          <Button
+            type="button"
+            variant="primary"
+            disabled={busy}
+            onClick={() => setReclaimOpen(true)}
+          >
+            Free the reserved partition and extend
           </Button>
         ) : (
           <Button
@@ -303,9 +350,32 @@ function TargetRow({
         detail="The partition is grown, then the filesystem. Nothing is unmounted and mail keeps running. This cannot be undone: a filesystem can be grown but not shrunk."
         confirmLabel="Extend now"
         variant="warn"
-        onConfirm={apply}
+        onConfirm={() => apply(false)}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      {/* A second, deliberately separate confirmation. This one deletes a
+          partition, and folding it into the ordinary Extend dialog would mean
+          somebody could delete one while intending only to grow a disk. */}
+      <ConfirmModal
+        open={reclaimOpen}
+        title="Free the reserved partition?"
+        message={`${reserved} is a small partition the installer set aside for a future second server. It has never been used, and it is what stops ${target.mount} from growing.`}
+        detail="It is deleted, then the disk is extended. The appliance checks first that it holds no filesystem, no volume group and no replication data, and refuses if it finds any. Building a high-availability pair later would need a small separate disk. This cannot be undone."
+        confirmLabel="Free it and extend"
+        variant="danger"
+        onConfirm={() => apply(true)}
+        onCancel={() => setReclaimOpen(false)}
+      />
+
+      {/* Something is in the way that we will not touch. Say which, and why,
+          rather than leaving Check again to be pressed for ever. */}
+      {reservedStuck && !working ? (
+        <Result $tone="warn">
+          {reservedStuck} sits after this partition and is in use, so this disk cannot
+          be extended from here.
+        </Result>
+      ) : null}
     </TargetBlock>
   );
 }

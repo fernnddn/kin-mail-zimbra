@@ -618,6 +618,83 @@ case "$out" in *"needs a local recursive resolver"*) pass "and the operator is w
   *) bad "should warn about the resolver requirement: ${out}" ;; esac
 write_gw_conf "192.0.2.9"
 
+# --- the two failures nobody goes looking for ---------------------------------
+# An open relay keeps working perfectly until the sending address is blocklisted
+# everywhere, and a gateway with a full disk stops accepting mail outright. Both
+# are silent, both are slow, and neither shows up as an error anywhere.
+fixture_healthy
+printf '%s' '{"data":[{"cidr":"192.0.2.20/32"}]}' > "${FIX}/GET_config_mynetworks.json"
+printf '%s' '{"data":[{"name":"pmg"}]}' > "${FIX}/GET_nodes.json"
+printf '%s' '{"data":{"rootfs":{"total":100,"used":40}}}' > "${FIX}/GET_nodes_pmg_status.json"
+vrun() {
+  KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" \
+  KIN_TEST_ZDOMAINS="example.test" run_gw verify
+}
+out=$(vrun)
+case "$out" in *"relay-scope is tight"*) pass "verify confirms nothing can relay through the gateway unauthenticated" ;;
+  *) bad "verify should check the gateway's relay scope: ${out}" ;; esac
+case "$out" in *"gateway.disk is 40% full"*) pass "verify reports how much room the gateway has left" ;;
+  *) bad "verify should check the gateway disk: ${out}" ;; esac
+case "$out" in *"KIN_GW_VERIFY problems=0"*) pass "a healthy gateway still verifies clean with the new checks" ;;
+  *) bad "healthy gateway should verify clean: ${out}" ;; esac
+
+# A range wide enough to relay for the internet.
+printf '%s' '{"data":[{"cidr":"192.0.2.20/32"},{"cidr":"203.0.113.0/16"}]}' > "${FIX}/GET_config_mynetworks.json"
+out=$(vrun)
+case "$out" in *"KIN_GW_PROBLEM gateway.relay-scope"*) pass "an over-wide trusted network is a problem, not a note" ;;
+  *) bad "a /16 should be flagged: ${out}" ;; esac
+case "$out" in *"That is an open relay"*) pass "and it is named as what it is" ;;
+  *) bad "should say open relay: ${out}" ;; esac
+
+printf '%s' '{"data":[{"cidr":"0.0.0.0/0"}]}' > "${FIX}/GET_config_mynetworks.json"
+out=$(vrun)
+case "$out" in *"KIN_GW_PROBLEM gateway.relay-scope"*) pass "a default route in the trusted networks is caught" ;;
+  *) bad "0.0.0.0/0 should be flagged: ${out}" ;; esac
+
+# Loopback is not a finding. A guard that cries wolf is a guard nobody reads.
+printf '%s' '{"data":[{"cidr":"127.0.0.0/8"},{"cidr":"192.0.2.20/32"}]}' > "${FIX}/GET_config_mynetworks.json"
+out=$(vrun)
+case "$out" in *"KIN_GW_PROBLEM gateway.relay-scope"*) bad "loopback was flagged as an open relay" ;;
+  *) pass "loopback is not mistaken for an open relay" ;; esac
+printf '%s' '{"data":[{"cidr":"192.0.2.20/32"}]}' > "${FIX}/GET_config_mynetworks.json"
+
+# A full disk stops mail. This release lengthened the quarantine, so checking
+# the machine can afford it is part of having made that trade.
+printf '%s' '{"data":{"rootfs":{"total":100,"used":93}}}' > "${FIX}/GET_nodes_pmg_status.json"
+out=$(vrun)
+case "$out" in *"KIN_GW_PROBLEM gateway.disk"*) pass "a nearly-full gateway disk is a problem" ;;
+  *) bad "93% full should be a problem: ${out}" ;; esac
+case "$out" in *"stops accepting mail altogether"*) pass "and the consequence is stated" ;;
+  *) bad "should say what a full disk does: ${out}" ;; esac
+
+printf '%s' '{"data":{"rootfs":{"total":100,"used":80}}}' > "${FIX}/GET_nodes_pmg_status.json"
+out=$(vrun)
+case "$out" in *"KIN_GW_WARN"*"80% full"*) pass "a filling disk is a warning before it is a problem" ;;
+  *) bad "80% should warn: ${out}" ;; esac
+case "$out" in *"KIN_GW_VERIFY problems=0"*) pass "and a warning does not fail verify" ;;
+  *) bad "a disk warning should not fail verify: ${out}" ;; esac
+
+# Neither check may fail verify when the gateway simply will not answer.
+printf '500' > "${FIX}/GET_nodes.code"
+printf '500' > "${FIX}/GET_config_mynetworks.code"
+out=$(vrun); rc=$?
+rm -f "${FIX}/GET_nodes.code" "${FIX}/GET_config_mynetworks.code"
+case "$out" in *"Could not read the gateway"*) pass "an unanswerable check says so rather than inventing a verdict" ;;
+  *) bad "should report it could not check: ${out}" ;; esac
+rm -f "${FIX}/GET_nodes.json" "${FIX}/GET_nodes_pmg_status.json"
+
+# Undeliverable mail is retried for longer than the default, not shorter.
+fixture_fresh
+: > "$CALLS"
+out=$(run_gw apply)
+if grep -q 'queue-lifetime=7' "$CALLS"; then
+  pass "undeliverable mail is retried for a week before it is given up on"
+else
+  bad "queue-lifetime should be set: $(grep -o 'queue-lifetime=[0-9]*' "$CALLS" | head -1)"
+fi
+case "$out" in *"bounce cannot be taken back"*) pass "and the reason for the longer window is stated" ;;
+  *) bad "should explain the queue lifetime: ${out}" ;; esac
+
 # =============================================================================
 # Tuning: performance and security
 # =============================================================================

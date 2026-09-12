@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useCountUp, useStaggerIn } from "../lib/motion";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { theme } from "../styles/theme";
@@ -17,7 +18,8 @@ import { formatValue } from "./chart";
  */
 
 type Column = { key: string; heading: string; kind: string };
-type Row = Record<string, string | number | null>;
+/** `partial` marks the day in progress: hours, not a whole day. */
+type Row = Record<string, string | number | null | boolean>;
 type Report = {
   period: string;
   label: string;
@@ -33,6 +35,8 @@ type Report = {
   busiest_day_accepted: number;
   days: number;
   unavailable: string[];
+  /** True when the collector has never produced anything for this period. */
+  no_data?: boolean;
   /** Whether the collector behind these numbers is still writing. */
   mail_flow?: {
     known: boolean;
@@ -165,6 +169,32 @@ const Headline = styled.div`
   gap: 12px;
   margin-bottom: 18px;
 `;
+
+/* The figure travels to its new value when the period changes.
+   
+   Not decoration: this page swaps every number at once when the period
+   selector moves, and a set of digits that simply blinks to a different value
+   is easy to misread as not having changed at all. It settles on the exact
+   value, never on an interpolated one, and it does not move for somebody who
+   has asked their system for less motion. */
+function CountingStat({
+  value,
+  format,
+}: {
+  value: number | null;
+  format: (v: number | null) => string;
+}) {
+  const ref = useRef<HTMLParagraphElement | null>(null);
+  useCountUp(
+    ref,
+    value === null || value === undefined ? 0 : Number(value),
+    (n) => format(Math.round(n)),
+  );
+  if (value === null || value === undefined) {
+    return <StatValue>{format(value)}</StatValue>;
+  }
+  return <StatValue ref={ref} />;
+}
 
 const Stat = styled.div`
   background: ${theme.bgElev};
@@ -335,6 +365,14 @@ const Foot = styled.tr`
   }
 `;
 
+/* Quiet on screen, and it prints. A reader handed the page on paper needs the
+   caveat as much as the one looking at it. */
+const PartialMark = styled.span`
+  color: ${theme.muted};
+  font-size: 0.76rem;
+  white-space: nowrap;
+`;
+
 const Empty = styled.p`
   margin: 0;
   padding: 28px 16px;
@@ -406,6 +444,17 @@ export function ReportsTab() {
 
   const columns = report?.columns || [];
   const rows = report?.daily || [];
+  /* "No rows" and "no data" are different states, and conflating them is what
+     printed real totals above the words "No mail figures for this period". */
+  const statsRef = useRef<HTMLDivElement | null>(null);
+  /* Keyed on the period, so the cards arrive when the report genuinely
+     changes and stay still while somebody reads it. */
+  useStaggerIn(statsRef, report?.period ?? "", { step: 38, max: 8 });
+
+  const hasTotals = Boolean(
+    report && !report.no_data &&
+      Object.values(report.totals || {}).some((v) => v !== null && v !== undefined),
+  );
 
   if (loading && !report) {
     return (
@@ -482,14 +531,14 @@ export function ReportsTab() {
 
       {report ? (
         <>
-          <Headline>
+          <Headline ref={statsRef}>
             {HEADLINE.map((key) => {
               const col = columns.find((c) => c.key === key);
               if (!col) return null;
               return (
                 <Stat key={key}>
                   <StatLabel>{col.heading}</StatLabel>
-                  <StatValue>{count(report.totals[key])}</StatValue>
+                  <CountingStat value={report.totals[key]} format={count} />
                   {key === "delivered_in" && report.delivered_pct !== null ? (
                     <StatSub>{pct(report.delivered_pct)} of final outcomes</StatSub>
                   ) : null}
@@ -553,7 +602,13 @@ export function ReportsTab() {
                   <tbody>
                     {rows.map((row) => (
                       <Tr key={String(row.date)}>
-                        <Td>{dayLabel(String(row.date))}</Td>
+                        {/* The day in progress covers hours, not a day. Saying
+                            so stops it being read as a collapse in traffic
+                            next to yesterday's full figure. */}
+                        <Td>
+                          {dayLabel(String(row.date))}
+                          {row.partial ? <PartialMark> so far today</PartialMark> : null}
+                        </Td>
                         {columns.map((c) => {
                           const raw = row[c.key];
                           const value =
@@ -583,6 +638,17 @@ export function ReportsTab() {
                   </tfoot>
                 </Table>
               </TableWrap>
+            ) : hasTotals ? (
+              /* Totals but no rows. The table is built from completed days and
+                 the totals include today, so this is what a first day looks
+                 like. Printing the generic "no figures" line under real numbers
+                 was two contradictory statements on one screen. */
+              <Empty>
+                The figures above are from today, and no full day has completed yet.
+                <br />
+                The daily table fills in from tomorrow. Nothing is missing and
+                nothing is wrong.
+              </Empty>
             ) : (
               <Empty>
                 No mail figures for this period.

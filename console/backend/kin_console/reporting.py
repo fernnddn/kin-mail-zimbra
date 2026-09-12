@@ -619,6 +619,48 @@ def fetch_daily(metric: str, start: datetime, end: datetime) -> list[tuple[float
     return _first_series_points(parse_matrix(_get("/api/v1/query_range", params)))
 
 
+def build_partial_day_params(metric: str, end: datetime) -> dict[str, str] | None:
+    """The day that has not finished yet, as a single instant query.
+
+    The daily range query can only produce a point at a day BOUNDARY, so the
+    day in progress never appears in it. The totals, which are one instant
+    query over the whole period, do include it.
+
+    On a freshly deployed appliance those two facts collide badly: the
+    collector started today, so there is no completed day with any data, the
+    table comes back empty - and the totals are non-zero. The console then
+    printed real figures above the sentence "No mail figures for this period"
+    (live QA Phase 17, 12 Sep 2026). Two contradictory statements on one
+    screen, and no way for the operator to tell which to believe.
+
+    Returns None when `end` is exactly a local midnight, because then there is
+    no partial day and the range query has already covered everything.
+    """
+    if metric not in REPORT_SERIES:
+        raise MonitoringError(f"unknown report series {metric!r}")
+    midnight = end.astimezone(appliance_zone()).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    elapsed = int(round(end.timestamp() - midnight.timestamp()))
+    if elapsed <= 0:
+        return None
+    _heading, template, _kind = REPORT_SERIES[metric]
+    return {
+        "query": template.replace("$w", f"{elapsed}s"),
+        "time": f"{end.timestamp():.3f}",
+    }
+
+
+def fetch_partial_day(metric: str, end: datetime) -> float | None:
+    params = build_partial_day_params(metric, end)
+    if params is None:
+        return None
+    rows = parse_vector(_get("/api/v1/query", params))
+    if not rows:
+        return None
+    return rows[0].get("value")
+
+
 def fetch_total(metric: str, start: datetime, end: datetime) -> float | None:
     params = build_total_params(metric, start, end)
     rows = parse_vector(_get("/api/v1/query", params))
@@ -650,6 +692,28 @@ def build_report(period: str, *, now: datetime | None = None) -> dict[str, Any]:
                 failed.append(metric)
 
     rows = daily_rows(per_metric, start=start, end=end)
+
+    # The day in progress, which the range query above cannot produce.
+    partial: dict[str, Any] = {}
+    for metric in REPORT_COLUMNS:
+        kind = REPORT_SERIES[metric][2]
+        try:
+            value = fetch_partial_day(metric, end)
+        except MonitoringError:
+            value = None
+        if value is not None:
+            partial[metric] = _round_count(value, kind)
+    if partial:
+        today = end.astimezone(appliance_zone()).strftime("%Y-%m-%d")
+        # Only if the range query did not already reach today. It cannot, but
+        # a step landing exactly on midnight would produce a row for it, and
+        # two rows for one date is worse than none.
+        if not any(r.get("date") == today for r in rows):
+            row: dict[str, Any] = {"date": today, "partial": True}
+            for metric in REPORT_COLUMNS:
+                row[metric] = partial.get(metric, 0)
+            rows.append(row)
+
     return {
         "period": (period or DEFAULT_PERIOD).strip().lower() or DEFAULT_PERIOD,
         "label": label,

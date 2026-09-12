@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styled from "@emotion/styled";
-import { keyframes } from "@emotion/react";
 import { api } from "../api";
 import { useStaggerIn } from "../lib/motion";
 import { ConsoleChrome } from "../ConsoleChrome";
@@ -66,10 +65,6 @@ type Status = {
 
 type Op = "probe" | "plan" | "apply" | "verify" | "revert";
 
-const rise = keyframes`
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
-`;
 
 const Grid = styled.div`
   display: grid;
@@ -79,17 +74,18 @@ const Grid = styled.div`
 /* Cards arrive in sequence rather than all at once, which makes the page read
    as a set of steps instead of a wall. The delay is capped so a slow reader
    never waits on decoration. */
-const Card = styled.section<{ $i?: number }>`
+/* No animation of its own.
+   
+   These used to carry a CSS keyframe with a per-card animation-delay while the
+   page ALSO ran a JS stagger. Two schedulers animating the same region is how a
+   layout ends up appearing to fight itself, and the CSS one restarted every
+   time a card mounted or unmounted - which the certificate card did on its
+   first Probe. Entry is handled in one place now: useStaggerIn on the grid. */
+const Card = styled.section`
   border: 1px solid ${theme.line};
   border-radius: ${theme.radius.md};
   background: ${theme.bgElev};
   padding: 1rem 1.1rem 1.15rem;
-  animation: ${rise} ${theme.motion.slow} ${theme.motion.ease.standard} both;
-  animation-delay: ${(p) => Math.min((p.$i ?? 0) * 45, 270)}ms;
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-  }
 `;
 
 const CardHead = styled.div`
@@ -457,6 +453,11 @@ export default function MailGatewayPage() {
 
   const lines = useMemo(() => readable(log), [log]);
   const linesRef = useRef<HTMLDivElement | null>(null);
+  const cardsRef = useRef<HTMLDivElement | null>(null);
+  /* Keyed on whether the certificate card is showing a fingerprint, because
+     that is the only thing that changes the SET of cards. Re-running it on
+     every render would animate the page while somebody is typing into it. */
+  useStaggerIn(cardsRef, loading ? 0 : 1, { step: 42, max: 8 });
   /* Keyed on the run, not on the log: the transcript grows line by line while
      a stream is open, and re-animating on every chunk would make the panel
      flicker for the whole of an apply. */
@@ -556,8 +557,8 @@ export default function MailGatewayPage() {
         {err ? <Err>{err}</Err> : null}
         {note ? <OkMsg>{note}</OkMsg> : null}
 
-        <Grid>
-          <Card $i={0}>
+        <Grid ref={cardsRef}>
+          <Card>
             <CardHead>
               <h2>How mail will flow</h2>
               <StepTag>Reference</StepTag>
@@ -571,7 +572,7 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             </Hint>
           </Card>
 
-          <Card $i={1}>
+          <Card>
             <CardHead>
               <h2>1. Connect to the gateway</h2>
               <StepTag $done={configured}>{configured ? "Recorded" : "Not recorded"}</StepTag>
@@ -672,43 +673,7 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             </Actions>
           </Card>
 
-          <Card $i={2}>
-            <CardHead>
-              <h2>3. What the internet sees</h2>
-              <StepTag $done={hasPublic}>{hasPublic ? "Recorded" : "Needed for DNS"}</StepTag>
-            </CardHead>
-            <Hint>
-              These are the gateway&rsquo;s public identity, and they are the only values
-              that belong in DNS. An MX record can only name a host, never an address, and
-              an SPF record listing a private address authorises nobody.
-            </Hint>
-            <FieldRow>
-              <Label htmlFor="gw-pub-host">Public hostname</Label>
-              <Input
-                id="gw-pub-host"
-                value={publicHost}
-                onChange={(e) => setPublicHost(e.target.value)}
-                placeholder="relay.your-domain.com"
-                autoComplete="off"
-              />
-            </FieldRow>
-            <FieldRow>
-              <Label htmlFor="gw-pub-ip">Public address</Label>
-              <Input
-                id="gw-pub-ip"
-                value={publicIp}
-                onChange={(e) => setPublicIp(e.target.value)}
-                placeholder="the address the internet reaches it on"
-                autoComplete="off"
-              />
-            </FieldRow>
-            <Hint>
-              Both are saved with Connect above. Without them this page cannot print your
-              DNS records, and will say so rather than guess.
-            </Hint>
-          </Card>
-
-          <Card $i={3}>
+          <Card>
             <CardHead>
               <h2>2. Test the connection and confirm the certificate</h2>
               <StepTag $done={pinned}>{pinned ? "Confirmed" : "Not confirmed"}</StepTag>
@@ -766,7 +731,43 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             ) : null}
           </Card>
 
-          <Card $i={4}>
+          <Card>
+            <CardHead>
+              <h2>3. What the internet sees</h2>
+              <StepTag $done={hasPublic}>{hasPublic ? "Recorded" : "Needed for DNS"}</StepTag>
+            </CardHead>
+            <Hint>
+              These are the gateway&rsquo;s public identity, and they are the only values
+              that belong in DNS. An MX record can only name a host, never an address, and
+              an SPF record listing a private address authorises nobody.
+            </Hint>
+            <FieldRow>
+              <Label htmlFor="gw-pub-host">Public hostname</Label>
+              <Input
+                id="gw-pub-host"
+                value={publicHost}
+                onChange={(e) => setPublicHost(e.target.value)}
+                placeholder="relay.your-domain.com"
+                autoComplete="off"
+              />
+            </FieldRow>
+            <FieldRow>
+              <Label htmlFor="gw-pub-ip">Public address</Label>
+              <Input
+                id="gw-pub-ip"
+                value={publicIp}
+                onChange={(e) => setPublicIp(e.target.value)}
+                placeholder="the address the internet reaches it on"
+                autoComplete="off"
+              />
+            </FieldRow>
+            <Hint>
+              Both are saved with Connect above. Without them this page cannot print your
+              DNS records, and will say so rather than guess.
+            </Hint>
+          </Card>
+
+          <Card>
             <CardHead>
               <h2>4. Apply the link</h2>
               <StepTag $done={compliant}>{compliant ? "Applied" : "Not applied"}</StepTag>
@@ -840,7 +841,7 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             ) : null}
           </Card>
 
-          <Card $i={5}>
+          <Card>
             <CardHead>
               <h2>5. DNS, then verify</h2>
               <StepTag $done={hasPublic}>Yours to change</StepTag>
@@ -870,7 +871,7 @@ PTR   ${status.public_ip}   →  ${status.public_host}   (ask your ISP)`}</Flow>
             </Hint>
           </Card>
 
-          <Card $i={6}>
+          <Card>
             <CardHead>
               <h2>Undo</h2>
               <StepTag>Rarely needed</StepTag>
@@ -897,7 +898,7 @@ PTR   ${status.public_ip}   →  ${status.public_host}   (ask your ISP)`}</Flow>
           </Card>
 
           {log ? (
-            <Card $i={7}>
+            <Card>
               <CardHead>
                 <h2>What happened</h2>
                 <StepTag>{running ? "Running" : "Finished"}</StepTag>

@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import styled from "@emotion/styled";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api";
 import { useAuth } from "./auth";
+import { prefersReducedMotion, slideTo } from "./lib/motion";
 import { useSetup } from "./setup";
 import { theme } from "./styles/theme";
 import { Avatar, BrandLockup, Dropdown, focusRingOnDark, MenuItem } from "./ui";
@@ -51,6 +52,22 @@ const SetupTop = styled.header`
   background: ${theme.bgElev};
   border-bottom: 1px solid ${theme.line};
   flex-shrink: 0;
+`;
+
+/* Travels between nav items rather than blinking from one to the next. Sits
+   behind the links, so it can never intercept a click. */
+const RailMarker = styled.span`
+  position: absolute;
+  left: 0;
+  width: 2px;
+  background: ${theme.oxide};
+  border-radius: 0 2px 2px 0;
+  pointer-events: none;
+  opacity: 0;
+`;
+
+const RailNavWrap = styled.div`
+  position: relative;
 `;
 
 const Rail = styled.aside`
@@ -121,9 +138,11 @@ const RailLink = styled(NavLink)`
     background: rgba(255, 255, 255, 0.04);
   }
 
+  /* The 2px edge stays as the accessible, no-JS marker: if the travelling
+     indicator below never runs - reduced motion, a failed measure - the
+     active item is still unambiguous. */
   &.active {
     color: ${theme.paper};
-    border-left-color: ${theme.oxide};
     background: rgba(255, 255, 255, 0.06);
     font-weight: 600;
   }
@@ -234,6 +253,52 @@ const BannerLink = styled(Link)`
   white-space: nowrap;
 `;
 
+/**
+ * Slide the rail marker to whichever nav item is active.
+ *
+ * Measured from the DOM rather than tracked in state, because the rail is a
+ * plain list of NavLinks and the active one is decided by the router. A
+ * measurement that fails - the item is not laid out yet, the rail is a
+ * horizontal band on a narrow screen - simply leaves the marker hidden, and
+ * the `.active` background still says where you are.
+ */
+function useRailMarker(
+  navRef: React.RefObject<HTMLDivElement | null>,
+  markerRef: React.RefObject<HTMLSpanElement | null>,
+  pathname: string,
+) {
+  useEffect(() => {
+    const host = navRef.current;
+    const marker = markerRef.current;
+    if (!host || !marker) return;
+    // Two frames: one for the router to apply .active, one for layout.
+    const id = window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        const active = host.querySelector<HTMLElement>("a.active");
+        if (!active) {
+          marker.style.opacity = "0";
+          return;
+        }
+        const top = active.offsetTop;
+        const height = active.offsetHeight;
+        if (!height) {
+          marker.style.opacity = "0";
+          return;
+        }
+        const first = marker.style.opacity !== "1";
+        marker.style.opacity = "1";
+        if (first || prefersReducedMotion()) {
+          marker.style.top = `${top}px`;
+          marker.style.height = `${height}px`;
+          return;
+        }
+        slideTo(marker, top, height);
+      }),
+    );
+    return () => window.cancelAnimationFrame(id);
+  }, [pathname, navRef, markerRef]);
+}
+
 export function ConsoleChrome({
   hint,
   children,
@@ -253,6 +318,13 @@ export function ConsoleChrome({
   // mail_gateway in SENSITIVE_OPS_COMMANDS, which is both ops roles.
   const isOps = isSuper || user?.role === "kin_support_ops";
   const [menuOpen, setMenuOpen] = useState(false);
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const markerRef = useRef<HTMLSpanElement | null>(null);
+  /* useLocation, not window.location: the latter compiles fine and is not
+     reactive, so the marker would only move on a full page load and would sit
+     under the wrong item for the whole of a normal session. */
+  const routerLocation = useLocation();
+  useRailMarker(navRef, markerRef, routerLocation.pathname);
   const alerts = useAlerts();
   const [license, setLicense] = useState<{
     status?: string;
@@ -336,7 +408,10 @@ export function ConsoleChrome({
         <RailBrand type="button" onClick={() => navigate("/cluster")}>
           <BrandLockup compact light />
         </RailBrand>
-        <RailNav>{railNav}</RailNav>
+        <RailNavWrap ref={navRef}>
+          <RailMarker ref={markerRef} aria-hidden="true" />
+          <RailNav>{railNav}</RailNav>
+        </RailNavWrap>
         {user ? (
           <RailGroup>
             <TaskCenter alerts={alerts} rail />

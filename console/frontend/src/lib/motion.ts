@@ -173,6 +173,23 @@ export function drawPath(path: SVGPathElement | null, on: boolean) {
 }
 
 /**
+ * Move an absolutely-positioned marker to a new top and height.
+ *
+ * For the one in the navigation rail: a marker that travels tells you the two
+ * pages are part of the same console, where one that blinks from item to item
+ * reads as the whole screen having been replaced.
+ */
+export function slideTo(el: HTMLElement | null, top: number, height: number) {
+  if (!el) return;
+  run(el, {
+    top: `${top}px`,
+    height: `${height}px`,
+    duration: DUR.base,
+    ease: EASE.emphasis,
+  } as AnimationParams);
+}
+
+/**
  * A short, non-repeating attention pulse.
  *
  * For the moment a value the operator is waiting on actually changes. Never on

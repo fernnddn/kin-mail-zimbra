@@ -818,6 +818,11 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
     args = args or {}
     op = str(args.get("op") or "plan").strip().lower()
     target = str(args.get("target") or "").strip().lower()
+    # Deleting the partition the installer reserved for a second server is the
+    # only way the mail disk can ever grow, and it is still a deletion. It is
+    # never implied: the console has to ask for it by name, and the operator
+    # has to have been shown what it removes.
+    reclaim = str(args.get("reclaim") or "").strip().lower() in ("1", "true", "yes")
 
     if op not in ("plan", "apply"):
         yield proto.event_stderr("op must be plan or apply\n")
@@ -847,6 +852,14 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
             yield ev
         return
 
+    if reclaim:
+        yield proto.event_stdout(
+            "This will delete the small partition reserved for a future second "
+            "server before growing the disk. It is unused on a single-server "
+            "appliance, and the helper refuses if it turns out to contain "
+            "anything at all.\n"
+        )
+
     # Applying moves a partition boundary. It must never overlap a deploy, an
     # Add or Remove Host, or a metrics install that is mid-apt.
     lock_fh = try_lock_maintenance()
@@ -862,8 +875,11 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
             f"Growing {mountpoint} into unused space on its disk. "
             "Mail keeps running; nothing is unmounted.\n"
         )
+        argv = [str(script), "apply", mountpoint]
+        if reclaim:
+            argv.append("--reclaim-reserved")
         async for ev in _stream_subprocess(
-            [str(script), "apply", mountpoint],
+            argv,
             transcript=DEPLOY_LAST_LOG,
             transcript_reset=False,
         ):
