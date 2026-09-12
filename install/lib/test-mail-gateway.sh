@@ -458,82 +458,165 @@ case "$out" in *"HTTP 500"*) pass "the gateway's actual answer reaches the opera
   *) bad "the HTTP status should survive the command substitution: ${out}" ;; esac
 
 # --- the rule database -------------------------------------------------------
-# Scoring a message as a virus does nothing unless a rule acts on the verdict.
-# Until these tests existed, the code that reads and re-activates rules had only
-# ever been run against a gateway that refused to answer.
+# Fixtures are the real rule set from a live PMG 9.1, names and ids included.
+# The first version of this matched names by keyword, and on that gateway the
+# keyword "spam" caught "Block Spam (Level 10)" - a rule that DESTROYS mail on
+# a score rather than quarantining it. An installer must not switch that on.
 rules_fixture() {
   printf '%s' "$1" > "${FIX}/GET_config_ruledb_rules.json"
 }
 
-fixture_fresh
-rules_fixture '{"data":[
-  {"id":1,"name":"Block Viruses","active":1},
-  {"id":2,"name":"Quarantine Spam","active":1},
-  {"id":3,"name":"Block Dangerous Files","active":1},
-  {"id":4,"name":"Whitelist","active":1}
+# The factory set as it actually ships, with the ids this gateway had.
+FACTORY_RULES='{"data":[
+  {"id":4,"name":"Blocklist","active":1},
+  {"id":2,"name":"Block Viruses","active":1},
+  {"id":3,"name":"Virus Alert","active":1},
+  {"id":1,"name":"Block Dangerous Files","active":1},
+  {"id":5,"name":"Modify Header","active":1},
+  {"id":13,"name":"Quarantine Office Files","active":0},
+  {"id":12,"name":"Block Multimedia Files","active":0},
+  {"id":6,"name":"Welcomelist","active":1},
+  {"id":9,"name":"Block Spam (Level 10)","active":0},
+  {"id":8,"name":"Quarantine/Mark Spam (Level 5)","active":0},
+  {"id":7,"name":"Quarantine/Mark Spam (Level 3)","active":1},
+  {"id":10,"name":"Block outgoing Spam","active":0},
+  {"id":11,"name":"Add Disclaimer","active":0}
 ]}'
+
+fixture_fresh
+rules_fixture "$FACTORY_RULES"
+: > "$CALLS"
 out=$(run_gw apply)
-case "$out" in *"rule active: Block Viruses"*) pass "an active virus rule is reported by name" ;;
-  *) bad "should report active rules: ${out}" ;; esac
-case "$out" in *"rule active: Block Dangerous Files"*) pass "the dangerous-attachment rule is checked, not assumed" ;;
-  *) bad "should report the attachment rule: ${out}" ;; esac
-if grep -qE 'X PUT .*config/ruledb/rules/[0-9]' "$CALLS"; then
-  bad "an already-active rule was written to; the customer's rule database must be left alone"
+
+# The endpoint. /config/ruledb/rules/{id} is a DIRECTORY on PMG 9.1 and
+# answers 501 to a write; the settable object is one level down. Every rule
+# activation failed on the live gateway because of this.
+if grep -q 'config/ruledb/rules/8/config' "$CALLS"; then
+  pass "a rule is written at .../rules/{id}/config, which is the object PMG exposes"
 else
-  pass "rules that are already active are read and not touched"
+  bad "wrong rule endpoint: $(grep -o 'config/ruledb/rules[^ ]*' "$CALLS" | sort -u | tr '\n' ' ')"
 fi
 
-# A factory rule that is merely switched off is safe to switch back on.
-fixture_fresh
-rules_fixture '{"data":[
-  {"id":7,"name":"Block Viruses","active":0},
-  {"id":8,"name":"Quarantine Spam","active":1}
-]}'
-out=$(run_gw apply)
-if grep -q 'X PUT .*config/ruledb/rules/7' "$CALLS" && grep -q 'active=1' "$CALLS"; then
-  pass "a disabled virus rule is switched back on"
-else
-  bad "should re-activate rule 7: $(grep ruledb "$CALLS" | head -2)"
-fi
-case "$out" in *"rule re-activated: Block Viruses"*) pass "and says so, rather than changing the gateway quietly" ;;
-  *) bad "should report the re-activation: ${out}" ;; esac
+# Quarantine is recoverable, so switching it on is ours to do.
+case "$out" in *"rule switched on: Quarantine/Mark Spam (Level 5)"*)
+  pass "the Level 5 rule is switched on: confident spam is quarantined, not lost" ;;
+  *) bad "should enable the Level 5 quarantine rule: ${out}" ;; esac
 
-# If it cannot be switched on, that is a warning with a consequence attached -
-# never a silent pass, and never a failed apply.
+# Blocking is not. A false positive here is a message nobody can recover.
+if grep -q 'config/ruledb/rules/9/config' "$CALLS"; then
+  bad "Block Spam (Level 10) was switched on; it destroys mail on a score"
+else
+  pass "Block Spam (Level 10) is left alone - a blocked message cannot be released"
+fi
+
+# Rules that would take a business offline must never be touched by an installer.
+for id in 13 12 10 11; do
+  if grep -q "config/ruledb/rules/${id}/config" "$CALLS"; then
+    bad "rule ${id} was switched on; office files, multimedia and disclaimers are not ours"
+  fi
+done
+pass "office-file, multimedia, outbound-block and disclaimer rules are left to the customer"
+
+case "$out" in *"rule on: Block Viruses"*) pass "an active protective rule is confirmed by name" ;;
+  *) bad "should confirm Block Viruses: ${out}" ;; esac
+case "$out" in *"rule on: Block Dangerous Files"*) pass "the dangerous-attachment rule is checked, not assumed" ;;
+  *) bad "should confirm the attachment rule: ${out}" ;; esac
+case "$out" in *"A blocked"*"message is gone"*) pass "the restraint is stated, so it reads as a decision and not an omission" ;;
+  *) bad "should explain why blocking rules are left off: ${out}" ;; esac
+
+# A protective rule that the operator turned off is reported, never silently
+# turned back on: they may have had a reason.
 fixture_fresh
-rules_fixture '{"data":[{"id":9,"name":"Block Viruses","active":0}]}'
-printf '403' > "${FIX}/PUT_config_ruledb_rules_9.code"
+rules_fixture '{"data":[{"id":2,"name":"Block Viruses","active":0},{"id":7,"name":"Quarantine/Mark Spam (Level 3)","active":1}]}'
+: > "$CALLS"
+out=$(run_gw apply)
+case "$out" in *"rule OFF: Block Viruses"*) pass "a protective rule that is off is reported loudly" ;;
+  *) bad "should warn about an inactive virus rule: ${out}" ;; esac
+if grep -q 'config/ruledb/rules/2/config' "$CALLS"; then
+  bad "an operator's deliberate change was overruled silently"
+else
+  pass "and is not overruled - the operator may have turned it off on purpose"
+fi
+
+# A rule we have never seen is reported and left alone.
+fixture_fresh
+rules_fixture '{"data":[{"id":40,"name":"Customer Special Rule","active":1}]}'
+: > "$CALLS"
+out=$(run_gw apply)
+if grep -q 'config/ruledb/rules/40/config' "$CALLS"; then
+  bad "an unrecognised rule was modified"
+else
+  pass "an unrecognised rule is left exactly as the customer left it"
+fi
+case "$out" in *"No protective rule is active"*) pass "a gateway with nothing protective on is called out" ;;
+  *) bad "should warn when nothing protective is active: ${out}" ;; esac
+case "$out" in *"scan every message and then deliver all of them"*) pass "and the consequence is spelled out" ;;
+  *) bad "should explain the consequence: ${out}" ;; esac
+
+# Failure to switch a rule on is a warning, never a failed apply.
+fixture_fresh
+rules_fixture '{"data":[{"id":8,"name":"Quarantine/Mark Spam (Level 5)","active":0}]}'
+printf '403' > "${FIX}/PUT_config_ruledb_rules_8_config.code"
 out=$(run_gw apply); rc=$?
-rm -f "${FIX}/PUT_config_ruledb_rules_9.code"
-case "$out" in *"rule INACTIVE: Block Viruses"*) pass "a rule that cannot be switched on is named" ;;
-  *) bad "should warn about the inactive rule: ${out}" ;; esac
+rm -f "${FIX}/PUT_config_ruledb_rules_8_config.code"
+case "$out" in *"could not switch it on"*) pass "a rule that cannot be switched on is named with the reason" ;;
+  *) bad "should report the failure: ${out}" ;; esac
 if [ "$rc" -eq 0 ]; then
   pass "and it does not fail the apply, because mail still flows"
 else
   bad "a rule problem should not fail apply (rc=${rc})"
 fi
 
-# A gateway with no protective rules at all filters beautifully and delivers
-# everything anyway. That is worth saying out loud.
-fixture_fresh
-rules_fixture '{"data":[{"id":1,"name":"Some Custom Rule","active":1}]}'
-out=$(run_gw apply)
-case "$out" in *"No virus, spam or attachment rules were found"*) pass "a gateway with no protective rules is called out" ;;
-  *) bad "should warn when nothing protective exists: ${out}" ;; esac
-case "$out" in *"scans mail and then delivers all of it"*) pass "and the consequence is spelled out, not implied" ;;
-  *) bad "should explain the consequence: ${out}" ;; esac
-
-# Never create, edit or delete. The rule database is the one part of PMG a
-# customer legitimately customises.
-fixture_fresh
-rules_fixture '{"data":[{"id":1,"name":"Block Viruses","active":1}]}'
-out=$(run_gw apply)
+# Never create or delete.
 if grep -qE 'X (POST|DELETE) .*config/ruledb' "$CALLS"; then
-  bad "apply created or deleted a rule; it may only activate an existing one"
+  bad "apply created or deleted a rule in the customer's database"
 else
-  pass "apply never creates or deletes a rule in the customer's database"
+  pass "apply never creates or deletes a rule"
 fi
 rm -f "${FIX}/GET_config_ruledb_rules.json"
+
+# --- blocklists that reject at the door --------------------------------------
+# A DNSBL in PMG is a hard SMTP reject, and Postfix reads ANY 127.0.0.0/8
+# answer as a listing. Spamhaus answers 127.255.255.254 - "Error: open
+# resolver" - to every query that arrives through a public resolver, so every
+# sender looked listed and all inbound mail was refused on a live deployment.
+fixture_fresh
+: > "$CALLS"
+out=$(run_gw apply)
+if grep -q 'delete=dnsbl_sites' "$CALLS"; then
+  pass "apply CLEARS the SMTP blocklist, so re-applying repairs a gateway that has one"
+else
+  bad "apply should clear dnsbl_sites: $(grep -o 'dnsbl[^ ]*' "$CALLS" | head -2)"
+fi
+if grep -q 'dnsbl_sites=zen' "$CALLS"; then
+  bad "a DNSBL is still being set by default"
+else
+  pass "no DNSBL is imposed by default"
+fi
+case "$out" in *"scored, never refused at the door"*) pass "and the trade is explained rather than left silent" ;;
+  *) bad "should explain the DNSBL decision: ${out}" ;; esac
+
+# SpamAssassin still consults the same lists - scored, not rejected.
+if grep -q 'rbl_checks=1' "$CALLS"; then
+  pass "blocklist data is still used, as score rather than refusal"
+else
+  bad "rbl_checks should stay on"
+fi
+
+# An operator who has a local resolver can opt in, and gets a return-code
+# filter so an error answer can never be read as a listing.
+printf 'GATEWAY_DNSBL="zen.spamhaus.org"\n' >> "$GWCONF"
+fixture_fresh
+: > "$CALLS"
+out=$(run_gw apply)
+if grep -q 'dnsbl_sites=zen.spamhaus.org=127.0.0' "$CALLS"; then
+  pass "an opted-in blocklist is pinned to the answers that really mean listed"
+else
+  bad "opt-in DNSBL should carry a return-code filter: $(grep -o 'dnsbl_sites=[^ ]*' "$CALLS" | head -1)"
+fi
+case "$out" in *"needs a local recursive resolver"*) pass "and the operator is warned what it requires" ;;
+  *) bad "should warn about the resolver requirement: ${out}" ;; esac
+write_gw_conf "192.0.2.9"
 
 # =============================================================================
 # Tuning: performance and security
@@ -766,11 +849,38 @@ case "$out" in *"KIN_GW_WARN"*"not the gateway"*) pass "verify warns when the MX
 case "$out" in *"KIN_GW_VERIFY problems=0"*) pass "an un-moved MX is a warning, not a failure - migrations take time" ;;
   *) bad "MX warning should not fail verify: ${out}" ;; esac
 
+# With no public identity recorded, verify must give a PLACEHOLDER, never the
+# management address. It used to warn "this is a guess" and then print
+#   Set: example.test. MX 10 192.0.2.9
+#   Add: ip4:192.0.2.9
+# underneath. An operator who reads a warning and then finds a concrete
+# instruction below it does the concrete thing (QA Phase 16, 12 Sep 2026).
 out=$(KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" \
-      KIN_TEST_ZDOMAINS="example.test" KIN_TEST_MX="10 192.0.2.9." \
+      KIN_TEST_ZDOMAINS="example.test" KIN_TEST_MX="10 mail.example.test." \
       KIN_TEST_SPF='"v=spf1 ip4:192.0.2.20 ~all"' run_gw verify)
-case "$out" in *"Add:"*"ip4:192.0.2.9"*) pass "verify says exactly what to add to SPF, not just that it is wrong" ;;
+case "$out" in *"gateway public address"*) pass "with no public identity, verify prints a placeholder, not an address" ;;
+  *) bad "verify should print a placeholder: ${out}" ;; esac
+case "$out" in
+  *"MX  10  192.0.2.9"*|*"Add:     ip4:192.0.2.9"*)
+    bad "verify told the operator to publish the management address" ;;
+  *) pass "the management address never appears as something to publish" ;;
+esac
+case "$out" in *"no public identity recorded"*) pass "and says plainly why it cannot be more specific" ;;
+  *) bad "verify should explain the missing identity: ${out}" ;; esac
+
+# With one recorded, it prints the real records.
+cat >> "$GWCONF" <<EOF
+GATEWAY_PUBLIC_HOST="relay.example.test"
+GATEWAY_PUBLIC_IP="198.51.100.38"
+EOF
+out=$(KIN_TEST_RELAYHOST="192.0.2.9:26" KIN_TEST_ZNETS="127.0.0.0/8 192.0.2.9/32" \
+      KIN_TEST_ZDOMAINS="example.test" KIN_TEST_MX="10 mail.example.test." \
+      KIN_TEST_SPF='"v=spf1 ip4:192.0.2.20 ~all"' run_gw verify)
+case "$out" in *"Add:"*"ip4:198.51.100.38"*) pass "verify says exactly what to add to SPF once it knows the public address" ;;
   *) bad "verify should print the SPF fix: ${out}" ;; esac
+case "$out" in *"MX  10  relay.example.test"*) pass "and names the public hostname for the MX" ;;
+  *) bad "verify should print the MX target: ${out}" ;; esac
+write_gw_conf "192.0.2.9"
 
 # =============================================================================
 # revert and status

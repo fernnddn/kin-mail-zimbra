@@ -108,7 +108,10 @@ class TheRuleDatabaseIsReadNotRewritten(unittest.TestCase):
         """The rule database is the one part of PMG a customer customises."""
         rules = self.code[self.code.index("check_rules() {") :]
         rules = rules[: rules.index("\n# ---")] if "\n# ---" in rules else rules
-        self.assertIn('api_put "/config/ruledb/rules/${rid}" "active=1"', rules)
+        # .../rules/{id} is a DIRECTORY on PMG 9.1 and answers 501 to a write.
+        # The settable object is one level down, which is why every rule
+        # activation failed on the live gateway (QA Phase 16, 12 Sep 2026).
+        self.assertIn('api_put "/config/ruledb/rules/${rid}/config" "active=1"', rules)
         self.assertNotIn("api_post /config/ruledb", rules)
         self.assertNotIn("api_del /config/ruledb", rules)
 

@@ -4,6 +4,7 @@ import { keyframes } from "@emotion/react";
 import { api } from "../api";
 import { isOpsRole, useAuth } from "../auth";
 import { theme } from "../styles/theme";
+import { useStaggerIn } from "../lib/motion";
 import DiskExtend from "./DiskExtend";
 import { useSlidingIndicator } from "./useSlidingIndicator";
 import {
@@ -539,11 +540,16 @@ function GatewayCard({ gw }: { gw?: MailGatewayHealth }) {
 }
 
 function HostPanel({ host }: { host: HostFacts }) {
+  /* The host cards arrive as a set. It reads as "here is the machine" rather
+     than as six things appearing at once, and it is the same vocabulary the
+     gateway page uses. Keyed on nothing: this panel renders once per load. */
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  useStaggerIn(gridRef, "host", { step: 45, max: 6 });
   const mail = host.disks.find((d) => d.mount !== "/");
   const system = host.disks.find((d) => d.mount === "/");
   const mem = host.memory;
   return (
-    <HostGrid>
+    <HostGrid ref={gridRef}>
       <Card>
         <CardLabel>Processor</CardLabel>
         <BigValue $tone="ok">

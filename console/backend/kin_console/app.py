@@ -557,7 +557,7 @@ class AdSettingsBody(BaseModel):
 class MailGatewayConnectBody(BaseModel):
     host: str = Field(min_length=1, max_length=255)
     api_port: int = Field(default=8006, ge=1, le=65535)
-    auth: str = Field(default="token", max_length=16)
+    auth: str = Field(default="ticket", max_length=16)
     token_id: str = Field(default="", max_length=128)
     token_secret: str = Field(default="", max_length=512)
     user: str = Field(default="root@pam", max_length=128)

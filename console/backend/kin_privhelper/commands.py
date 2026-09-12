@@ -1393,7 +1393,7 @@ async def cmd_mail_gateway(args: dict[str, Any] | None = None) -> AsyncIterator[
 
     if op == "connect":
         host = str(args.get("host") or "").strip()
-        auth = str(args.get("auth") or "token").strip().lower()
+        auth = str(args.get("auth") or "ticket").strip().lower()
         token_id = str(args.get("token_id") or "").strip()
         user = str(args.get("user") or "root@pam").strip()
         cacert = str(args.get("cacert") or "").strip()

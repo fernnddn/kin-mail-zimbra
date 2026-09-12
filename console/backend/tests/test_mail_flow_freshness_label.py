@@ -50,10 +50,27 @@ class TheProbeMatchesEitherLabelForm(unittest.TestCase):
         # different file and would report the wrong thing as fresh.
         self.assertIn(r"kin_mail_flow\.prom", self.query)
 
+    def test_the_escape_is_inside_a_raw_literal(self) -> None:
+        """Otherwise Prometheus refuses the query outright.
+
+        PromQL string literals use Go escaping, where a backslash before a dot
+        is not an escaped dot but an invalid escape sequence.
+        """
+        self.assertIn("file=~`", self.query)
+
     def test_it_matches_both_shapes_and_nothing_else(self) -> None:
         # Prometheus anchors its label regexes, so the pattern is tested here
         # the same way: fully anchored.
-        pattern = re.search(r'file=~"([^"]+)"', self.query)
+        #
+        # The literal is backtick-quoted. PromQL treats a backtick string as
+        # raw - no escape processing at all - which is what lets `\.` reach the
+        # regex engine as an escaped dot. Written inside DOUBLE quotes it was
+        # an invalid escape sequence and Prometheus rejected the entire query,
+        # printing a parser error where the staleness warning should have been
+        # (QA Phase 16, 12 Sep 2026).
+        pattern = re.search(r"file=~`([^`]+)`", self.query) or re.search(
+            r'file=~"([^"]+)"', self.query
+        )
         self.assertIsNotNone(pattern, "no regex matcher in the query")
         rx = re.compile("^" + pattern.group(1) + "$")
         for label in (

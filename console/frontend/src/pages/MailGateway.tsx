@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
 import { api } from "../api";
+import { useStaggerIn } from "../lib/motion";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { theme } from "../styles/theme";
 import {
@@ -319,7 +320,7 @@ export default function MailGatewayPage() {
 
   const [host, setHost] = useState("");
   const [apiPort, setApiPort] = useState("8006");
-  const [authMode, setAuthMode] = useState("token");
+  const [authMode, setAuthMode] = useState("ticket");
   const [tokenId, setTokenId] = useState("root@pam!kinmail");
   const [tokenSecret, setTokenSecret] = useState("");
   const [pmgUser, setPmgUser] = useState("root@pam");
@@ -455,11 +456,21 @@ export default function MailGatewayPage() {
   }, [log, refresh]);
 
   const lines = useMemo(() => readable(log), [log]);
+  const linesRef = useRef<HTMLDivElement | null>(null);
+  /* Keyed on the run, not on the log: the transcript grows line by line while
+     a stream is open, and re-animating on every chunk would make the panel
+     flicker for the whole of an apply. */
+  useStaggerIn(linesRef, running === null ? lines.length : 0, { step: 28, max: 12 });
   const busy = running !== null || saving;
   const compliant = Boolean(status?.compliant);
   const configured = Boolean(status?.configured);
   const pinned = Boolean(status?.certificate_pinned);
   const hasPublic = Boolean(status?.public_identity_complete);
+  /* Plan, Apply and Verify all talk to the gateway, and every one of them
+     refuses against an unconfirmed certificate. Gating them here turns that
+     refusal into a sentence the operator reads before pressing, which is the
+     order they asked for: connect, confirm, then apply. */
+  const ready = configured && pinned;
   const pendingFingerprint = fingerprintFrom(log);
   const showTrust =
     pendingFingerprint !== "" &&
@@ -520,15 +531,15 @@ export default function MailGatewayPage() {
         />
 
         <Trail>
-          <TrailStep $state={stepState(configured, !configured)}>Connect</TrailStep>
-          <TrailStep $state={stepState(pinned, configured && !pinned)}>Certificate</TrailStep>
+          <TrailStep $state={stepState(configured, !configured)}>1 Connect</TrailStep>
+          <TrailStep $state={stepState(pinned, configured && !pinned)}>2 Certificate</TrailStep>
+          <TrailStep $state={stepState(hasPublic, configured && pinned && !hasPublic)}>
+            3 Public identity
+          </TrailStep>
           <TrailStep $state={stepState(compliant, configured && pinned && !compliant)}>
-            Apply
+            4 Apply
           </TrailStep>
-          <TrailStep $state={stepState(compliant && hasPublic, compliant && !hasPublic)}>
-            DNS
-          </TrailStep>
-          <TrailStep $state={stepState(false, compliant)}>Verify</TrailStep>
+          <TrailStep $state={stepState(false, compliant)}>5 DNS &amp; verify</TrailStep>
         </Trail>
 
         {!compliant ? (
@@ -594,8 +605,8 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             <FieldRow>
               <Label htmlFor="gw-auth">Authentication</Label>
               <Select id="gw-auth" value={authMode} onChange={(e) => setAuthMode(e.target.value)}>
-                <option value="token">API token (recommended)</option>
                 <option value="ticket">Username and password</option>
+                <option value="token">API token</option>
               </Select>
             </FieldRow>
             {authMode === "token" ? (
@@ -658,21 +669,12 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
               >
                 {configured ? "Update" : "Connect"}
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={busy || !configured}
-                loading={running === "probe"}
-                onClick={() => stream("probe")}
-              >
-                Probe
-              </Button>
             </Actions>
           </Card>
 
           <Card $i={2}>
             <CardHead>
-              <h2>2. What the internet sees</h2>
+              <h2>3. What the internet sees</h2>
               <StepTag $done={hasPublic}>{hasPublic ? "Recorded" : "Needed for DNS"}</StepTag>
             </CardHead>
             <Hint>
@@ -706,35 +708,67 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
             </Hint>
           </Card>
 
-          {showTrust ? (
-            <Card $i={3}>
-              <CardHead>
-                <h2>Confirm the gateway&rsquo;s certificate</h2>
-                <StepTag>Action needed</StepTag>
-              </CardHead>
+          <Card $i={3}>
+            <CardHead>
+              <h2>2. Test the connection and confirm the certificate</h2>
+              <StepTag $done={pinned}>{pinned ? "Confirmed" : "Not confirmed"}</StepTag>
+            </CardHead>
+            <Hint>
+              Press <strong>Probe</strong>. The first time, it will stop and show the
+              fingerprint of the gateway&rsquo;s certificate. Compare it with the one on
+              the gateway itself, then confirm it here. Nothing else on this page will run
+              until you do, and it will stop again if that certificate ever changes.
+            </Hint>
+            <Facts>
+              <dt>Certificate</dt>
+              <dd>{pinned ? "confirmed for this gateway" : "not confirmed yet"}</dd>
+              {pendingFingerprint ? (
+                <>
+                  <dt>Fingerprint offered</dt>
+                  <dd>
+                    <Mono>{pendingFingerprint}</Mono>
+                  </dd>
+                </>
+              ) : null}
+            </Facts>
+            {pinned ? null : (
               <Hint>
-                The gateway presented a certificate this appliance has not seen before.
-                Check the fingerprint against the one shown on the gateway&rsquo;s own
-                console, then confirm it. Every operation here refuses until you do, and
-                refuses again if it ever changes.
+                On the gateway, over SSH:{" "}
+                <Mono>openssl x509 -in /etc/pmg/pmg-api.pem -noout -fingerprint -sha256</Mono>
               </Hint>
-              <Facts>
-                <dt>Fingerprint</dt>
-                <dd>
-                  <Mono>{pendingFingerprint}</Mono>
-                </dd>
-              </Facts>
-              <Actions>
-                <Button type="button" variant="primary" disabled={busy} onClick={() => void trust()}>
-                  This is the right certificate
-                </Button>
-              </Actions>
-            </Card>
-          ) : null}
+            )}
+            <Actions>
+              <Button
+                type="button"
+                variant={pinned ? "ghost" : "primary"}
+                disabled={busy || !configured}
+                loading={running === "probe"}
+                onClick={() => stream("probe")}
+              >
+                Probe
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={busy || !showTrust}
+                onClick={() => void trust()}
+              >
+                {showTrust ? "This is the right certificate" : "Confirm certificate"}
+              </Button>
+            </Actions>
+            {!configured ? (
+              <Hint>Finish step 1 first: there is nothing to probe yet.</Hint>
+            ) : !showTrust && !pinned ? (
+              <Hint>
+                Run Probe to see the fingerprint. Confirm becomes available once the
+                gateway has offered one.
+              </Hint>
+            ) : null}
+          </Card>
 
           <Card $i={4}>
             <CardHead>
-              <h2>3. Apply the link</h2>
+              <h2>4. Apply the link</h2>
               <StepTag $done={compliant}>{compliant ? "Applied" : "Not applied"}</StepTag>
             </CardHead>
             <Facts>
@@ -769,7 +803,7 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
               <Button
                 type="button"
                 variant="ghost"
-                disabled={busy || !configured}
+                disabled={busy || !ready}
                 loading={running === "plan"}
                 onClick={() => stream("plan")}
               >
@@ -778,7 +812,7 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
               <Button
                 type="button"
                 variant="primary"
-                disabled={busy || !configured}
+                disabled={busy || !ready}
                 loading={running === "apply"}
                 onClick={() => stream("apply")}
               >
@@ -787,18 +821,28 @@ internal   mailbox ──▶ mailbox stays here and never reaches the gateway`}<
               <Button
                 type="button"
                 variant="ghost"
-                disabled={busy || !configured}
+                disabled={busy || !ready}
                 loading={running === "verify"}
                 onClick={() => stream("verify")}
               >
                 Verify
               </Button>
             </Actions>
+            {/* A disabled button with no reason beside it is a dead end. Every
+                one of these has a sentence saying what unlocks it. */}
+            {!configured ? (
+              <Hint>Finish step 1 first: this appliance has no gateway recorded yet.</Hint>
+            ) : !pinned ? (
+              <Hint>
+                Finish step 2 first. Nothing here will run against a gateway whose
+                certificate has not been confirmed.
+              </Hint>
+            ) : null}
           </Card>
 
           <Card $i={5}>
             <CardHead>
-              <h2>4. DNS</h2>
+              <h2>5. DNS, then verify</h2>
               <StepTag $done={hasPublic}>Yours to change</StepTag>
             </CardHead>
             {hasPublic ? (
@@ -847,6 +891,9 @@ PTR   ${status.public_ip}   →  ${status.public_host}   (ask your ISP)`}</Flow>
                 Revert the appliance side
               </Button>
             </Actions>
+            {!configured ? (
+              <Hint>Nothing to revert: no gateway is recorded.</Hint>
+            ) : null}
           </Card>
 
           {log ? (
@@ -856,7 +903,7 @@ PTR   ${status.public_ip}   →  ${status.public_host}   (ask your ISP)`}</Flow>
                 <StepTag>{running ? "Running" : "Finished"}</StepTag>
               </CardHead>
               {lines.length ? (
-                <div>
+                <div ref={linesRef}>
                   {lines.map((l, i) => (
                     <Line key={`${i}-${l.text}`} $tone={l.tone}>
                       {l.text}

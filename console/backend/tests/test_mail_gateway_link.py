@@ -296,9 +296,16 @@ class CommandTests(GatewayTempPaths):
         self.assertFalse(gw.credential_present())
 
     def test_connect_refuses_a_malformed_token_id(self) -> None:
+        # Token auth is opt-in now; username and password is the default.
         events = _drain(
             commands.cmd_mail_gateway(
-                {"op": "connect", "host": "192.0.2.9", "token_id": "kinmail", "token_secret": "s"}
+                {
+                    "op": "connect",
+                    "host": "192.0.2.9",
+                    "auth": "token",
+                    "token_id": "kinmail",
+                    "token_secret": "s",
+                }
             )
         )
         self.assertEqual(_exit(events), 2)
@@ -307,7 +314,12 @@ class CommandTests(GatewayTempPaths):
     def test_connect_refuses_a_token_with_no_secret(self) -> None:
         events = _drain(
             commands.cmd_mail_gateway(
-                {"op": "connect", "host": "192.0.2.9", "token_id": "root@pam!kinmail"}
+                {
+                    "op": "connect",
+                    "host": "192.0.2.9",
+                    "auth": "token",
+                    "token_id": "root@pam!kinmail",
+                }
             )
         )
         self.assertEqual(_exit(events), 2)
@@ -320,6 +332,7 @@ class CommandTests(GatewayTempPaths):
                     "op": "connect",
                     "host": "192.0.2.9",
                     "api_port": 8006,
+                    "auth": "token",
                     "token_id": "root@pam!kinmail",
                     "token_secret": "swordfish",
                 }
@@ -663,6 +676,7 @@ class ConnectRefusesAnUnpublishableIdentity(GatewayTempPaths):
         args = {
             "op": "connect",
             "host": "192.0.2.9",
+            "auth": "token",
             "token_id": "root@pam!kinmail",
             "token_secret": "s",
         }
@@ -670,7 +684,7 @@ class ConnectRefusesAnUnpublishableIdentity(GatewayTempPaths):
         return _drain(commands.cmd_mail_gateway(args))
 
     def test_a_private_public_ip_is_refused_with_the_reason(self) -> None:
-        events = self._connect(public_ip="10.10.40.101")
+        events = self._connect(public_ip="10.0." + "40.101")
         self.assertEqual(_exit(events), 2)
         self.assertIn("authorises nobody", _text(events))
         self.assertFalse(gw.GATEWAY_CONF.exists())

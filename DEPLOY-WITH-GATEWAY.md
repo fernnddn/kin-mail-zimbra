@@ -110,23 +110,20 @@ normal and does not affect function.
 (`Configuration ▸ Administration ▸ Time zone`, e.g. `Asia/Jakarta`). Mismatched
 clocks make two sets of logs impossible to correlate when something goes wrong.
 
-**2.5** Create the API token KIN Mail will use. On the gateway:
+**2.5** Decide how KIN Mail will authenticate to the gateway.
+
+**Username and password is the default, and it is fine.** The `root@pam` login
+you set during installation is the one credential every PMG install definitely
+has, and it is stored encrypted on the appliance. Nothing further to do here.
+
+If you prefer an API token, create one on the gateway:
 
 ```sh
 pmgsh create /access/users/root@pam/token/kinmail
 ```
 
-or `Configuration ▸ User Management ▸ API Tokens ▸ Add`.
-
-**Copy the secret now.** It is shown once and never again. If you lose it,
-delete the token and make another; nothing is harmed.
-
-You will end up with two values:
-
-```
-token id      root@pam!kinmail
-token secret  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-```
+or `Configuration ▸ User Management ▸ API Tokens ▸ Add`. **Copy the secret
+now** — it is shown once. Then choose *API token* in step 3.1.
 
 **2.6** Check the two machines can actually talk. From the **appliance**:
 
@@ -166,7 +163,8 @@ printing the LAN address and letting you publish it.
 The secret is encrypted on the appliance and never shown again — not to the
 browser, not in the logs, not in a process listing.
 
-**3.2 Probe.** Press **Probe**. The first time, it will refuse:
+**3.2 Test the connection and confirm the certificate.** Press **Probe**. The
+first time, it will refuse:
 
 ```
 KIN_GW_REFUSED reason=certificate-not-trusted
@@ -186,6 +184,10 @@ appliance verifies it every time, and if it ever changes, everything stops
 until you confirm the new one.
 
 Probe again. You should see the PMG version and *"the credential works"*.
+
+Nothing further on the page runs until the certificate is confirmed: Plan,
+Apply and Verify stay disabled, with a line saying why. That is deliberate —
+this is the machine every message will pass through.
 
 **3.3 Plan.** Press **Plan**. Nothing is changed. Read what it says it would
 change; it should list the relay, the relay domain, the transport and the
@@ -223,6 +225,12 @@ Apply does not only route mail. It also tunes the gateway's detection — see
   with the switch on the Apply card if your site wants it.
 - **Bayesian learning is on**, and it starts knowing nothing. Accuracy
   improves over the first weeks as it sees your mail.
+- **No SMTP-level blocklist is set**, and Apply actively clears one if the
+  gateway has it. A DNSBL in PMG hard-rejects mail before scoring, and
+  Spamhaus answers every query with an error code when it is asked through a
+  public resolver — which makes every sender look listed and rejects all
+  inbound mail. SpamAssassin still consults the same lists as *score*. See
+  "Inbound mail is rejected" below.
 
 If you see `KIN_GW_REFUSED reason=settings-did-not-stick`, **stop, and do not
 change DNS.** The gateway accepted the settings but is not reporting them back;
@@ -395,7 +403,16 @@ check the MX record has actually propagated.
 
 ## If something goes wrong
 
-**Inbound mail is slow — minutes — while outbound is instant.**
+**Inbound mail is rejected with "blocked using zen.spamhaus.org".**
+A DNSBL is configured on the gateway and its answers cannot be trusted.
+Spamhaus refuses queries from public resolvers *by answering* `127.255.255.254`,
+and Postfix reads any `127.0.0.0/8` answer as a listing, so every sender looks
+blocked. Press **Apply** again: it clears the setting. If you want a blocklist,
+give the gateway a local recursive resolver first, then set `GATEWAY_DNSBL` —
+the setting is then written with a return-code filter so an error reply cannot
+be read as a listing.
+
+**Inbound mail is slow, minutes, while outbound is instant.**
 Greylisting. It is off by default in 0.1.10; if it is on, that delay is the
 feature working. Turn it off on the Apply card and re-apply. If it is already
 off, look at the gateway's Tracking Center to see where the time goes.

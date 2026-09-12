@@ -155,7 +155,7 @@ ourselves.
 | `/config/mail` | `verifyreceivers` | `450` | ask the mail server whether the recipient exists, and **defer** if not. Not `550`: a permanent refusal throws real mail away for good if Zimbra happens to be restarting, where a deferral costs a delay and loses nothing. |
 | `/config/mail` | `greylist` | `0` | **off by default.** It defers the first message from any unseen sender triplet, and PMG's delay is hardcoded at a few minutes — which is exactly why inbound mail felt slow while outbound felt instant in live QA. Every other layer still runs. `GATEWAY_GREYLIST=1` turns it on for a site that wants it. |
 | `/config/mail` | `spf` | `1` | |
-| `/config/mail` | `dnsbl_sites` | `zen.spamhaus.org` | |
+
 | `/config/mail` | `tls` | `1` | opportunistic TLS outbound |
 | `/config/mail` | `banner` | `ESMTP KIN Mail Gateway` | do not advertise the product version |
 | `/config/mail` | `hide_received` | `1` | do not leak the internal IP of the mail node in headers |
@@ -319,12 +319,66 @@ Scoring a message as a virus does nothing unless a rule says to act on it. A
 gateway whose protective rules are switched off filters beautifully and
 delivers everything anyway.
 
-`apply` **reads** the rule database, reports which protective rules are active,
-and switches on a factory rule that is merely disabled. It never creates, edits
-or deletes a rule: the rule database is the one part of PMG a customer
-legitimately customises, and an installer that rewrote it would throw away
-their work. If it cannot be read, that is a warning and not a failure — mail
-still flows.
+The settable object is **`/config/ruledb/rules/{id}/config`**. `/config/ruledb/rules/{id}`
+is a directory and answers `501` to a write; aiming at it made every rule
+activation fail on PMG 9.1 while reporting, wrongly, that the gateway was too
+old.
+
+Rules are matched **by exact name against an explicit policy**, never by
+keyword. Keyword matching on "spam" caught *Block Spam (Level 10)*, which does
+not quarantine a message — it destroys it.
+
+| Factory rule | What we do | Why |
+| --- | --- | --- |
+| Block Viruses | expect on | infected mail must not reach a mailbox |
+| Virus Alert | expect on | tells sender and admin it was blocked |
+| Block Dangerous Files | expect on | executable attachments |
+| Blocklist / Welcomelist | expect on | the operator's own lists |
+| Quarantine/Mark Spam (Level 3) | expect on | marks likely spam without moving it |
+| **Quarantine/Mark Spam (Level 5)** | **switch on** | quarantines confident spam, and it can be released |
+| Block Spam (Level 10) | **leave** | blocks rather than quarantines. A false positive here is unrecoverable, and anything scoring 10 is already caught by Level 5 |
+| Block outgoing Spam | **leave** | protects sending reputation, and blocks your own users' mail when it misfires. The customer's call |
+| Quarantine Office Files | **leave** | quarantines every Word and Excel attachment. On a business mail server that is an outage |
+| Block Multimedia Files | **leave** | blocks audio and video outright |
+| Modify Header, Add Disclaimer | **leave** | cosmetic, or a company decision |
+
+A protective rule the operator has turned **off** is reported loudly and *not*
+turned back on — they may have had a reason. A rule not on this list is
+reported and left exactly as found. Nothing is ever created or deleted, and a
+rule database that cannot be read is a warning, not a failure: mail still
+flows.
+
+### Blocklists that reject at the door: deliberately OFF
+
+This is the most expensive lesson in this document.
+
+`dnsbl_sites` in PMG is not "one more signal". It is a **hard SMTP reject** in
+postscreen, before scoring happens, and Postfix reads **any** answer in
+`127.0.0.0/8` as a listing.
+
+Spamhaus refuses queries that arrive through a public resolver, and it refuses
+them *by answering*: `127.255.255.254`, "Error: open resolver". On an appliance
+whose gateway resolves through Google or Cloudflare DNS, every sender on earth
+therefore looks listed, and every inbound message is rejected:
+
+```
+NOQUEUE: reject: RCPT from [...]: 550 5.7.1 Service unavailable;
+client [...] blocked using zen.spamhaus.org
+```
+
+That happened on a live deployment (QA Phase 16, 12 September 2026), and it
+read like the sender's fault. Verified from a workstation: the same
+`127.255.255.254` came back for `8.8.8.8`, which is not a spam source.
+
+So KIN Mail sets **no DNSBL**, and `apply` actively **clears** the setting, so
+re-applying repairs a gateway configured by an earlier version. SpamAssassin's
+`rbl_checks` consults the same data and only adds **score** — a wrong answer
+there costs a few points instead of the whole message.
+
+An operator with a local recursive resolver can opt in with `GATEWAY_DNSBL`.
+When they do, the site is written with a return-code filter
+(`zen.spamhaus.org=127.0.0.[2..11]`), so an error reply can never be read as a
+listing.
 
 ### Not tuned, on purpose
 

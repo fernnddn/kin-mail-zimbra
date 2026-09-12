@@ -606,12 +606,24 @@ def mail_flow_freshness() -> dict[str, Any]:
     #
     # The pattern accepts both shapes and cannot match a different collector's
     # file, because the name is anchored at the end.
-    # Built outside the f-string: Python 3.10, which is the appliance's
-    # interpreter, refuses a backslash inside an f-string expression.
-    escaped = MAILFLOW_PROM_FILE.replace(".", r"\.")
+    # The backslash has to survive TWO parsers, and getting that wrong took the
+    # Reports tab down with
+    #   invalid parameter "query": parse error: unknown escape sequence U+002E
+    # on a live appliance (QA Phase 16, 12 Sep 2026).
+    #
+    # PromQL string literals use Go escaping. Writing `\.` inside a
+    # double-quoted PromQL string is not "an escaped dot", it is an *invalid
+    # escape sequence*, and Prometheus rejects the whole query - so the panel
+    # that exists to warn about stale figures instead printed a parser error
+    # where the warning should have been.
+    #
+    # A backtick string in PromQL is raw: no escape processing at all, so what
+    # is written here is exactly what the regex engine receives. That removes
+    # the double-escaping question rather than solving it once.
+    escaped = MAILFLOW_PROM_FILE.replace(".", "\\.")
     query = (
         "time() - node_textfile_mtime_seconds"
-        '{file=~"(.*/)?' + escaped + '"}'
+        "{file=~`(.*/)?" + escaped + "`}"
     )
     try:
         rows = parse_vector(_get("/api/v1/query", {"query": query}))

@@ -71,8 +71,35 @@ PMG_CLAMAV_HEURISTIC_SCORE="${KIN_PMG_CLAMAV_HEURISTIC_SCORE:-5}"
 PMG_SPAMQUAR_DAYS="${KIN_PMG_SPAMQUAR_DAYS:-14}"
 # Virus quarantine is evidence, and evidence is cheap to keep.
 PMG_VIRUSQUAR_DAYS="${KIN_PMG_VIRUSQUAR_DAYS:-30}"
-# Spamhaus ZEN covers the three lists most worth having in one lookup.
-PMG_DNSBL_SITES="${KIN_PMG_DNSBL_SITES:-zen.spamhaus.org}"
+# No DNSBL by default, and this is the most expensive lesson in this file.
+#
+# A DNSBL in PMG's mail settings is not "one more signal". It is a HARD SMTP
+# REJECT in postscreen, before any scoring happens, and Postfix treats ANY
+# answer in 127.0.0.0/8 as a listing.
+#
+# Spamhaus refuses queries that arrive through a public resolver, and it
+# refuses them by ANSWERING - 127.255.255.254, "Error: open resolver". So on
+# an appliance whose gateway resolves through Google or Cloudflare DNS, every
+# sender on earth looks listed and every inbound message is rejected:
+#
+#   NOQUEUE: reject: RCPT from [...]: 550 5.7.1 Service unavailable;
+#   client [...] blocked using zen.spamhaus.org
+#
+# That is what happened on a live deployment (QA Phase 16, 12 Sep 2026), and
+# it looked like the sender's fault. Verified from the workstation: the same
+# 127.255.255.254 came back for 8.8.8.8, which is obviously not a spam source.
+#
+# SpamAssassin's own blocklist checks (rbl_checks, set below) consult the same
+# data and only add SCORE. A wrong answer there costs a few points; a wrong
+# answer here costs the message. So: scoring yes, hard reject no.
+#
+# An operator with a local recursive resolver can opt in, and when they do the
+# site is written with a return-code filter so an error answer can never be
+# read as a listing.
+PMG_DNSBL_SITES="${KIN_PMG_DNSBL_SITES:-}"
+# Only these answers mean "listed". Spamhaus's error range (127.255.255.x)
+# is deliberately outside it.
+PMG_DNSBL_RETURN_FILTER="${KIN_PMG_DNSBL_RETURN_FILTER:-127.0.0.[2..11]}"
 
 say()  { printf '%s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
@@ -105,7 +132,11 @@ load_config() {
   GW_ENABLED=$(conf_get GATEWAY_ENABLED "$GW_CONF" || printf '0')
   GW_HOST=$(conf_get GATEWAY_HOST "$GW_CONF" || printf '')
   GW_API_PORT=$(conf_get GATEWAY_API_PORT "$GW_CONF" || printf '%s' "$PMG_API_PORT_DEFAULT")
-  GW_AUTH=$(conf_get GATEWAY_AUTH "$GW_CONF" || printf 'token')
+  # Username and password by default. An API token is the tidier credential,
+  # but PMG's token permission model surprised an operator into a half-working
+  # link, and a root@pam login is the one thing every PMG install definitely
+  # has. The token path stays supported for anyone who prefers it.
+  GW_AUTH=$(conf_get GATEWAY_AUTH "$GW_CONF" || printf 'ticket')
   GW_TOKEN_ID=$(conf_get GATEWAY_TOKEN_ID "$GW_CONF" || printf '')
   GW_USER=$(conf_get GATEWAY_USER "$GW_CONF" || printf 'root@pam')
   GW_CACERT=$(conf_get GATEWAY_CACERT "$GW_CONF" || printf '')
@@ -134,6 +165,10 @@ load_config() {
   # from a new correspondent is a mail system people complain about.
   GW_GREYLIST=$(conf_get GATEWAY_GREYLIST "$GW_CONF" || printf '0')
   case "$GW_GREYLIST" in 0|1) ;; *) GW_GREYLIST=0 ;; esac
+
+  # Opt-in only, and see the note beside PMG_DNSBL_SITES for why. A blocklist
+  # here rejects at SMTP; getting it wrong rejects everything.
+  GW_DNSBL=$(conf_get GATEWAY_DNSBL "$GW_CONF" || printf '')
 
   [ -n "$GW_API_PORT" ] || GW_API_PORT=$PMG_API_PORT_DEFAULT
 
@@ -466,6 +501,49 @@ zimbra_local_domains() {
 }
 
 # -----------------------------------------------------------------------------
+# Blocklists that reject at the door
+# -----------------------------------------------------------------------------
+# Separate from the rest of the policy because this one setting can refuse all
+# mail, and because a gateway already carrying a bad value has to be repaired,
+# not just left alone. Re-applying is how an operator fixes things.
+apply_dnsbl() {
+  local want="${GW_DNSBL:-$PMG_DNSBL_SITES}"
+
+  if [ -z "$want" ]; then
+    # Clear it, every time. An appliance configured by an earlier version of
+    # this script is carrying zen.spamhaus.org and rejecting its own inbound
+    # mail; pressing Apply again has to be the fix.
+    if api_put /config/mail "delete=dnsbl_sites" >/dev/null; then
+      ok "no SMTP-level blocklist - senders are scored, never refused at the door"
+      info "SpamAssassin still consults the same blocklists; a wrong answer there"
+      info "costs a few points instead of the whole message."
+    else
+      warn "Could not clear the SMTP blocklist setting: $(api_error)"
+      info "Check Mail Proxy > Options > DNSBL Sites on the gateway is empty."
+    fi
+    return 0
+  fi
+
+  # The operator asked for one. Pin the answers that count as a listing, so an
+  # error reply - Spamhaus answers 127.255.255.254 through a public resolver -
+  # can never be read as "this sender is spam".
+  local site="$want"
+  case "$want" in
+    *=*) ;;  # the operator supplied their own filter; respect it
+    *) site="${want}=${PMG_DNSBL_RETURN_FILTER}" ;;
+  esac
+  if api_put /config/mail "dnsbl_sites=${site}" "dnsbl_threshold=1" >/dev/null; then
+    ok "SMTP blocklist ${site}"
+    warn "This REJECTS mail at the door. It needs a local recursive resolver on"
+    info "the gateway: Spamhaus answers every query with an error code when it"
+    info "is asked through a public resolver, and every sender then looks listed."
+  else
+    warn "Could not set the SMTP blocklist: $(api_error)"
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # The rule database
 # -----------------------------------------------------------------------------
 # PMG ships a factory rule set, and the rules are what actually act on a
@@ -477,9 +555,47 @@ zimbra_local_domains() {
 # legitimately customises, and an installer that rewrites it would throw away
 # their work. This looks, activates the factory rules that are merely switched
 # off, and otherwise reports. It never creates, edits or deletes a rule.
-RULES_WANTED="Virus:quarantine or block viruses
-Spam:quarantine or block spam
-Dangerous:block dangerous attachments"
+# What PMG's factory rules do, and which of them we are willing to switch on.
+#
+# The first version of this matched rule names by keyword - anything containing
+# "spam", "virus" or "dangerous". On a real gateway (PMG 9.1) that set included
+# "Block Spam (Level 10)", which does not quarantine a message, it destroys it.
+# An installer has no business turning on a rule that deletes a customer's mail
+# on a score, and the operator had asked for exactly the opposite: no false
+# positives.
+#
+# So this is an explicit list with a decision and a reason for each, and
+# anything not named here is reported and left alone. A rule we have not
+# thought about is a rule we do not touch.
+#
+# Format: name<TAB>verdict<TAB>why
+#   enable   safe to switch on: the worst case is a message waiting in
+#            quarantine, where somebody can look at it and release it
+#   expect   should already be on; warn loudly if it is not
+#   leave    deliberately not ours to decide - reported, never changed
+RULE_POLICY=$(printf '%s\n' \
+  "Block Viruses|expect|infected mail must not reach a mailbox" \
+  "Virus Alert|expect|tells the sender and the admin that it was blocked" \
+  "Block Dangerous Files|expect|executable attachments" \
+  "Blocklist|expect|the operator's own blocklist" \
+  "Welcomelist|expect|the operator's own welcomelist" \
+  "Quarantine/Mark Spam (Level 3)|expect|marks likely spam without moving it" \
+  "Quarantine/Mark Spam (Level 5)|enable|quarantines confident spam, and it can be released" \
+  "Block Spam (Level 10)|leave|BLOCKS rather than quarantines - a false positive here is a message nobody can recover, and anything scoring 10 is already quarantined by the Level 5 rule" \
+  "Block outgoing Spam|leave|protects this estate's sending reputation, and blocks your own users' mail when it misfires - the customer's call, not an installer's" \
+  "Quarantine Office Files|leave|quarantines every Word and Excel attachment; on a business mail server that is an outage" \
+  "Block Multimedia Files|leave|blocks audio and video attachments outright" \
+  "Modify Header|leave|cosmetic header handling" \
+  "Add Disclaimer|leave|a legal footer is a company decision" \
+)
+
+rule_verdict() {
+  printf '%s\n' "$RULE_POLICY" | awk -F'|' -v n="$1" '$1==n {print $2; found=1} END {if(!found) print "unknown"}'
+}
+
+rule_reason() {
+  printf '%s\n' "$RULE_POLICY" | awk -F'|' -v n="$1" '$1==n {print $3}'
+}
 
 check_rules() {
   local body
@@ -493,40 +609,33 @@ check_rules() {
   local summary
   summary=$(printf '%s' "$body" | "$PYTHON" -c '
 import json, sys
-
-# What each factory rule is for, keyed by a word that appears in its name.
-# Matching on a word rather than an exact name survives translation and the
-# small renames Proxmox has made between versions.
-WANTED = {
-    "virus": "viruses",
-    "spam": "spam",
-    "dangerous": "dangerous attachments",
-    "blacklist": "the blocklist",
-    "whitelist": "the welcomelist",
-}
 try:
     data = json.load(sys.stdin).get("data") or []
 except Exception:
     sys.exit(1)
 if not isinstance(data, list):
     sys.exit(1)
-
-seen = []
 for rule in data:
     if not isinstance(rule, dict):
         continue
+    rid = rule.get("id")
     name = str(rule.get("name") or "")
-    low = name.lower()
-    for key, what in WANTED.items():
-        if key in low:
-            active = str(rule.get("active", "0")) in ("1", "True", "true")
-            seen.append((key, name, active, rule.get("id"), what))
-            break
-
-for key, name, active, rid, what in seen:
-    print("RULE\t%s\t%s\t%s\t%s" % (key, name, "1" if active else "0", rid))
-if not seen:
-    print("NONE")
+    active = 1 if str(rule.get("active", "0")) in ("1", "True", "true") else 0
+    if rid is None or not name:
+        continue
+    # The shell reads these back as tab-separated fields, one rule per line.
+    # A rule NAME is operator-supplied text: a tab or a newline in one would
+    # silently split a rule into two, and the second half would be looked up
+    # as an unknown rule carrying the wrong id. No apostrophes in here: this
+    # whole block is a single-quoted shell string.
+    name = name.replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+    if not name:
+        continue
+    try:
+        rid = int(rid)
+    except (TypeError, ValueError):
+        continue
+    print("%s\t%s\t%s" % (rid, active, name))
 ' 2>/dev/null) || summary=""
 
   if [ -z "$summary" ]; then
@@ -534,39 +643,60 @@ if not seen:
     info "Check Configuration > Mail Filter by hand."
     return 0
   fi
-  if [ "$summary" = "NONE" ]; then
-    warn "No virus, spam or attachment rules were found on the gateway."
-    info "A gateway with no rules scans mail and then delivers all of it."
-    info "Restore the factory rules under Configuration > Mail Filter."
-    return 0
-  fi
 
-  local key name active rid missing=0
-  while IFS="$(printf '\t')" read -r _tag key name active rid; do
-    [ -n "${key:-}" ] || continue
-    if [ "$active" = "1" ]; then
-      ok "rule active: ${name}"
-      continue
-    fi
-    # Switched off, not absent. Turning a factory rule back on is a safe,
-    # reversible change; creating one would not be.
-    if [ -n "${rid:-}" ] && api_put "/config/ruledb/rules/${rid}" "active=1" >/dev/null; then
-      ok "rule re-activated: ${name}"
-    else
-      warn "rule INACTIVE: ${name} - and it could not be switched on ($(api_error))"
-      info "Turn it on under Configuration > Mail Filter, or nothing acts on what the scanners find."
-      missing=$((missing + 1))
-    fi
+  local rid active name verdict reason protective=0 enabled=0
+  while IFS="$(printf '\t')" read -r rid active name; do
+    [ -n "${name:-}" ] || continue
+    verdict=$(rule_verdict "$name")
+    reason=$(rule_reason "$name")
+    case "$verdict" in
+      expect)
+        protective=$((protective + 1))
+        if [ "$active" = "1" ]; then
+          ok "rule on: ${name}"
+        else
+          # Not switched on automatically even though we expect it: an
+          # operator may have turned it off on purpose, and this is not the
+          # place to overrule that silently.
+          warn "rule OFF: ${name} - ${reason}"
+          info "Nothing acts on what the scanners find for this case. Turn it on"
+          info "under Configuration > Mail Filter if that was not deliberate."
+        fi
+        ;;
+      enable)
+        if [ "$active" = "1" ]; then
+          ok "rule on: ${name}"
+          protective=$((protective + 1))
+        elif api_put "/config/ruledb/rules/${rid}/config" "active=1" >/dev/null; then
+          ok "rule switched on: ${name} - ${reason}"
+          enabled=$((enabled + 1))
+          protective=$((protective + 1))
+        else
+          warn "rule OFF: ${name} - could not switch it on ($(api_error))"
+          info "Turn it on under Configuration > Mail Filter."
+        fi
+        ;;
+      leave)
+        [ "$active" = "1" ] && info "rule on (yours): ${name}"
+        ;;
+      *)
+        # A rule we have never seen. Say so and change nothing.
+        [ "$active" = "1" ] && info "rule on (yours): ${name}" || info "rule off (yours): ${name}"
+        ;;
+    esac
   done <<EOF
 $(printf '%s\n' "$summary")
 EOF
 
-  case "$summary" in
-    *dangerous*) ;;
-    *) warn "No 'dangerous attachments' rule was found. Executable attachments may be delivered."
-       info "Zimbra still blocks executable extensions at its own MTA, so this is a"
-       info "second layer rather than the only one - but the gateway should have it." ;;
-  esac
+  if [ "$protective" -eq 0 ]; then
+    warn "No protective rule is active on this gateway."
+    info "It will scan every message and then deliver all of them."
+    info "Restore the factory rules under Configuration > Mail Filter."
+  fi
+
+  # Said explicitly, because it is a deliberate restraint and not an oversight.
+  info "Rules that block rather than quarantine are left to you. A blocked"
+  info "message is gone; a quarantined one can be released."
   return 0
 }
 
@@ -594,17 +724,21 @@ tcp_probe() {
 # -----------------------------------------------------------------------------
 desired_relay() { printf '%s:%s' "$GW_HOST" "$PMG_INT_PORT"; }
 
-# What the world should see. Falls back to the management address only when
-# the operator has not said otherwise, and says so rather than pretending.
-public_name() {
-  if [ -n "${GW_PUBLIC_HOST:-}" ]; then printf '%s' "$GW_PUBLIC_HOST"; return 0; fi
-  printf '%s' "$GW_HOST"
-}
-
-public_addr() {
-  if [ -n "${GW_PUBLIC_IP:-}" ]; then printf '%s' "$GW_PUBLIC_IP"; return 0; fi
-  printf '%s' "$GW_HOST"
-}
+# What the world should see.
+#
+# These do NOT fall back to the management address. They used to, and the
+# warning that said "no public identity is recorded, this is a guess" was then
+# followed by advice naming the LAN address anyway:
+#
+#   Set: example.com. MX 10 <the gateway's LAN address>
+#   Add: ip4:<the gateway's LAN address>
+#
+# An operator who reads a warning and then finds a concrete instruction below
+# it does the concrete thing. Published, that MX points at an address the
+# internet cannot route to and that SPF authorises nobody (QA Phase 16,
+# 12 Sep 2026). Empty is the honest answer; the callers print a placeholder.
+public_name() { printf '%s' "${GW_PUBLIC_HOST:-}"; }
+public_addr() { printf '%s' "${GW_PUBLIC_IP:-}"; }
 
 # An address nobody on the internet can route to. Publishing one of these in
 # SPF or pointing an MX at it is not a warning, it is a broken mail domain.
@@ -620,14 +754,16 @@ is_private_addr() {
 # An MX record cannot hold an address - only a name - so the DNS advice has
 # to name something, and it must be a name that resolves publicly.
 public_identity_usable() {
-  local name addr ok_name=1 ok_addr=1
+  local name addr
   name=$(public_name)
   addr=$(public_addr)
-  case "$name" in ''|*[0-9].[0-9]*) ok_name=0 ;; esac
-  case "$name" in *[a-zA-Z]*) ;; *) ok_name=0 ;; esac
-  is_private_addr "$addr" && ok_addr=0
-  [ -n "$addr" ] || ok_addr=0
-  [ "$ok_name" -eq 1 ] && [ "$ok_addr" -eq 1 ]
+  [ -n "$name" ] || return 1
+  [ -n "$addr" ] || return 1
+  # A name, not an address: an MX record cannot hold one.
+  case "$name" in *[a-zA-Z]*) ;; *) return 1 ;; esac
+  # Routable, or SPF authorises nobody.
+  is_private_addr "$addr" && return 1
+  return 0
 }
 
 cmd_probe() {
@@ -832,10 +968,13 @@ cmd_apply() {
     "tlslog=1" \
     "hide_received=1" \
     "before_queue_filtering=0" \
-    "dnsbl_sites=${PMG_DNSBL_SITES}" \
-    "dnsbl_threshold=1" \
     "maxsize=${PMG_MAX_MESSAGE_BYTES}" \
     "banner=ESMTP KIN Mail Gateway" >/dev/null || policy_failed=1
+
+  # Written separately so that clearing it can be reported on its own, and so
+  # a gateway that already carries a bad value is REPAIRED by re-applying
+  # rather than merely left alone.
+  apply_dnsbl
 
   if [ "$policy_failed" -eq 1 ]; then
     # Mail still flows without these. Say so honestly rather than failing the
@@ -1153,19 +1292,20 @@ cmd_verify() {
 check_dns() {
   command -v "$DIG" >/dev/null 2>&1 || { warn "dig is not installed; DNS was not checked."; return 0; }
 
-  local pub_name pub_addr
+  local pub_name pub_addr have=1
   pub_name=$(public_name)
   pub_addr=$(public_addr)
+  public_identity_usable || have=0
 
-  # Say this once, loudly, before any advice that depends on it. Advice built
-  # on a LAN address is worse than no advice: an operator who follows it
-  # publishes a record that authorises nothing.
-  if ! public_identity_usable; then
-    warn "This gateway has no public identity recorded, so the DNS advice below is a guess."
-    info "Set the gateway's public hostname and address in Console > Proxmox Mail Gateway."
-    info "An MX record can only name a host, never an address, and SPF must list"
-    info "the address the internet sees - not ${GW_HOST}, which is how this"
-    info "appliance reaches it on the local network."
+  if [ "$have" -eq 0 ]; then
+    warn "This gateway has no public identity recorded, so no DNS records can be given."
+    info "Record its public hostname and address under Console > Proxmox Mail Gateway."
+    info "An MX record can only name a host, never an address, and SPF must list the"
+    info "address the internet sees. ${GW_HOST} is how this appliance reaches the"
+    info "gateway on the local network; publishing it would authorise nobody."
+    # Placeholders, so nothing below can be copied into a zone file by mistake.
+    pub_name="<gateway public hostname>"
+    pub_addr="<gateway public address>"
   fi
 
   local mx spf
@@ -1173,7 +1313,7 @@ check_dns() {
   if [ -z "$mx" ]; then
     warn "No MX record for ${MAIL_DOMAIN} could be resolved from here."
     info "Set:  ${MAIL_DOMAIN}.  MX  10  ${pub_name}"
-  elif printf ' %s ' "$mx" | grep -q " ${pub_name} "; then
+  elif [ "$have" -eq 1 ] && printf ' %s ' "$mx" | grep -q " ${pub_name} "; then
     ok "dns.mx points at the gateway (${pub_name})"
   else
     warn "dns.mx for ${MAIL_DOMAIN} is '${mx}', not the gateway. Inbound mail still bypasses it."
@@ -1184,24 +1324,22 @@ check_dns() {
   if [ -z "$spf" ]; then
     warn "No SPF record for ${MAIL_DOMAIN}. Outbound mail from the gateway will be treated as suspicious."
     info "Set:  ${MAIL_DOMAIN}.  TXT  \"v=spf1 ip4:${pub_addr} ~all\""
-  elif printf '%s' "$spf" | grep -q "$pub_addr"; then
+  elif [ "$have" -eq 1 ] && printf '%s' "$spf" | grep -q "$pub_addr"; then
     ok "dns.spf authorises the gateway (${pub_addr})"
   else
-    warn "SPF for ${MAIL_DOMAIN} does not list ${pub_addr}. Outbound mail now leaves from there."
+    warn "SPF for ${MAIL_DOMAIN} does not list the gateway's public address."
     info "Current: ${spf}"
     info "Add:     ip4:${pub_addr}"
   fi
 
-  # An A record that does not exist makes the MX unusable no matter how
-  # correct the MX itself is.
-  if [ -n "$pub_name" ] && printf '%s' "$pub_name" | grep -q '[a-zA-Z]'; then
+  if [ "$have" -eq 1 ]; then
     local a
     a=$("$DIG" +short +time=5 A "$pub_name" 2>/dev/null | head -1)
     if [ -z "$a" ]; then
       warn "${pub_name} has no A record. An MX pointing at it cannot be used."
       info "Set:  ${pub_name}.  A  ${pub_addr}"
-    elif [ -n "${GW_PUBLIC_IP:-}" ] && [ "$a" != "$GW_PUBLIC_IP" ]; then
-      warn "${pub_name} resolves to ${a}, but the gateway's public address is recorded as ${GW_PUBLIC_IP}."
+    elif [ "$a" != "$pub_addr" ]; then
+      warn "${pub_name} resolves to ${a}, but its public address is recorded as ${pub_addr}."
     else
       ok "dns.a ${pub_name} resolves to ${a}"
     fi
