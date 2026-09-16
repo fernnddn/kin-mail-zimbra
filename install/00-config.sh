@@ -24,6 +24,25 @@ if [ -z "${KIN_MAIL_INSTALL_DIR:-}" ]; then
   export KIN_MAIL_INSTALL_DIR
 fi
 
+# Which deployment is this, and which machine am I in it? Sourced here, from an
+# absolute path, so every stage that sources this file gets the answer - and so
+# it is already loaded before any stage cds somewhere else (03 cds into
+# $ZCS_SRC and never comes back, where a relative source would find nothing).
+#
+# Checked rather than sourced blindly: this file has no `set -e`, so a failed
+# source would print one line and CARRY ON, leaving every stage running with no
+# role resolver and each call to it failing somewhere further downstream. A
+# deploy tree that arrived without lib/ must stop here, where the reason is
+# still legible.
+KIN_TOPOLOGY_LIB="${KIN_MAIL_INSTALL_DIR}/lib/topology.sh"
+if [ ! -r "$KIN_TOPOLOGY_LIB" ]; then
+  printf '%s\n' "  [FAIL]   missing ${KIN_TOPOLOGY_LIB}" >&2
+  printf '%s\n' "           This deploy tree is incomplete; re-sync install/ before running any stage." >&2
+  exit 1
+fi
+# shellcheck source=lib/topology.sh
+. "$KIN_TOPOLOGY_LIB"
+
 # 0755 so unprivileged kin-console can traverse to 0644 markers. Do not rely
 # on umask. Sensitive files inside (config) stay 0600.
 ensure_kin_mail_conf_dir() {
@@ -352,6 +371,79 @@ run_wizard() {
     *)                           ZIMBRA_TZ_NAME="$TIMEZONE" ;;
   esac
 
+  echo; say "Deployment topology"
+  info "1) Single server - Zimbra runs every role on this machine"
+  info "2) Split - MTA and proxy here, LDAP and the mailboxes on a second machine"
+  info "A mail gateway sits in front of either one; that is linked from the console."
+  TOPOLOGY=""; EDGE_IP=""; EDGE_HOST=""; MAILBOX_IP=""; MAILBOX_HOST=""
+  _topo_tries=0
+  while [ -z "$TOPOLOGY" ]; do
+    _topo_tries=$((_topo_tries + 1))
+    if [ "$_topo_tries" -gt 8 ]; then
+      fail "Topology was not chosen; cannot run interactively here"
+      exit 1
+    fi
+    printf '  Choice [1/2]: '
+    if ! read -r __topo </dev/tty; then
+      fail "no controlling terminal; cannot choose a topology here"
+      exit 1
+    fi
+    case "$__topo" in
+      1) TOPOLOGY=1vm ;;
+      2) TOPOLOGY="split" ;;
+      *) warn "Choose 1 or 2."; sleep 1 ;;
+    esac
+  done
+  ok "TOPOLOGY=${TOPOLOGY}"
+
+  if [ "$TOPOLOGY" = split ]; then
+    info "Run this wizard on the edge. The mailbox is built from here over SSH."
+    info "The mailbox holds LDAP and the mail; the edge holds neither and can be rebuilt."
+    ask EDGE_IP      "Edge address (this machine)"          "${SERVER_IP}"
+    ask EDGE_HOST    "Edge hostname (FQDN)"                 "${MAIL_HOST}"
+    ask MAILBOX_IP   "Mailbox address"                      ""
+    ask MAILBOX_HOST "Mailbox hostname (FQDN)"              "store.${MAIL_DOMAIN}"
+    # Every one of these is cheap to catch now and expensive to find halfway
+    # through installing Zimbra on two machines.
+    _split_tries=0
+    while :; do
+      _problem=$(kin_split_config_problem) || break
+      _split_tries=$((_split_tries + 1))
+      if [ "$_split_tries" -ge 5 ]; then
+        fail "Split topology is still not usable: ${_problem}"
+        exit 1
+      fi
+      warn "$_problem"
+      sleep 1
+      ask EDGE_IP      "Edge address (this machine)" "${EDGE_IP}"
+      ask EDGE_HOST    "Edge hostname (FQDN)"        "${EDGE_HOST}"
+      ask MAILBOX_IP   "Mailbox address"             "${MAILBOX_IP}"
+      ask MAILBOX_HOST "Mailbox hostname (FQDN)"     "${MAILBOX_HOST}"
+    done
+    ok "edge ${EDGE_HOST} (${EDGE_IP}) -> mailbox ${MAILBOX_HOST} (${MAILBOX_IP})"
+
+    # How this machine reaches the mailbox. Asked here so the whole deployment
+    # can be driven from the edge: the operator never logs into the mailbox,
+    # and the console's Deploy button builds it over this channel.
+    echo
+    info "The mailbox is built from here over SSH. It needs an account there"
+    info "that can sudo - on a fresh Ubuntu that is the one you created at install."
+    ask MAILBOX_SSH_USER "Account on the mailbox" "${MAILBOX_SSH_USER:-kin}"
+    _mbox_pass_tries=0
+    while :; do
+      ask_secret MAILBOX_SSH_PASS "Password for ${MAILBOX_SSH_USER}@${MAILBOX_IP}"
+      [ -n "$MAILBOX_SSH_PASS" ] && break
+      _mbox_pass_tries=$((_mbox_pass_tries + 1))
+      if [ "$_mbox_pass_tries" -ge 5 ]; then
+        fail "A password is required to build the mailbox; giving up"
+        exit 1
+      fi
+      warn "Required - without it the mailbox cannot be built from here."
+      sleep 1
+    done
+    ok "mailbox will be built as ${MAILBOX_SSH_USER}@${MAILBOX_IP}"
+  fi
+
   echo; say "Resolver"
   info "This server will run local dnsmasq: the mail domain is answered locally,"
   info "everything else is forwarded to public resolvers (split-horizon)."
@@ -506,6 +598,7 @@ run_wizard() {
 
   ensure_kin_mail_conf_dir "$CONF_DIR"
   ADMIN_PASS_ESC=$(sq_escape "$ADMIN_PASS")
+  MAILBOX_SSH_PASS_ESC=$(sq_escape "${MAILBOX_SSH_PASS:-}")
   AD_SEARCH_FILTER_ESC=$(sq_escape "$AD_SEARCH_FILTER")
   AD_SEARCH_BIND_PASSWORD_ESC=$(sq_escape "$AD_SEARCH_BIND_PASSWORD")
   AD_TEST_PASS_ESC=$(sq_escape "$AD_TEST_PASS")
@@ -516,6 +609,23 @@ MAIL_DOMAIN="${MAIL_DOMAIN}"
 MAIL_HOST="${MAIL_HOST}"
 SERVER_IP="${SERVER_IP}"
 NET_IFACE="${NET_IFACE}"
+# Deployment shape. 1vm = every Zimbra role on this machine. split = MTA and
+# proxy on the edge, LDAP and the mailboxes on a second machine.
+#
+# On a split these addresses ARE the deployment: the edge is built where this
+# file lives, the mailbox is built from there over SSH, and the gateway relays
+# to the edge. Change an address here and re-run; nothing else needs editing.
+# Both machines read this same file, so which one a stage is running on is
+# decided by matching these addresses, never by SERVER_IP or the hostname.
+TOPOLOGY="${TOPOLOGY}"
+EDGE_IP="${EDGE_IP}"
+EDGE_HOST="${EDGE_HOST}"
+MAILBOX_IP="${MAILBOX_IP}"
+MAILBOX_HOST="${MAILBOX_HOST}"
+# How the edge reaches the mailbox to build it. The operator never logs into
+# that machine; this is the only channel to it.
+MAILBOX_SSH_USER="${MAILBOX_SSH_USER}"
+MAILBOX_SSH_PASS='${MAILBOX_SSH_PASS_ESC}'
 TIMEZONE="${TIMEZONE}"
 ZIMBRA_TZ_NAME="${ZIMBRA_TZ_NAME}"
 DNS_UPSTREAM_1="${DNS_UPSTREAM_1}"
@@ -638,6 +748,15 @@ fi
 if [ -z "$CONTRACTED_SEATS" ]; then
   CONTRACTED_SEATS=PLACEHOLDER_UNSET
 fi
+# Configs written before the split topology existed describe a single machine,
+# which is what install/kin-mail.sh has always assumed with "${TOPOLOGY:-1vm}".
+: "${TOPOLOGY:=1vm}"
+: "${EDGE_IP:=}"
+: "${EDGE_HOST:=}"
+: "${MAILBOX_IP:=}"
+: "${MAILBOX_HOST:=}"
+: "${MAILBOX_SSH_USER:=kin}"
+: "${MAILBOX_SSH_PASS:=}"
 : "${KIN_ADMIN_IPS:=}"
 : "${ZPUSH_ENABLED:=yes}"
 case "${ZPUSH_ENABLED}" in

@@ -2,15 +2,22 @@
 # =============================================================================
 # KIN Mail - 03 INSTALL ZIMBRA
 #
-# Downloads the Maldua Zimbra FOSS build, verifies its checksum, and drives the
-# interactive installer inside tmux by reading the screen and answering the
-# prompts it recognises.
+# Downloads the Maldua Zimbra FOSS build and verifies its checksum, then
+# installs it one of two ways depending on the topology:
 #
-#   ./03-install-zimbra.sh            drive the installer automatically
+#   1vm    drives the interactive installer inside tmux, reading the screen and
+#          answering the prompts it recognises. Proven; unchanged.
+#   split  writes a per-role defaults file and lets the installer read it, with
+#          no terminal involved. A single-node menu tree cannot express "LDAP
+#          and store here, MTA and proxy there", and the joining node has an
+#          LDAP-join menu that does not exist on a single-node install.
+#
+#   ./03-install-zimbra.sh            install according to the configured topology
 #   ./03-install-zimbra.sh --manual   only download and extract, then print the
 #                                     answer sequence and let you drive it
 #
-# Watch it live from another terminal:  tmux attach -t zcs
+# Watch the 1vm driver live from another terminal:  tmux attach -t zcs
+# The split path logs to /var/log/kin-mail-install.log instead.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
@@ -271,6 +278,178 @@ if [ $MANUAL -eq 1 ]; then
     Notify Zimbra of your installation? ......  No  <- sends admin email to Zimbra
 EOF
   echo; exit 0
+fi
+
+# --- 1c. split topology: install from a file, not from a terminal -------------
+# Deliberately below --manual, so downloading and extracting the tarball stays
+# reachable for check-unattended-install.sh.
+#
+# The tmux driver below cannot serve a split: each role has a different menu
+# tree and the joining node has an LDAP-join menu that does not exist on a
+# single-node install. Zimbra's own answer is a defaults file - install.sh
+# sources it, skips the package prompts, installs what INSTALL_PACKAGES names,
+# and hands the same file to zmsetup.pl -c. One file per role is the whole
+# difference between a mailbox and an edge.
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+  # shellcheck source=lib/zcs-defaults.sh
+  . "${KIN_MAIL_INSTALL_DIR}/lib/zcs-defaults.sh"
+
+  say "2. Split install (role decided by this machine's address, not its name)"
+  ZROLE=$(kin_node_role) || {
+    fail "Cannot tell which half of the split this machine is."
+    info "Check EDGE_IP and MAILBOX_IP in /etc/kin-mail/config against this host's addresses."
+    exit 1
+  }
+  ok "role: ${ZROLE}"
+
+  if [ -d /opt/zimbra ]; then
+    fail "/opt/zimbra already exists on this ${ZROLE} node."
+    info "This stage will not re-drive an installer over an existing tree."
+    exit 1
+  fi
+
+  DEFAULTS="${CONF_DIR}/zcs-${ZROLE}.cfg"
+  LDAP_STORE="${CONF_DIR}/ldap-secrets"
+  case "$ZROLE" in
+    mailbox)
+      # This node creates the directory, so it decides its passwords and writes
+      # them down. The edge is built minutes later and must present the same
+      # ones.
+      kin_zcs_ensure_ldap_secrets "$LDAP_STORE"
+      ok "directory passwords ready (${LDAP_STORE}, mode $(stat -c %a "$LDAP_STORE" 2>/dev/null))"
+      kin_zcs_defaults_mailbox "$DEFAULTS"
+      ;;
+    edge)
+      # The directory already exists on the mailbox. This node must present its
+      # passwords, not invent new ones - inventing them produces a node that
+      # installs cleanly, binds to nothing, and shows up as mail not moving,
+      # hours later and on the other machine. So it is an error to be missing
+      # them here, never a reason to generate.
+      if [ -r "$LDAP_STORE" ]; then
+        # shellcheck disable=SC1090
+        . "$LDAP_STORE"
+      fi
+      for _s in KIN_LDAP_ADMIN_PASS KIN_LDAP_ROOT_PASS KIN_LDAP_REP_PASS \
+                KIN_LDAP_POST_PASS KIN_LDAP_AMAVIS_PASS KIN_LDAP_NGINX_PASS; do
+        if [ -z "${!_s:-}" ]; then
+          fail "${_s} is not available; the edge cannot join the mailbox's directory."
+          info "Expected ${LDAP_STORE}, copied from the mailbox after it was built."
+          info "Build the mailbox first; the orchestrator carries this file across."
+          exit 1
+        fi
+      done
+      kin_zcs_defaults_edge "$DEFAULTS"
+      ;;
+    *)
+      fail "Unexpected role '${ZROLE}' for a split install"
+      exit 1
+      ;;
+  esac
+  ok "wrote ${DEFAULTS} (mode $(stat -c %a "$DEFAULTS" 2>/dev/null))"
+
+  if _why=$(kin_zcs_defaults_problem "$DEFAULTS"); then
+    fail "The generated install file would not produce a working ${ZROLE}:"
+    info "  ${_why}"
+    rm -f "$DEFAULTS"
+    exit 1
+  fi
+  ok "install file checked"
+
+  # The file carries the directory's passwords and is sourced as root. It is
+  # removed on every exit path, including failure.
+  cleanup_defaults() { rm -f "$DEFAULTS"; }
+  trap cleanup_defaults EXIT
+
+  # Deliberately two steps, not one.
+  #
+  # install.sh can do the whole thing in a single pass - given a defaults file
+  # it installs the packages and then calls zmsetup.pl -c itself. That pass
+  # fails on this build: the packages leave /opt/zimbra/conf/ca owned by
+  # root:root, zmsetup immediately runs `zmcertmgr createca` AS THE ZIMBRA USER,
+  # and it cannot write there. The install dies at "Setting up CA...failed", and
+  # the error that gets printed is a Java LDAP "Connection refused" stack -
+  # because slapd never started - which points at the wrong thing entirely.
+  #
+  # Splitting the pass lets zmfixperms run in between, which is what moves
+  # conf/ca to zimbra:zimbra. Observed on zcs-10.1.20 / Ubuntu 22.04,
+  # 16 September 2026.
+  say "3. Installing packages (no prompts; 10-20 minutes)"
+  : >"$LOG"
+  chmod 600 "$LOG"
+  apt_prepare || warn "Package lock still busy; the Zimbra installer may contend for it"
+
+  if ! (cd "$ZDIR" && ./install.sh -s --platform-override --skip-activation-check \
+        "$DEFAULTS" >>"$LOG" 2>&1); then
+    fail "Package installation failed on this ${ZROLE} node."
+    tail -n 25 "$LOG" | sed 's/^/    /'
+    scrub_install_log "$LOG"
+    apt_resume_background_upgrades 2>/dev/null || true
+    exit 1
+  fi
+  ok "packages installed"
+
+  say "4. Repairing ownership before configuration"
+  if [ ! -x /opt/zimbra/libexec/zmfixperms ]; then
+    fail "zmfixperms is missing; configuration would fail at 'Setting up CA'"
+    exit 1
+  fi
+  /opt/zimbra/libexec/zmfixperms >>"$LOG" 2>&1 || {
+    fail "zmfixperms failed"
+    tail -n 15 "$LOG" | sed 's/^/    /'
+    exit 1
+  }
+  # The one that actually blocks the install. Asserted rather than assumed,
+  # because the failure it causes names LDAP rather than a permission.
+  _ca_owner=$(stat -c '%U' /opt/zimbra/conf/ca 2>/dev/null || printf '?')
+  if [ "$_ca_owner" != zimbra ]; then
+    fail "/opt/zimbra/conf/ca is owned by ${_ca_owner}, not zimbra."
+    info "zmcertmgr runs as zimbra and cannot write there; configuration would fail."
+    exit 1
+  fi
+  ok "conf/ca owned by zimbra"
+
+  say "5. Configuring from the generated file (10-20 minutes)"
+  if ! /opt/zimbra/libexec/zmsetup.pl -c "$DEFAULTS" >>"$LOG" 2>&1; then
+    fail "Configuration failed on this ${ZROLE} node."
+    info "Last lines of ${LOG}:"
+    tail -n 25 "$LOG" | sed 's/^/    /'
+    scrub_install_log "$LOG"
+    apt_resume_background_upgrades 2>/dev/null || true
+    exit 1
+  fi
+  scrub_install_log "$LOG"
+  apt_resume_background_upgrades 2>/dev/null || true
+
+  say "6. Verification"
+  if [ ! -d /opt/zimbra ]; then
+    fail "/opt/zimbra missing after a successful installer run"
+    exit 1
+  fi
+  STATUS=$(su - zimbra -c "zmcontrol status" 2>&1)
+  printf '%s\n' "$STATUS" | sed 's/^/    /'
+  STOPPED=$(printf '%s' "$STATUS" | grep -v Running | grep -vE "^Host|^$" | wc -l)
+  if [ "${STOPPED:-1}" -ne 0 ]; then
+    fail "${STOPPED} service(s) not running on this ${ZROLE} node"
+    exit 1
+  fi
+  ok "all services running"
+
+  if [ "$ZROLE" = mailbox ]; then
+    info "domain: $(su - zimbra -c 'zmprov gad' 2>/dev/null | tr '\n' ' ')"
+    info "The edge joins this directory next; its passwords are read from here."
+  fi
+
+  if [ -f "$LOG" ] && grep -Fq -- "$ADMIN_PASS" "$LOG" 2>/dev/null; then
+    fail "Admin password still present in ${LOG} after redact"
+    exit 1
+  fi
+  ok "install log clean of the admin password"
+
+  echo
+  say "DONE (${ZROLE})"
+  cleanup_defaults
+  trap - EXIT
+  exit 0
 fi
 
 # --- 2. drive the installer --------------------------------------------------

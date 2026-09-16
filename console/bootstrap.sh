@@ -102,7 +102,12 @@ info "Listen port  : ${CONSOLE_PORT} (HTTPS)"
 say "1. Base packages (skip apt when already present)"
 export DEBIAN_FRONTEND=noninteractive
 need_pkgs=()
-for p in openssl ca-certificates rsync curl; do
+# sshpass is what lets a split deployment build its mailbox without the
+# operator logging into that machine: the orchestrator reaches it over SSH with
+# the password the wizard already collected. A single appliance never uses it,
+# and it is small, so it is installed either way rather than discovered missing
+# halfway through a deploy the operator is watching in the browser.
+for p in openssl ca-certificates rsync curl sshpass; do
   if ! dpkg -s "$p" >/dev/null 2>&1; then
     need_pkgs+=("$p")
   fi

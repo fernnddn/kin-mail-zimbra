@@ -239,6 +239,7 @@ jobs:
           scan_domain 'nisaroti\.my\.id'   "real deployment domain (use example.test)"
           scan_domain 'gits-it\.site'      "real deployment domain (use example.test)"
           scan_domain 'helgaalan\.my\.id'  "real deployment domain (use example.test)"
+          scan_domain 'fernnddn\.my\.id'   "real deployment domain (use example.test)"
           exit $fail
 
       - name: Confirm internal documents are ignored

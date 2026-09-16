@@ -97,3 +97,7 @@ HANDOVER*.md
 # Created and deleted per session; it stubs the API and must never ship.
 console/frontend/preview.html
 console/frontend/src/preview.tsx
+
+# Output of check-unattended-install.sh: the config keys read out of the
+# Zimbra build being deployed. Regenerated per build, not product source.
+zmsetup-config-keys.txt

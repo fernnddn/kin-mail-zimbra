@@ -325,6 +325,28 @@ run_full_install() {
   local -a soft_failed_stages=()
   load_install_config
 
+  # This pipeline runs every stage against ONE machine, in order, which is not
+  # how a split is built: the mailbox has to exist before the edge has a
+  # directory to join, and the edge's install needs passwords that only exist
+  # once the mailbox is built. kin-mail-split.sh does that ordering.
+  #
+  # Delegating here rather than asking the operator to run a different command
+  # is what makes the console's Deploy button work for both topologies: it runs
+  # this script and streams whatever it prints into the browser.
+  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+    local splitter="${KIN_MAIL_INSTALL_DIR}/kin-mail-split.sh"
+    if [ ! -x "$splitter" ]; then
+      fail "This config is TOPOLOGY=split but ${splitter} is missing."
+      info "Nothing on this host has been changed; re-sync install/ and try again."
+      return 1
+    fi
+    say "Split topology - building the mailbox first, then this machine"
+    info "Running ${splitter}"
+    echo
+    "$splitter"
+    return $?
+  fi
+
   say "Full install"
   info "Stops automatically if any stage exits non-zero."
   info "This host only - for HA, install/verify one node before the peer."

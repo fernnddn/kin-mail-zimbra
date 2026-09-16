@@ -15,12 +15,17 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "ok  $1"; }
 bad() { fail=$((fail+1)); echo "FAILED  $1"; [ -n "${2:-}" ] && echo "    $2"; }
 
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/bin"
-ACTIONS="$TMP/actions"; : >"$ACTIONS"
+# Not called TMP. apt_ensure_tmpdir exports TMPDIR/TMP/TEMP as part of what it
+# does, so the library under test overwrites that name mid-run and every path
+# built from it silently moves into the shared /tmp. On a clean CI runner that
+# still passes; on a workstation it collides with whatever the last run left
+# behind, under whichever user ran it.
+FIXTURE=$(mktemp -d); trap 'rm -rf "$FIXTURE"' EXIT
+mkdir -p "$FIXTURE/bin"
+ACTIONS="$FIXTURE/actions"; : >"$ACTIONS"
 export ACTIONS
 
-cat >"$TMP/bin/systemctl" <<'STUB'
+cat >"$FIXTURE/bin/systemctl" <<'STUB'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$ACTIONS"
 if [ "$1" = "is-active" ]; then
@@ -30,33 +35,33 @@ if [ "$1" = "is-active" ]; then
 fi
 exit 0
 STUB
-cat >"$TMP/bin/fuser" <<'STUB'
+cat >"$FIXTURE/bin/fuser" <<'STUB'
 #!/usr/bin/env bash
 # Holder disappears after HOLD_FOR probes, simulating a lock that clears.
 n=0
-[ -f "$TMP/probes" ] && n=$(cat "$TMP/probes")
-n=$((n+1)); echo "$n" >"$TMP/probes"
+[ -f "$FIXTURE/probes" ] && n=$(cat "$FIXTURE/probes")
+n=$((n+1)); echo "$n" >"$FIXTURE/probes"
 [ "$n" -le "${HOLD_FOR:-0}" ] && { echo "${FAKE_PID:-6811}"; exit 0; }
 exit 1
 STUB
-cat >"$TMP/bin/dpkg" <<'STUB'
+cat >"$FIXTURE/bin/dpkg" <<'STUB'
 #!/usr/bin/env bash
 echo "dpkg $*" >>"$ACTIONS"
 [ "$1" = "--audit" ] && { printf '%s' "${DPKG_AUDIT:-}"; exit 0; }
 exit 0
 STUB
-cat >"$TMP/bin/apt-get" <<'STUB'
+cat >"$FIXTURE/bin/apt-get" <<'STUB'
 #!/usr/bin/env bash
 echo "apt-get $*" >>"$ACTIONS"
 exit 0
 STUB
-cat >"$TMP/bin/sleep" <<'STUB'
+cat >"$FIXTURE/bin/sleep" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
-chmod +x "$TMP"/bin/*
-export PATH="$TMP/bin:$PATH" TMP
-export KIN_DPKG_LOCK_FILE="$TMP/lock-frontend"
+chmod +x "$FIXTURE"/bin/*
+export PATH="$FIXTURE/bin:$PATH" FIXTURE
+export KIN_DPKG_LOCK_FILE="$FIXTURE/lock-frontend"
 # shellcheck disable=SC1090
 . "$LIB"
 
@@ -71,17 +76,17 @@ fi
 grep -q 'install dnsmasq' "$ACTIONS" && ok "kin_apt passes the caller's arguments through" || bad "arguments lost"
 
 # --- waiting for a lock that clears -----------------------------------------
-: >"$ACTIONS"; rm -f "$TMP/probes"
-HOLD_FOR=3 FAKE_PID=6811 apt_wait_for_lock 60 >"$TMP/out" 2>&1
+: >"$ACTIONS"; rm -f "$FIXTURE/probes"
+HOLD_FOR=3 FAKE_PID=6811 apt_wait_for_lock 60 >"$FIXTURE/out" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] && ok "a lock that clears is waited out, not failed" || bad "wait returned $rc"
-grep -q "Waiting for the package lock" "$TMP/out" && ok "it says what it is waiting for" || bad "silent wait"
+grep -q "Waiting for the package lock" "$FIXTURE/out" && ok "it says what it is waiting for" || bad "silent wait"
 
 # --- a lock that never clears reports who holds it --------------------------
-: >"$ACTIONS"; rm -f "$TMP/probes"
-HOLD_FOR=100000 FAKE_PID=6811 apt_wait_for_lock 6 >"$TMP/out" 2>&1
+: >"$ACTIONS"; rm -f "$FIXTURE/probes"
+HOLD_FOR=100000 FAKE_PID=6811 apt_wait_for_lock 6 >"$FIXTURE/out" 2>&1
 [ $? -ne 0 ] && ok "a lock that never clears times out rather than hanging forever" || bad "no timeout"
-grep -q "6811" "$TMP/out" && ok "the timeout names the process holding the lock" || bad "holder not named" "$(cat "$TMP/out")"
+grep -q "6811" "$FIXTURE/out" && ok "the timeout names the process holding the lock" || bad "holder not named" "$(cat "$FIXTURE/out")"
 
 # --- pausing and restoring the background updaters --------------------------
 : >"$ACTIONS"
@@ -126,9 +131,9 @@ grep -q 'apt_ensure_tmpdir' "$STAGE" && ok "02 recreates /tmp after the base-ima
 grep -q 'apt_ensure_tmpdir' "$LIB" && ok "apt-lock defines apt_ensure_tmpdir" || bad "missing apt_ensure_tmpdir"
 
 # --- /tmp missing after systemd upgrade must not kill apt -------------------
-FAKE_TMP="$TMP/gone-tmp"
+FAKE_TMP="$FIXTURE/gone-tmp"
 rm -rf "$FAKE_TMP"
-KIN_APT_TMPDIR="$FAKE_TMP" KIN_APT_VARTMP="$TMP/gone-vartmp" apt_ensure_tmpdir
+KIN_APT_TMPDIR="$FAKE_TMP" KIN_APT_VARTMP="$FIXTURE/gone-vartmp" apt_ensure_tmpdir
 if [ -d "$FAKE_TMP" ]; then
   ok "apt_ensure_tmpdir creates a missing /tmp"
 else

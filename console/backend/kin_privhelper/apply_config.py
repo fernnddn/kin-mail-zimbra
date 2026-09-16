@@ -81,6 +81,15 @@ _KEY_ORDER = [
     "MAIL_HOST",
     "SERVER_IP",
     "NET_IFACE",
+    # The split topology's addresses. Unknown keys are preserved by the second
+    # loop in format_config() either way, but they belong next to SERVER_IP:
+    # this block is what an operator edits by hand to move a deployment, and
+    # appending it to the bottom of the file hides it under the AD and test
+    # credentials.
+    "EDGE_IP",
+    "EDGE_HOST",
+    "MAILBOX_IP",
+    "MAILBOX_HOST",
     "TIMEZONE",
     "ZIMBRA_TZ_NAME",
     "DNS_UPSTREAM_1",

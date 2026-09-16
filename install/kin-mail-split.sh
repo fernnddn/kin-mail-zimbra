@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# =============================================================================
+# KIN Mail - build a split deployment from the edge
+#
+# Runs on the EDGE. Builds the mailbox first over SSH, then this machine,
+# because the edge has nothing to join until the directory exists and cannot
+# join it without passwords that only exist once the mailbox is built.
+#
+#   sudo ./kin-mail-split.sh            build
+#   sudo ./kin-mail-split.sh --check    preflight only; changes nothing
+#
+# Every step writes a marker, so a re-run resumes instead of reinstalling. The
+# output is plain progress lines: kin-mail.sh --full-install delegates here, and
+# the console streams whatever this prints straight into the browser.
+# =============================================================================
+set -u
+cd "$(dirname "$0")" && . ./00-config.sh
+need_root
+
+CHECK_ONLY=0
+[ "${1:-}" = "--check" ] && CHECK_ONLY=1
+
+STATE_DIR="${CONF_DIR}/split-state"
+REMOTE_ROOT="/opt/kin-mail-deploy"
+LDAP_STORE="${CONF_DIR}/ldap-secrets"
+
+step_done()  { [ -f "${STATE_DIR}/$1" ]; }
+mark_done()  { mkdir -p "$STATE_DIR"; : >"${STATE_DIR}/$1"; }
+
+# --- who am I, and who is the other machine ----------------------------------
+if ! kin_topology_is_split; then
+  fail "This appliance is not configured as a split (TOPOLOGY=$(kin_topology 2>/dev/null))."
+  info "Nothing has been changed."
+  exit 1
+fi
+
+ROLE=$(kin_node_role) || {
+  fail "Cannot tell which machine this is."
+  info "EDGE_IP and MAILBOX_IP must match this host's addresses."
+  exit 1
+}
+if [ "$ROLE" != edge ]; then
+  fail "This must run on the edge; this machine is the ${ROLE}."
+  info "The edge builds the mailbox, not the other way round."
+  exit 1
+fi
+
+if _why=$(kin_split_config_problem); then
+  fail "The split configuration cannot work: ${_why}"
+  exit 1
+fi
+
+MBOX_IP=$(kin_mailbox_ip)
+MBOX_HOST=$(kin_mailbox_host)
+
+# --- how we reach the mailbox -------------------------------------------------
+# Password auth, because that is what a freshly installed Ubuntu offers and the
+# wizard already collects it. Never in argv: sshpass -e reads SSHPASS from the
+# environment, so the password cannot be read out of the process list.
+SSH_USER="${MAILBOX_SSH_USER:-${KIN_OS_USER:-kin}}"
+SSH_PASS="${MAILBOX_SSH_PASS:-${KIN_USER_PASS:-}}"
+
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password
+          -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=30
+          -o ServerAliveCountMax=120 -o LogLevel=ERROR)
+
+mbox_run() {
+  SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" \
+    "${SSH_USER}@${MBOX_IP}" "$@"
+}
+mbox_sudo() {
+  # One sudo per call, reading its password from the same channel rather than
+  # from a second prompt this script would have to answer.
+  SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" \
+    "${SSH_USER}@${MBOX_IP}" "sudo -S -p '' $*" <<EOF
+${SSH_PASS}
+EOF
+}
+mbox_put() {
+  SSHPASS="$SSH_PASS" sshpass -e scp "${SSH_OPTS[@]}" -p "$1" \
+    "${SSH_USER}@${MBOX_IP}:$2"
+}
+
+# --- 1. preflight -------------------------------------------------------------
+say "1/8 Preflight"
+
+command -v sshpass >/dev/null 2>&1 || {
+  fail "sshpass is not installed on this edge node."
+  info "  sudo apt-get install -y sshpass"
+  exit 1
+}
+ok "sshpass present"
+
+if [ -z "$SSH_PASS" ]; then
+  fail "No password for reaching the mailbox."
+  info "Set KIN_USER_PASS (or MAILBOX_SSH_PASS) in ${CONF_FILE}."
+  exit 1
+fi
+
+if ! mbox_run true 2>/dev/null; then
+  fail "Cannot log in to ${SSH_USER}@${MBOX_IP}."
+  info "Check the address, the account and KIN_USER_PASS in ${CONF_FILE}."
+  exit 1
+fi
+ok "mailbox reachable as ${SSH_USER}@${MBOX_IP}"
+
+if ! mbox_sudo true >/dev/null 2>&1; then
+  fail "${SSH_USER} cannot use sudo on the mailbox."
+  exit 1
+fi
+ok "sudo works on the mailbox"
+
+# Clocks. Zimbra's LDAP and TLS both care, and a skewed pair fails in ways that
+# read as authentication problems hours later.
+_local_now=$(date +%s)
+_remote_now=$(mbox_run 'date +%s' 2>/dev/null | tr -dc '0-9')
+if [ -n "$_remote_now" ]; then
+  _skew=$(( _local_now > _remote_now ? _local_now - _remote_now : _remote_now - _local_now ))
+  if [ "$_skew" -gt 120 ]; then
+    fail "The two machines' clocks differ by ${_skew}s."
+    info "Fix time sync before installing; Zimbra's TLS and LDAP both depend on it."
+    exit 1
+  fi
+  ok "clocks agree (${_skew}s apart)"
+else
+  warn "Could not read the mailbox clock"
+fi
+
+# A mailbox that already has Zimbra is not something to build onto.
+if mbox_run 'test -d /opt/zimbra' 2>/dev/null; then
+  if step_done mailbox-installed; then
+    info "mailbox already built (marker present)"
+  else
+    fail "The mailbox already has /opt/zimbra but this deployment did not build it."
+    info "Wipe it first:  sudo ${REMOTE_ROOT}/install/kin-mail-uninstall.sh --detach"
+    exit 1
+  fi
+fi
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  echo
+  say "Preflight only - nothing was changed"
+  exit 0
+fi
+
+# --- 2. ship the tree ---------------------------------------------------------
+say "2/8 Copying the installer to the mailbox"
+if step_done tree-pushed; then
+  ok "already copied"
+else
+  _tgz=$(mktemp /tmp/kin-split-tree.XXXXXX.tgz)
+  # install/ alone is not enough: prepare-zimbra-data-disk.sh reads the disk
+  # selector out of ansible/, and without it the second disk is silently
+  # ignored and Zimbra lands on the OS volume instead.
+  _root="$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"
+  _sel="ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
+  if [ -r "${_root}/${_sel}" ]; then
+    tar -C "$_root" -czf "$_tgz" install "$_sel"
+    ok "including the data-disk selector"
+  else
+    tar -C "$_root" -czf "$_tgz" install
+    warn "no ${_sel} in this tree - the mailbox's second disk will NOT be used"
+  fi
+  mbox_put "$_tgz" /tmp/kin-split-tree.tgz >/dev/null || {
+    fail "Could not copy the installer to the mailbox"; rm -f "$_tgz"; exit 1; }
+  rm -f "$_tgz"
+  mbox_sudo "rm -rf ${REMOTE_ROOT} && mkdir -p ${REMOTE_ROOT} && tar -C ${REMOTE_ROOT} -xzf /tmp/kin-split-tree.tgz && chmod -R a+rX ${REMOTE_ROOT} && rm -f /tmp/kin-split-tree.tgz" >/dev/null || {
+    fail "Could not unpack the installer on the mailbox"; exit 1; }
+  mark_done tree-pushed
+  ok "installer in place at ${REMOTE_ROOT}"
+fi
+
+say "2b/8 Copying the appliance configuration"
+if step_done config-pushed; then
+  ok "already copied"
+else
+  # Both machines read the same file; each works out its own role from the
+  # addresses in it.
+  mbox_put "$CONF_FILE" /tmp/kin-config >/dev/null || {
+    fail "Could not copy ${CONF_FILE} to the mailbox"; exit 1; }
+  mbox_sudo "install -d -m 755 ${CONF_DIR} && install -m 600 -o root -g root /tmp/kin-config ${CONF_FILE} && rm -f /tmp/kin-config" >/dev/null || {
+    fail "Could not install the configuration on the mailbox"; exit 1; }
+  _remote_role=$(mbox_sudo "bash -c 'cd ${REMOTE_ROOT}/install && . ./00-config.sh >/dev/null 2>&1 && kin_node_role'" 2>/dev/null | tr -dc 'a-z')
+  if [ "$_remote_role" != mailbox ]; then
+    fail "The mailbox does not recognise itself (it reported '${_remote_role:-nothing}')."
+    info "MAILBOX_IP in the config must be an address that machine actually holds."
+    exit 1
+  fi
+  mark_done config-pushed
+  ok "mailbox agrees it is the mailbox"
+fi
+
+# --- 3-4. build the mailbox ---------------------------------------------------
+run_remote_stage() {
+  local marker="$1" stage="$2" label="$3"
+  if step_done "$marker"; then
+    ok "${label}: already done"
+    return 0
+  fi
+  info "${label}: running on ${MBOX_HOST} (output follows)"
+  if ! mbox_sudo "${REMOTE_ROOT}/install/${stage}" 2>&1 | sed 's/^/    | /'; then
+    fail "${label} failed on the mailbox"
+    return 1
+  fi
+  mark_done "$marker"
+  ok "${label}: done"
+}
+
+say "3/8 Preparing the mailbox operating system"
+run_remote_stage mailbox-os 02-prepare-os.sh "mailbox 02-prepare-os" || exit 1
+
+say "4/8 Installing Zimbra on the mailbox (directory + mail store; 20-40 minutes)"
+run_remote_stage mailbox-installed 03-install-zimbra.sh "mailbox 03-install-zimbra" || exit 1
+
+# --- 5. carry the directory passwords across ----------------------------------
+say "5/8 Carrying the directory passwords to the edge"
+if step_done secrets-fetched && [ -r "$LDAP_STORE" ]; then
+  ok "already here"
+else
+  _tmp=$(mktemp "${CONF_DIR}/.ldap-secrets.XXXXXX")
+  chmod 600 "$_tmp"
+  if ! mbox_sudo "cat ${LDAP_STORE}" >"$_tmp" 2>/dev/null || [ ! -s "$_tmp" ]; then
+    rm -f "$_tmp"
+    fail "Could not read the directory passwords from the mailbox."
+    info "Expected ${LDAP_STORE} there, written when the mailbox was built."
+    exit 1
+  fi
+  # Must look like the store, not like an error message.
+  if ! grep -q '^KIN_LDAP_ADMIN_PASS=' "$_tmp"; then
+    rm -f "$_tmp"
+    fail "What came back from the mailbox is not the password store."
+    exit 1
+  fi
+  mv -f "$_tmp" "$LDAP_STORE"
+  chmod 600 "$LDAP_STORE"
+  mark_done secrets-fetched
+  ok "directory passwords in place (mode 600)"
+fi
+
+# --- 6-7. build this machine --------------------------------------------------
+run_local_stage() {
+  local marker="$1" stage="$2" label="$3"
+  if step_done "$marker"; then
+    ok "${label}: already done"
+    return 0
+  fi
+  info "${label}: running here (output follows)"
+  if ! "${KIN_MAIL_INSTALL_DIR}/${stage}" 2>&1 | sed 's/^/    | /'; then
+    fail "${label} failed on the edge"
+    return 1
+  fi
+  mark_done "$marker"
+  ok "${label}: done"
+}
+
+say "6/8 Preparing the edge operating system"
+run_local_stage edge-os 02-prepare-os.sh "edge 02-prepare-os" || exit 1
+
+say "7/8 Installing Zimbra on the edge (MTA + proxy, joining the directory)"
+run_local_stage edge-installed 03-install-zimbra.sh "edge 03-install-zimbra" || exit 1
+
+# --- 8. does the pair actually work -------------------------------------------
+say "8/8 Checking the pair"
+_fail=0
+
+_mbox_status=$(mbox_sudo "su - zimbra -c 'zmcontrol status'" 2>/dev/null || printf '')
+if printf '%s' "$_mbox_status" | grep -q Running; then
+  ok "mailbox services running"
+else
+  fail "mailbox services are not running"
+  _fail=1
+fi
+
+if su - zimbra -c "zmcontrol status" 2>/dev/null | grep -q Running; then
+  ok "edge services running"
+else
+  fail "edge services are not running"
+  _fail=1
+fi
+
+# The edge must be able to reach the directory it just joined. This is the link
+# that fails silently: the edge installs cleanly and then binds to nothing.
+if timeout 10 bash -c "exec 3<>/dev/tcp/${MBOX_IP}/389" 2>/dev/null; then
+  ok "edge can reach the directory on ${MBOX_IP}:389"
+else
+  fail "edge cannot reach LDAP on ${MBOX_IP}:389"
+  _fail=1
+fi
+
+# And hand mail over.
+if timeout 10 bash -c "exec 3<>/dev/tcp/${MBOX_IP}/7025" 2>/dev/null; then
+  ok "edge can reach LMTP on ${MBOX_IP}:7025"
+else
+  warn "edge cannot reach LMTP on ${MBOX_IP}:7025 yet"
+fi
+
+# Both machines must agree on how many servers exist, or one of them joined
+# something else.
+_servers=$(su - zimbra -c "zmprov -l gas" 2>/dev/null | tr '\n' ' ')
+if [ -n "$_servers" ]; then
+  ok "directory knows these servers: ${_servers}"
+else
+  warn "could not list servers from the directory"
+fi
+
+echo
+if [ "$_fail" -ne 0 ]; then
+  say "SPLIT BUILD INCOMPLETE"
+  info "The checks above name what is wrong. Re-running resumes from the last good step."
+  exit 1
+fi
+
+say "SPLIT BUILD DONE"
+ok "mailbox ${MBOX_HOST} (${MBOX_IP}) - directory and mail store"
+ok "edge    $(kin_edge_host) ($(kin_edge_ip)) - MTA and proxy"
+info "Next: link the Proxmox Mail Gateway from the console, then publish DNS."

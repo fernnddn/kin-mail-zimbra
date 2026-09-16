@@ -46,13 +46,30 @@ if [ -f /usr/sbin/policy-rc.d ] && grep -q 'KIN Mail install' /usr/sbin/policy-r
   rm -f /usr/sbin/policy-rc.d
 fi
 
+# Which machine is this, and what is it called?
+#
+# On a single appliance these are MAIL_HOST and SERVER_IP, exactly as before.
+# On a split they are not: one config file is written on the edge and carried to
+# the mailbox, so SERVER_IP there names the wrong machine. Setting the hostname
+# or /etc/hosts from it would configure the mailbox as if it were the edge.
+KIN_THIS_HOST=$(kin_node_host) || {
+  fail "Cannot tell which machine this is."
+  info "Check EDGE_IP and MAILBOX_IP in the appliance config against this host's addresses."
+  exit 1
+}
+KIN_THIS_IP=$(kin_node_ip) || exit 1
+
 echo
-say "Preparing ${MAIL_HOST} (${SERVER_IP})"
+if kin_topology_is_split; then
+  say "Preparing ${KIN_THIS_HOST} (${KIN_THIS_IP}) - $(kin_node_role) node of a split"
+else
+  say "Preparing ${KIN_THIS_HOST} (${KIN_THIS_IP})"
+fi
 echo
 
 # --- 1. hostname and clock ---------------------------------------------------
 say "1. Hostname and time"
-hostnamectl set-hostname "$MAIL_HOST"
+hostnamectl set-hostname "$KIN_THIS_HOST"
 timedatectl set-timezone "$TIMEZONE"
 timedatectl set-ntp true
 ok "hostname : $(hostname -f)"
@@ -133,9 +150,21 @@ enable_ssh_password
 # LAN IPs first - do not point the FQDN at loopback before cluster setup.
 say "2. /etc/hosts"
 [ -f /etc/hosts.kin-backup ] || cp /etc/hosts /etc/hosts.kin-backup
+#
+# On a split, BOTH names go in on BOTH machines. The edge relays to the mailbox
+# over LMTP and asks it for proxy routes; the mailbox relays outbound through
+# the edge. Each is useless if it cannot resolve the other, and leaning on DNS
+# for that makes the pair fail whenever the resolver does.
 cat > /etc/hosts <<EOF
 127.0.0.1       localhost
-${SERVER_IP}    ${MAIL_HOST}  ${MAIL_HOST%%.*}
+${KIN_THIS_IP}    ${KIN_THIS_HOST}  ${KIN_THIS_HOST%%.*}
+$(if kin_topology_is_split; then
+    if [ "$(kin_node_role)" = edge ]; then
+      printf '%s    %s  %s\n' "$(kin_mailbox_ip)" "$(kin_mailbox_host)" "$(kin_mailbox_host | cut -d. -f1)"
+    else
+      printf '%s    %s  %s\n' "$(kin_edge_ip)" "$(kin_edge_host)" "$(kin_edge_host | cut -d. -f1)"
+    fi
+  fi)
 
 ::1     ip6-localhost ip6-loopback
 fe00::0 ip6-localnet
@@ -317,8 +346,23 @@ server=${DNS_UPSTREAM_2}
 $( [ -n "${INTERNAL_ZONE}" ] && echo "server=/${INTERNAL_ZONE}/${INTERNAL_DNS}" )
 
 # internal view of the mail domain
+#
+# On a split the public name users type is served by the edge proxy, and the
+# internal MX is the edge MTA - the mailbox has neither. Both machine names are
+# answered here too, so neither node depends on upstream DNS to find the other.
+$(if kin_topology_is_split; then
+    cat <<SPLIT
+address=/$(kin_edge_host)/$(kin_edge_ip)
+address=/$(kin_mailbox_host)/$(kin_mailbox_ip)
+address=/${MAIL_HOST}/$(kin_edge_ip)
+mx-host=${MAIL_DOMAIN},$(kin_edge_host),10
+SPLIT
+  else
+    cat <<SINGLE
 address=/${MAIL_HOST}/${SERVER_IP}
 mx-host=${MAIL_DOMAIN},${MAIL_HOST},10
+SINGLE
+  fi)
 EOF
 
 if [ -d /etc/resolvconf/resolv.conf.d ]; then
