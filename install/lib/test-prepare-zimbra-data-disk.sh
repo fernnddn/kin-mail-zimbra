@@ -17,6 +17,72 @@ else
   bad "find_selector: [$sel]"
 fi
 
+# --- is this disk the right place to keep a customer's mail? -----------------
+# The selector only asks whether a disk is blank and past a ~20 GiB floor. That
+# is the right question for "can Zimbra install here" and the wrong one for
+# "should the mail live here", and the gap between those two is where an estate
+# ends up confined to whatever spare disk the OS installer left behind.
+GB=1073741824
+TB=1099511627776
+
+if reason=$(data_disk_too_small $((60 * GB)) 1000); then
+  case "$reason" in
+    *"60 GB"*) pass "a 60 GB disk is refused when the site needs 1 TB" ;;
+    *) bad "refused, but the message does not name the size: $reason" ;;
+  esac
+else
+  bad "a 60 GB disk was accepted for a deployment needing 1 TB"
+fi
+
+data_disk_too_small $((1200 * GB)) 1000 >/dev/null \
+  && bad "a 1.2 TB disk was refused for a 1 TB requirement" \
+  || pass "a 1.2 TB disk satisfies a 1 TB requirement"
+
+# No requirement stated means no opinion: a demo must not be blocked by a rule
+# nobody set.
+data_disk_too_small $((60 * GB)) "" >/dev/null \
+  && bad "refused with no minimum configured" \
+  || pass "no minimum configured means no refusal"
+data_disk_too_small $((60 * GB)) 0 >/dev/null \
+  && bad "refused when the minimum is zero" \
+  || pass "a zero minimum means no refusal"
+data_disk_too_small $((60 * GB)) "not-a-number" >/dev/null \
+  && bad "a malformed minimum was treated as a limit" \
+  || pass "a malformed minimum is ignored rather than guessed at"
+
+# The inverted-layout fingerprint: OS on the big disk, mail on the leftover.
+data_disk_looks_inverted $((60 * GB)) $((100 * GB)) \
+  && pass "60 GB mail disk beside a 100 GB system disk reads as inverted" \
+  || bad "did not notice an inverted layout"
+data_disk_looks_inverted $((1200 * GB)) $((60 * GB)) \
+  && bad "called a correct layout inverted" \
+  || pass "a large mail disk beside a small system disk is not flagged"
+data_disk_looks_inverted $((60 * GB)) 0 \
+  && bad "flagged inversion without knowing the system disk size" \
+  || pass "an unknown system disk size is not treated as inversion"
+
+case "$(human_bytes $((1200 * GB)))" in
+  *TB) pass "human_bytes reports a terabyte disk in TB" ;;
+  *) bad "human_bytes: $(human_bytes $((1200 * GB)))" ;;
+esac
+case "$(human_bytes $((60 * GB)))" in
+  "60 GB") pass "human_bytes reports 60 GB exactly" ;;
+  *) bad "human_bytes: $(human_bytes $((60 * GB)))" ;;
+esac
+
+# The stage must actually consult these, and must say the size out loud - the
+# device name alone is what let an inverted layout pass unnoticed.
+STAGE="$(pwd)/prepare-zimbra-data-disk.sh"
+grep -q 'data_disk_too_small' "$STAGE" \
+  && pass "the stage refuses a disk below the configured minimum" \
+  || bad "the stage never calls data_disk_too_small"
+grep -q 'data_disk_looks_inverted' "$STAGE" \
+  && pass "the stage warns about an inverted layout" \
+  || bad "the stage never calls data_disk_looks_inverted"
+grep -q 'Mail will be stored on' "$STAGE" \
+  && pass "the stage prints which disk the mail lands on, with its size" \
+  || bad "the stage still names a device without its size"
+
 tmp=$(mktemp -d)
 mkdir -p "$tmp/empty"
 if leftover=$(first_leftover "$tmp/empty" || true); [ -z "$leftover" ]; then

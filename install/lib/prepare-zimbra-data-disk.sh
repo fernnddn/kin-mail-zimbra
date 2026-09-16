@@ -143,6 +143,53 @@ fstab_has_kin_mark() {
   grep -Fq "$FSTAB_MARK" "$FSTAB" 2>/dev/null
 }
 
+# human_bytes <bytes>
+human_bytes() {
+  local b="${1:-0}"
+  if [ "$b" -ge 1099511627776 ]; then
+    printf '%s TB' "$(awk -v n="$b" 'BEGIN{printf "%.1f", n/1099511627776}')"
+  elif [ "$b" -ge 1073741824 ]; then
+    printf '%s GB' "$(awk -v n="$b" 'BEGIN{printf "%.0f", n/1073741824}')"
+  else
+    printf '%s MB' "$(awk -v n="$b" 'BEGIN{printf "%.0f", n/1048576}')"
+  fi
+}
+
+# data_disk_too_small <data_bytes> <min_gb>
+#
+# Prints why this disk must not hold the mail and returns 0; returns 1 when it
+# is big enough, or when no minimum was asked for.
+#
+# The selector only asks whether a disk is blank and above a floor of about
+# 20 GiB. That is the right question for "can Zimbra install here" and the
+# wrong one for "should a customer's mail live here". Setting
+# KIN_MIN_DATA_DISK_GB turns the site's real requirement into a refusal, so a
+# migration that needs 559 GB cannot quietly land on whatever spare disk the
+# installer happened to leave behind.
+data_disk_too_small() {
+  local bytes="${1:-0}" min_gb="${2:-}"
+  case "$min_gb" in '' | 0 | *[!0-9]*) return 1 ;; esac
+  local min_bytes=$((min_gb * 1073741824))
+  [ "$bytes" -ge "$min_bytes" ] && return 1
+  printf 'the data disk is %s, below the %s this deployment requires' \
+    "$(human_bytes "$bytes")" "$(human_bytes "$min_bytes")"
+  return 0
+}
+
+# data_disk_looks_inverted <data_bytes> <root_bytes>
+#
+# True when the disk chosen for mail is smaller than the one holding the
+# operating system. Not an error - plenty of sound layouts look like that - but
+# it is the fingerprint of the mistake that is easiest to make and hardest to
+# see: the Ubuntu installer offered two disks, took the large one for itself,
+# and left the small one looking like a spare. Observed on both nodes of this
+# lab, 16 September 2026.
+data_disk_looks_inverted() {
+  local data="${1:-0}" root="${2:-0}"
+  [ "$root" -gt 0 ] || return 1
+  [ "$data" -lt "$root" ]
+}
+
 if [ "${KIN_PREPARE_SOURCE_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -275,6 +322,39 @@ fi
 
 info "$REASON"
 info "data=${DATA_DISK} meta=${META_DISK} disk=${PLAN_DISK:-none}"
+
+# Sizes, said out loud. The line above names devices, and a device name does not
+# tell an operator watching a deploy whether the mail is about to land on 60 GB
+# or on a terabyte. Every check below is about that one question.
+_disk_for_size="${PLAN_DISK:-$DATA_DISK}"
+_data_bytes=$(lsblk -bdno SIZE "$_disk_for_size" 2>/dev/null | tr -dc '0-9')
+_root_disk=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null | head -1 | tr -d ' ')
+_root_bytes=""
+[ -n "$_root_disk" ] && _root_bytes=$(lsblk -bdno SIZE "/dev/${_root_disk}" 2>/dev/null | tr -dc '0-9')
+
+if [ -n "$_data_bytes" ]; then
+  say "Mail will be stored on ${_disk_for_size} ($(human_bytes "$_data_bytes"))"
+  if [ -n "$_root_bytes" ]; then
+    info "the operating system is on /dev/${_root_disk} ($(human_bytes "$_root_bytes"))"
+  fi
+
+  if _why=$(data_disk_too_small "$_data_bytes" "${KIN_MIN_DATA_DISK_GB:-}"); then
+    fail "Refusing to put mail here: ${_why}."
+    info "Set KIN_MIN_DATA_DISK_GB to match the estate you are migrating, or give"
+    info "this machine a larger blank disk. Nothing has been partitioned."
+    exit 1
+  fi
+
+  if [ -n "$_root_bytes" ] && data_disk_looks_inverted "$_data_bytes" "$_root_bytes"; then
+    warn "The mail disk is SMALLER than the system disk."
+    info "That is the fingerprint of an Ubuntu install that took the large disk"
+    info "for itself and left the small one looking like a spare. If that is what"
+    info "happened, stop now: mail would be confined to $(human_bytes "$_data_bytes")."
+    info "Set KIN_MIN_DATA_DISK_GB to make this a refusal rather than a warning."
+  fi
+else
+  warn "Could not read the size of ${_disk_for_size}"
+fi
 
 if [ "$NEED_PART" = "true" ]; then
   command -v parted >/dev/null 2>&1 || die "parted is not installed"
