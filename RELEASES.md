@@ -10,10 +10,54 @@ test.
 
 ---
 
+## 0.1.11 — the split mailbox
+
+**New, and not yet mature by the definition above.** Zimbra across two
+machines, with a Proxmox Mail Gateway in front of them.
+
+Every stage is tested and the build is complete end to end in code, but a split
+has not yet finished a clean installation on real hardware. Deploy it with
+somebody watching, and read the output. **0.1.10 is the proven one**; it is
+unchanged here and remains the safe choice if tonight cannot go wrong.
+
+The node facing the internet holds no mail. It runs the MTA and the proxy; the
+directory and the mail store live on a second machine that nothing on the
+internet can reach. The whole build runs from the first machine over SSH, so
+the operator never logs into the second one.
+
+```
+internet ──MX──▶ gateway ──filter──▶ edge (MTA + proxy) ──▶ mailbox (directory + store)
+```
+
+- **Choose it in the wizard.** Address and hostname for the mailbox, and the
+  password the edge uses to build it. Nothing else.
+- **One Deploy button.** The mailbox is built first, because the edge has no
+  directory to join until it exists. Then the edge. Then TLS, DKIM, hardening
+  and the firewall on both.
+- **Each node is firewalled for what it is.** The edge faces the internet as a
+  single appliance does. The mailbox accepts everything from the edge and
+  nothing from anywhere else.
+- **Every stage knows which machine it is on**, decided from addresses rather
+  than hostnames, and refuses rather than guessing.
+
+Single-server (0.1.10) is unchanged and still supported. Choose it in the
+wizard for a one-machine deployment.
+
+Known limits, stated rather than discovered:
+
+- **One gateway and one edge are each a single point of failure.** If either is
+  down, mail queues rather than being lost, and nothing moves.
+- Backups run on the mailbox node, which is where the mail is. The edge refuses
+  and says so.
+- Removing a deployment means running the uninstaller on both machines. It
+  names the one still standing.
+
+---
+
 ## 0.1.10 — mature, with the Proxmox Mail Gateway
 
-**The release to deploy.** Single-server appliance with a Proxmox Mail Gateway
-in front of it.
+Single-server appliance with a Proxmox Mail Gateway in front of it. Still
+supported, and the right choice when there is only one machine.
 
 The gateway is the MX. Inbound mail is filtered there before Zimbra sees it,
 outbound mail is relayed through it, and the appliance's port 25 accepts SMTP
@@ -83,7 +127,9 @@ not for new installations.
 
 | | |
 | --- | --- |
-| New customer, today | **0.1.10**, with the gateway |
+| Deployment that must not go wrong | **0.1.10**, proven on hardware |
+| Two machines, and the mailbox must be off the internet | **0.1.11**, split, watched |
+| One machine only | **0.1.10**, single server with the gateway |
 | Existing 0.1.9 estate, gateway planned | upgrade to 0.1.10, then link the gateway — no reinstall |
 | Existing 0.1.9 estate, no second VM available | stay on 0.1.9 |
 | Anything at 0.1.8 or below | upgrade |
