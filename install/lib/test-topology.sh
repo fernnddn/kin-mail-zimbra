@@ -399,6 +399,41 @@ else
   bad "preflight would pass with sudo that breaks on the first &&"
 fi
 
+# --- a failed step must not report success -----------------------------------
+# Piping a stage through sed for indentation makes the pipeline report sed's
+# status, and sed always succeeds. A mailbox install that died on a permission
+# error was reported as done, and the run carried on to collect passwords it had
+# never written. Only PIPESTATUS sees the stage itself.
+if grep -q 'PIPESTATUS\[0\]' "$SPLITTER"; then
+  ok "a piped stage is judged by the stage, not by sed"
+else
+  bad "a failing stage would be reported as done"
+fi
+if grep -qE 'if ! (mbox_sudo|"\$\{KIN_MAIL_INSTALL_DIR\}).*\| sed' "$SPLITTER"; then
+  bad "a stage is still judged by the exit status of its pipeline"
+else
+  ok "no stage is judged by its pipeline's last command"
+fi
+
+# --- the deploy must work when driven from the console -----------------------
+# privhelperd runs with ProtectHome=true, so /root is not writable: ssh cannot
+# create /root/.ssh and the host key has nowhere to go.
+if grep -q 'UserKnownHostsFile=' "$SPLITTER"; then
+  ok "known_hosts is kept somewhere writable under ProtectHome"
+else
+  bad "ssh would try to write /root/.ssh, which the console cannot"
+fi
+
+# The disk selector is not always beside install/: bootstrap syncs the install
+# tree to /opt/kin-mail-deploy and ansible to /opt/kin-mail-console, so a
+# console-driven deploy finds one without the other and silently skips the
+# mailbox's spare disk.
+if grep -q '/opt/kin-mail-console' "$SPLITTER"; then
+  ok "the selector is looked for in the console's tree too"
+else
+  bad "a console-driven deploy would ship no disk selector"
+fi
+
 # --- a marker must never be the only evidence a step happened ----------------
 # /etc/kin-mail outlives the machines it describes. A rebuilt mailbox, a swapped
 # disk or a re-run against a different address leaves markers claiming work that

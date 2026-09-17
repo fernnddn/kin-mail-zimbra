@@ -102,9 +102,22 @@ invalidate_markers_if_moved
 SSH_USER="${MAILBOX_SSH_USER:-${KIN_OS_USER:-kin}}"
 SSH_PASS="${MAILBOX_SSH_PASS:-${KIN_USER_PASS:-}}"
 
+# known_hosts lives under /etc/kin-mail, not in root's home.
+#
+# The console runs this through kin-mail-privhelperd, which has
+# ProtectHome=true, so /root is not writable there: ssh reports "Could not
+# create directory '/root/.ssh' (Read-only file system)" and the host key has
+# nowhere to go. Keeping it here means the same file is used whether the deploy
+# is driven from the console or from a shell.
+KNOWN_HOSTS="${CONF_DIR}/split-known-hosts"
+mkdir -p "$CONF_DIR" 2>/dev/null || true
+: >>"$KNOWN_HOSTS" 2>/dev/null || true
+chmod 600 "$KNOWN_HOSTS" 2>/dev/null || true
+
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password
           -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=30
-          -o ServerAliveCountMax=120 -o LogLevel=ERROR)
+          -o ServerAliveCountMax=120 -o LogLevel=ERROR
+          -o "UserKnownHostsFile=${KNOWN_HOSTS}")
 
 mbox_run() {
   SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" \
@@ -219,12 +232,23 @@ else
   # ignored and Zimbra lands on the OS volume instead.
   _root="$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"
   _sel="ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
-  if [ -r "${_root}/${_sel}" ]; then
-    tar -C "$_root" -czf "$_tgz" install "$_sel"
-    ok "including the data-disk selector"
+  # The selector is not always beside install/. console/bootstrap.sh syncs the
+  # install tree to /opt/kin-mail-deploy and the ansible tree to
+  # /opt/kin-mail-console, so a deploy driven from the console finds install/
+  # with no ansible/ next to it - and the mailbox's spare disk goes unused
+  # while the log says only that the file was not found.
+  _seldir=""
+  for _cand in "$_root" /opt/kin-mail-console /opt/kin-mail-deploy "$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"; do
+    if [ -r "${_cand}/${_sel}" ]; then _seldir="$_cand"; break; fi
+  done
+  if [ -n "$_seldir" ]; then
+    tar -C "$_root" -czf "$_tgz" install
+    tar -C "$_seldir" -rzf "$_tgz" "$_sel" 2>/dev/null \
+      || { gunzip -c "$_tgz" >"${_tgz}.t" && tar -C "$_seldir" -rf "${_tgz}.t" "$_sel" && gzip -c "${_tgz}.t" >"$_tgz" && rm -f "${_tgz}.t"; }
+    ok "including the data-disk selector from ${_seldir}"
   else
     tar -C "$_root" -czf "$_tgz" install
-    warn "no ${_sel} in this tree - the mailbox's second disk will NOT be used"
+    warn "no ${_sel} anywhere - the mailbox's second disk will NOT be used"
   fi
   mbox_put "$_tgz" /tmp/kin-split-tree.tgz >/dev/null || {
     fail "Could not copy the installer to the mailbox"; rm -f "$_tgz"; exit 1; }
@@ -271,7 +295,13 @@ run_remote_stage() {
     fi
   fi
   info "${label}: running on ${MBOX_HOST} (output follows)"
-  if ! mbox_sudo "${REMOTE_ROOT}/install/${stage}" 2>&1 | sed 's/^/    | /'; then
+  # PIPESTATUS, not the pipeline's own status. A pipeline reports its LAST
+  # command, and the last command here is sed, which succeeds whatever the
+  # stage did - so a mailbox install that died on a permission error was
+  # reported as done, and the run carried on to look for the passwords it
+  # never wrote.
+  mbox_sudo "${REMOTE_ROOT}/install/${stage}" 2>&1 | sed 's/^/    | /'
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     fail "${label} failed on the mailbox"
     return 1
   fi
@@ -325,7 +355,8 @@ run_local_stage() {
     fi
   fi
   info "${label}: running here (output follows)"
-  if ! "${KIN_MAIL_INSTALL_DIR}/${stage}" 2>&1 | sed 's/^/    | /'; then
+  "${KIN_MAIL_INSTALL_DIR}/${stage}" 2>&1 | sed 's/^/    | /'
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     fail "${label} failed on the edge"
     return 1
   fi
