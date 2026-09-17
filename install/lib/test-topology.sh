@@ -438,13 +438,20 @@ fi
 # uninstaller removes /opt/kin-mail-deploy, so a mailbox wiped between attempts
 # keeps "tree-pushed" while the tree is gone - and the run reaches the install
 # step to find no installer there.
-for m in tree-pushed config-pushed; do
-  if grep -q "step_done ${m} && ! mbox_run" "$SPLITTER"; then
-    ok "${m} is confirmed on the machine before it is trusted"
-  else
-    bad "${m} is trusted without asking the mailbox"
-  fi
-done
+if grep -q "step_done config-pushed && ! mbox_run" "$SPLITTER"; then
+  ok "config-pushed is confirmed on the machine before it is trusted"
+else
+  bad "config-pushed is trusted without asking the mailbox"
+fi
+# The installer tree is not cached at all. A marker can attest that a tree
+# exists; it cannot attest that it is the CURRENT one, and a mailbox running a
+# stale stage while the edge runs the fixed copy fails in a way that looks like
+# the fix did not work.
+if grep -q 'fresh every run' "$SPLITTER" && ! grep -q 'mark_done tree-pushed' "$SPLITTER"; then
+  ok "the installer is copied fresh every run, never cached"
+else
+  bad "a cached installer tree could be stale on the mailbox"
+fi
 
 # The same rule inside stage 03. It carries its own copy of the check, and
 # fixing only the orchestrator's left the deploy passing preflight and then

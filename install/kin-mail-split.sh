@@ -265,49 +265,45 @@ fi
 
 # --- 2. ship the tree ---------------------------------------------------------
 say "2/8 Copying the installer to the mailbox"
-# Verified, not trusted - the same rule as every other step. The uninstaller
-# removes /opt/kin-mail-deploy, so a mailbox that was wiped between attempts
-# still carries this marker while the tree it describes is gone, and the run
-# reaches step 4 to find no installer there.
-if step_done tree-pushed && ! mbox_run "test -x ${REMOTE_ROOT}/install/03-install-zimbra.sh" 2>/dev/null; then
-  warn "the installer is recorded as copied, but the mailbox does not have it. Copying again."
-  rm -f "${STATE_DIR}/tree-pushed"
-fi
-if step_done tree-pushed; then
-  ok "already copied"
+# Always copied, never cached.
+#
+# A marker here bought nothing - the tree is 1.4 MB over a LAN - and cost
+# correctness twice: once when the uninstaller removed it and the marker still
+# claimed it was there, and once when the marker was right that a tree existed
+# but wrong that it was THIS one, so the mailbox ran a stale stage while the
+# edge ran the fixed copy. Freshness is not something a marker can attest to.
+_tgz=$(mktemp /tmp/kin-split-tree.XXXXXX.tgz)
+# install/ alone is not enough: prepare-zimbra-data-disk.sh reads the disk
+# selector out of ansible/, and without it the second disk is silently
+# ignored and Zimbra lands on the OS volume instead.
+_root="$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"
+_sel="ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
+# The selector is not always beside install/. console/bootstrap.sh syncs the
+# install tree to /opt/kin-mail-deploy and the ansible tree to
+# /opt/kin-mail-console, so a deploy driven from the console finds install/
+# with no ansible/ next to it - and the mailbox's spare disk goes unused
+# while the log says only that the file was not found.
+_seldir=""
+for _cand in "$_root" /opt/kin-mail-console /opt/kin-mail-deploy; do
+  if [ -r "${_cand}/${_sel}" ]; then _seldir="$_cand"; break; fi
+done
+tar -C "$_root" -czf "$_tgz" install
+if [ -n "$_seldir" ]; then
+  _plain="${_tgz%.tgz}.tar"
+  gunzip -c "$_tgz" >"$_plain" \
+    && tar -C "$_seldir" -rf "$_plain" "$_sel" \
+    && gzip -c "$_plain" >"$_tgz" \
+    && rm -f "$_plain"
+  ok "including the data-disk selector from ${_seldir}"
 else
-  _tgz=$(mktemp /tmp/kin-split-tree.XXXXXX.tgz)
-  # install/ alone is not enough: prepare-zimbra-data-disk.sh reads the disk
-  # selector out of ansible/, and without it the second disk is silently
-  # ignored and Zimbra lands on the OS volume instead.
-  _root="$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"
-  _sel="ansible/roles/drbd_disk_prep/files/select_drbd_disk.py"
-  # The selector is not always beside install/. console/bootstrap.sh syncs the
-  # install tree to /opt/kin-mail-deploy and the ansible tree to
-  # /opt/kin-mail-console, so a deploy driven from the console finds install/
-  # with no ansible/ next to it - and the mailbox's spare disk goes unused
-  # while the log says only that the file was not found.
-  _seldir=""
-  for _cand in "$_root" /opt/kin-mail-console /opt/kin-mail-deploy "$(cd "${KIN_MAIL_INSTALL_DIR}/.." && pwd)"; do
-    if [ -r "${_cand}/${_sel}" ]; then _seldir="$_cand"; break; fi
-  done
-  if [ -n "$_seldir" ]; then
-    tar -C "$_root" -czf "$_tgz" install
-    tar -C "$_seldir" -rzf "$_tgz" "$_sel" 2>/dev/null \
-      || { gunzip -c "$_tgz" >"${_tgz}.t" && tar -C "$_seldir" -rf "${_tgz}.t" "$_sel" && gzip -c "${_tgz}.t" >"$_tgz" && rm -f "${_tgz}.t"; }
-    ok "including the data-disk selector from ${_seldir}"
-  else
-    tar -C "$_root" -czf "$_tgz" install
-    warn "no ${_sel} anywhere - the mailbox's second disk will NOT be used"
-  fi
-  mbox_put "$_tgz" /tmp/kin-split-tree.tgz >/dev/null || {
-    fail "Could not copy the installer to the mailbox"; rm -f "$_tgz"; exit 1; }
-  rm -f "$_tgz"
-  mbox_sudo "rm -rf ${REMOTE_ROOT} && mkdir -p ${REMOTE_ROOT} && tar -C ${REMOTE_ROOT} -xzf /tmp/kin-split-tree.tgz && chmod -R a+rX ${REMOTE_ROOT} && rm -f /tmp/kin-split-tree.tgz" >/dev/null || {
-    fail "Could not unpack the installer on the mailbox"; exit 1; }
-  mark_done tree-pushed
-  ok "installer in place at ${REMOTE_ROOT}"
+  warn "no ${_sel} anywhere - the mailbox's second disk will NOT be used"
 fi
+mbox_put "$_tgz" /tmp/kin-split-tree.tgz >/dev/null || {
+  fail "Could not copy the installer to the mailbox"; rm -f "$_tgz"; exit 1; }
+rm -f "$_tgz"
+mbox_sudo "rm -rf ${REMOTE_ROOT}/install && mkdir -p ${REMOTE_ROOT} && tar -C ${REMOTE_ROOT} -xzf /tmp/kin-split-tree.tgz && chmod -R a+rX ${REMOTE_ROOT} && rm -f /tmp/kin-split-tree.tgz" >/dev/null || {
+  fail "Could not unpack the installer on the mailbox"; exit 1; }
+ok "installer copied to ${REMOTE_ROOT} (fresh every run)"
 
 say "2b/8 Copying the appliance configuration"
 if step_done config-pushed && ! mbox_run "test -r ${CONF_FILE}" 2>/dev/null; then
