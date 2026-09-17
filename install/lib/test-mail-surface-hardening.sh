@@ -162,6 +162,39 @@ else
   bad "the closing cluster_ok check warns on nodes with no proxy"
 fi
 
+# --- global setting, per-node effect ----------------------------------------
+# zimbraReverseProxySSLProtocols and -Ciphers are GLOBAL: zmprov gacf reads
+# them, zmprov mcf writes them. The nginx built from them is per-node.
+#
+# On a split this stage runs on the mailbox first. The mailbox writes the
+# settings and, having no proxy, correctly does not regenerate. The edge then
+# runs, reads what the mailbox just wrote, finds nothing to change, and reports
+# "No proxy restart required" - so the one machine that actually serves TLS
+# keeps the cipher list it was installed with, forever. Deployment green,
+# hardening never applied, nothing in any log saying so.
+#
+# The trigger therefore cannot be "did this run change the directory".
+if grep -q 'proxy_config_has_ciphers' "$STAGE"; then
+  ok "the stage checks whether this node's nginx matches the directory"
+else
+  bad "nothing reconciles a node's nginx with settings another node wrote"
+fi
+if awk '/^configure_tls\(\) \{/,/^\}/' "$STAGE" \
+   | grep -q 'need_proxy_reload" -eq 0 \].*node_runs_proxy'; then
+  ok "a node that changed nothing still regenerates when its nginx is stale"
+else
+  bad "the regeneration is still gated only on this run having changed something"
+fi
+# ...and that reconciliation is scoped to splits. One appliance writes and
+# regenerates in the same run, so it cannot have the gap - and there the check
+# would be the sole decider of whether to restart the proxy, every run.
+if awk '/^configure_tls\(\) \{/,/^\}/' "$STAGE" \
+   | grep -q 'KIN_NODE_ROLE" != "all" \].*need_proxy_reload'; then
+  ok "the reconciliation does not change single-appliance behaviour"
+else
+  bad "the split-only reconciliation is not gated on the node role"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1

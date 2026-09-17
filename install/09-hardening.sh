@@ -106,13 +106,45 @@ cluster_ok() {
 # same question got answered three different ways across this stage and the
 # orchestrator before, and each copy was fixed separately.
 #
-# The proxy is a package, not a setting. On a single-server appliance it is
-# always present; on a split it is installed on the edge only, so the mailbox
-# has no zmproxyconfgen to run and nothing answering on :443. Asking the
-# filesystem rather than the role means this is also right for any node that
-# was built without zimbra-proxy for some other reason.
+# The role comes first and is decisive. On a split the proxy is on the edge
+# because that is what a split IS, not because of what happens to be on disk.
+# Deriving it from the filesystem instead would mean betting the stage on which
+# Zimbra package ships zmproxyconfgen - and if that bet were wrong, the mailbox
+# would run it, fail, and abort the build exactly as before. An architecture
+# decision that is already recorded should not be re-inferred from evidence.
+#
+# The filesystem checks below still matter for every node the role cannot
+# speak for: a single-server appliance, or an HA secondary, built without
+# zimbra-proxy. Both the generator and its templates have to be here, because
+# the generator without templates is the failure this is here to prevent.
 node_runs_proxy() {
-  [ -x /opt/zimbra/libexec/zmproxyconfgen ]
+  [ "${KIN_NODE_ROLE:-all}" = "mailbox" ] && return 1
+  [ -x /opt/zimbra/libexec/zmproxyconfgen ] || return 1
+  [ -d /opt/zimbra/conf/nginx/templates ] || return 1
+  return 0
+}
+
+# Does this node's GENERATED nginx config already carry the cipher list we
+# want? Answers yes when it cannot tell, because the caller uses this to decide
+# whether to restart the proxy, and a restart is an outage.
+#
+# This exists because of a split-brain that is invisible on one machine.
+# zimbraReverseProxySSLProtocols and zimbraReverseProxySSLCiphers are GLOBAL -
+# zmprov gacf reads them, zmprov mcf writes them - but the nginx config built
+# from them is per-node. On a split, stage 09 runs on the mailbox first. The
+# mailbox writes the global settings and, having no proxy, correctly does not
+# regenerate. The edge then runs, reads the settings the mailbox just wrote,
+# finds nothing to change, and reports "No proxy restart required" - so the one
+# machine that actually serves TLS never regenerates, and keeps the cipher list
+# it was installed with. Green deployment, hardening silently not applied.
+#
+# So the trigger is not "did this run change the directory" but "does this
+# node's nginx match it", which is also idempotent: once it matches, every
+# later run is a no-op.
+proxy_config_has_ciphers() {
+  local want="$1" dir=/opt/zimbra/conf/nginx/includes
+  [ -d "$dir" ] || return 0
+  grep -rqsF -- "$want" "$dir" 2>/dev/null
 }
 
 show_status() {
@@ -290,6 +322,26 @@ configure_tls() {
     info "Added TLSv1.3 to zimbraMailboxdSSLProtocols (takes full effect on next mailboxd restart - not forced here)"
   else
     ok "mailboxd SSL protocols include TLSv1.3"
+  fi
+
+  # Nothing changed in the directory THIS run, but that says nothing about
+  # whether this node's nginx was ever rebuilt from it. See
+  # proxy_config_has_ciphers: on a split the mailbox writes these settings
+  # first, so the edge - the only machine serving TLS - finds them already
+  # correct and would never regenerate.
+  #
+  # Split only, deliberately. One appliance writes and regenerates in the same
+  # run, so the gap cannot open there, and this check would be the only thing
+  # deciding whether to restart the proxy on the product's main path. If the
+  # generated config ever spelled the cipher list differently from the
+  # directory, that would mean a proxy restart on every single run of this
+  # stage. Not a risk worth taking to fix a bug that shape of deployment
+  # cannot have.
+  if [ "$KIN_NODE_ROLE" != "all" ] && [ "$need_proxy_reload" -eq 0 ] && node_runs_proxy \
+     && ! proxy_config_has_ciphers "$desired_ciphers"; then
+    need_proxy_reload=1
+    info "Directory already has the modern cipher list, but this node's nginx"
+    info "does not. Regenerating so the machine that serves TLS actually uses it."
   fi
 
   if [ "$need_proxy_reload" -eq 1 ]; then
