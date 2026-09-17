@@ -309,11 +309,26 @@ if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; th
   # already there before this stage starts. Refusing on that alone rejects the
   # machine the previous stage just prepared - and wiping it only puts the
   # mount point back. bin/zmcontrol is what means Zimbra lives here.
+  # Installed and configured are different things, and the gap between them is
+  # exactly where a failed run leaves the machine: 193 packages on disk, a
+  # zmcontrol binary, and no directory. Refusing there means an install that
+  # died during configuration can never be resumed - only wiped and repeated
+  # from the download.
+  #
+  # So ask what actually works. zmcontrol status needs the configuration to
+  # exist; on a package-only tree it fails with "Unable to determine enabled
+  # services from ldap".
+  PKGS_DONE=0
   if [ -x /opt/zimbra/bin/zmcontrol ]; then
-    fail "Zimbra is already installed on this ${ZROLE} node."
-    info "This stage will not re-drive an installer over an existing tree."
-    info "Wipe it first:  sudo ./kin-mail-uninstall.sh --detach"
-    exit 1
+    if su - zimbra -c "zmcontrol status" >/dev/null 2>&1; then
+      fail "Zimbra is already installed AND configured on this ${ZROLE} node."
+      info "This stage will not re-drive an installer over a working tree."
+      info "Wipe it first:  sudo ./kin-mail-uninstall.sh --detach"
+      exit 1
+    fi
+    PKGS_DONE=1
+    warn "Packages are already installed here but not configured."
+    info "Resuming from configuration rather than downloading and installing again."
   fi
   if mountpoint -q /opt/zimbra 2>/dev/null; then
     ok "/opt/zimbra is the prepared data disk; installing into it"
@@ -386,7 +401,7 @@ if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; th
   # Splitting the pass lets zmfixperms run in between, which is what moves
   # conf/ca to zimbra:zimbra. Observed on zcs-10.1.20 / Ubuntu 22.04,
   # 16 September 2026.
-  say "3. Installing packages (no prompts; 10-20 minutes)"
+  say "3/8 Installing packages (no prompts; 10-20 minutes)"
   : >"$LOG"
   chmod 600 "$LOG"
   apt_prepare || warn "Package lock still busy; the Zimbra installer may contend for it"

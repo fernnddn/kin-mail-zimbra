@@ -305,7 +305,12 @@ else
   bad "03-install-zimbra.sh has no per-role defaults generation"
 fi
 # The branch must exit rather than continue into the tmux driver below it.
-if grep -A200 'kin_topology_is_split' "$STAGE3" | grep -q 'exit 0'; then
+# Anchored on the branch's own end, not on a fixed number of lines: the branch
+# grows, and a window that once contained it silently stops covering it.
+split_start=$(grep -n 'if declare -F kin_topology_is_split' "$STAGE3" | head -1 | cut -d: -f1)
+tmux_start=$(grep -n '^# --- 2. drive the installer' "$STAGE3" | head -1 | cut -d: -f1)
+if [ -n "$split_start" ] && [ -n "$tmux_start" ] &&
+   sed -n "${split_start},${tmux_start}p" "$STAGE3" | grep -q '^  exit 0$'; then
   ok "the split branch exits instead of falling through to the tmux driver"
 else
   bad "the split branch can fall through into the single-node driver"
@@ -460,6 +465,16 @@ if grep -q 'if \[ -x /opt/zimbra/bin/zmcontrol \]; then' "$STAGE3"; then
   ok "stage 03 also judges by the install, not the directory"
 else
   bad "stage 03 still refuses a prepared-but-empty /opt/zimbra"
+fi
+
+# Installed and configured are different states, and a run that dies during
+# configuration leaves the machine in the gap between them: packages on disk, a
+# zmcontrol binary, no directory. Refusing there means such a run can only be
+# wiped and repeated from the download.
+if grep -q 'PKGS_DONE' "$STAGE3"; then
+  ok "a package-only tree is resumed from configuration, not refused"
+else
+  bad "an install that died during configuration could not be resumed"
 fi
 
 # conf/ca must be MADE ready, not merely inspected. Missing is a normal state
