@@ -607,13 +607,34 @@ else
   if su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" >/dev/null 2>&1; then
     ok "DKIM key already exists"
   else
-    su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -a -d ${MAIL_DOMAIN}" >/dev/null 2>&1
-    ok "DKIM key created"
+    # The result was discarded and success announced either way. When creation
+    # actually failed, this stage said "DKIM key created", printed a record
+    # with an empty selector for the operator to paste, and 05-healthcheck then
+    # stopped the pipeline with "DKIM key not created yet" - two stages later,
+    # pointing at the wrong moment.
+    if out=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -a -d ${MAIL_DOMAIN}" 2>&1); then
+      ok "DKIM key created"
+    else
+      fail "Could not create the DKIM key for ${MAIL_DOMAIN}"
+      printf '%s\n' "$out" | tail -5 | sed 's/^/    /'
+      info "Outbound mail will send unsigned until this is fixed. On a split,"
+      info "DKIM is signed by the MTA, so run this stage on the edge."
+      exit 1
+    fi
   fi
 
   Q=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>/dev/null)
   SEL=$(printf '%s' "$Q" | awk '/DKIM Selector/{getline; while($0==""){getline}; print; exit}')
   VAL=$(printf '%s' "$Q" | awk '/DKIM Public signature/,0' | grep -oE '"[^"]*"' | tr -d '"' | tr -d '\n')
+
+  # A record with an empty selector or empty value is not a record. Printing it
+  # inside a PASTE THIS box is how it ends up in a DNS zone.
+  if [ -z "$SEL" ] || [ -z "$VAL" ]; then
+    fail "The DKIM key exists but its selector or public value could not be read"
+    info "Read it by hand before publishing anything:"
+    info "  su - zimbra -c '/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}'"
+    exit 1
+  fi
 
   echo
   printf '%s\n' "${BLD}  PASTE DKIM RECORD IN DNS PANEL (zone ${MAIL_DOMAIN})${RST}"
