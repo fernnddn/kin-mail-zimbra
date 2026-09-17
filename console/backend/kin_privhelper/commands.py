@@ -651,6 +651,17 @@ async def cmd_apply_wizard_draft() -> AsyncIterator[dict[str, Any]]:
 
     # Run sync work in a thread so the event loop can still stream/busy-gate.
     code, lines = await asyncio.to_thread(apply_config.apply_wizard_draft)
+    # Persist before streaming. The Deploy button treats a non-zero exit as
+    # "Could not save settings, Deploy stopped before install". If the SSE
+    # drops, the banner is all the operator sees unless the reason is also
+    # in deploy-last.log for the next hydrate.
+    try:
+        DEPLOY_LAST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEPLOY_LAST_LOG.open("w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        os.chmod(DEPLOY_LAST_LOG, 0o640)
+    except OSError:
+        pass
     for line in lines:
         yield proto.event_stdout(line)
     yield proto.event_done(int(code))

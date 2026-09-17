@@ -360,7 +360,7 @@ def write_topology_marker(topology: str) -> bool:
     """Write /etc/kin-mail/topology at 0644. Companion to TOPOLOGY in config.
 
     Idempotent: skips rewrite when the file already holds the same value.
-    Returns False when topology is not 1vm/2vm (does not write).
+    Returns False when topology is not 1vm, 2vm or split (does not write).
     """
     body = topology_marker_body(topology)
     if not body:

@@ -11,12 +11,15 @@ import {
 import { api } from "../api";
 import { useSetup } from "../setup";
 import { formatDeployLog } from "./ansi";
+import { applyDraftFailureMessage } from "./applyDraft";
 import { useWizard } from "./WizardContext";
 import {
   emptyInstallProgress,
   parseInstallProgress,
   type InstallProgress,
 } from "./deployPipeline";
+
+export { applyDraftFailureMessage };
 
 export type DeployActionId =
   | "apply_draft"
@@ -541,7 +544,7 @@ export function DeploySessionProvider({ children, logFilter }: DeploySessionProv
         pipelineStartRef.current = false;
         setLocalBusy(false);
         pipelineEsRef.current = null;
-        setMessage("Could not save settings, Deploy stopped before install.");
+        setMessage(applyDraftFailureMessage(logBufRef.current));
         return;
       }
       append(`\n[${new Date().toISOString()}] Starting mail system install...\n`);

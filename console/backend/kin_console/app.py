@@ -428,10 +428,11 @@ async def put_wizard_draft(
                 status_code=400,
                 detail="The mailbox must be a different machine from this one",
             )
+        edge_name = (updated.edge_host or updated.mail_host or "").strip()
         if (
             updated.mailbox_host
-            and updated.edge_host
-            and updated.mailbox_host == updated.edge_host
+            and edge_name
+            and updated.mailbox_host.strip() == edge_name
         ):
             raise HTTPException(
                 status_code=400,

@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 
 from kin_privhelper.apply_config import format_config, merge_draft, validate_draft
-from kin_privhelper.deploy_state import _normalize_topology
+from kin_privhelper.commands import cmd_apply_wizard_draft
+from kin_privhelper.deploy_state import _normalize_topology, write_topology_marker
 
 
 def split_draft(**over: object) -> dict[str, object]:
@@ -59,6 +60,14 @@ class TheWizardAcceptsASplit(unittest.TestCase):
         self.assertEqual(_normalize_topology("SPLIT"), "split")
         self.assertEqual(_normalize_topology("3vm"), "")
 
+    def test_the_topology_marker_writer_accepts_a_split(self) -> None:
+        # apply_wizard_draft stops Deploy if this returns False.
+        import inspect
+
+        src = inspect.getsource(write_topology_marker)
+        self.assertNotIn("not 1vm/2vm", src)
+        self.assertIn("split", inspect.getsource(_normalize_topology))
+
 
 class BothValidationLayersAgree(unittest.TestCase):
     """The draft endpoint and the config writer must accept the same layouts.
@@ -75,6 +84,20 @@ class BothValidationLayersAgree(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('("1vm", "2vm", "split")', src)
         self.assertNotIn('detail="topology must be 1vm or 2vm"', src)
+        self.assertIn("updated.edge_host or updated.mail_host", src)
+
+    def test_the_domain_step_writes_the_edge_hostname_from_mail_host(self) -> None:
+        # Topology runs first and saves edge_host while mail_host is still
+        # empty. Domain is where the operator types the hostname. If Domain
+        # only fills edge_host when it is already empty, a later edit of
+        # mail_host leaves EDGE_HOST stale and apply_draft can refuse a
+        # collision that the operator already corrected.
+        src = (
+            Path(__file__).resolve().parents[2]
+            / "frontend/src/wizard/steps/DomainStep.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("draft.topology === \"split\" ? { edge_host: host }", src)
+        self.assertNotIn("!draft.edge_host.trim()", src)
 
     def test_no_layout_is_accepted_by_one_layer_and_refused_by_the_other(self) -> None:
         for topology in ("1vm", "2vm", "split"):
@@ -126,6 +149,29 @@ class ItRefusesWhatCannotBeBuilt(unittest.TestCase):
         self.assertEqual(errs, [])
 
 
+    def test_an_empty_edge_host_is_this_machine_once_mail_host_is_known(self) -> None:
+        # Topology is asked first, Domain later. The operator never types the
+        # edge hostname: it is the mail server hostname they fill in next.
+        # Requiring it as its own stored field is how Deploy stopped before
+        # install over a complete split.
+        errs = validate_draft(split_draft(edge_host=""), dict(EXISTING))
+        self.assertEqual(errs, [])
+        out = merge_draft(split_draft(edge_host=""), dict(EXISTING))
+        self.assertEqual(out["EDGE_HOST"], "mail.example.test")
+
+    def test_an_empty_edge_ip_is_this_machine(self) -> None:
+        errs = validate_draft(split_draft(edge_ip=""), dict(EXISTING))
+        self.assertEqual(errs, [])
+        out = merge_draft(split_draft(edge_ip=""), dict(EXISTING))
+        self.assertEqual(out["EDGE_IP"], "192.0.2.6")
+
+    def test_mail_host_colliding_with_the_mailbox_is_still_refused(self) -> None:
+        self.assert_refused(
+            split_draft(edge_host="", mail_host="store.example.test"),
+            "must differ",
+        )
+
+
 class ItReachesTheConfigFileIntact(unittest.TestCase):
     def test_every_field_lands_under_the_name_the_installer_reads(self) -> None:
         out = merge_draft(split_draft(), {})
@@ -151,6 +197,7 @@ class ItReachesTheConfigFileIntact(unittest.TestCase):
         )
         self.assertEqual(out["EDGE_IP"], "")
         self.assertEqual(out["MAILBOX_IP"], "")
+        self.assertEqual(out["MAILBOX_SSH_PASS"], "")
 
     def test_the_password_is_single_quoted_like_every_other_secret(self) -> None:
         # Double quotes would let $ and ` in a password be expanded when the
@@ -167,6 +214,18 @@ class ItReachesTheConfigFileIntact(unittest.TestCase):
         # Appended to the bottom it lands under the AD and test credentials.
         text = format_config(merge_draft(split_draft(), {}))
         self.assertLess(text.index("MAILBOX_IP="), text.index("ADMIN_PASS="))
+
+
+class ApplyDraftLeavesAReasonInTheTranscript(unittest.TestCase):
+    def test_the_command_writes_deploy_last_log_before_it_streams(self) -> None:
+        # The banner used to hide the refusal. If the SSE drops, deploy-last.log
+        # is the only record; writing it after streaming is how that stayed empty.
+        import inspect
+
+        src = inspect.getsource(cmd_apply_wizard_draft)
+        self.assertIn("DEPLOY_LAST_LOG", src)
+        self.assertLess(src.index("DEPLOY_LAST_LOG"), src.index("event_stdout"))
+        self.assertLess(src.index('open("w"'), src.index("event_done"))
 
 
 if __name__ == "__main__":

@@ -210,6 +210,14 @@ class MailDeployedGateTests(unittest.TestCase):
         self.assertTrue(ds.write_topology_marker("2vm"))
         self.assertEqual(self.topo.read_text(encoding="utf-8"), first)
 
+    def test_write_topology_marker_accepts_split(self) -> None:
+        # apply_wizard_draft treats a False here as "invalid TOPOLOGY" and
+        # stops Deploy before install. A docstring that still said "1vm/2vm"
+        # is how that refusal would come back.
+        self.assertTrue(ds.write_topology_marker("split"))
+        self.assertEqual(self.topo.read_text(encoding="utf-8"), "split\n")
+        self.assertEqual(ds._normalize_topology(self.topo.read_text(encoding="utf-8")), "split")
+
     def test_backfill_writes_marker_from_readable_config(self) -> None:
         self._write_topology("2vm", via="config")
         self.assertTrue(ds.backfill_topology_marker_from_config())

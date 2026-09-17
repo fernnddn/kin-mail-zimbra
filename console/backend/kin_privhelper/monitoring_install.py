@@ -232,6 +232,39 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
 INSTALL_TIMEOUT_SEC = 30 * 60
 
 
+def _config_mail_hostname() -> str:
+    """MAIL_HOST or EDGE_HOST from the appliance config, or empty."""
+    path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    keys = {"MAIL_HOST": "", "EDGE_HOST": ""}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key in keys:
+            keys[key] = value.strip().strip('"').strip("'")
+    return keys["EDGE_HOST"] or keys["MAIL_HOST"]
+
+
+def inventory_hostname(raw: str, *, fallback: str = "") -> str:
+    """A name ansible will accept as an inventory host.
+
+    this_hostname() can return an installer default with an underscore, or
+    empty, and local_inventory then refuses. Monitoring is additive: failing
+    the whole install because the kernel hostname is ugly leaves both tabs
+    empty. A local connection does not care what the inventory key is called.
+    """
+    for candidate in ((raw or "").strip().rstrip("."), (fallback or "").strip().rstrip(".")):
+        if candidate and HOSTNAME_RE.match(candidate):
+            return candidate
+    return "kin-mail"
+
+
 def local_inventory(hostname: str) -> str:
     """Inventory naming this node only, over a local connection.
 
@@ -524,7 +557,7 @@ async def cmd_install_monitoring(
         yield proto.event_done(1)
         return
 
-    hostname = this_hostname()
+    hostname = inventory_hostname(this_hostname(), fallback=_config_mail_hostname())
     try:
         inventory = local_inventory(hostname)
     except ValueError as exc:

@@ -12,6 +12,8 @@ import unittest
 from kin_privhelper import protocol as proto
 from kin_privhelper.monitoring_install import (
     MONITORING_WORK_DIR,
+    _config_mail_hostname,
+    inventory_hostname,
     local_inventory,
 )
 from kin_privhelper.orchestration import WORK_DIR
@@ -60,6 +62,62 @@ class InventoryTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError, msg=bad):
                 local_inventory(bad)
+
+    def test_an_ugly_kernel_hostname_does_not_block_monitoring(self) -> None:
+        # Underscores and empty names fail HOSTNAME_RE. The playbook talks to
+        # localhost; the inventory key is only a label.
+        self.assertEqual(inventory_hostname("has_underscore"), "kin-mail")
+        self.assertEqual(inventory_hostname(""), "kin-mail")
+        self.assertEqual(
+            inventory_hostname("has_underscore", fallback="mail.example.test"),
+            "mail.example.test",
+        )
+        self.assertEqual(inventory_hostname("mail.example.test."), "mail.example.test")
+        local_inventory(inventory_hostname("ip_192_0_2_10"))
+
+    def test_the_appliance_mail_hostname_is_a_valid_fallback(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "config"
+            cfg.write_text(
+                'MAIL_HOST="mail.example.test"\nEDGE_HOST=""\n',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"KIN_MAIL_CONFIG": str(cfg)}):
+                self.assertEqual(_config_mail_hostname(), "mail.example.test")
+                self.assertEqual(
+                    inventory_hostname("has_underscore", fallback=_config_mail_hostname()),
+                    "mail.example.test",
+                )
+
+    def test_a_split_edge_hostname_wins_over_mail_host(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "config"
+            cfg.write_text(
+                'MAIL_HOST="mail.example.test"\nEDGE_HOST="edge.example.test"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"KIN_MAIL_CONFIG": str(cfg)}):
+                self.assertEqual(_config_mail_hostname(), "edge.example.test")
+
+    def test_the_install_command_never_hands_an_ugly_name_to_inventory(self) -> None:
+        import inspect
+
+        from kin_privhelper.monitoring_install import cmd_install_monitoring
+
+        src = inspect.getsource(cmd_install_monitoring)
+        self.assertIn("inventory_hostname", src)
+        self.assertIn("_config_mail_hostname", src)
+        self.assertNotIn("local_inventory(this_hostname()", src)
 
 
 class IsolationTests(unittest.TestCase):

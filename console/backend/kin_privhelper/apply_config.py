@@ -535,6 +535,34 @@ def zimbra_tz(timezone: str) -> str:
     return timezone
 
 
+def split_edge_identity(
+    draft: dict[str, Any], existing: dict[str, str]
+) -> tuple[str, str]:
+    """The edge's address and hostname, even when the Topology step ran first.
+
+    The wizard asks for the mailbox on the Topology step, before Domain has
+    collected mail_host. The edge is this machine, so those two fields are
+    known from SERVER_IP / mail_host and must not be required as separate
+    typed answers. Requiring them as stored draft keys is how Deploy printed
+    "Could not save settings, Deploy stopped before install" over a complete
+    split that the operator had filled in correctly.
+    """
+    edge_ip = str(
+        draft.get("edge_ip")
+        or existing.get("EDGE_IP")
+        or existing.get("SERVER_IP")
+        or ""
+    ).strip()
+    edge_host = str(
+        draft.get("edge_host")
+        or existing.get("EDGE_HOST")
+        or draft.get("mail_host")
+        or existing.get("MAIL_HOST")
+        or ""
+    ).strip()
+    return edge_ip, edge_host
+
+
 def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]:
     errs: list[str] = []
     topology = str(draft.get("topology") or "").strip()
@@ -544,9 +572,8 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     if topology == "split":
         # Every one of these is cheap to catch here and expensive to find
         # halfway through installing Zimbra on two machines.
-        edge_ip = str(draft.get("edge_ip") or "").strip()
+        edge_ip, edge_host = split_edge_identity(draft, existing)
         mailbox_ip = str(draft.get("mailbox_ip") or "").strip()
-        edge_host = str(draft.get("edge_host") or "").strip()
         mailbox_host = str(draft.get("mailbox_host") or "").strip()
         if not edge_ip:
             errs.append("edge_ip is required when topology is split")
@@ -725,8 +752,9 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["CLUSTER_VIP_IP"] = ""
 
     if topology == "split":
-        out["EDGE_IP"] = str(draft.get("edge_ip") or "").strip()
-        out["EDGE_HOST"] = str(draft.get("edge_host") or "").strip()
+        edge_ip, edge_host = split_edge_identity(draft, existing)
+        out["EDGE_IP"] = edge_ip
+        out["EDGE_HOST"] = edge_host
         out["MAILBOX_IP"] = str(draft.get("mailbox_ip") or "").strip()
         out["MAILBOX_HOST"] = str(draft.get("mailbox_host") or "").strip()
         out["MAILBOX_SSH_USER"] = (
@@ -746,6 +774,8 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["EDGE_HOST"] = ""
         out["MAILBOX_IP"] = ""
         out["MAILBOX_HOST"] = ""
+        out["MAILBOX_SSH_USER"] = ""
+        out["MAILBOX_SSH_PASS"] = ""
 
     # OS admin identity for later host provisioning; passwords preserve-on-empty like ADMIN_PASS.
     out["KIN_OS_USER"] = "kin"

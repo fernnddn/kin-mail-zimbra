@@ -50,6 +50,15 @@ export default function DomainStep() {
       setFieldErr(`Please fill in: ${missing.join(", ")}.`);
       return;
     }
+    if (draft.topology === "split") {
+      const mailboxHost = (draft.mailbox_host || "").trim();
+      if (mailboxHost && mailboxHost === host) {
+        setFieldErr(
+          "The mailbox hostname must differ from the mail server hostname. The mail server hostname is this machine (the edge).",
+        );
+        return;
+      }
+    }
     setFieldErr("");
     await save({
       mail_domain: domain,
@@ -57,6 +66,7 @@ export default function DomainStep() {
       timezone: tz,
       ...(typedPass ? { admin_pass: typedPass } : {}),
       le_email: le,
+      ...(draft.topology === "split" ? { edge_host: host } : {}),
       current_step: "tls",
     });
     navigate("/wizard/tls");
