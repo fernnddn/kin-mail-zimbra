@@ -10,6 +10,7 @@ the mailbox step and stops, and the reason is a machine nobody has a shell on.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from kin_privhelper.apply_config import format_config, merge_draft, validate_draft
 from kin_privhelper.deploy_state import _normalize_topology
@@ -57,6 +58,32 @@ class TheWizardAcceptsASplit(unittest.TestCase):
         self.assertEqual(_normalize_topology("split"), "split")
         self.assertEqual(_normalize_topology("SPLIT"), "split")
         self.assertEqual(_normalize_topology("3vm"), "")
+
+
+class BothValidationLayersAgree(unittest.TestCase):
+    """The draft endpoint and the config writer must accept the same layouts.
+
+    They are separate checks with separate messages, and teaching only one about
+    a new topology produces a wizard that refuses to save what the appliance can
+    perfectly well install - which is exactly what happened: the step rendered,
+    the fields filled in, and Continue answered "topology must be 1vm or 2vm".
+    """
+
+    def test_the_http_layer_knows_every_layout_the_config_writer_knows(self) -> None:
+        src = (
+            Path(__file__).resolve().parents[1] / "kin_console/app.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('("1vm", "2vm", "split")', src)
+        self.assertNotIn('detail="topology must be 1vm or 2vm"', src)
+
+    def test_no_layout_is_accepted_by_one_layer_and_refused_by_the_other(self) -> None:
+        for topology in ("1vm", "2vm", "split"):
+            with self.subTest(topology=topology):
+                errs = validate_draft({"topology": topology}, dict(EXISTING))
+                self.assertFalse(
+                    any("topology must be" in e for e in errs),
+                    f"the config writer refuses {topology}",
+                )
 
 
 class ItRefusesWhatCannotBeBuilt(unittest.TestCase):

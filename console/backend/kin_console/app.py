@@ -401,10 +401,42 @@ async def put_wizard_draft(
                 detail=str(stored.get("error") or stored.get("log") or "could not store credentials"),
             )
     updated = draft.apply_patch(current, body)
-    if updated.topology and updated.topology not in ("1vm", "2vm"):
-        raise HTTPException(status_code=400, detail="topology must be 1vm or 2vm")
+    # Two layers validate the topology and they have to agree. apply_config's
+    # validate_draft is the one that guards the write to /etc/kin-mail/config;
+    # this one guards the draft itself, and teaching only the first about a new
+    # layout leaves the wizard refusing to save what the appliance can install.
+    if updated.topology and updated.topology not in ("1vm", "2vm", "split"):
+        raise HTTPException(
+            status_code=400, detail="topology must be 1vm, 2vm or split"
+        )
     if updated.tls_method and updated.tls_method not in ("cloudflare", "manual", "customer"):
         raise HTTPException(status_code=400, detail="tls_method invalid")
+    if updated.topology == "split":
+        # Caught here rather than at deploy time: an address that is not an
+        # address, or a mailbox that is this same machine, is a typo the
+        # operator can fix in the field they are looking at.
+        if updated.mailbox_ip and not draft.valid_ipv4(updated.mailbox_ip):
+            raise HTTPException(
+                status_code=400, detail="Mailbox server IP must be an IPv4 address"
+            )
+        if updated.edge_ip and not draft.valid_ipv4(updated.edge_ip):
+            raise HTTPException(
+                status_code=400, detail="Edge server IP must be an IPv4 address"
+            )
+        if updated.mailbox_ip and updated.mailbox_ip == updated.edge_ip:
+            raise HTTPException(
+                status_code=400,
+                detail="The mailbox must be a different machine from this one",
+            )
+        if (
+            updated.mailbox_host
+            and updated.edge_host
+            and updated.mailbox_host == updated.edge_host
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="The mailbox needs its own hostname, different from this server's",
+            )
     if updated.topology == "2vm":
         if updated.peer_host_ip and not draft.valid_ipv4(updated.peer_host_ip):
             raise HTTPException(status_code=400, detail="Second server IP must be an IPv4 address")
