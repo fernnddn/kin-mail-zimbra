@@ -100,6 +100,21 @@ cluster_ok() {
   [ "$code" = "200" ]
 }
 
+# Does nginx live on this machine?
+#
+# Said once, here, because saying it at each call site is how it drifts: the
+# same question got answered three different ways across this stage and the
+# orchestrator before, and each copy was fixed separately.
+#
+# The proxy is a package, not a setting. On a single-server appliance it is
+# always present; on a split it is installed on the edge only, so the mailbox
+# has no zmproxyconfgen to run and nothing answering on :443. Asking the
+# filesystem rather than the role means this is also right for any node that
+# was built without zimbra-proxy for some other reason.
+node_runs_proxy() {
+  [ -x /opt/zimbra/libexec/zmproxyconfgen ]
+}
+
 show_status() {
   echo
   say "Hardening status (Part A signals)"
@@ -282,6 +297,20 @@ configure_tls() {
       warn "TLS LDAP changed but KIN_HARDENING_SKIP_PROXY_RESTART=1 - not restarting zmproxy"
       return 0
     fi
+    # The settings above are global; this regeneration is not.
+    #
+    # zimbraReverseProxySSL* live in the directory and apply to whichever node
+    # runs nginx. Rewriting nginx's config and restarting it can only happen on
+    # that node. Calling it where there is no proxy failed the whole stage after
+    # every setting had already been written correctly, on a deployment where
+    # mail was working.
+    if ! node_runs_proxy; then
+      ok "Proxy TLS settings written to the directory"
+      info "This node does not run the proxy, so there is no nginx here to"
+      info "regenerate. They take effect on the node that does - on a split,"
+      info "the edge - when 09-hardening runs there."
+      return 0
+    fi
     warn "Regenerating nginx + restarting zmproxy (kin-zimbra temporarily unmanaged)"
     kin_zimbra_unmanage
     trap kin_zimbra_remanage EXIT
@@ -311,7 +340,11 @@ configure_tls() {
   fi
 
   # Prove TLS1.2 works (TLS1.0/1.1 already rejected by proxy ssl_protocols).
-  if echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -tls1_2 2>/dev/null | grep -q 'Protocol  : TLSv1.2'; then
+  # Nothing answers :443 on a node without the proxy, and a warning there would
+  # be reporting the absence of a service this node was never given.
+  if ! node_runs_proxy; then
+    info "No proxy on this node, so no :443 handshake to prove here."
+  elif echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -tls1_2 2>/dev/null | grep -q 'Protocol  : TLSv1.2'; then
     ok "openssl s_client -tls1_2 succeeds"
   else
     warn "Could not confirm TLS1.2 handshake via openssl s_client"
@@ -599,5 +632,11 @@ say "Part A complete"
 if command -v pcs >/dev/null 2>&1; then
   pcs status 2>/dev/null | grep -E 'kin-zimbra|kin-vip|FAILED|Promoted' | sed 's/^/    /' || true
 fi
-if cluster_ok; then ok "Cluster web health https=200"; else warn "https check failed - investigate"; fi
+if ! node_runs_proxy; then
+  info "Web health is checked on the node that serves it, not this one."
+elif cluster_ok; then
+  ok "Cluster web health https=200"
+else
+  warn "https check failed - investigate"
+fi
 exit 0

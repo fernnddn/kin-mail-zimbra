@@ -116,6 +116,52 @@ else
   bad "the proxy is restarted unconditionally"
 fi
 
+# --- the proxy is not on every node -----------------------------------------
+# A split puts zimbra-proxy on the edge only. Stage 09 still has to run on the
+# mailbox, because the lockout, cleartext and TLS settings it writes are
+# directory-wide. It did, wrote all of them correctly, and then died calling
+# zmproxyconfgen - a binary that machine was never given - failing the whole
+# split build on a deployment where mail was already flowing.
+#
+# So: ask once whether nginx is here, and gate every node-local proxy action on
+# that answer. The "once" is the part under test. The same rule stated at three
+# call sites is how it drifted the first three times.
+if [ "$(grep -cE '^node_runs_proxy\(\) \{' "$STAGE")" -eq 1 ]; then
+  ok "node_runs_proxy is defined exactly once"
+else
+  bad "node_runs_proxy must be defined exactly once in the stage"
+fi
+
+# Nobody restates it. The literal path may be tested only inside the helper.
+restated=$(grep -nE '\[ (!  *)?-x /opt/zimbra/libexec/zmproxyconfgen' "$STAGE" | wc -l)
+if [ "$restated" -eq 1 ]; then
+  ok "the proxy-presence test appears only in the helper"
+else
+  bad "the proxy-presence test is restated ${restated} times; call node_runs_proxy"
+fi
+
+# configure_tls must bail out before touching nginx, not after.
+if awk '/^configure_tls\(\) \{/,/^\}/' "$STAGE" \
+   | awk '/if ! node_runs_proxy; then/,/fi/' | grep -q 'return 0'; then
+  ok "configure_tls returns before regenerating nginx when there is none"
+else
+  bad "configure_tls does not return early on a node without a proxy"
+fi
+if [ "$(awk '/^configure_tls\(\) \{/,/^\}/' "$STAGE" | grep -c 'node_runs_proxy')" -ge 2 ]; then
+  ok "configure_tls gates both the regeneration and the :443 probe"
+else
+  bad "configure_tls leaves a node-local proxy action ungated"
+fi
+
+# And the closing health check, which curls https://127.0.0.1/ - nothing answers
+# that on a mailbox node, and warning about it reports the absence of a service
+# the node was never meant to run.
+if awk '/^if ! node_runs_proxy; then/,/^fi/' "$STAGE" | grep -q 'cluster_ok'; then
+  ok "the closing web health check is gated on the proxy being here"
+else
+  bad "the closing cluster_ok check warns on nodes with no proxy"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1
