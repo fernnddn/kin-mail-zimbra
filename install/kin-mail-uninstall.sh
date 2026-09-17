@@ -108,6 +108,45 @@ if [ "$DRY_RUN" -eq 1 ]; then
   warn "DRY-RUN - no mutations will be performed."
 fi
 
+# A split is two machines, and this only wipes the one it runs on.
+#
+# Left half-done it is worse than either state: an edge with no mailbox relays
+# into nothing, and a mailbox with no edge is unreachable but still holds every
+# message. Worse, a rebuild of one half against the surviving other inherits a
+# directory that still knows about a server that no longer exists.
+#
+# Nothing here refuses - the operator may legitimately be rebuilding one node -
+# but they are told, by name, which machine is still standing.
+if grep -qs '^[[:space:]]*TOPOLOGY="\?split' "$CONF" 2>/dev/null; then
+  _conf_val() {
+    sed -n "s/^[[:space:]]*$1=//p" "$CONF" 2>/dev/null | tail -1 | tr -d '"'"'"' \r'
+  }
+  _edge_ip=$(_conf_val EDGE_IP);   _edge_host=$(_conf_val EDGE_HOST)
+  _mbox_ip=$(_conf_val MAILBOX_IP); _mbox_host=$(_conf_val MAILBOX_HOST)
+  _this_role="unknown"
+  for _a in $(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1); do
+    [ "$_a" = "$_edge_ip" ] && _this_role="edge"
+    [ "$_a" = "$_mbox_ip" ] && _this_role="mailbox"
+  done
+  echo
+  warn "This is a SPLIT deployment, and this uninstaller only wipes THIS machine."
+  info "This host appears to be the ${_this_role} node."
+  if [ "$_this_role" = "edge" ]; then
+    warn "The mailbox node still holds every message: ${_mbox_host:-unknown} (${_mbox_ip:-unknown})."
+    info "Wiping only the edge leaves mail that nothing can deliver or serve."
+  elif [ "$_this_role" = "mailbox" ]; then
+    warn "The edge node is still accepting mail: ${_edge_host:-unknown} (${_edge_ip:-unknown})."
+    info "Wiping only the mailbox leaves an edge relaying into a machine that is gone."
+  else
+    warn "Edge ${_edge_host:-unknown} (${_edge_ip:-unknown}), mailbox ${_mbox_host:-unknown} (${_mbox_ip:-unknown})."
+  fi
+  info "To remove the whole deployment, run this on BOTH machines."
+  if [ "$DRY_RUN" -eq 0 ]; then
+    info "Continuing in 10 seconds. Ctrl-C now if that was not the intention."
+    sleep 10
+  fi
+fi
+
 # -----------------------------------------------------------------------------
 stage "1/8 Stop Pacemaker/Corosync on THIS node (before config delete)"
 # Local stop only - never pcs cluster stop --all (would hit survivors).

@@ -116,6 +116,25 @@ assert_safe_staging() {
 assert_safe_staging "$STAGING"
 
 if ! is_promoted_here; then
+  # Why this node has no mail store depends on the deployment, and the wrong
+  # explanation sends an operator looking in the wrong place.
+  #
+  # On a split the edge is SUPPOSED to have no store: it runs the MTA and the
+  # proxy, and the mail lives on the mailbox node. Telling that operator the
+  # node "is not Promoted" is Pacemaker vocabulary for a cluster they do not
+  # have, and the real instruction - run this on the other machine - never
+  # reaches them. A backup that refuses for a reason nobody understands is how
+  # an estate ends up with no backups at all.
+  if grep -qs '^[[:space:]]*TOPOLOGY="\?split' /etc/kin-mail/config 2>/dev/null; then
+    mbox=$(sed -n 's/^[[:space:]]*MAILBOX_HOST=//p' /etc/kin-mail/config 2>/dev/null |
+           tail -1 | tr -d '"'"'"' \r')
+    mbox_ip=$(sed -n 's/^[[:space:]]*MAILBOX_IP=//p' /etc/kin-mail/config 2>/dev/null |
+              tail -1 | tr -d '"'"'"' \r')
+    fail "This is the edge node of a split; the mail store is on the mailbox node."
+    info "Run the backup on ${mbox:-the mailbox} (${mbox_ip:-address not recorded})."
+    info "The edge holds no mail, so a backup taken here would contain none."
+    exit 3
+  fi
   fail "This node is not Promoted (/opt/zimbra not mounted with store)"
   exit 3
 fi

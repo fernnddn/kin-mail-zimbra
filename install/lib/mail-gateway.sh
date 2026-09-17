@@ -188,6 +188,31 @@ load_config() {
   MAIL_DOMAIN=$(conf_get MAIL_DOMAIN "$APPLIANCE_CONF" || printf '')
   MAIL_HOST=$(conf_get MAIL_HOST "$APPLIANCE_CONF" || printf '')
   SERVER_IP=$(conf_get SERVER_IP "$APPLIANCE_CONF" || printf '')
+
+  # Which machine actually carries mail for the gateway.
+  #
+  # Everything below wants one address: the host the gateway hands filtered
+  # mail to, and the host that relays outbound mail back through it. On a
+  # single appliance that is the appliance, and SERVER_IP is right.
+  #
+  # On a split it is the EDGE. The mailbox node runs no MTA at all - it has
+  # zimbra-ldap and zimbra-store and nothing that speaks SMTP - so a gateway
+  # pointed at it accepts mail from the internet and then cannot deliver any
+  # of it. SERVER_IP on a split names whichever machine the config was written
+  # on, which is not a useful answer to this question.
+  #
+  # Derived here, once, so no caller has to remember which topology it is in.
+  TOPOLOGY=$(conf_get TOPOLOGY "$APPLIANCE_CONF" || printf '1vm')
+  EDGE_IP=$(conf_get EDGE_IP "$APPLIANCE_CONF" || printf '')
+  MAILBOX_IP=$(conf_get MAILBOX_IP "$APPLIANCE_CONF" || printf '')
+  EDGE_HOST=$(conf_get EDGE_HOST "$APPLIANCE_CONF" || printf '')
+  if [ "$TOPOLOGY" = "split" ]; then
+    MTA_IP="$EDGE_IP"
+    MTA_HOST="${EDGE_HOST:-$MAIL_HOST}"
+  else
+    MTA_IP="$SERVER_IP"
+    MTA_HOST="$MAIL_HOST"
+  fi
 }
 
 # A hostname or an IPv4 address, and nothing that could carry a shell
@@ -203,6 +228,25 @@ valid_host() {
 valid_port() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
   [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+# Does this machine hold this address?
+#
+# Deliberately local rather than borrowed from lib/topology.sh: this helper is
+# run by privhelperd with a fixed argv and does not source 00-config.sh, so it
+# has no access to the stage helpers. KIN_GW_LOCAL_IPV4S overrides it for tests.
+host_has_ipv4() {
+  local want="${1:-}" addr list
+  [ -n "$want" ] || return 1
+  if [ -n "${KIN_GW_LOCAL_IPV4S:-}" ]; then
+    list="$KIN_GW_LOCAL_IPV4S"
+  else
+    list=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+  fi
+  for addr in $list; do
+    [ "$addr" = "$want" ] && return 0
+  done
+  return 1
 }
 
 valid_ipv4() {
@@ -255,9 +299,37 @@ require_config() {
       ;;
     *) fail bad-auth-mode "GATEWAY_AUTH must be token or ticket, not '${GW_AUTH}'."; bad=1 ;;
   esac
+  # On a split, the machine that carries mail is the edge, and everything below
+  # is aimed at it rather than at whichever host the config was written on.
+  if [ "${TOPOLOGY:-1vm}" = "split" ]; then
+    if [ -z "${EDGE_IP:-}" ]; then
+      fail no-edge-ip "TOPOLOGY=split but EDGE_IP is not set in ${APPLIANCE_CONF}."
+      info "The gateway hands mail to the edge; without its address there is nowhere to send it."
+      bad=1
+    elif ! valid_ipv4 "$EDGE_IP"; then
+      fail bad-edge-ip "EDGE_IP in ${APPLIANCE_CONF} is '${EDGE_IP}', which is not an IPv4 address."
+      bad=1
+    fi
+    # Refuse on the mailbox node, rather than configuring a gateway to deliver
+    # to a machine with no MTA.
+    #
+    # The mailbox runs zimbra-ldap and zimbra-store; nothing there speaks SMTP.
+    # A link applied from here would set zimbraMtaRelayHost on a host with no
+    # Postfix, and point the gateway's transport at a port nothing is listening
+    # on - so the gateway would accept mail from the internet and then be
+    # unable to deliver a single message.
+    if [ -n "${MAILBOX_IP:-}" ] && host_has_ipv4 "$MAILBOX_IP" \
+       && ! host_has_ipv4 "${EDGE_IP:-}"; then
+      fail wrong-node \
+        "This is the mailbox node of a split. The mail gateway is linked from the EDGE, which is the machine that runs the MTA."
+      info "Open the console on ${EDGE_HOST:-the edge} (${EDGE_IP:-unknown}) and link it there."
+      bad=1
+    fi
+  fi
+
   # The gateway must not be this machine. That configuration is a mail loop
   # with extra steps, and it is an easy typo to make.
-  if [ -n "${GW_HOST:-}" ] && [ "${GW_HOST}" = "${SERVER_IP:-}" ]; then
+  if [ -n "${GW_HOST:-}" ] && [ "${GW_HOST}" = "${MTA_IP:-}" ]; then
     fail gateway-is-self "The gateway address is this appliance's own IP. PMG has to be a separate machine."
     bad=1
   fi
@@ -942,7 +1014,7 @@ cmd_plan() {
   }
 
   say "On the gateway (${GW_HOST}):"
-  plan_line pmg.relay        "$(json_field "$body" data relay || printf '')"        "$SERVER_IP"
+  plan_line pmg.relay        "$(json_field "$body" data relay || printf '')"        "$MTA_IP"
   plan_line pmg.relayport    "$(json_field "$body" data relayport || printf '')"    "25"
   plan_line pmg.relaynomx    "$(json_field "$body" data relaynomx || printf '0')"   "1"
   plan_line pmg.int_port     "$(json_field "$body" data int_port || printf '')"     "$PMG_INT_PORT"
@@ -967,7 +1039,7 @@ cmd_plan() {
     plan_line zimbra.relayhost "$(zimbra_relay_host)" "$(desired_relay)"
     local nets
     nets=$(zimbra_mynetworks)
-    if printf ' %s ' "$nets" | grep -q " ${SERVER_IP}/32 \| ${GW_HOST}/32 "; then
+    if printf ' %s ' "$nets" | grep -q " ${MTA_IP}/32 \| ${GW_HOST}/32 "; then
       info "unchanged  zimbra.mynetworks already trusts the gateway"
     else
       printf 'KIN_GW_CHANGE %s from=%s to=%s\n' zimbra.mynetworks "$nets" "${nets} ${GW_HOST}/32"
@@ -1024,37 +1096,37 @@ cmd_apply() {
   transports=$(api_get /config/transport) || transports=""
   if printf '%s' "$transports" | grep -q "\"${MAIL_DOMAIN}\""; then
     if api_put "/config/transport/${MAIL_DOMAIN}" \
-         "host=${SERVER_IP}" "port=25" "protocol=smtp" "use_mx=0" >/dev/null; then
-      ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (updated)"
+         "host=${MTA_IP}" "port=25" "protocol=smtp" "use_mx=0" >/dev/null; then
+      ok "transport ${MAIL_DOMAIN} -> ${MTA_IP}:25 (updated)"
     else
       warn "The gateway would not update the transport entry ($(api_error)); replacing it."
       api_del "/config/transport/${MAIL_DOMAIN}" >/dev/null 2>&1 || true
       if ! api_post /config/transport \
-             "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
+             "domain=${MAIL_DOMAIN}" "host=${MTA_IP}" "port=25" \
              "protocol=smtp" "use_mx=0" >/dev/null; then
         fail api-failed \
           "Could not write the transport entry: $(api_error). The old entry was removed to replace it, so ${MAIL_DOMAIN} may now have NO route on the gateway. Fix this before mail arrives: Mail Proxy > Transports on the gateway."
         return 2
       fi
-      ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25 (replaced)"
+      ok "transport ${MAIL_DOMAIN} -> ${MTA_IP}:25 (replaced)"
     fi
   else
     api_post /config/transport \
-      "domain=${MAIL_DOMAIN}" "host=${SERVER_IP}" "port=25" \
+      "domain=${MAIL_DOMAIN}" "host=${MTA_IP}" "port=25" \
       "protocol=smtp" "use_mx=0" >/dev/null || {
         fail api-failed "Could not write the transport entry: $(api_error)"; return 2; }
-    ok "transport ${MAIL_DOMAIN} -> ${SERVER_IP}:25"
+    ok "transport ${MAIL_DOMAIN} -> ${MTA_IP}:25"
   fi
 
   say "3. Letting this appliance relay out through the gateway"
   local nets
   nets=$(api_get /config/mynetworks) || nets=""
-  if printf '%s' "$nets" | grep -q "\"${SERVER_IP}/32\""; then
-    info "${SERVER_IP}/32 already trusted"
+  if printf '%s' "$nets" | grep -q "\"${MTA_IP}/32\""; then
+    info "${MTA_IP}/32 already trusted"
   else
-    api_post /config/mynetworks "cidr=${SERVER_IP}/32" >/dev/null || {
-      fail api-failed "Could not add ${SERVER_IP}/32 to the gateway's trusted networks: $(api_error)"; return 2; }
-    ok "trusted network ${SERVER_IP}/32"
+    api_post /config/mynetworks "cidr=${MTA_IP}/32" >/dev/null || {
+      fail api-failed "Could not add ${MTA_IP}/32 to the gateway's trusted networks: $(api_error)"; return 2; }
+    ok "trusted network ${MTA_IP}/32"
   fi
 
   say "4. Mail routing"
@@ -1066,13 +1138,13 @@ cmd_apply() {
   # a single combined PUT meant a typo in "hide_received" would silently
   # leave the relay unset.
   api_put /config/mail \
-    "relay=${SERVER_IP}" \
+    "relay=${MTA_IP}" \
     "relayport=25" \
     "relaynomx=1" \
     "int_port=${PMG_INT_PORT}" \
     "ext_port=${PMG_EXT_PORT}" >/dev/null || {
       fail api-failed "Could not write the mail routing settings: $(api_error)"; return 2; }
-  ok "relay ${SERVER_IP}:25, no MX lookup, internal port ${PMG_INT_PORT}"
+  ok "relay ${MTA_IP}:25, no MX lookup, internal port ${PMG_INT_PORT}"
 
   say "5. Mail policy"
   # Softer than the first draft of this, on purpose.
@@ -1260,8 +1332,8 @@ cmd_apply() {
     warn "The gateway did not keep relaynomx=1. Left as it is, mail for this domain will loop."
     drift=1
   fi
-  if [ "$(json_field "$check_mail" data relay || printf '')" != "$SERVER_IP" ]; then
-    warn "The gateway did not keep relay=${SERVER_IP}. Filtered mail has nowhere to go."
+  if [ "$(json_field "$check_mail" data relay || printf '')" != "$MTA_IP" ]; then
+    warn "The gateway did not keep relay=${MTA_IP}. Filtered mail has nowhere to go."
     drift=1
   fi
   check_admin=$(api_get /config/admin) || check_admin=""
@@ -1336,7 +1408,7 @@ cmd_verify() {
     fi
   }
 
-  assert_eq pmg.relay "$(json_field "$body" data relay || printf '')" "$SERVER_IP" \
+  assert_eq pmg.relay "$(json_field "$body" data relay || printf '')" "$MTA_IP" \
     "Filtered mail has nowhere to go. Inbound mail will sit in the gateway's queue."
   assert_eq pmg.relaynomx "$(json_field "$body" data relaynomx || printf '0')" "1" \
     "With MX lookup on, the gateway looks up this domain's MX - which now points at the gateway. That is a loop."
@@ -1355,11 +1427,11 @@ cmd_verify() {
 
   local nets
   nets=$(api_get /config/mynetworks) || nets=""
-  if printf '%s' "$nets" | grep -q "\"${SERVER_IP}/32\""; then
-    ok "pmg.mynetworks trusts ${SERVER_IP}"
+  if printf '%s' "$nets" | grep -q "\"${MTA_IP}/32\""; then
+    ok "pmg.mynetworks trusts ${MTA_IP}"
   else
     note_problem
-    printf 'KIN_GW_PROBLEM %s expected=%s actual=%s\n' pmg.mynetworks "${SERVER_IP}/32" "<absent>"
+    printf 'KIN_GW_PROBLEM %s expected=%s actual=%s\n' pmg.mynetworks "${MTA_IP}/32" "<absent>"
     info "Outbound mail from this appliance will be refused at port ${PMG_INT_PORT}."
   fi
 

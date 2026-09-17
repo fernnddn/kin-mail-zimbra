@@ -316,7 +316,7 @@ run_firewall_stage_interactive() {
 }
 
 run_full_install() {
-  local s rc mid_handoff=0 zimbra_dir_exists=0 hardening_mode stage_action
+  local s rc mid_handoff=0 zimbra_dir_exists=0 hardening_mode stage_action split_built=0
   # Stages that warn-and-continue on failure (07/09/11/revert-ssh) instead of
   # stopping the pipeline. Tracked so the final banner cannot claim a clean
   # "All selected pipeline stages exited 0" when hardening/lockdown actually
@@ -343,8 +343,28 @@ run_full_install() {
     say "Split topology - building the mailbox first, then this machine"
     info "Running ${splitter}"
     echo
-    "$splitter"
-    return $?
+    "$splitter" || {
+      rc=$?
+      echo
+      fail "The split build did not finish"
+      info "The output above names the step. Re-running resumes from the last good one."
+      return "$rc"
+    }
+    # And then carry on.
+    #
+    # Returning here was the whole bug: the splitter builds Zimbra on both
+    # machines and stops, so on a split NOTHING after stage 03 ever ran on the
+    # edge - no TLS, no DKIM, no hardening, no firewall, no admin lockdown, no
+    # branding. The deployment looked finished because the splitter printed
+    # SPLIT BUILD DONE, and it was an unhardened, uncertificated, unfirewalled
+    # mail server facing the internet.
+    #
+    # The mailbox is dealt with inside the splitter, over the SSH channel it
+    # already has. The edge is this machine, so it just continues the ordinary
+    # pipeline below with 01-03 already satisfied.
+    split_built=1
+    echo
+    say "Split built. Continuing with the stages that come after it, on this machine."
   fi
 
   say "Full install"
@@ -356,7 +376,11 @@ run_full_install() {
   echo
 
   # 01-03 always run. Mid-handoff is only meaningful after 03 (data disk probe).
-  for s in 01-preflight.sh 02-prepare-os.sh 03-install-zimbra.sh; do
+  #
+  # On a split the splitter above has already run all three on this machine, in
+  # the only order that works, so repeating them would re-drive an installer
+  # over a working tree.
+  for s in $([ "${split_built:-0}" = 1 ] || printf '%s ' 01-preflight.sh 02-prepare-os.sh 03-install-zimbra.sh); do
     run_stage "$s" || {
       rc=$?
       echo

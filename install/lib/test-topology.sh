@@ -350,11 +350,61 @@ fi
 # kin-mail.sh also lists the scripts it expects to find and names them in the
 # menu, both of which appear far earlier and neither of which runs anything.
 boot_split=$(grep -n 'kin_topology_is_split' "$BOOT" | head -1 | cut -d: -f1)
-boot_stage=$(grep -n 'for s in 01-preflight' "$BOOT" | head -1 | cut -d: -f1)
+# Anchored on the stage names rather than on 'for s in 01-preflight': the loop
+# now skips those three on a split, because the orchestrator has already run
+# them, so the line no longer begins the way it used to.
+boot_stage=$(grep -n '01-preflight.sh 02-prepare-os.sh 03-install-zimbra.sh' "$BOOT" | head -1 | cut -d: -f1)
 if [ -n "$boot_split" ] && [ -n "$boot_stage" ] && [ "$boot_split" -lt "$boot_stage" ]; then
   ok "the handover happens before any stage runs"
 else
   bad "kin-mail.sh starts running stages before it notices the topology"
+fi
+
+# ...and having handed over, it must NOT stop there.
+#
+# Returning after the orchestrator was the whole bug: the splitter builds
+# Zimbra on both machines and finishes, so nothing after stage 03 ever ran on
+# the edge - no TLS, no DKIM, no hardening, no firewall. It printed SPLIT BUILD
+# DONE over an unhardened mail server facing the internet.
+if grep -q 'split_built=1' "$BOOT"; then
+  ok "the edge carries on with the stages the orchestrator does not cover"
+else
+  bad "kin-mail.sh stops after the split build; the edge would get no TLS, hardening or firewall"
+fi
+if grep -qE '"\$splitter"$' "$BOOT"; then
+  bad "the split build's exit code is ignored"
+else
+  ok "a failed split build still stops the pipeline"
+fi
+if grep -q '\[ "\${split_built:-0}" = 1 \] ||' "$BOOT"; then
+  ok "stages 01-03 are not re-run over the tree the orchestrator just built"
+else
+  bad "the pipeline would re-drive the installer over a working tree"
+fi
+
+# The mailbox is only ever reached over SSH from the edge, so its own
+# hardening and firewall have to happen inside the orchestrator.
+if grep -q 'mailbox-firewalled' "$SPLITTER"; then
+  ok "the orchestrator firewalls the mailbox"
+else
+  bad "the mailbox would be left with no firewall at all"
+fi
+if grep -q 'mailbox-hardened' "$SPLITTER"; then
+  ok "the orchestrator hardens the mailbox"
+else
+  bad "the mailbox would be left unhardened"
+fi
+split_harden=$(grep -n 'mailbox-hardened' "$SPLITTER" | head -1 | cut -d: -f1)
+split_fw=$(grep -n 'mailbox-firewalled' "$SPLITTER" | head -1 | cut -d: -f1)
+if [ -n "$split_harden" ] && [ -n "$split_fw" ] && [ "$split_harden" -lt "$split_fw" ]; then
+  ok "the firewall goes last, because it is what can cut the connection doing the work"
+else
+  bad "the mailbox firewall runs before the hardening it would lock out"
+fi
+if grep -q 'cancel-deadman' "$SPLITTER"; then
+  ok "the mailbox dead-man is cancelled, so ufw does not switch itself off again"
+else
+  bad "ufw on the mailbox would disable itself five minutes later"
 fi
 
 [ -x "$SPLITTER" ] && ok "the orchestrator is executable" \

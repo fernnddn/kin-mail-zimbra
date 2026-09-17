@@ -363,7 +363,7 @@ run_remote_stage() {
   # stage did - so a mailbox install that died on a permission error was
   # reported as done, and the run carried on to look for the passwords it
   # never wrote.
-  mbox_sudo "${REMOTE_ROOT}/install/${stage}" 2>&1 | sed 's/^/    | /'
+  mbox_sudo "${REMOTE_ROOT}/install/${stage} ${5:-}" 2>&1 | sed 's/^/    | /'
   if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     fail "${label} failed on the mailbox"
     return 1
@@ -503,6 +503,49 @@ else
   warn "could not list servers from the directory"
 fi
 
+# The mailbox is built, and nothing has hardened or firewalled it.
+#
+# kin-mail.sh --full-install delegates the whole pipeline here, so the stages
+# it would normally run after 03 never touched this machine. On the edge they
+# run afterwards, because kin-mail.sh continues its own pipeline once this
+# returns. The mailbox has no such second pass - it is only ever reached over
+# SSH from here - so it happens now.
+#
+# Firewall last, and last on purpose: it is the stage that can cut this very
+# SSH session. It arms a dead man that disables ufw again after five minutes,
+# and the rules it writes allow everything from the edge, which is where this
+# connection comes from.
+if [ "$_fail" -eq 0 ]; then
+  echo
+  say "9/9 Hardening and firewalling the mailbox"
+
+  run_remote_stage mailbox-hardened 09-hardening.sh "mailbox 09-hardening" "" || {
+    warn "Hardening did not complete on the mailbox."
+    info "Mail still works. Re-run: ${REMOTE_ROOT}/install/09-hardening.sh on ${MBOX_HOST}"
+    _fail=1
+  }
+
+  if [ "$_fail" -eq 0 ]; then
+    run_remote_stage mailbox-firewalled 10-host-firewall.sh "mailbox 10-host-firewall" "" apply || {
+      fail "The firewall did not apply on the mailbox."
+      info "That machine holds every message and is currently unfirewalled."
+      info "Run it by hand: sudo ${REMOTE_ROOT}/install/10-host-firewall.sh apply"
+      _fail=1
+    }
+    if [ "$_fail" -eq 0 ]; then
+      # The dead man disables ufw again in five minutes unless it is cancelled,
+      # and nobody is going to be watching the mailbox to do that. The proof
+      # that the rules are right is this very connection still working.
+      if mbox_sudo "${REMOTE_ROOT}/install/10-host-firewall.sh cancel-deadman" >/dev/null 2>&1; then
+        ok "mailbox firewall kept (this connection survived it, which is the proof)"
+      else
+        warn "Could not cancel the mailbox dead-man; ufw there will switch itself off shortly."
+        info "Run: sudo ${REMOTE_ROOT}/install/10-host-firewall.sh cancel-deadman"
+      fi
+    fi
+  fi
+fi
+
 echo
 if [ "$_fail" -ne 0 ]; then
   say "SPLIT BUILD INCOMPLETE"
@@ -513,4 +556,5 @@ fi
 say "SPLIT BUILD DONE"
 ok "mailbox ${MBOX_HOST} (${MBOX_IP}) - directory and mail store"
 ok "edge    $(kin_edge_host) ($(kin_edge_ip)) - MTA and proxy"
-info "Next: link the Proxmox Mail Gateway from the console, then publish DNS."
+info "The mailbox is hardened and firewalled: nothing from the internet, everything"
+info "from the edge. The edge's own TLS, DKIM, hardening and firewall follow now."

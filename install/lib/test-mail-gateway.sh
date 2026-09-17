@@ -695,6 +695,83 @@ fi
 case "$out" in *"bounce cannot be taken back"*) pass "and the reason for the longer window is stated" ;;
   *) bad "should explain the queue lifetime: ${out}" ;; esac
 
+# --- split topology ----------------------------------------------------------
+# On a split the machine that carries mail is the EDGE. The mailbox node runs
+# zimbra-ldap and zimbra-store and nothing that speaks SMTP, so a gateway
+# pointed at it accepts mail from the internet and then cannot deliver any of
+# it. Every address the gateway is given has to be the edge's.
+split_conf() {
+  cat > "$APPCONF" <<EOF
+MAIL_DOMAIN="example.test"
+MAIL_HOST="mail.example.test"
+SERVER_IP="${1:-192.0.2.20}"
+TOPOLOGY="split"
+EDGE_IP="192.0.2.30"
+EDGE_HOST="edge.example.test"
+MAILBOX_IP="192.0.2.40"
+MAILBOX_HOST="mbox.example.test"
+EOF
+}
+
+split_conf
+fixture_fresh
+: > "$CALLS"
+out=$(KIN_GW_LOCAL_IPV4S="192.0.2.30" run_gw apply)
+
+if grep -q 'host=192.0.2.30' "$CALLS"; then
+  pass "split: the gateway delivers to the edge, which is the machine with an MTA"
+else
+  bad "split: transport should target the edge: $(grep -o 'host=[0-9.]*' "$CALLS" | head -1)"
+fi
+if grep -q 'relay=192.0.2.30' "$CALLS"; then
+  pass "split: the relay target is the edge"
+else
+  bad "split: relay should be the edge: $(grep -o 'relay=[0-9.]*' "$CALLS" | head -1)"
+fi
+if grep -q 'cidr=192.0.2.30/32' "$CALLS"; then
+  pass "split: the edge is what may relay out through the gateway"
+else
+  bad "split: mynetworks should trust the edge: $(grep -o 'cidr=[0-9./]*' "$CALLS" | head -1)"
+fi
+if grep -qE 'host=192\.0\.2\.(20|40)|relay=192\.0\.2\.(20|40)|cidr=192\.0\.2\.(20|40)/32' "$CALLS"; then
+  bad "split: an address that is not the edge reached the gateway"
+else
+  pass "split: neither SERVER_IP nor the mailbox is ever given to the gateway"
+fi
+
+# Run from the mailbox node it must refuse, not misconfigure.
+out=$(KIN_GW_LOCAL_IPV4S="192.0.2.40" run_gw apply); rc=$?
+case "$out" in *"reason=wrong-node"*) pass "split: linking from the mailbox node is refused" ;;
+  *) bad "split: should refuse on the mailbox node: ${out}" ;; esac
+case "$out" in *"linked from the EDGE"*) pass "split: and it says which machine to do it from" ;;
+  *) bad "split: should name the edge: ${out}" ;; esac
+[ "$rc" -ne 0 ] && pass "split: refusing on the wrong node is a non-zero exit"                 || bad "split: wrong-node refusal should fail"
+
+# A split with no edge address has nowhere to send mail.
+cat > "$APPCONF" <<EOF
+MAIL_DOMAIN="example.test"
+MAIL_HOST="mail.example.test"
+SERVER_IP="192.0.2.20"
+TOPOLOGY="split"
+MAILBOX_IP="192.0.2.40"
+EOF
+out=$(run_gw apply)
+case "$out" in *"reason=no-edge-ip"*) pass "split: a missing EDGE_IP is named, not silently treated as SERVER_IP" ;;
+  *) bad "split: should refuse without EDGE_IP: ${out}" ;; esac
+
+# A single appliance must be completely unaffected by all of the above.
+write_appliance_conf
+fixture_fresh
+: > "$CALLS"
+out=$(run_gw apply)
+if grep -q 'host=192.0.2.20' "$CALLS" && grep -q 'relay=192.0.2.20' "$CALLS"; then
+  pass "single appliance: still uses its own address, exactly as before"
+else
+  bad "single appliance behaviour changed: $(grep -o 'relay=[0-9.]*' "$CALLS" | head -1)"
+fi
+case "$out" in *"reason=wrong-node"*) bad "single appliance was refused as a wrong node" ;;
+  *) pass "single appliance is never asked which node it is" ;; esac
+
 # =============================================================================
 # Tuning: performance and security
 # =============================================================================

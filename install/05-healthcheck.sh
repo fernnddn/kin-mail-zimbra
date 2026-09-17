@@ -28,8 +28,23 @@ p() { ok   "$*"; PASS=$((PASS+1)); }
 f() { fail "$*"; FAILED=$((FAILED+1)); }
 b() { warn "$*"; BLOCKED=$((BLOCKED+1)); }
 
+# Which machine is this, on a split?
+#
+# Nearly every check below assumes one host that does everything. On a split
+# that is false, and the failures are misleading in both directions: the edge
+# has no mailbox to deliver into, the mailbox has no MTA to send from, and a
+# healthcheck reporting a dozen failures on a node that is working perfectly
+# is a healthcheck the operator stops reading.
+KIN_NODE_ROLE="all"
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+  KIN_NODE_ROLE=$(kin_node_role 2>/dev/null) || KIN_NODE_ROLE="unknown"
+fi
+
 echo
 printf '%s\n' "${BLD}  KIN Mail - health check  ${MAIL_HOST}  $(date -Is)${RST}"
+if [ "$KIN_NODE_ROLE" != "all" ]; then
+  printf '%s\n' "${DIM}  split deployment - this is the ${KIN_NODE_ROLE} node${RST}"
+fi
 
 # --- services ----------------------------------------------------------------
 echo; say "Zimbra services"
@@ -181,6 +196,10 @@ else
 fi
 
 # --- outbound SMTP -----------------------------------------------------------
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  echo; say "Outbound SMTP"
+  b "Skipped - this node has no MTA. Mail leaves through the edge."
+else
 echo; say "Outbound SMTP  ${DIM}(banner grab)${RST}"
 SMTP_OUT=0
 for t in "alt1.aspmx.l.google.com 25" "gmail-smtp-in.l.google.com 25"; do
@@ -269,6 +288,8 @@ if [ -n "$SEND_IP" ]; then
 fi
 
 # --- hybrid authentication ---------------------------------------------------
+fi
+
 echo; say "Hybrid authentication"
 MECH=$(su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech" 2>/dev/null \
        | awk -F': ' '/zimbraAuthMech:/{print $2; exit}')
@@ -400,6 +421,10 @@ esac
 # A gateway that IS recorded but is not working is a FAILURE, because at that
 # point it is this server's configuration that is wrong, and mail is at risk.
 echo; say "Mail gateway"
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  b "Skipped - the gateway is linked from the edge, which runs the MTA."
+  info "Run this check there to see the state of the link."
+else
 GW_CONF=/etc/kin-mail/mail-gateway.conf
 GW_STATE=/var/lib/kin-mail-console/mail-gateway-state.json
 gw_host=""; gw_enabled=""; gw_phase=""
@@ -469,6 +494,8 @@ else
   else
     f "Cannot reach ${gw_host}:26 - outbound mail will queue on this appliance"
   fi
+fi
+
 fi
 
 # --- summary -----------------------------------------------------------------

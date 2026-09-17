@@ -558,11 +558,40 @@ if [ ! -d /opt/zimbra ]; then
   exit 1
 fi
 
+# On a split, these are not all the same machine's business.
+#
+#   configure_smtp_rates   Postfix rate limits. Postfix is on the EDGE; the
+#                          mailbox has zimbra-ldap and zimbra-store and no MTA
+#                          at all, so zmprov would write attributes that
+#                          nothing reads and the sanity checks would report a
+#                          misconfiguration that is really an absence.
+#   configure_mail_surface zimbraMtaMyNetworks, blocked attachment extensions,
+#                          the open-relay guard: all MTA settings, all edge.
+#
+# The rest - password lockout, cleartext login, TLS protocols and ciphers - are
+# directory and mailboxd settings and belong on whichever node is running.
+# They are global in LDAP, so setting them from either node is correct.
+KIN_NODE_ROLE="all"
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+  KIN_NODE_ROLE=$(kin_node_role) || {
+    fail "TOPOLOGY=split but this host's role cannot be determined."
+    info "Check EDGE_IP and MAILBOX_IP in ${CONF_FILE} against this machine's addresses."
+    exit 1
+  }
+  info "Split deployment; this host is the ${KIN_NODE_ROLE} node"
+fi
+
 configure_lockout
 configure_cleartext
 configure_tls
-configure_smtp_rates
-configure_mail_surface
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  say "6/8. MTA hardening - skipped on the mailbox node"
+  info "Rate limits, blocked attachments and the relay scope live on the edge,"
+  info "which is the machine that runs Postfix. Run this stage there too."
+else
+  configure_smtp_rates
+  configure_mail_surface
+fi
 test_fail2ban_ban_unban
 
 echo

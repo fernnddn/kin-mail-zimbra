@@ -1,0 +1,279 @@
+"""A split is two machines, and every stage has to know which one it is on.
+
+The split topology separates the MTA and proxy (edge, facing the internet) from
+the directory and mail store (mailbox, facing nothing). Three stages were taught
+that. The rest still assumed one host that does everything, and each of those
+assumptions fails differently:
+
+  the firewall   opened 110/143/993/995 on the mailbox, which is the precise
+                 exposure a split exists to remove
+  the gateway    aimed at SERVER_IP, so on a split it pointed the MX at a
+                 machine with no MTA: mail accepted from the internet and then
+                 undeliverable
+  hardening      wrote Postfix settings on a node with no Postfix
+  the healthcheck reported a dozen failures on a node that was working
+  backup         refused with Pacemaker vocabulary on a deployment with no
+                 cluster, so the real instruction never reached the operator
+  the uninstaller wiped one half and said nothing about the other
+
+These are source-level guards. Every one names the failure it prevents, because
+a guard whose purpose nobody remembers is a guard somebody deletes.
+"""
+
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
+
+
+def code(rel: str) -> str:
+    """The file with comment lines removed.
+
+    A guard satisfied by the comment explaining it is not a guard; this
+    repository has been caught by that more than once.
+    """
+    return "\n".join(
+        ln
+        for ln in (REPO / rel).read_text(encoding="utf-8").splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+
+
+class TheFirewallKnowsWhichNodeItIsOn(unittest.TestCase):
+    def setUp(self) -> None:
+        self.c = code("install/10-host-firewall.sh")
+
+    def _mailbox_branch(self) -> str:
+        """The mailbox-only rules, ending at the branch's own early return.
+
+        Sliced on `return 0` rather than on a comment: code() strips comments,
+        so any marker inside one is gone by the time this runs.
+        """
+        start = self.c.index('if [ "$node_role" = "mailbox" ]')
+        end = self.c.index("\n    return 0", start)
+        return self.c[start:end]
+
+    def test_it_asks_for_the_role(self) -> None:
+        self.assertIn("kin_node_role", self.c)
+
+    def test_it_refuses_rather_than_guessing(self) -> None:
+        # One wrong guess publishes every mailbox port; the other stops all mail.
+        block = self.c[self.c.index("node_role=$(kin_node_role)") :][:600]
+        self.assertIn("exit 2", block)
+
+    def test_the_mailbox_gets_no_public_mail_ports(self) -> None:
+        mbox = self._mailbox_branch()
+        for port in ("110", "143", "993", "995", "465", "587"):
+            with self.subTest(port=port):
+                self.assertNotIn(f'ufw allow "{port}"', mbox)
+                self.assertNotIn(f"ufw allow {port}/tcp", mbox)
+
+    def test_the_mailbox_trusts_the_edge(self) -> None:
+        self.assertIn('ufw allow from "$EDGE_IP"', self.c)
+
+    def test_it_refuses_a_mailbox_with_no_edge_address(self) -> None:
+        """Otherwise the node is firewalled off from the only machine it talks to."""
+        self.assertIn('if [ -z "${EDGE_IP:-}" ]; then', self.c)
+
+    def test_the_mailbox_branch_still_arms_the_dead_man(self) -> None:
+        # It returns early, so it has to do this itself or a mistake locks the
+        # operator out permanently.
+        mbox = self._mailbox_branch()
+        self.assertIn("start_deadman", mbox)
+        self.assertIn("ufw --force enable", mbox)
+
+    def test_a_single_appliance_is_untouched(self) -> None:
+        self.assertIn('local node_role="all"', self.c)
+        self.assertIn("ufw allow 25/tcp", self.c)
+
+
+class TheGatewayAimsAtTheMachineWithAnMta(unittest.TestCase):
+    def setUp(self) -> None:
+        self.c = code("install/lib/mail-gateway.sh")
+
+    def test_the_mta_address_is_derived_once(self) -> None:
+        self.assertIn('MTA_IP="$EDGE_IP"', self.c)
+        self.assertIn('MTA_IP="$SERVER_IP"', self.c)
+
+    def test_nothing_after_the_config_check_still_uses_server_ip(self) -> None:
+        """One missed use points the MX at a machine with no Postfix."""
+        after = self.c[self.c.index("resolve_tls() {") :]
+        leftovers = [ln.strip() for ln in after.splitlines() if "SERVER_IP" in ln]
+        self.assertEqual(leftovers, [], f"still aimed at SERVER_IP: {leftovers}")
+
+    def test_it_refuses_to_be_run_from_the_mailbox_node(self) -> None:
+        self.assertIn("wrong-node", self.c)
+        self.assertIn("host_has_ipv4", self.c)
+
+    def test_a_split_without_an_edge_address_is_named(self) -> None:
+        self.assertIn("no-edge-ip", self.c)
+        self.assertIn("bad-edge-ip", self.c)
+
+
+class HardeningSkipsWhatIsNotOnThisNode(unittest.TestCase):
+    def setUp(self) -> None:
+        self.c = code("install/09-hardening.sh")
+
+    def test_it_knows_the_role(self) -> None:
+        self.assertIn("kin_node_role", self.c)
+
+    def test_mta_hardening_is_skipped_on_the_mailbox(self) -> None:
+        block = self.c[self.c.index('if [ "$KIN_NODE_ROLE" = "mailbox" ]') :][:400]
+        self.assertNotIn("configure_smtp_rates", block.split("else")[0])
+        self.assertIn("configure_smtp_rates", block.split("else")[1])
+        self.assertIn("configure_mail_surface", block.split("else")[1])
+
+    def test_directory_settings_still_run_everywhere(self) -> None:
+        # Password lockout, cleartext login and TLS are LDAP-global and belong
+        # on whichever node is running.
+        for fn in ("configure_lockout", "configure_cleartext", "configure_tls"):
+            with self.subTest(fn=fn):
+                self.assertRegex(self.c, rf"(?m)^{fn}$")
+
+
+class TheHealthcheckDoesNotCryWolfOnASplit(unittest.TestCase):
+    def setUp(self) -> None:
+        self.c = code("install/05-healthcheck.sh")
+
+    def test_it_reports_which_node_it_is_on(self) -> None:
+        self.assertIn("KIN_NODE_ROLE", self.c)
+        self.assertIn("this is the ${KIN_NODE_ROLE} node", self.c)
+
+    def test_mta_checks_are_blocked_not_failed_on_the_mailbox(self) -> None:
+        """BLOCKED means outside this machine. FAILED would abort the pipeline."""
+        block = self.c[self.c.index('if [ "$KIN_NODE_ROLE" = "mailbox" ]') :][:400]
+        self.assertIn("  b ", block)
+        self.assertNotIn("\n  f ", block)
+
+
+class LifecycleKnowsThereAreTwoMachines(unittest.TestCase):
+    def test_backup_names_the_machine_that_holds_the_mail(self) -> None:
+        c = code("backup/kin-mail-backup-remote.sh")
+        self.assertIn("MAILBOX_HOST", c)
+        self.assertIn("edge node of a split", c)
+
+    def test_backup_still_refuses_rather_than_taking_an_empty_one(self) -> None:
+        c = code("backup/kin-mail-backup-remote.sh")
+        block = c[c.index("if ! is_promoted_here; then") :][:900]
+        self.assertEqual(block.count("exit 3"), 2, "both paths must refuse")
+
+    def test_the_uninstaller_says_what_is_still_standing(self) -> None:
+        c = code("install/kin-mail-uninstall.sh")
+        self.assertIn("only wipes THIS machine", c)
+        self.assertIn("MAILBOX_HOST", c)
+        self.assertIn("EDGE_HOST", c)
+
+    def test_the_uninstaller_does_not_refuse(self) -> None:
+        """Rebuilding one node is legitimate; being uninformed is not."""
+        c = code("install/kin-mail-uninstall.sh")
+        block = c[c.index("only wipes THIS machine") :][:1400]
+        self.assertNotIn("exit 1", block)
+        self.assertNotIn("exit 2", block)
+
+
+class ASplitDeploymentFinishesTheWholePipeline(unittest.TestCase):
+    """The biggest gap of all, and the easiest to reintroduce.
+
+    kin-mail.sh delegated the entire full-install to kin-mail-split.sh and
+    returned its exit code. The splitter builds Zimbra on both machines and
+    stops, so on a split NOTHING after stage 03 ever ran: no TLS certificate,
+    no DKIM, no hardening, no firewall, no admin-path lockdown, no branding.
+    It looked finished, because the splitter printed SPLIT BUILD DONE - and it
+    was an unhardened, uncertificated, unfirewalled mail server facing the
+    internet.
+
+    The edge continues the ordinary pipeline; the mailbox is dealt with inside
+    the splitter, over the SSH channel it already has.
+    """
+
+    def setUp(self) -> None:
+        self.main = code("install/kin-mail.sh")
+        self.split = code("install/kin-mail-split.sh")
+
+    def test_the_pipeline_does_not_return_after_the_split_build(self) -> None:
+        block = self.main[self.main.index("local splitter=") :][:1400]
+        self.assertNotIn("return $?", block, "returning here skips every later stage")
+        self.assertIn("split_built=1", block)
+
+    def test_a_failed_split_build_still_stops_the_pipeline(self) -> None:
+        """Continuing past a broken build would harden half a machine."""
+        block = self.main[self.main.index("local splitter=") :][:1400]
+        self.assertIn('"$splitter" || {', block)
+        self.assertIn('return "$rc"', block)
+
+    def test_the_first_three_stages_are_not_repeated_on_a_split(self) -> None:
+        # The splitter already ran them, in the only order that works.
+        self.assertIn('[ "${split_built:-0}" = 1 ] ||', self.main)
+
+    def test_split_built_is_declared_so_set_u_cannot_trip(self) -> None:
+        self.assertRegex(self.main, r"local .*split_built=0")
+
+    def test_the_mailbox_is_hardened_and_firewalled_by_the_splitter(self) -> None:
+        self.assertIn("mailbox-hardened", self.split)
+        self.assertIn("mailbox-firewalled", self.split)
+        self.assertIn("09-hardening.sh", self.split)
+        self.assertIn("10-host-firewall.sh", self.split)
+
+    def test_the_firewall_runs_last_on_the_mailbox(self) -> None:
+        """It is the one stage that can cut the SSH session doing the work."""
+        self.assertLess(
+            self.split.index("mailbox-hardened"),
+            self.split.index("mailbox-firewalled"),
+        )
+
+    def test_the_remote_firewall_is_given_its_apply_argument(self) -> None:
+        # Without it the stage prints usage and does nothing, and the marker
+        # would record that as done.
+        self.assertIn('10-host-firewall.sh "mailbox 10-host-firewall" "" apply', self.split)
+        self.assertIn('${stage} ${5:-}', self.split)
+
+    def test_the_mailbox_dead_man_is_cancelled(self) -> None:
+        """Nobody is watching that machine to do it, and ufw would switch off."""
+        self.assertIn("cancel-deadman", self.split)
+
+    def test_a_failed_mailbox_firewall_is_loud(self) -> None:
+        block = self.split[self.split.index("mailbox-firewalled") :][:900]
+        self.assertIn("unfirewalled", block)
+        self.assertIn("_fail=1", block)
+
+    def test_the_closing_message_does_not_claim_more_than_was_done(self) -> None:
+        # It used to end by saying the next step was the mail gateway, which
+        # read as "everything else is finished".
+        tail = self.split[self.split.index("SPLIT BUILD DONE") :]
+        self.assertIn("follow now", tail)
+
+
+class EveryStageThatBranchesOnRoleAsksTheSameWay(unittest.TestCase):
+    """One way of asking, so a stage cannot answer it differently."""
+
+    STAGES = (
+        "install/10-host-firewall.sh",
+        "install/09-hardening.sh",
+        "install/05-healthcheck.sh",
+        "install/02-prepare-os.sh",
+        "install/03-install-zimbra.sh",
+    )
+
+    def test_none_of_them_decide_the_role_from_a_hostname(self) -> None:
+        # Hostnames are set by stage 02 and are wrong for the whole window
+        # before it runs. An address is a fact about the machine.
+        for rel in self.STAGES:
+            with self.subTest(stage=rel):
+                c = code(rel)
+                self.assertNotRegex(
+                    c,
+                    r"hostname.*==.*(EDGE_HOST|MAILBOX_HOST)",
+                    "role must come from addresses, never hostnames",
+                )
+
+    def test_each_one_sources_the_config_that_defines_the_helpers(self) -> None:
+        for rel in self.STAGES:
+            with self.subTest(stage=rel):
+                self.assertIn(". ./00-config.sh", code(rel))
+
+
+if __name__ == "__main__":
+    unittest.main()

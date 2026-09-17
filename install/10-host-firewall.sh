@@ -162,6 +162,64 @@ apply_rules() {
   done
   ufw allow from "$CLUSTER_NET" to any port 22 proto tcp comment 'SSH cluster LAN'
 
+  # Which half of a split is this, and what may reach it?
+  #
+  # A single appliance answers "all" and everything below behaves as it always
+  # has. A split is two very different machines:
+  #
+  #   edge     runs the MTA and the proxy. It faces the internet exactly as a
+  #            single appliance does, and it holds no mail.
+  #   mailbox  runs the directory and the mail store. Nothing on the internet
+  #            has any business reaching it. Opening 110/143/993/995 there is
+  #            the precise exposure a split exists to remove, so the mailbox
+  #            gets no public ports at all.
+  #
+  # The role comes from this host's own addresses, never from its hostname -
+  # see lib/topology.sh. If it cannot be determined we refuse, because guessing
+  # "edge" on a mailbox publishes every mailbox port to the internet and
+  # guessing "mailbox" on an edge stops all mail.
+  CONSOLE_PORT="${CONSOLE_PORT:-${KIN_CONSOLE_PORT:-9443}}"
+  local node_role="all"
+  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+    node_role=$(kin_node_role) || {
+      fail "TOPOLOGY=split, but this host's role cannot be determined."
+      info "Check EDGE_IP and MAILBOX_IP in ${CONF_FILE} against this machine's addresses."
+      info "Refusing rather than guessing: one wrong guess publishes every mailbox"
+      info "port to the internet, the other stops all mail."
+      exit 2
+    }
+    ok "Split deployment; this host is the ${node_role} node"
+  fi
+
+  if [ "$node_role" = "mailbox" ]; then
+    if [ -z "${EDGE_IP:-}" ]; then
+      fail "EDGE_IP is not set, so the mailbox cannot be told who may reach it."
+      info "Without it this node would be firewalled off from its own edge."
+      exit 2
+    fi
+    # The edge is the only machine that speaks to this one, and it speaks a lot
+    # of Zimbra: LDAP, LMTP, mailboxd, the proxy's IMAP and POP back ends,
+    # milter, and more between releases. Enumerating that set is where a wrong
+    # guess breaks mail in a way nobody traces back to a firewall, so the edge
+    # is trusted wholesale and the internet is trusted with nothing.
+    ufw allow from "$EDGE_IP" comment 'edge node of this split'
+    ok "Everything from the edge (${EDGE_IP}); nothing from the internet"
+    for ip in $ADMIN_IPS; do
+      ufw allow from "$ip" to any port 22 proto tcp comment 'SSH admin'
+      ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP'
+      ufw allow from "$ip" to any port 7071 proto tcp comment 'Zimbra admin admin-IP'
+    done
+    warn "No public mail ports on this node. Users reach mail through the edge."
+    info "The directory and the mail store are not reachable from the internet."
+    info "Admin IPs: ${ADMIN_IPS}"
+    start_deadman
+    say "Enabling ufw NOW"
+    ufw --force enable
+    ufw_status
+    ok "ufw enabled with dead-man (${DEADMAN_SEC}s). Verify SSH, then cancel-deadman."
+    return 0
+  fi
+
   # Public mail (internet)
   #
   # Port 25 is the exception. From 0.1.10 a Proxmox Mail Gateway sits in front
