@@ -48,9 +48,32 @@ Known limits, stated rather than discovered:
 - **One gateway and one edge are each a single point of failure.** If either is
   down, mail queues rather than being lost, and nothing moves.
 - Backups run on the mailbox node, which is where the mail is. The edge refuses
-  and says so.
+  and says so. Restore is the same: it overwrites the mailbox, and afterwards
+  the edge must still bind to LDAP (the directory passwords have to match).
+- TLS certificates and DKIM keys are issued on the edge. The mailbox does not
+  serve :443 and does not run opendkim.
+- The console and the mail-flow collector run on the edge. Zeros from a
+  mailbox node mean that node has no MTA, not that mail has stopped. Disk
+  fullness of the store is visible on the mailbox, not on the edge dashboard.
 - Removing a deployment means running the uninstaller on both machines. It
   names the one still standing.
+- An empty Admin IPs list still firewalled the mailbox (the store on the
+  internet is worse than no workstation SSH). Re-run stage 10 with
+  `KIN_ADMIN_IPS` set when you want a workstation path to that machine.
+- A leftover LDAP server object from a previous edge will confuse routing.
+  The build now fails if the directory does not list both nodes, and warns
+  if it lists more than two.
+
+What 0.1.11 closed after the tag, still without claiming the split is mature:
+
+- The store's `SMTPHOST` is the edge. Pointing it at the mailbox is how
+  outbound mail sits in a queue with no error.
+- Gateway `zmprov` writes `zimbraMtaRelayHost` on the edge server object
+  (`MTA_HOST`), not on the public name typed in the wizard.
+- Z-Push on the edge talks to mailboxd on the mailbox (`:8443`), not to
+  loopback.
+- Healthcheck T1, DKIM, and the other MTA checks are BLOCKED on the mailbox,
+  not FAILED. FAILED would stop the install.
 
 ---
 

@@ -425,8 +425,11 @@ else
   fi
   mv -f "$_tmp" "$LDAP_STORE"
   chmod 600 "$LDAP_STORE"
+  # Kept, not deleted. A re-run of the edge installer has to present the
+  # same passwords the directory already has; minting a second set is how
+  # the edge installs cleanly and then cannot bind. Mode 600, root only.
   mark_done secrets-fetched
-  ok "directory passwords in place (mode 600)"
+  ok "directory passwords in place (mode 600, kept for re-runs)"
 fi
 
 # --- 6-7. build this machine --------------------------------------------------
@@ -495,10 +498,35 @@ else
 fi
 
 # Both machines must agree on how many servers exist, or one of them joined
-# something else.
+# something else. An edge rebuild that keeps the mailbox leaves the old edge
+# server object in LDAP; routing then has two MTAs and mail goes to the one
+# that no longer exists.
 _servers=$(su - zimbra -c "zmprov -l gas" 2>/dev/null | tr '\n' ' ')
+_edge_host=$(kin_edge_host)
 if [ -n "$_servers" ]; then
   ok "directory knows these servers: ${_servers}"
+  case " ${_servers} " in
+    *" ${_edge_host} "*) ;;
+    *)
+      fail "The directory does not list this edge (${_edge_host})."
+      info "The edge installed but did not join. Mail will not move."
+      _fail=1
+      ;;
+  esac
+  case " ${_servers} " in
+    *" ${MBOX_HOST} "*) ;;
+    *)
+      fail "The directory does not list the mailbox (${MBOX_HOST})."
+      _fail=1
+      ;;
+  esac
+  _n=0
+  for _s in ${_servers}; do _n=$((_n + 1)); done
+  if [ "$_n" -gt 2 ]; then
+    warn "The directory lists ${_n} servers. A split has two."
+    info "A leftover server object from a previous edge will confuse routing."
+    info "Inspect with: su - zimbra -c 'zmprov -l gas'"
+  fi
 else
   warn "could not list servers from the directory"
 fi

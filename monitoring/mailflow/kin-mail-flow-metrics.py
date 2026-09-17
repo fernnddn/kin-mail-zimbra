@@ -248,6 +248,7 @@ def render(
     *,
     ok: bool,
     now: float,
+    mta: bool = True,
 ) -> str:
     L: list[str] = []
     a = L.append
@@ -277,6 +278,9 @@ def render(
     a("# HELP kin_mail_flow_up 1 when this collector read the mail log successfully.")
     a("# TYPE kin_mail_flow_up gauge")
     a(f"kin_mail_flow_up {1 if ok else 0}")
+    a("# HELP kin_mail_flow_mta 1 when this node runs Postfix.")
+    a("# TYPE kin_mail_flow_mta gauge")
+    a(f"kin_mail_flow_mta {1 if mta else 0}")
     a("# HELP kin_mail_flow_last_run_timestamp_seconds When this collector last ran.")
     a("# TYPE kin_mail_flow_last_run_timestamp_seconds gauge")
     a(f"kin_mail_flow_last_run_timestamp_seconds {now:.0f}")
@@ -336,10 +340,11 @@ def main(argv: list[str] | None = None) -> int:
     lines, pos = read_new_lines(log, state)
     counters = parse_lines(lines, state["counters"])
     ok = log.exists()
+    mta = spool.is_dir()
 
     depths = queue_depths(spool)
     oldest = oldest_queued_seconds(spool)
-    body = render(counters, depths, oldest, ok=ok, now=time.time())
+    body = render(counters, depths, oldest, ok=ok, now=time.time(), mta=mta)
 
     if args.to_stdout:
         sys.stdout.write(body)

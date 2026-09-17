@@ -112,6 +112,9 @@ grep -q 'systemctl is-active --quiet pacemaker' "$SRC" \
 grep -q 'refusing restore onto live replica' "$SRC" \
   && t_ok "refuses when /opt/zimbra is on DRBD" \
   || t_bad "no DRBD guard"
+grep -q 'restore onto the mailbox, which holds the mail' "$SRC" \
+  && t_ok "refuses to restore onto the edge of a split" \
+  || t_bad "no split-edge restore guard"
 grep -q 'i-understand-this-overwrites-zimbra' "$SRC" \
   && t_ok "requires an explicit overwrite acknowledgement" \
   || t_bad "no explicit confirmation flag"

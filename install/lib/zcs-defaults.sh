@@ -43,12 +43,13 @@ HTTPPORT="8080"
 HTTPSPORT="8443"
 IMAPPORT="7143"
 POPPORT="7110"
-SMTPHOST="${MAILBOX_HOST}"
 AVDOMAIN="${MAIL_DOMAIN}"
 AVUSER="admin@${MAIL_DOMAIN}"
 zimbraDefaultDomainName="${MAIL_DOMAIN}"
 zimbraPrefTimeZoneId="${ZIMBRA_TZ_NAME:-Asia/Bangkok}"
 SNMPNOTIFY="no"
+# Traps go to the mailbox because that is where the logger lives. They are
+# off (SNMPNOTIFY above), so this cannot move mail even if it were wrong.
 SNMPTRAPHOST="${MAILBOX_HOST}"
 # Telemetry off. The interactive installer asks this as "Notify Zimbra of your
 # installation?" and answering yes mails the admin address to Zimbra.
@@ -167,6 +168,9 @@ LDAPNGINXPASSSET="yes"
 CREATEDOMAIN="${MAIL_DOMAIN}"
 CREATEADMIN="admin@${MAIL_DOMAIN}"
 CREATEADMINPASS="${ADMIN_PASS}"
+# Outbound from the store goes to the edge, which is the machine with Postfix.
+# Pointing this at the mailbox itself is how webmail queues forever with no error.
+SMTPHOST="${EDGE_HOST}"
 # This node answers proxy route lookups and accepts authenticated submission
 # relayed from the edge.
 zimbraReverseProxyLookupTarget="TRUE"
@@ -215,6 +219,8 @@ LDAPNGINXPASSSET="yes"
 # again from here is how a second, conflicting domain entry appears.
 CREATEDOMAIN="no"
 CREATEADMIN="no"
+# This node is the MTA. mailboxd is not here, but zmsetup still wants a value.
+SMTPHOST="${EDGE_HOST}"
 # This node proxies; it does not answer route lookups and holds no mailboxes.
 zimbraReverseProxyLookupTarget="FALSE"
 zimbraMtaAuthTarget="FALSE"
@@ -265,5 +271,20 @@ kin_zcs_defaults_problem() {
   esac
 
   grep -q '^LDAPHOST="..*"' "$f" || { printf 'no LDAPHOST\n'; return 0; }
+
+  # The store hands outbound mail to SMTPHOST. On a split that must be the
+  # edge: this node has no Postfix, and a self-address here is how webmail
+  # queues forever with nothing in the log that looks like an error.
+  case "$pkgs" in
+    *zimbra-store*)
+      smtp=$(sed -n 's/^SMTPHOST="\(.*\)"$/\1/p' "$f")
+      [ -n "$smtp" ] || { printf 'store has no SMTPHOST: mailboxd would have nowhere to send\n'; return 0; }
+      if [ "$smtp" = "$host" ]; then
+        printf 'store SMTPHOST is this machine; there is no MTA here\n'
+        return 0
+      fi
+      ;;
+  esac
+
   return 1
 }

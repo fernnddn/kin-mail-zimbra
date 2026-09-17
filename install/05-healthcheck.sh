@@ -39,6 +39,16 @@ KIN_NODE_ROLE="all"
 if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
   KIN_NODE_ROLE=$(kin_node_role 2>/dev/null) || KIN_NODE_ROLE="unknown"
 fi
+SMTP_OUT=0
+
+# Treating an unknown role as a single appliance would fail checks that do
+# not apply here, or pass ones that do, and either way abort the pipeline
+# over a misread. Refuse, the same way the topology helpers do.
+if [ "$KIN_NODE_ROLE" = "unknown" ]; then
+  f "TOPOLOGY=split, but this host's role cannot be determined from its addresses."
+  info "Check EDGE_IP and MAILBOX_IP in ${CONF_FILE} against this machine."
+  exit 1
+fi
 
 echo
 printf '%s\n' "${BLD}  KIN Mail - health check  ${MAIL_HOST}  $(date -Is)${RST}"
@@ -61,12 +71,22 @@ fi
 
 # --- listeners ---------------------------------------------------------------
 echo; say "Listening ports"
-for port in 25 443 587 993; do
-  ss -lnt 2>/dev/null | grep -q ":${port} " && p "port ${port} listening" || f "port ${port} not listening"
-done
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  for port in 389 7025 8443; do
+    ss -lnt 2>/dev/null | grep -q ":${port} " && p "port ${port} listening" || f "port ${port} not listening"
+  done
+  info "No public mail ports on this node. Users reach mail through the edge."
+else
+  for port in 25 443 587 993; do
+    ss -lnt 2>/dev/null | grep -q ":${port} " && p "port ${port} listening" || f "port ${port} not listening"
+  done
+fi
 
 # --- certificate -------------------------------------------------------------
 echo; say "TLS certificate"
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  b "Skipped - public TLS is served by the edge proxy, not by this node."
+else
 SUB=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MAIL_HOST" 2>/dev/null \
       | openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
 ISSUER=$(printf '%s' "$SUB" | sed -n 's/^issuer=//p' | head -1)
@@ -92,6 +112,7 @@ else
   [ -x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh ] \
     && p "Deploy hook installed" || f "Deploy hook missing - TLS will break in 90 days"
 fi
+fi
 
 # --- flush caches before DNS assertions --------------------------------------
 # Long-lived processes cache negative DNS answers. A record added after they
@@ -99,6 +120,9 @@ fi
 # amavis/opendkim appear in zmcontrol status - on HA Primary that trips the
 # Pacemaker kin-zimbra monitor unless we unmanage --monitor first (1.7b/1.7c).
 echo; say "Flushing DNS cache"
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  info "amavis and opendkim run on the edge; nothing to flush here"
+else
 kin_zimbra_unmanage
 trap kin_zimbra_remanage EXIT
 systemctl restart dnsmasq >/dev/null 2>&1 && info "dnsmasq restarted"
@@ -112,6 +136,7 @@ fi
 kin_zimbra_remanage
 trap - EXIT
 sleep 2
+fi
 
 # --- public DNS --------------------------------------------------------------
 echo; say "Public DNS"
@@ -141,6 +166,9 @@ A=$(dig +short +time=5 @"$DNS_UPSTREAM_1" "$MAIL_HOST" A 2>/dev/null | tr '\n' '
 
 # --- DKIM --------------------------------------------------------------------
 echo; say "DKIM"
+if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+  b "Skipped - DKIM signing is on the edge, which runs the MTA."
+else
 SEL=$(su - zimbra -c "/opt/zimbra/libexec/zmdkimkeyutil -q -d ${MAIL_DOMAIN}" 2>/dev/null \
       | awk '/DKIM Selector/{getline; while($0==""){getline}; print; exit}')
 if [ -n "$SEL" ]; then
@@ -193,6 +221,7 @@ else
   else
     f "DKIM key not created yet"
   fi
+fi
 fi
 
 # --- outbound SMTP -----------------------------------------------------------
@@ -339,6 +368,9 @@ fi
 # --- mail flow ---------------------------------------------------------------
 if [ $QUICK -eq 0 ]; then
   echo; say "T1 - internal mail flow"
+  if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+    b "Skipped - submission is on the edge. Delivery lands here; prove it from there."
+  else
   ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" >/dev/null 2>&1 || true
   ensure_kin_test_mailbox "$TEST_USER_2" "$TEST_PASS_2" >/dev/null 2>&1 || true
   SUBJ="KIN healthcheck $(date +%s)"
@@ -348,6 +380,19 @@ if [ $QUICK -eq 0 ]; then
         --tls --header "Subject: $SUBJ" --body "healthcheck" 2>&1)
   if printf '%s' "$OUT" | grep -q "queued as"; then
     p "Submission accepted (587, TLS, AUTH)"
+    if [ "$KIN_NODE_ROLE" = "edge" ]; then
+      # Delivery lands on the mailbox. /opt/zimbra/store is empty here, and
+      # treating that as a failure would stop the pipeline over a success.
+      if [ -n "${MAILBOX_IP:-}" ] && timeout 5 bash -c "exec 3<>/dev/tcp/${MAILBOX_IP}/7025" 2>/dev/null; then
+        p "LMTP path to the mailbox (${MAILBOX_IP}:7025) is open"
+      else
+        f "Cannot reach the mailbox on LMTP :7025 - submitted mail has nowhere to land"
+      fi
+      grep -q "status=sent" /var/log/zimbra.log 2>/dev/null \
+        && p "MTA logged a delivery" \
+        || b "No local delivery log yet (LMTP to the mailbox may still be in flight)"
+      b "DKIM of the delivered message is in the mailbox store; not readable from here."
+    else
     # amavis/antispam scanning can still be warming up right after a restart
     # (04-tls-dkim.sh and the DNS-cache flush above both restart it), so a
     # single fixed sleep can catch it mid-scan. Poll instead of one shot.
@@ -377,11 +422,15 @@ if [ $QUICK -eq 0 ]; then
     else
       b "Message not found in message store yet (amavis still scanning after restart)"
     fi
+    fi
   else
     f "Submission rejected"; printf '%s' "$OUT" | tail -4 | sed 's/^/      /'
   fi
+  fi
 
-  if kin_ha_peer_install; then
+  if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
+    :
+  elif kin_ha_peer_install; then
     b "T2 skipped on HA peer (external send is verified on the published MX)"
   elif [ -n "${EXTERNAL_TEST_ADDRESS}" ] && [ "$SMTP_OUT" -eq 1 ]; then
     echo; say "T2 - send to external address"

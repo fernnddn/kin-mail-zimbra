@@ -572,7 +572,7 @@ zimbra_available() {
 }
 
 zimbra_relay_host() {
-  zm gs "${MAIL_HOST}" zimbraMtaRelayHost 2>/dev/null |
+  zm gs "${MTA_HOST}" zimbraMtaRelayHost 2>/dev/null |
     sed -n 's/^zimbraMtaRelayHost: //p' | head -1 | tr -d ' \r'
 }
 
@@ -1294,7 +1294,7 @@ cmd_apply() {
   if [ "$cur" = "$want" ]; then
     info "zimbraMtaRelayHost already ${want}"
   else
-    zm ms "${MAIL_HOST}" zimbraMtaRelayHost "${want}" >/dev/null 2>&1 || {
+    zm ms "${MTA_HOST}" zimbraMtaRelayHost "${want}" >/dev/null 2>&1 || {
       fail zimbra-failed "zmprov would not set zimbraMtaRelayHost to ${want}."; return 2; }
     ok "zimbraMtaRelayHost ${want}"
   fi
@@ -1574,7 +1574,7 @@ cmd_revert() {
   fi
 
   say "Removing the relay host so this appliance sends directly again"
-  zm ms "${MAIL_HOST}" zimbraMtaRelayHost '' >/dev/null 2>&1 ||
+  zm ms "${MTA_HOST}" zimbraMtaRelayHost '' >/dev/null 2>&1 ||
     warn "Could not clear zimbraMtaRelayHost; check it by hand."
   if [ -n "${GW_HOST:-}" ]; then
     zm mcf "-zimbraMtaMyNetworks" "${GW_HOST}/32" >/dev/null 2>&1 || true

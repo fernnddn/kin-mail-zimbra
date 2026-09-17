@@ -104,6 +104,19 @@ fi
 
 [ -d /opt/zimbra ] || { fail "Zimbra is not installed yet. Run 03 first."; exit 1; }
 
+# Public TLS is served by the proxy, and DKIM is signed by the MTA. Both of
+# those are the edge. Issuing a certificate here would put it on a machine
+# that does not answer :443, and zmdkimkeyutil would run where opendkim is
+# not installed. The edge pipeline is what actually issues them.
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+  _tls_role=$(kin_node_role 2>/dev/null) || _tls_role=""
+  if [ "$_tls_role" = mailbox ]; then
+    warn "TLS and DKIM are issued on the edge, which is the machine clients reach."
+    info "This is the mailbox node; skipping. Run 04-tls-dkim.sh on the edge."
+    exit 0
+  fi
+fi
+
 : "${TLS_METHOD:=cloudflare}"
 case "$TLS_METHOD" in
   cloudflare|manual|customer) ;;

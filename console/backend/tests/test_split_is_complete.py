@@ -144,7 +144,8 @@ class TheHealthcheckDoesNotCryWolfOnASplit(unittest.TestCase):
 
     def test_mta_checks_are_blocked_not_failed_on_the_mailbox(self) -> None:
         """BLOCKED means outside this machine. FAILED would abort the pipeline."""
-        block = self.c[self.c.index('if [ "$KIN_NODE_ROLE" = "mailbox" ]') :][:400]
+        start = self.c.index('say "Outbound SMTP"')
+        block = self.c[start : start + 400]
         self.assertIn("  b ", block)
         self.assertNotIn("\n  f ", block)
 
@@ -246,6 +247,175 @@ class ASplitDeploymentFinishesTheWholePipeline(unittest.TestCase):
         self.assertIn("follow now", tail)
 
 
+class TheStoreHandsOutboundMailToTheEdge(unittest.TestCase):
+    """Hole 2.1: SMTPHOST on the mailbox pointed at itself.
+
+    mailboxd hands outbound mail to SMTPHOST. The mailbox has no Postfix, so
+    a self-address here is how webmail queues forever with nothing in the log
+    that looks like an error. The generated defaults must name the edge, and
+    the validator must refuse a store file that does not.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/lib/zcs-defaults.sh")
+
+    def test_the_store_profile_names_the_edge(self) -> None:
+        self.assertIn('SMTPHOST="${EDGE_HOST}"', self.c)
+        self.assertNotIn('SMTPHOST="${MAILBOX_HOST}"', self.c)
+
+    def test_a_store_that_points_at_itself_is_rejected(self) -> None:
+        self.assertIn("store SMTPHOST is this machine", self.c)
+        self.assertIn("store has no SMTPHOST", self.c)
+
+    def test_snmp_traps_still_go_to_the_mailbox(self) -> None:
+        # Logger lives there. Traps are off (SNMPNOTIFY=no), so a wrong
+        # value cannot move mail, but the destination is still the logger.
+        self.assertIn('SNMPTRAPHOST="${MAILBOX_HOST}"', self.c)
+
+
+class TheGatewayWritesRelayHostOnTheMtaServerObject(unittest.TestCase):
+    """Hole 2.2: zmprov ms MAIL_HOST, which is the public name, not the edge.
+
+    MAIL_HOST is what the operator typed. In LDAP the edge's server object
+    is EDGE_HOST. Writing the relay onto the public name either no-ops or
+    writes a server that does not run Postfix. MTA_HOST was derived for
+    this and has to be the name used at the three RelayHost calls.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/lib/mail-gateway.sh")
+
+    def test_relay_host_reads_and_writes_use_the_mta_server_object(self) -> None:
+        after = self.c[self.c.index("zimbra_relay_host()") :]
+        self.assertIn('zm gs "${MTA_HOST}" zimbraMtaRelayHost', after)
+        self.assertIn('zm ms "${MTA_HOST}" zimbraMtaRelayHost', after)
+        self.assertNotIn('zm gs "${MAIL_HOST}" zimbraMtaRelayHost', after)
+        self.assertNotIn('zm ms "${MAIL_HOST}" zimbraMtaRelayHost', after)
+
+    def test_gateway_is_self_still_compares_the_public_name(self) -> None:
+        # That check is "did the operator type this appliance as the
+        # gateway", which is the public name, not the server object.
+        block = self.c[self.c.index("gateway-is-self") :][:800]
+        self.assertIn('"${GW_HOST}" = "${MAIL_HOST}"', block)
+
+
+class ZPushTalksToMailboxdNotToLoopback(unittest.TestCase):
+    """Hole 2.3: Z-Push on the edge pointed at 127.0.0.1:8443.
+
+    8443 is mailboxd, which is on the mailbox. Loopback on the edge has
+    nothing listening there. ActiveSync dies while webmail and IMAP still
+    work, so nobody notices during the install.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/07-zpush.sh")
+
+    def test_a_split_points_at_the_mailbox_not_loopback(self) -> None:
+        # The split default has to be assigned first, otherwise the
+        # 1vm loopback default wins on both topologies.
+        split_url = self.c.index("https://${MAILBOX_HOST}:8443")
+        loopback = self.c.index("https://127.0.0.1:8443")
+        self.assertLess(split_url, loopback)
+        preamble = self.c[:split_url]
+        self.assertIn("kin_topology_is_split", preamble[-400:])
+
+    def test_it_refuses_to_install_on_the_mailbox_node(self) -> None:
+        self.assertIn("Z-Push is installed on the edge", self.c)
+
+    def test_throttle_safe_ips_include_the_edge_address(self) -> None:
+        # mailboxd sees the edge, not loopback, so 127.0.0.1 on the
+        # mailbox server object does not cover the Z-Push path.
+        self.assertIn("+zimbraHttpThrottleSafeIPs", self.c)
+        self.assertIn("mailboxd will not throttle the edge", self.c)
+
+
+class InternalMailFlowIsNotFailedOnTheWrongNode(unittest.TestCase):
+    """Hole 2.4: T1 submitted on the mailbox, then read the local store.
+
+    Submission is on the edge. Delivery lands on the mailbox. A local-log
+    check on the wrong node reports FAILED, and FAILED aborts the install.
+    Off-node checks are BLOCKED.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/05-healthcheck.sh")
+
+    def test_t1_is_blocked_not_failed_on_the_mailbox(self) -> None:
+        start = self.c.index('say "T1 - internal mail flow"')
+        t1 = self.c[start : start + 1800]
+        mailbox_branch = t1.split('if [ "$KIN_NODE_ROLE" = "mailbox" ]', 1)[1].split("else", 1)[0]
+        self.assertIn("  b ", mailbox_branch)
+        self.assertNotIn("\n  f ", mailbox_branch)
+        self.assertIn("submission is on the edge", mailbox_branch)
+
+    def test_the_edge_proves_lmtp_instead_of_reading_the_store(self) -> None:
+        self.assertIn("LMTP path to the mailbox", self.c)
+        self.assertIn("${MAILBOX_IP}/7025", self.c)
+
+    def test_dkim_is_blocked_on_the_mailbox_not_failed(self) -> None:
+        start = self.c.index('say "DKIM"')
+        block = self.c[start : start + 700]
+        mailbox_branch = block.split('if [ "$KIN_NODE_ROLE" = "mailbox" ]', 1)[1].split("else", 1)[0]
+        self.assertIn("  b ", mailbox_branch)
+        self.assertNotIn("\n  f ", mailbox_branch)
+
+    def test_an_unknown_role_is_refused_not_treated_as_a_single_appliance(self) -> None:
+        self.assertIn('KIN_NODE_ROLE="unknown"', self.c)
+        unknown = self.c[self.c.index('if [ "$KIN_NODE_ROLE" = "unknown" ]') :][:500]
+        self.assertIn("exit 1", unknown)
+
+
+class TheMailboxFirewallAppliesWithoutAdminIps(unittest.TestCase):
+    """Hole 2.5: ADMIN_IPS required before the mailbox branch could run.
+
+    The wizard treats Admin IPs as optional. The orchestrator still has to
+    firewall the mailbox. Refusing there printed SPLIT BUILD INCOMPLETE
+    over a store that was still on the internet.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/10-host-firewall.sh")
+
+    def test_the_role_is_known_before_admin_ips_are_required(self) -> None:
+        role = self.c.index("node_role=$(kin_node_role)")
+        required = self.c.index("KIN_ADMIN_IPS is required")
+        self.assertLess(role, required)
+
+    def test_the_mailbox_is_exempt_from_the_requirement(self) -> None:
+        self.assertIn('if [ "$node_role" != "mailbox" ]', self.c)
+        self.assertIn("This mailbox will still be firewalled", self.c)
+
+    def test_edge_and_single_appliance_still_require_admin_ips(self) -> None:
+        # The exemption is the mailbox, not "any split node". An edge
+        # without admin IPs would publish SSH and the console.
+        block = self.c[self.c.index('if [ "$node_role" != "mailbox" ]') :][:400]
+        self.assertIn("exit 2", block)
+
+
+class LifecycleKnowsTheMailboxHoldsTheMail(unittest.TestCase):
+    def test_restore_refuses_the_edge_of_a_split(self) -> None:
+        c = code("backup/kin-mail-restore.sh")
+        self.assertIn("restore onto the mailbox, which holds the mail", c)
+        self.assertIn("same directory passwords", c)
+
+    def test_tls_is_skipped_on_the_mailbox(self) -> None:
+        c = code("install/04-tls-dkim.sh")
+        self.assertIn("This is the mailbox node; skipping", c)
+        self.assertIn("kin_node_role", c)
+
+    def test_a_directory_that_does_not_list_the_edge_fails_the_build(self) -> None:
+        c = code("install/kin-mail-split.sh")
+        self.assertIn("The directory does not list this edge", c)
+        self.assertIn("The directory does not list the mailbox", c)
+        self.assertIn("A leftover server object", c)
+
+    def test_the_backup_split_refusal_does_not_call_undefined_info(self) -> None:
+        # set -u. `info` is not defined in this script; using it after the
+        # fail line would crash and hide the instruction to run on the mailbox.
+        c = code("backup/kin-mail-backup-remote.sh")
+        self.assertNotRegex(c, r"(?m)^\s+info ")
+
+
 class EveryStageThatBranchesOnRoleAsksTheSameWay(unittest.TestCase):
     """One way of asking, so a stage cannot answer it differently."""
 
@@ -255,6 +425,8 @@ class EveryStageThatBranchesOnRoleAsksTheSameWay(unittest.TestCase):
         "install/05-healthcheck.sh",
         "install/02-prepare-os.sh",
         "install/03-install-zimbra.sh",
+        "install/07-zpush.sh",
+        "install/04-tls-dkim.sh",
     )
 
     def test_none_of_them_decide_the_role_from_a_hostname(self) -> None:

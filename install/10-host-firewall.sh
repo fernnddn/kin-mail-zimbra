@@ -133,36 +133,12 @@ start_deadman() {
 }
 
 apply_rules() {
-  if [ -z "$ADMIN_IPS" ]; then
-    fail "KIN_ADMIN_IPS is required (set in /etc/kin-mail/config via 00-config wizard, or export KIN_ADMIN_IPS=…)"
-    exit 2
-  fi
   if [ -z "$CLUSTER_NET" ]; then
     fail "SERVER_IP unset - cannot derive cluster LAN"
     exit 2
   fi
 
-  say "Installing ufw (if needed)"
-  export DEBIAN_FRONTEND=noninteractive
-  kin_apt -qq update
-  kin_apt -y install ufw >/dev/null
-
-  say "Resetting ufw to a clean deny-incoming policy"
-  ufw --force reset >/dev/null
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw default deny routed
-
-  # Established
-  ufw allow in on lo
-  # SSH - admin IPs + cluster LAN (break-glass from peers)
-  local ip
-  for ip in $ADMIN_IPS; do
-    ufw allow from "$ip" to any port 22 proto tcp comment 'SSH admin'
-  done
-  ufw allow from "$CLUSTER_NET" to any port 22 proto tcp comment 'SSH cluster LAN'
-
-  # Which half of a split is this, and what may reach it?
+  # Which half of a split is this, decided BEFORE any firewall change.
   #
   # A single appliance answers "all" and everything below behaves as it always
   # has. A split is two very different machines:
@@ -190,6 +166,50 @@ apply_rules() {
     }
     ok "Split deployment; this host is the ${node_role} node"
   fi
+
+  # Admin IPs are required on a machine that opens public ports: without them
+  # the console and SSH would be reachable from the internet the moment ufw
+  # is enabled. The mailbox opens no public ports. Its security model is
+  # "the edge, and nothing else from the internet". An empty admin list there
+  # is therefore not a reason to refuse - refusing is how a split deploy
+  # printed SPLIT BUILD INCOMPLETE over a store that was still on the
+  # internet, because the wizard treats Admin IPs as optional and the
+  # orchestrator still has to firewall that machine.
+  #
+  # Trade: without an admin IP, a workstation cannot SSH to the mailbox
+  # except via the edge or the LAN. If the edge is down that is inconvenient.
+  # Leaving the store on the internet is worse. Re-run with KIN_ADMIN_IPS to
+  # add a workstation later.
+  if [ "$node_role" != "mailbox" ]; then
+    if [ -z "$ADMIN_IPS" ]; then
+      fail "KIN_ADMIN_IPS is required (set in /etc/kin-mail/config via 00-config wizard, or export KIN_ADMIN_IPS=…)"
+      exit 2
+    fi
+  elif [ -z "$ADMIN_IPS" ]; then
+    warn "No admin IPs configured. This mailbox will still be firewalled."
+    info "SSH from a workstation is not opened. Reach it via the edge, or from the LAN."
+    info "Re-run with KIN_ADMIN_IPS set when you want a workstation path."
+  fi
+
+  say "Installing ufw (if needed)"
+  export DEBIAN_FRONTEND=noninteractive
+  kin_apt -qq update
+  kin_apt -y install ufw >/dev/null
+
+  say "Resetting ufw to a clean deny-incoming policy"
+  ufw --force reset >/dev/null
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw default deny routed
+
+  # Established
+  ufw allow in on lo
+  # SSH - admin IPs (may be empty on a mailbox) + cluster LAN (break-glass)
+  local ip
+  for ip in $ADMIN_IPS; do
+    ufw allow from "$ip" to any port 22 proto tcp comment 'SSH admin'
+  done
+  ufw allow from "$CLUSTER_NET" to any port 22 proto tcp comment 'SSH cluster LAN'
 
   if [ "$node_role" = "mailbox" ]; then
     if [ -z "${EDGE_IP:-}" ]; then

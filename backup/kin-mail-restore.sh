@@ -70,6 +70,16 @@ assert_scratch() {
     fail "Zimbra FOSS tools not installed on this host (need matching version scratch install)"
     exit 2
   fi
+  # On a split the store, the directory and MySQL all live on the mailbox.
+  # Restoring onto the edge would write them onto a machine that has none
+  # of those services, and leave the real store untouched. The leftover
+  # would look like a successful restore of an empty system.
+  if grep -qs '^[[:space:]]*TOPOLOGY="\?split' /etc/kin-mail/config 2>/dev/null \
+     && [ ! -d /opt/zimbra/store ]; then
+    fail "This is the edge of a split; restore onto the mailbox, which holds the mail."
+    warn "After LDAP is restored the edge must still bind (same directory passwords)."
+    exit 3
+  fi
 }
 
 assert_set() {

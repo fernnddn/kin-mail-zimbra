@@ -125,6 +125,17 @@ esac
 eq "$MBOX" HOSTNAME "store.example.test" "mailbox knows its own name"
 eq "$EDGE" HOSTNAME "mail.example.test"  "edge knows its own name"
 
+# --- outbound from the store goes to the edge, never back to itself ---------
+# SMTPHOST is where mailboxd hands mail to be sent. The mailbox has no MTA.
+# Pointing it at itself is how webmail queues forever with no error.
+eq "$MBOX" SMTPHOST "mail.example.test" "mailbox hands outbound mail to the edge"
+eq "$EDGE" SMTPHOST "mail.example.test" "edge SMTPHOST is itself, the MTA"
+if [ "$(val "$MBOX" SMTPHOST)" = "$(val "$MBOX" HOSTNAME)" ]; then
+  bad "mailbox SMTPHOST is this machine - there is no Postfix here"
+else
+  ok "mailbox SMTPHOST is not this machine"
+fi
+
 # --- both must point at the same directory ----------------------------------
 eq "$MBOX" LDAPHOST "store.example.test" "mailbox is its own LDAP host"
 eq "$EDGE" LDAPHOST "store.example.test" "edge points at the mailbox for LDAP"
@@ -264,6 +275,14 @@ refuses "a file with no package list" "$TMP/nopkgs.cfg" "package menu"
 cp "$MBOX" "$TMP/nohost.cfg"
 sed -i '/^HOSTNAME=/d' "$TMP/nohost.cfg"
 refuses "a file that does not say which machine it is for" "$TMP/nohost.cfg" "HOSTNAME"
+
+cp "$MBOX" "$TMP/selfsmtp.cfg"
+sed -i 's/^SMTPHOST=.*/SMTPHOST="store.example.test"/' "$TMP/selfsmtp.cfg"
+refuses "a store that hands outbound mail to itself" "$TMP/selfsmtp.cfg" "no MTA here"
+
+cp "$MBOX" "$TMP/nosmtp.cfg"
+sed -i '/^SMTPHOST=/d' "$TMP/nosmtp.cfg"
+refuses "a store with no SMTPHOST" "$TMP/nosmtp.cfg" "nowhere to send"
 
 refuses "a file that does not exist" "$TMP/absent.cfg" "not readable"
 

@@ -738,6 +738,16 @@ if grep -qE 'host=192\.0\.2\.(20|40)|relay=192\.0\.2\.(20|40)|cidr=192\.0\.2\.(2
 else
   pass "split: neither SERVER_IP nor the mailbox is ever given to the gateway"
 fi
+if grep -q 'zmprov ms edge.example.test zimbraMtaRelayHost' "$CALLS"; then
+  pass "split: zmprov writes the relay on the edge server object, not the public name"
+else
+  bad "split: zmprov should target EDGE_HOST: $(grep RelayHost "$CALLS" | head -1)"
+fi
+if grep -q 'zmprov ms mail.example.test zimbraMtaRelayHost' "$CALLS"; then
+  bad "split: zmprov wrote the public MAIL_HOST, which may not be a server object"
+else
+  pass "split: the public MAIL_HOST is never used as a zmprov server name"
+fi
 
 # Run from the mailbox node it must refuse, not misconfigure.
 out=$(KIN_GW_LOCAL_IPV4S="192.0.2.40" run_gw apply); rc=$?

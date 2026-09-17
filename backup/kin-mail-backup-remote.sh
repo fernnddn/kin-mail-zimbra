@@ -131,8 +131,8 @@ if ! is_promoted_here; then
     mbox_ip=$(sed -n 's/^[[:space:]]*MAILBOX_IP=//p' /etc/kin-mail/config 2>/dev/null |
               tail -1 | tr -d '"'"'"' \r')
     fail "This is the edge node of a split; the mail store is on the mailbox node."
-    info "Run the backup on ${mbox:-the mailbox} (${mbox_ip:-address not recorded})."
-    info "The edge holds no mail, so a backup taken here would contain none."
+    warn "Run the backup on ${mbox:-the mailbox} (${mbox_ip:-address not recorded})."
+    warn "The edge holds no mail, so a backup taken here would contain none."
     exit 3
   fi
   fail "This node is not Promoted (/opt/zimbra not mounted with store)"

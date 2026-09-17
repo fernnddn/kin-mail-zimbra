@@ -196,9 +196,15 @@ rejected, `apply` says so and still succeeds, because mail flows without it.
 ## 7. Zimbra settings KIN Mail writes
 
 ```sh
-zmprov ms <mailhost> zimbraMtaRelayHost '<pmg-ip>:26'
+zmprov ms <mta-host> zimbraMtaRelayHost '<pmg-ip>:26'
 zmprov mcf zimbraMtaMyNetworks '127.0.0.0/8 <lan>/24 <pmg-ip>/32'
 ```
+
+`<mta-host>` is the LDAP server object that runs Postfix. On a single
+appliance that is the public name (`MAIL_HOST`). On a split it is the edge
+(`EDGE_HOST` / `MTA_HOST`). Writing the relay onto the public name of a split
+either no-ops or writes a server that has no MTA, and outbound mail then
+sits in the store's queue with nothing that looks like an error.
 
 `zimbraMtaMyNetworks` gains the gateway so PMG can hand mail in. It is added,
 never replaced wholesale, and `relay_scope_too_wide()` from

@@ -285,3 +285,44 @@ class BothDiskLayoutsAreHandled(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("meta-partition-in-the-way", lib)
         self.assertIn("drbd-meta", lib)
+
+
+class GrowingTheMailDiskOnTheEdgeIsRefused(unittest.TestCase):
+    """The console runs on the edge. /opt/zimbra there holds no mail."""
+
+    _SPLIT = {
+        "TOPOLOGY": "split",
+        "MAILBOX_IP": "192.0.2.20",
+        "MAILBOX_HOST": "store.example.test",
+    }
+
+    def test_a_split_edge_refuses_to_grow_mail(self) -> None:
+        with mock.patch.object(commands, "_appliance_config", return_value=self._SPLIT), \
+             mock.patch.object(commands, "_local_ipv4s", return_value={"192.0.2.10"}):
+            events = _drain(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
+        self.assertEqual(_exit(events), 2)
+        self.assertIn("holds no mail", _text(events))
+        self.assertIn("store.example.test", _text(events))
+
+    def test_the_mailbox_node_is_allowed_to_plan(self) -> None:
+        true = __import__("pathlib").Path("/bin/true")
+        with mock.patch.object(commands, "_appliance_config", return_value=self._SPLIT), \
+             mock.patch.object(commands, "_local_ipv4s", return_value={"192.0.2.20"}), \
+             mock.patch.object(commands, "resolve_grow_disk", lambda: true):
+            events = _drain(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
+        self.assertEqual(_exit(events), 0)
+
+    def test_a_single_appliance_is_untouched(self) -> None:
+        true = __import__("pathlib").Path("/bin/true")
+        with mock.patch.object(commands, "_appliance_config", return_value={"TOPOLOGY": "1vm"}), \
+             mock.patch.object(commands, "resolve_grow_disk", lambda: true):
+            events = _drain(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
+        self.assertEqual(_exit(events), 0)
+
+    def test_growing_the_system_disk_is_still_allowed_on_the_edge(self) -> None:
+        true = __import__("pathlib").Path("/bin/true")
+        with mock.patch.object(commands, "_appliance_config", return_value=self._SPLIT), \
+             mock.patch.object(commands, "_local_ipv4s", return_value={"192.0.2.10"}), \
+             mock.patch.object(commands, "resolve_grow_disk", lambda: true):
+            events = _drain(commands.cmd_grow_disk({"op": "plan", "target": "system"}))
+        self.assertEqual(_exit(events), 0)

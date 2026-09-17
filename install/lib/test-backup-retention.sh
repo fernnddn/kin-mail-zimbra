@@ -100,6 +100,14 @@ for n in 20260101T020000Z 20260102T020000Z 20260103T020000Z; do
 done
 make_set "$ROOT/daily" "20260104T020000Z" 0
 make_set "$ROOT/daily" "20260105T020000Z" 1
+# ls -1dt orders by mtime. Directories created in the same second keep an
+# unspecified order, so the bug this exists to reproduce would silently not
+# show. Pin mtimes to the names.
+touch -t 202601010200 "$ROOT/daily/20260101T020000Z"
+touch -t 202601020200 "$ROOT/daily/20260102T020000Z"
+touch -t 202601030200 "$ROOT/daily/20260103T020000Z"
+touch -t 202601040200 "$ROOT/daily/20260104T020000Z"
+touch -t 202601050200 "$ROOT/daily/20260105T020000Z"
 # The pre-fix logic, verbatim in spirit: newest N by mtime, marker ignored.
 ls -1dt "$ROOT/daily"/*/ | awk -v k=3 'NR>k {print $0}' \
   | while IFS= read -r d; do rm -rf "$d"; done

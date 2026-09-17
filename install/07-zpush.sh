@@ -29,7 +29,15 @@ ZPUSH_STATE="${ZPUSH_STATE:-/var/lib/z-push}"
 ZPUSH_LOGDIR="${ZPUSH_LOGDIR:-/var/log/z-push}"
 ZPUSH_ZIP_URL="${ZPUSH_ZIP_URL:-https://github.com/Z-Hub/Z-Push/archive/refs/tags/${ZPUSH_VERSION}.zip}"
 ZIMBRA_BACKEND_TGZ_URL="${ZIMBRA_BACKEND_TGZ_URL:-https://downloads.sourceforge.net/project/zimbrabackend/Release75/zimbra75.tgz}"
-ZIMBRA_BACKEND_URL_LOCAL="${ZIMBRA_BACKEND_URL_LOCAL:-https://127.0.0.1:8443}"
+# mailboxd listens on 8443. On a single appliance that is this machine. On a
+# split, Z-Push runs on the edge and mailboxd is on the mailbox: talking to
+# loopback here is how ActiveSync dies while webmail and IMAP still work.
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split \
+   && [ -n "${MAILBOX_HOST:-}" ]; then
+  ZIMBRA_BACKEND_URL_LOCAL="${ZIMBRA_BACKEND_URL_LOCAL:-https://${MAILBOX_HOST}:8443}"
+else
+  ZIMBRA_BACKEND_URL_LOCAL="${ZIMBRA_BACKEND_URL_LOCAL:-https://127.0.0.1:8443}"
+fi
 PHP_FPM_POOL="${PHP_FPM_POOL:-/etc/php/8.3/fpm/pool.d/www.conf}"
 PHP_FPM_LISTEN="${PHP_FPM_LISTEN:-127.0.0.1:9000}"
 NGX_TPL="${NGX_TPL:-/opt/zimbra/conf/nginx/templates/nginx.conf.web.https.default.template}"
@@ -45,6 +53,22 @@ fi
 if [ ! -d /opt/zimbra ]; then
   fail "Zimbra is not installed yet - run 03-install-zimbra.sh first"
   exit 1
+fi
+
+# Z-Push is the ActiveSync endpoint users reach. That is the edge. Running it
+# here on the mailbox would put the client-facing service on a machine the
+# internet must not see, and would still leave the edge with no backend.
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+  _zrole=$(kin_node_role 2>/dev/null) || _zrole=""
+  if [ "$_zrole" = mailbox ]; then
+    fail "Z-Push is installed on the edge, which is the machine users reach."
+    info "This is the mailbox node; nothing here faces ActiveSync clients."
+    exit 1
+  fi
+  if [ -z "${MAILBOX_HOST:-}" ]; then
+    fail "TOPOLOGY=split but MAILBOX_HOST is not set; Z-Push has no mailboxd to talk to."
+    exit 1
+  fi
 fi
 
 if [ ! -f "$NGX_TPL" ]; then
@@ -672,20 +696,33 @@ reload_proxy_if_needed() {
 # -----------------------------------------------------------------------------
 ensure_throttle_safe_ip() {
   say "8. zimbraHttpThrottleSafeIPs (loopback for backend)"
-  local cur
-  cur=$(zimbra_cmd zmprov gs "$(zimbra_cmd zmhostname)" zimbraHttpThrottleSafeIPs 2>/dev/null | awk '/zimbraHttpThrottleSafeIPs:/{print $2}' || true)
+  local cur host
+  host=$(zimbra_cmd zmhostname)
+  cur=$(zimbra_cmd zmprov gs "$host" zimbraHttpThrottleSafeIPs 2>/dev/null | awk '/zimbraHttpThrottleSafeIPs:/{print $2}' || true)
   if printf '%s\n' "$cur" | grep -qx '127.0.0.1'; then
     ok "127.0.0.1 already in zimbraHttpThrottleSafeIPs"
-    return 0
-  fi
-  # Append without wiping other entries
-  if [ -n "$cur" ]; then
-    zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" +zimbraHttpThrottleSafeIPs 127.0.0.1 \
-      || zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" zimbraHttpThrottleSafeIPs 127.0.0.1
+  elif [ -n "$cur" ]; then
+    zimbra_cmd zmprov ms "$host" +zimbraHttpThrottleSafeIPs 127.0.0.1 \
+      || zimbra_cmd zmprov ms "$host" zimbraHttpThrottleSafeIPs 127.0.0.1
+    ok "Ensured 127.0.0.1 in zimbraHttpThrottleSafeIPs"
   else
-    zimbra_cmd zmprov ms "$(zimbra_cmd zmhostname)" zimbraHttpThrottleSafeIPs 127.0.0.1
+    zimbra_cmd zmprov ms "$host" zimbraHttpThrottleSafeIPs 127.0.0.1
+    ok "Ensured 127.0.0.1 in zimbraHttpThrottleSafeIPs"
   fi
-  ok "Ensured 127.0.0.1 in zimbraHttpThrottleSafeIPs"
+
+  # On a split, Z-Push on the edge talks to mailboxd on the mailbox. The
+  # address mailboxd sees is the edge, not loopback, and throttling that
+  # looks like a backend outage.
+  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+    local edge_ip mailbox_host
+    edge_ip=$(kin_edge_ip 2>/dev/null || printf '%s' "${EDGE_IP:-}")
+    mailbox_host=$(kin_mailbox_host 2>/dev/null || printf '%s' "${MAILBOX_HOST:-}")
+    if [ -n "$edge_ip" ] && [ -n "$mailbox_host" ]; then
+      zimbra_cmd zmprov ms "$mailbox_host" +zimbraHttpThrottleSafeIPs "$edge_ip" \
+        || zimbra_cmd zmprov ms "$mailbox_host" zimbraHttpThrottleSafeIPs "$edge_ip"
+      ok "mailboxd will not throttle the edge (${edge_ip})"
+    fi
+  fi
 }
 
 # -----------------------------------------------------------------------------

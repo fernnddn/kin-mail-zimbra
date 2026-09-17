@@ -259,6 +259,7 @@ class PromOutput(unittest.TestCase):
             "kin_mail_queue_messages",
             "kin_mail_queue_oldest_seconds",
             "kin_mail_flow_up",
+            "kin_mail_flow_mta",
         ):
             self.assertIn(f"# HELP {name} ", body, name)
             self.assertIn(f"# TYPE {name} ", body, name)
@@ -276,6 +277,7 @@ class PromOutput(unittest.TestCase):
         self.assertIn('kin_mail_queue_messages{queue="deferred"} 2', body)
         self.assertIn("kin_mail_queue_oldest_seconds 3600", body)
         self.assertIn("kin_mail_flow_up 1", body)
+        self.assertIn("kin_mail_flow_mta 1", body)
         # No scientific notation or stray decimals that would fail a parse.
         for line in body.splitlines():
             if line.startswith("#") or not line.strip():
@@ -286,6 +288,12 @@ class PromOutput(unittest.TestCase):
     def test_a_failed_read_reports_itself(self) -> None:
         body = mf.render(mf.new_counters(), {}, 0.0, ok=False, now=1.0)
         self.assertIn("kin_mail_flow_up 0", body)
+
+    def test_a_node_without_postfix_says_so(self) -> None:
+        """Zeros from a mailbox node are not 'no mail is moving'."""
+        body = mf.render(mf.new_counters(), {}, 0.0, ok=True, now=1.0, mta=False)
+        self.assertRegex(body, r"(?m)^kin_mail_flow_mta 0$")
+        self.assertNotRegex(body, r"(?m)^kin_mail_flow_mta 1$")
 
 
 class EndToEnd(unittest.TestCase):

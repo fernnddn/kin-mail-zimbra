@@ -15,6 +15,14 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "ok  $1"; }
 bad() { fail=$((fail+1)); echo "FAILED  $1"; [ -n "${2:-}" ] && echo "    $2"; }
 
+# --- a split mailbox must not issue the public certificate ------------------
+if grep -q 'This is the mailbox node; skipping' "$STAGE" &&
+   grep -q 'kin_topology_is_split' "$STAGE"; then
+  ok "TLS/DKIM is skipped on the mailbox of a split"
+else
+  bad "stage 04 would issue a certificate on a node that does not serve :443"
+fi
+
 # --- the peer must not issue its own certificate ----------------------------
 # Anchor on the dispatch, not on prose: the file explains this at length.
 dispatch=$(awk '/^if kin_ha_peer_install; then/,/^fi$/' "$STAGE" | head -40)

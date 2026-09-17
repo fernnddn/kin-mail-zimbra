@@ -798,6 +798,68 @@ GROW_TARGETS = {
 }
 
 
+def _appliance_config() -> dict[str, str]:
+    path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    out: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = value.strip().strip('"').strip("'")
+    return out
+
+
+def _local_ipv4s() -> set[str]:
+    override = os.environ.get("KIN_LOCAL_IPV4S", "")
+    if override.strip():
+        return set(override.split())
+    addrs: set[str] = set()
+    try:
+        import subprocess
+
+        completed = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "scope", "global"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        for line in completed.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                addrs.add(parts[3].split("/", 1)[0])
+    except OSError:
+        pass
+    return addrs
+
+
+def mail_store_is_elsewhere() -> str | None:
+    """On a split, the mail disk lives on the mailbox node, not on this one.
+
+    The console runs on the edge. Growing /opt/zimbra here would enlarge the
+    MTA tree, which holds no mail, while the store on the other machine stays
+    full. Refuse rather than look successful.
+    """
+    cfg = _appliance_config()
+    if cfg.get("TOPOLOGY") != "split":
+        return None
+    mailbox_ip = cfg.get("MAILBOX_IP") or ""
+    mailbox_host = cfg.get("MAILBOX_HOST") or "the mailbox"
+    if mailbox_ip and mailbox_ip in _local_ipv4s():
+        return None
+    where = f"{mailbox_host} ({mailbox_ip})" if mailbox_ip else mailbox_host
+    return (
+        f"The mail store is on {where}. Growing /opt/zimbra on this machine "
+        "would enlarge the edge, which holds no mail. Run Extend a disk on "
+        "the mailbox node."
+    )
+
+
 async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     """Grow a filesystem into space added to its disk by the hypervisor.
 
@@ -834,6 +896,13 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
         )
         yield proto.event_done(2)
         return
+
+    if target == "mail":
+        elsewhere = mail_store_is_elsewhere()
+        if elsewhere:
+            yield proto.event_stderr(elsewhere + "\n")
+            yield proto.event_done(2)
+            return
 
     mountpoint = GROW_TARGETS[target]
 
