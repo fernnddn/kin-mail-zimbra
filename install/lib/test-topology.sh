@@ -446,6 +446,15 @@ for m in tree-pushed config-pushed; do
   fi
 done
 
+# The same rule inside stage 03. It carries its own copy of the check, and
+# fixing only the orchestrator's left the deploy passing preflight and then
+# failing on the identical condition one step later.
+if grep -q 'if \[ -x /opt/zimbra/bin/zmcontrol \]; then' "$STAGE3"; then
+  ok "stage 03 also judges by the install, not the directory"
+else
+  bad "stage 03 still refuses a prepared-but-empty /opt/zimbra"
+fi
+
 # An empty /opt/zimbra is the NORMAL state of a prepared mailbox: stage 02
 # mounts the spare data disk there and leaves it empty. Refusing on the
 # directory alone rejects a machine this deployment just finished preparing.

@@ -302,10 +302,23 @@ if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; th
   }
   ok "role: ${ZROLE}"
 
-  if [ -d /opt/zimbra ]; then
-    fail "/opt/zimbra already exists on this ${ZROLE} node."
+  # An existing install, not an existing directory.
+  #
+  # 02-prepare-os.sh mounts the spare data disk at /opt/zimbra and leaves it
+  # empty on purpose, so on any machine with a second disk the directory is
+  # already there before this stage starts. Refusing on that alone rejects the
+  # machine the previous stage just prepared - and wiping it only puts the
+  # mount point back. bin/zmcontrol is what means Zimbra lives here.
+  if [ -x /opt/zimbra/bin/zmcontrol ]; then
+    fail "Zimbra is already installed on this ${ZROLE} node."
     info "This stage will not re-drive an installer over an existing tree."
+    info "Wipe it first:  sudo ./kin-mail-uninstall.sh --detach"
     exit 1
+  fi
+  if mountpoint -q /opt/zimbra 2>/dev/null; then
+    ok "/opt/zimbra is the prepared data disk; installing into it"
+  elif [ -d /opt/zimbra ]; then
+    info "/opt/zimbra exists on the OS volume and holds no install"
   fi
 
   DEFAULTS="${CONF_DIR}/zcs-${ZROLE}.cfg"
