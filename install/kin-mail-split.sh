@@ -265,6 +265,14 @@ fi
 
 # --- 2. ship the tree ---------------------------------------------------------
 say "2/8 Copying the installer to the mailbox"
+# Verified, not trusted - the same rule as every other step. The uninstaller
+# removes /opt/kin-mail-deploy, so a mailbox that was wiped between attempts
+# still carries this marker while the tree it describes is gone, and the run
+# reaches step 4 to find no installer there.
+if step_done tree-pushed && ! mbox_run "test -x ${REMOTE_ROOT}/install/03-install-zimbra.sh" 2>/dev/null; then
+  warn "the installer is recorded as copied, but the mailbox does not have it. Copying again."
+  rm -f "${STATE_DIR}/tree-pushed"
+fi
 if step_done tree-pushed; then
   ok "already copied"
 else
@@ -302,6 +310,10 @@ else
 fi
 
 say "2b/8 Copying the appliance configuration"
+if step_done config-pushed && ! mbox_run "test -r ${CONF_FILE}" 2>/dev/null; then
+  warn "the configuration is recorded as copied, but the mailbox does not have it. Copying again."
+  rm -f "${STATE_DIR}/config-pushed"
+fi
 if step_done config-pushed; then
   ok "already copied"
 else

@@ -434,6 +434,18 @@ else
   bad "a console-driven deploy would ship no disk selector"
 fi
 
+# EVERY marker gets the same treatment, not just the interesting ones. The
+# uninstaller removes /opt/kin-mail-deploy, so a mailbox wiped between attempts
+# keeps "tree-pushed" while the tree is gone - and the run reaches the install
+# step to find no installer there.
+for m in tree-pushed config-pushed; do
+  if grep -q "step_done ${m} && ! mbox_run" "$SPLITTER"; then
+    ok "${m} is confirmed on the machine before it is trusted"
+  else
+    bad "${m} is trusted without asking the mailbox"
+  fi
+done
+
 # An empty /opt/zimbra is the NORMAL state of a prepared mailbox: stage 02
 # mounts the spare data disk there and leaves it empty. Refusing on the
 # directory alone rejects a machine this deployment just finished preparing.
