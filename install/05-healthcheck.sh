@@ -331,13 +331,18 @@ info "zimbraAuthMech=${MECH:-zimbra(default)}  fallback=${FALLBACK:-unset}"
 # Zimbra 10 FOSS (prints usage). Also passwords with `#` (old default KinTest#1-…)
 # become shell comments unless single-quoted - see ensure_kin_test_mailbox.
 ERR1=$(mktemp) ERR2=$(mktemp)
-if ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" 2>"$ERR1"; then
-  p "Local Zimbra auth: ${TEST_USER_1}"
-else
-  f "Local Zimbra auth failed: ${TEST_USER_1}"
-  sed 's/^/      /' "$ERR1" | tail -5
-fi
-if ! ensure_kin_test_mailbox "$TEST_USER_2" "$TEST_PASS_2" 2>"$ERR2"; then
+# rc 2 means the account is ready but this node cannot log in to prove it -
+# mailboxd is on the mailbox. That is BLOCKED, not FAILED and not PASSED: the
+# run is not at fault, and nothing was actually verified either.
+ensure_kin_test_mailbox "$TEST_USER_1" "$TEST_PASS_1" 2>"$ERR1"; RC1=$?
+case "$RC1" in
+  0) p "Local Zimbra auth: ${TEST_USER_1}" ;;
+  2) b "Local auth not provable here - mailboxd is on the mailbox node (account ${TEST_USER_1} is ready)" ;;
+  *) f "Local Zimbra auth failed: ${TEST_USER_1}"
+     sed 's/^/      /' "$ERR1" | tail -5 ;;
+esac
+ensure_kin_test_mailbox "$TEST_USER_2" "$TEST_PASS_2" 2>"$ERR2"; RC2=$?
+if [ "$RC2" -ne 0 ] && [ "$RC2" -ne 2 ]; then
   f "Failed to prepare test mailbox: ${TEST_USER_2}"
   sed 's/^/      /' "$ERR2" | tail -5
 fi
@@ -353,7 +358,9 @@ if [ "${AD_AUTH_ENABLED}" = "yes" ]; then
     *)           b "zimbraAuthFallbackToLocal not TRUE yet - AD bind deferred or failed" ;;
   esac
   if [ -n "${AD_TEST_USER}" ] && [ -n "${AD_TEST_PASS}" ]; then
-    if zimbra_user_auth_ok "$AD_TEST_USER" "$AD_TEST_PASS"; then
+    if ! kin_auth_provable_here; then
+      b "AD auth not provable here - logging in needs mailboxd, which is on the mailbox node"
+    elif zimbra_user_auth_ok "$AD_TEST_USER" "$AD_TEST_PASS"; then
       p "AD LDAP auth: ${AD_TEST_USER}"
     else
       b "AD LDAP auth not passing yet: ${AD_TEST_USER} (directory/network, not a server install failure)"

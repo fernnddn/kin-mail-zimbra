@@ -316,9 +316,29 @@ create_mailbox_gated() {
   fi
 
   # zmprov ca already succeeded - the account exists and a seat is consumed
-  # regardless of what happens below. mailboxd can take a moment to see a
-  # brand-new LDAP account, so a single immediate auth probe can false-
-  # negative on a perfectly good account; retry briefly before giving up.
+  # regardless of what happens below.
+  #
+  # On a split the operator creates accounts from the edge, because the edge is
+  # the only machine they ever log into. Logging in needs mailboxd, which is on
+  # the mailbox. So the probe below cannot pass here - and without this branch
+  # every account created on a healthy split would be reported as failed, after
+  # six seconds of retries, with a seat already spent and a retry that refuses
+  # as already-existing. The operator would conclude the product is broken on
+  # the one operation they perform most.
+  if ! kin_auth_provable_here; then
+    ok "Created: ${email}"
+    info "Login not proved from this node: mailboxd is on the mailbox, and this"
+    info "is the edge. The account and its password are in the directory."
+    kin_quota_status "$MAIL_DOMAIN" >/dev/null || true
+    info "Seats now: ${KIN_QUOTA_USED}/${KIN_QUOTA_LIMIT}"
+    emit_seats_json 0
+    echo "CREATE_JSON:{\"email\":\"${email}\",\"auth_probe_skipped\":true}"
+    return 0
+  fi
+
+  # mailboxd can take a moment to see a brand-new LDAP account, so a single
+  # immediate auth probe can false-negative on a perfectly good account; retry
+  # briefly before giving up.
   local auth_attempt auth_ok=0
   for auth_attempt in 1 2 3; do
     if zimbra_user_auth_ok "$email" "$pass"; then

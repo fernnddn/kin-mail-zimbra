@@ -169,8 +169,35 @@ zimbra_user_auth_ok() {
   zimbra_cmd zmmailbox -m "$user" -p "$pass" gaf >/dev/null 2>&1
 }
 
+# Can a login be PROVED on this machine?
+#
+# Creating an account and setting its password are directory writes: they work
+# from any node that can reach LDAP. Logging in is a mailboxd operation, and on
+# a split mailboxd is on the mailbox node only. zmmailbox on the edge has no
+# local store to log in to, so the probe cannot pass there no matter how
+# healthy the deployment is.
+#
+# This is the difference between "the account does not work" and "this is not
+# the machine that can tell you". Three stages ask the question - the
+# healthcheck, hybrid auth, and mailbox creation - and every one of them would
+# otherwise report a perfectly good account as broken, on every account, on
+# every run, on the only node an operator ever logs into.
+kin_auth_provable_here() {
+  declare -F kin_topology_is_split >/dev/null 2>&1 || return 0
+  kin_topology_is_split 2>/dev/null || return 0
+  [ "$(kin_node_role 2>/dev/null)" != "edge" ]
+}
+
 # Create test mailbox if missing; align password; verify auth. Prints zmprov
-# errors on stderr. Return 0 only when the account authenticates.
+# errors on stderr.
+#
+#   0  the account exists and authenticates
+#   1  something went wrong
+#   2  the account is ready, but this node cannot prove a login (split edge)
+#
+# 2 is deliberately not 0. A caller that cannot tell the difference would print
+# a pass for a thing it never tested, and a green check nobody earned is worse
+# than a blocked one: it is the kind of result that gets believed.
 ensure_kin_test_mailbox() {
   local email="$1" pass="$2" out
   if ! zimbra_cmd zmprov ga "$email" >/dev/null 2>&1; then
@@ -185,6 +212,9 @@ ensure_kin_test_mailbox() {
       printf '%s\n' "$out" >&2
       return 1
     fi
+  fi
+  if ! kin_auth_provable_here; then
+    return 2
   fi
   if zimbra_user_auth_ok "$email" "$pass"; then
     return 0

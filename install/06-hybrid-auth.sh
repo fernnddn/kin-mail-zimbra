@@ -35,13 +35,22 @@ if [ "${AD_AUTH_ENABLED}" != "yes" ]; then
   info "Domain uses local Zimbra auth. Re-run 00-config.sh --reset"
   info "then this script when the customer AD is ready."
   # Still prove local auth works (same probe as 05 - not zmprov auth).
-  if ensure_kin_test_mailbox "${TEST_USER_1}" "${TEST_PASS_1}" 2>/dev/null \
-     && zimbra_user_auth_ok "${TEST_USER_1}" "${TEST_PASS_1}"; then
-    ok "Local auth verified: ${TEST_USER_1}"
-  else
-    fail "Local auth FAILED: ${TEST_USER_1} - run 05-healthcheck.sh for details"
-    exit 1
-  fi
+  ensure_kin_test_mailbox "${TEST_USER_1}" "${TEST_PASS_1}" 2>/dev/null; _auth_rc=$?
+  case "$_auth_rc" in
+    0)
+      ok "Local auth verified: ${TEST_USER_1}"
+      ;;
+    2)
+      ok "Test account ready: ${TEST_USER_1}"
+      info "Logging in is a mailboxd operation, and this is the edge. The"
+      info "account was created in the directory from here, which is where"
+      info "accounts live; the login proof belongs on the mailbox."
+      ;;
+    *)
+      fail "Local auth FAILED: ${TEST_USER_1} - run 05-healthcheck.sh for details"
+      exit 1
+      ;;
+  esac
   ok "Local auth remains active (no domain changes)"
   exit 0
 fi
@@ -102,7 +111,8 @@ say "2. Test accounts - pure local + AD-backed"
 # zimbraAuthFallbackToLocal accepts the Zimbra password.
 LOCAL_USER="${TEST_USER_1}"
 LOCAL_PASS="${TEST_PASS_1}"
-if ensure_kin_test_mailbox "$LOCAL_USER" "$LOCAL_PASS" 2>/dev/null; then
+ensure_kin_test_mailbox "$LOCAL_USER" "$LOCAL_PASS" 2>/dev/null; LOCAL_PREP_RC=$?
+if [ "$LOCAL_PREP_RC" -eq 0 ] || [ "$LOCAL_PREP_RC" -eq 2 ]; then
   ok "Local account ready: ${LOCAL_USER}"
 else
   fail "Failed to prepare local account: ${LOCAL_USER}"
@@ -126,6 +136,21 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
 fi
 
 say "3. Verify auth paths (zmmailbox / zimbra_user_auth_ok)"
+
+# Both probes below log in, and logging in needs mailboxd. On a split edge
+# there is none, so they would fail on a working deployment and the stage would
+# exit 1 on the line that says "mailboxd is not usable" - which is true, and
+# which is not a fault. The domain attributes set above are directory-wide and
+# already applied; what cannot be done here is the proof.
+if ! kin_auth_provable_here; then
+  info "Auth probes need mailboxd, which on a split runs on the mailbox node."
+  info "The domain attributes above are directory-wide and already in effect."
+  info "Prove both paths from the mailbox:"
+  info "  su - zimbra -c \"zmmailbox -m ${LOCAL_USER} -p '<password>' gaf\""
+  echo
+  say "DONE - domain attributes applied; auth proof belongs on the mailbox"
+  exit 0
+fi
 
 auth_ok() {
   local user="$1" pass="$2" label="$3"
