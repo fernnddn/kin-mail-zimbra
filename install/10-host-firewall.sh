@@ -240,6 +240,32 @@ apply_rules() {
     return 0
   fi
 
+  # The edge half of the same trust the mailbox already extends to us.
+  #
+  # Without this the only thing letting the mailbox reach this machine is
+  # CLUSTER_NET - "whatever /24 this host happens to be on". That holds in a
+  # lab where both VMs share a subnet and stops holding the moment anyone
+  # deploys the split the way a split is meant to be deployed: the edge in a
+  # DMZ, the mailbox on an internal VLAN. Then the mailbox cannot reach port 25
+  # here, every outbound message queues on the mailbox, and nothing in any log
+  # on this machine says why - because the packets never arrived.
+  #
+  # Named addresses, not a subnet, for the same reason the mailbox names this
+  # one: on a split "same /24" is no longer the same question as "is the peer".
+  # Trusted wholesale and symmetrically - the mailbox already does this for the
+  # edge, and enumerating Zimbra's inter-node port set is where a wrong guess
+  # breaks mail in a way nobody traces back to a firewall.
+  if [ "$node_role" = "edge" ]; then
+    if [ -z "${MAILBOX_IP:-}" ]; then
+      fail "MAILBOX_IP is not set, so the edge cannot be told which machine its mailbox is."
+      info "Without it the mailbox can only reach this host by being on the same"
+      info "subnet, and outbound mail stops the day it is not."
+      exit 2
+    fi
+    ufw allow from "$MAILBOX_IP" comment 'mailbox node of this split'
+    ok "Everything from the mailbox (${MAILBOX_IP}) - it relays outbound mail through here"
+  fi
+
   # Public mail (internet)
   #
   # Port 25 is the exception. From 0.1.10 a Proxmox Mail Gateway sits in front

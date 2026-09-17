@@ -43,6 +43,50 @@ else
   bad "admin-IP requirement is no longer tied to non-mailbox nodes"
 fi
 
+# The trust between the two halves has to be symmetric and by ADDRESS.
+#
+# The mailbox names EDGE_IP. The edge named nothing: the only thing letting the
+# mailbox reach it was CLUSTER_NET, which is "the /24 this host happens to be
+# on". That is true in a lab where both VMs share a subnet, and false the
+# moment anyone deploys the split the way a split is meant to be deployed -
+# edge in a DMZ, mailbox on an internal VLAN. Outbound mail would then queue on
+# the mailbox with nothing in any log on the edge to explain it, because the
+# packets never arrived.
+if grep -q 'ufw allow from "\$MAILBOX_IP"' "$SCRIPT"; then
+  pass "the edge trusts the mailbox by address, not by subnet"
+else
+  bad "the edge never names MAILBOX_IP; cross-subnet splits lose outbound mail"
+fi
+if grep -q 'ufw allow from "\$EDGE_IP"' "$SCRIPT"; then
+  pass "the mailbox trusts the edge by address, not by subnet"
+else
+  bad "the mailbox never names EDGE_IP"
+fi
+# ...and each refuses rather than falling back to the subnet when it does not
+# know its peer. A silent fallback is the failure this pair of rules exists to
+# prevent, arriving later and quieter.
+mbip_line=$(grep -n 'MAILBOX_IP is not set' "$SCRIPT" | head -1 | cut -d: -f1)
+edip_line=$(grep -n 'EDGE_IP is not set' "$SCRIPT" | head -1 | cut -d: -f1)
+if [ -n "$mbip_line" ] && [ -n "$edip_line" ]; then
+  pass "each half refuses to firewall itself without knowing its peer"
+else
+  bad "a missing peer address is tolerated (mailbox=$mbip_line edge=$edip_line)"
+fi
+# The edge rule must be gated on being the edge. Applied on a single appliance
+# it would reference a variable that deployment has no reason to set.
+#
+# Ordered by line number rather than a -B window: a fixed window is a distance,
+# and distances go stale the next time a comment is added between the gate and
+# the rule it guards.
+edge_gate=$(grep -n 'node_role" = "edge"' "$SCRIPT" | head -1 | cut -d: -f1)
+mbip_rule=$(grep -n 'ufw allow from "\$MAILBOX_IP"' "$SCRIPT" | head -1 | cut -d: -f1)
+if [ -n "$edge_gate" ] && [ -n "$mbip_rule" ] && [ -n "$mbip_line" ] \
+   && [ "$edge_gate" -lt "$mbip_line" ] && [ "$mbip_line" -lt "$mbip_rule" ]; then
+  pass "the mailbox trust rule only applies on an edge, and only once it knows the address"
+else
+  bad "MAILBOX_IP rule is not inside the edge gate (gate=$edge_gate guard=$mbip_line rule=$mbip_rule)"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All host-firewall split tests passed\n'
   exit 0
