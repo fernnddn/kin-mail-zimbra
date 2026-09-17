@@ -162,8 +162,30 @@ if [ -z "$SSH_PASS" ]; then
   exit 1
 fi
 
-if ! mbox_run true 2>/dev/null; then
+# Which password does the mailbox answer to right now?
+#
+# There are two, and which one is live depends on how far a previous run got.
+# MAILBOX_SSH_PASS is what the operator typed on the Topology step. KIN_USER_PASS
+# is what 02-prepare-os.sh sets the account to when it runs. So a machine that
+# has already been prepared - by an earlier attempt that failed later on -
+# answers to the second, not the first, and a preflight that only tries the
+# first refuses to start over work it already did.
+#
+# Try both, in the order they become true, and carry on with whichever answers.
+try_mailbox_password() {
+  local candidate="$1"
+  [ -n "$candidate" ] || return 1
+  SSHPASS="$candidate" sshpass -e ssh "${SSH_OPTS[@]}" \
+    "${SSH_USER}@${MBOX_IP}" true 2>/dev/null
+}
+
+if ! try_mailbox_password "$SSH_PASS"; then
+  if try_mailbox_password "${KIN_USER_PASS:-}"; then
+    SSH_PASS="$KIN_USER_PASS"
+    ok "mailbox answers to the host password set by an earlier 02-prepare-os"
+  else
   fail "Cannot log in as ${SSH_USER}@${MBOX_IP}."
+  info "Neither the mailbox password from the wizard nor the host password worked."
   info "Check it by hand first:  ssh ${SSH_USER}@${MBOX_IP}"
   echo
   # Where to fix it depends on how the deploy was started, and getting that
@@ -183,6 +205,7 @@ if ! mbox_run true 2>/dev/null; then
     info "or re-run:  sudo ./00-config.sh --reset"
   fi
   exit 1
+  fi
 fi
 ok "mailbox reachable as ${SSH_USER}@${MBOX_IP}"
 

@@ -445,6 +445,22 @@ if grep -q 'KIN_USER_PASS' "$SPLITTER"; then
 else
   bad "every step after mailbox 02-prepare-os would be refused"
 fi
+# And preflight itself must try both, because a re-run meets a mailbox that an
+# earlier attempt already re-passworded: only trying the wizard's value refuses
+# to resume work the machine has already done.
+if grep -q 'try_mailbox_password' "$SPLITTER"; then
+  ok "preflight tries both passwords before giving up"
+else
+  bad "a re-run after 02-prepare-os would be refused at preflight"
+fi
+tryfn=$(grep -n 'try_mailbox_password "${KIN_USER_PASS' "$SPLITTER" | head -1 | cut -d: -f1)
+pf=$(grep -n 'say "1/8 Preflight"' "$SPLITTER" | head -1 | cut -d: -f1)
+if [ -n "$tryfn" ] && [ -n "$pf" ] && [ "$tryfn" -gt "$pf" ]; then
+  ok "the fallback happens inside preflight, before any step runs"
+else
+  bad "the password fallback is not reached during preflight"
+fi
+
 pwswitch=$(grep -n 'was reset by 02-prepare-os' "$SPLITTER" | head -1 | cut -d: -f1)
 mbox_os=$(grep -n 'run_remote_stage mailbox-os' "$SPLITTER" | head -1 | cut -d: -f1)
 mbox_inst=$(grep -n 'run_remote_stage mailbox-installed' "$SPLITTER" | head -1 | cut -d: -f1)
