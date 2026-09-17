@@ -434,6 +434,17 @@ else
   bad "a console-driven deploy would ship no disk selector"
 fi
 
+# --- the operator must be told WHERE to fix a bad password -------------------
+# Pressing Deploy in the console runs apply_wizard_draft first, which rewrites
+# /etc/kin-mail/config from the saved wizard answers. An operator who edits that
+# file by hand and then deploys from the browser loses the edit before the first
+# step runs, and the same failure comes back looking identical.
+if grep -q 'the password comes from the WIZARD' "$SPLITTER"; then
+  ok "a login failure says to fix the password where it is actually read from"
+else
+  bad "the operator would be sent to a file the next deploy overwrites"
+fi
+
 # --- a marker must never be the only evidence a step happened ----------------
 # /etc/kin-mail outlives the machines it describes. A rebuilt mailbox, a swapped
 # disk or a re-run against a different address leaves markers claiming work that

@@ -164,13 +164,24 @@ fi
 
 if ! mbox_run true 2>/dev/null; then
   fail "Cannot log in as ${SSH_USER}@${MBOX_IP}."
-  # Name the setting the wizard actually writes. An earlier version of this
-  # message named KIN_USER_PASS, which is the console's credential and not what
-  # is being used here, so an operator with a mistyped password went looking in
-  # the wrong place.
-  info "MAILBOX_SSH_USER / MAILBOX_SSH_PASS in ${CONF_FILE} must be an account"
-  info "on ${MBOX_IP} that can log in over SSH and use sudo. Check the password"
-  info "by hand first:  ssh ${SSH_USER}@${MBOX_IP}"
+  info "Check it by hand first:  ssh ${SSH_USER}@${MBOX_IP}"
+  echo
+  # Where to fix it depends on how the deploy was started, and getting that
+  # wrong wastes a whole attempt: pressing Deploy in the console runs
+  # apply_wizard_draft first, which rewrites this file from the saved wizard
+  # answers. Editing the config by hand and then deploying from the browser
+  # therefore reverts the edit before the first step runs.
+  if [ -f /var/lib/kin-mail-console/wizard-draft.json ]; then
+    warn "This appliance has a saved wizard draft."
+    info "If you deploy from the console, the password comes from the WIZARD,"
+    info "not from ${CONF_FILE} - pressing Deploy rewrites that file from the"
+    info "draft before this script runs. Fix it in the browser:"
+    info "    Setup > Topology > Password for that account"
+    info "Editing ${CONF_FILE} only helps when running this script by hand."
+  else
+    info "Set MAILBOX_SSH_USER / MAILBOX_SSH_PASS in ${CONF_FILE},"
+    info "or re-run:  sudo ./00-config.sh --reset"
+  fi
   exit 1
 fi
 ok "mailbox reachable as ${SSH_USER}@${MBOX_IP}"
