@@ -141,6 +141,17 @@ mbox_sudo() {
 ${SSH_PASS}
 EOF
 }
+# Installed and configured are different states, and every check in this script
+# has to mean the same one. Defined once: a package-only tree has the binary but
+# zmcontrol status fails, because the configuration it reads does not exist yet.
+#
+# Stating it three separate times is what went wrong today - stage 03 learned to
+# resume a half-finished install while the preflight here still refused it, and
+# the deploy stopped one line before the work it could have continued.
+MBOX_ZIMBRA_WORKS='su - zimbra -c "zmcontrol status" >/dev/null 2>&1'
+
+mailbox_zimbra_configured() { mbox_sudo "$MBOX_ZIMBRA_WORKS"; }
+
 mbox_put() {
   SSHPASS="$SSH_PASS" sshpass -e scp "${SSH_OPTS[@]}" -p "$1" \
     "${SSH_USER}@${MBOX_IP}:$2"
@@ -245,14 +256,16 @@ fi
 # directory existing is the normal state of a prepared machine - refusing on
 # that alone rejected a mailbox this deployment had just finished preparing.
 # bin/zmcontrol is the thing that means "Zimbra lives here".
-if mbox_run 'test -x /opt/zimbra/bin/zmcontrol' 2>/dev/null; then
+if mailbox_zimbra_configured 2>/dev/null; then
   if step_done mailbox-installed; then
     info "mailbox already built (marker present, confirmed on the machine)"
   else
-    fail "The mailbox already has Zimbra installed, but this deployment did not build it."
+    fail "The mailbox already has a working Zimbra, but this deployment did not build it."
     info "Wipe it first:  sudo ${REMOTE_ROOT}/install/kin-mail-uninstall.sh --detach"
     exit 1
   fi
+elif mbox_run 'test -x /opt/zimbra/bin/zmcontrol' 2>/dev/null; then
+  info "mailbox has Zimbra packages but no configuration; the install will resume"
 elif mbox_run 'test -d /opt/zimbra' 2>/dev/null; then
   info "/opt/zimbra exists on the mailbox but holds no install (prepared data disk)"
 fi
@@ -389,7 +402,7 @@ fi
 
 say "4/8 Installing Zimbra on the mailbox (directory + mail store; 20-40 minutes)"
 run_remote_stage mailbox-installed 03-install-zimbra.sh "mailbox 03-install-zimbra" \
-  "test -x /opt/zimbra/bin/zmcontrol" || exit 1
+  "$MBOX_ZIMBRA_WORKS" || exit 1
 
 # --- 5. carry the directory passwords across ----------------------------------
 say "5/8 Carrying the directory passwords to the edge"

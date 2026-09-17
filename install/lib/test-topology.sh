@@ -495,6 +495,30 @@ else
   bad "a prepared-but-empty mailbox would be refused as already installed"
 fi
 
+# "Working" is stated ONCE and reused. Three separate statements of the same
+# rule is what let stage 03 learn to resume a half-finished install while the
+# orchestrator still refused it - the deploy stopped one line before work it
+# could have continued, three times in one evening.
+if grep -q '^MBOX_ZIMBRA_WORKS=' "$SPLITTER"; then
+  ok "installed-vs-configured is defined once and reused"
+else
+  bad "each check restates what a working Zimbra means, and they will drift"
+fi
+# Both gates - the preflight refusal and the marker proof - must ask the same
+# question. Step 8 checks zmcontrol too, but that is reporting, not a gate.
+if [ "$(grep -c 'MBOX_ZIMBRA_WORKS\|mailbox_zimbra_configured' "$SPLITTER")" -ge 4 ]; then
+  ok "both gates ask the shared definition rather than restating it"
+else
+  bad "a gate restates what a working Zimbra is instead of reusing the definition"
+fi
+# Refusing must require a WORKING install, not merely installed packages: a
+# package-only tree is exactly what stage 03 now resumes.
+if grep -q 'if mailbox_zimbra_configured' "$SPLITTER"; then
+  ok "preflight refuses a working install and resumes a half-finished one"
+else
+  bad "preflight would refuse a package-only tree that stage 03 can resume"
+fi
+
 # --- the deploy changes the password it is using, and must follow it ---------
 # 02-prepare-os.sh calls chpasswd to set the OS account from KIN_USER_PASS.
 # MAILBOX_SSH_PASS is what the operator typed on the Topology step and what got
