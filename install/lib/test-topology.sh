@@ -399,6 +399,36 @@ else
   bad "preflight would pass with sudo that breaks on the first &&"
 fi
 
+# --- a marker must never be the only evidence a step happened ----------------
+# /etc/kin-mail outlives the machines it describes. A rebuilt mailbox, a swapped
+# disk or a re-run against a different address leaves markers claiming work that
+# no longer exists - and "mailbox-installed" is the expensive one, because
+# skipping it means the edge later hunts for a directory nobody created.
+if grep -q 'test -x /opt/zimbra/bin/zmcontrol' "$SPLITTER"; then
+  ok "a recorded install is confirmed against the machine before it is skipped"
+else
+  bad "the orchestrator trusts its own marker that Zimbra is installed"
+fi
+if grep -q 'deployment-identity' "$SPLITTER"; then
+  ok "recorded progress is tied to the addresses it was recorded for"
+else
+  bad "progress recorded for one pair of machines would be reused for another"
+fi
+if grep -q -- '--fresh' "$SPLITTER"; then
+  ok "there is a way to discard recorded progress deliberately"
+else
+  bad "no way to start over without deleting files by hand"
+fi
+# The identity check must run before any step consults a marker, or the first
+# step reads stale progress before it can be invalidated.
+ident_line=$(grep -n 'invalidate_markers_if_moved$' "$SPLITTER" | tail -1 | cut -d: -f1)
+first_step=$(grep -n 'run_remote_stage mailbox-os' "$SPLITTER" | head -1 | cut -d: -f1)
+if [ -n "$ident_line" ] && [ -n "$first_step" ] && [ "$ident_line" -lt "$first_step" ]; then
+  ok "stale progress is discarded before the first step reads it"
+else
+  bad "the first step could act on progress recorded for other machines"
+fi
+
 # An edge cannot be built before the mailbox exists: without the directory's
 # passwords it installs cleanly and then binds to nothing.
 if grep -q 'KIN_LDAP_ADMIN_PASS' "$STAGE3"; then

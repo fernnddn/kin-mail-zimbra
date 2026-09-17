@@ -8,17 +8,24 @@
 #
 #   sudo ./kin-mail-split.sh            build
 #   sudo ./kin-mail-split.sh --check    preflight only; changes nothing
+#   sudo ./kin-mail-split.sh --fresh    forget recorded progress, build again
 #
-# Every step writes a marker, so a re-run resumes instead of reinstalling. The
-# output is plain progress lines: kin-mail.sh --full-install delegates here, and
-# the console streams whatever this prints straight into the browser.
+# Every step writes a marker, so a re-run resumes instead of reinstalling. A
+# marker is never the only evidence a step happened: the machine is asked too,
+# and the deployment's identity is recorded beside them so markers are void
+# once the addresses change. The output is plain progress lines - kin-mail.sh
+# --full-install delegates here, and the console streams them to the browser.
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 need_root
 
 CHECK_ONLY=0
-[ "${1:-}" = "--check" ] && CHECK_ONLY=1
+FRESH=0
+case "${1:-}" in
+  --check) CHECK_ONLY=1 ;;
+  --fresh) FRESH=1 ;;
+esac
 
 STATE_DIR="${CONF_DIR}/split-state"
 REMOTE_ROOT="/opt/kin-mail-deploy"
@@ -26,6 +33,35 @@ LDAP_STORE="${CONF_DIR}/ldap-secrets"
 
 step_done()  { [ -f "${STATE_DIR}/$1" ]; }
 mark_done()  { mkdir -p "$STATE_DIR"; : >"${STATE_DIR}/$1"; }
+
+# Markers record what this script did. They must never be the only evidence
+# that it happened.
+#
+# A marker outlives the thing it describes: /etc/kin-mail survives a rebuilt
+# mailbox, a swapped disk, a re-run against a different address. A stale
+# "mailbox-installed" then skips the entire mailbox build and the run fails
+# later, looking for a directory nobody created - which is how this was found,
+# on a mailbox with no Zimbra on it and a marker saying there was.
+#
+# So the identity of the deployment is written alongside them, and markers are
+# void the moment it changes.
+IDENT_FILE="${STATE_DIR}/deployment-identity"
+current_identity() { printf '%s|%s|%s\n' "$MBOX_IP" "$MBOX_HOST" "$(kin_edge_ip)"; }
+
+invalidate_markers_if_moved() {
+  local now stored
+  now=$(current_identity)
+  stored=$(cat "$IDENT_FILE" 2>/dev/null || printf '')
+  if [ -n "$stored" ] && [ "$stored" != "$now" ]; then
+    warn "This deployment now describes different machines than the recorded progress."
+    info "  recorded: ${stored}"
+    info "  now:      ${now}"
+    info "Discarding the recorded progress; every step will run again."
+    rm -rf "$STATE_DIR"
+  fi
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$now" >"$IDENT_FILE"
+}
 
 # --- who am I, and who is the other machine ----------------------------------
 if ! kin_topology_is_split; then
@@ -52,6 +88,12 @@ fi
 
 MBOX_IP=$(kin_mailbox_ip)
 MBOX_HOST=$(kin_mailbox_host)
+
+if [ "$FRESH" -eq 1 ]; then
+  rm -rf "$STATE_DIR"
+  ok "Recorded progress discarded; every step will run from the start."
+fi
+invalidate_markers_if_moved
 
 # --- how we reach the mailbox -------------------------------------------------
 # Password auth, because that is what a freshly installed Ubuntu offers and the
@@ -215,10 +257,18 @@ fi
 
 # --- 3-4. build the mailbox ---------------------------------------------------
 run_remote_stage() {
-  local marker="$1" stage="$2" label="$3"
+  local marker="$1" stage="$2" label="$3" proof="${4:-}"
   if step_done "$marker"; then
-    ok "${label}: already done"
-    return 0
+    # A marker alone is not evidence. Where there is something cheap to look at
+    # on the far machine, look: skipping a step that never happened costs far
+    # more than repeating one that did.
+    if [ -n "$proof" ] && ! mbox_sudo "$proof" >/dev/null 2>&1; then
+      warn "${label}: recorded as done, but the mailbox does not show it. Running it again."
+      rm -f "${STATE_DIR}/${marker}"
+    else
+      ok "${label}: already done"
+      return 0
+    fi
   fi
   info "${label}: running on ${MBOX_HOST} (output follows)"
   if ! mbox_sudo "${REMOTE_ROOT}/install/${stage}" 2>&1 | sed 's/^/    | /'; then
@@ -230,10 +280,12 @@ run_remote_stage() {
 }
 
 say "3/8 Preparing the mailbox operating system"
-run_remote_stage mailbox-os 02-prepare-os.sh "mailbox 02-prepare-os" || exit 1
+run_remote_stage mailbox-os 02-prepare-os.sh "mailbox 02-prepare-os" \
+  "test \"\$(hostname -f)\" = '${MBOX_HOST}'" || exit 1
 
 say "4/8 Installing Zimbra on the mailbox (directory + mail store; 20-40 minutes)"
-run_remote_stage mailbox-installed 03-install-zimbra.sh "mailbox 03-install-zimbra" || exit 1
+run_remote_stage mailbox-installed 03-install-zimbra.sh "mailbox 03-install-zimbra" \
+  "test -x /opt/zimbra/bin/zmcontrol" || exit 1
 
 # --- 5. carry the directory passwords across ----------------------------------
 say "5/8 Carrying the directory passwords to the edge"
@@ -262,10 +314,15 @@ fi
 
 # --- 6-7. build this machine --------------------------------------------------
 run_local_stage() {
-  local marker="$1" stage="$2" label="$3"
+  local marker="$1" stage="$2" label="$3" proof="${4:-}"
   if step_done "$marker"; then
-    ok "${label}: already done"
-    return 0
+    if [ -n "$proof" ] && ! eval "$proof" >/dev/null 2>&1; then
+      warn "${label}: recorded as done, but this machine does not show it. Running it again."
+      rm -f "${STATE_DIR}/${marker}"
+    else
+      ok "${label}: already done"
+      return 0
+    fi
   fi
   info "${label}: running here (output follows)"
   if ! "${KIN_MAIL_INSTALL_DIR}/${stage}" 2>&1 | sed 's/^/    | /'; then
@@ -277,10 +334,12 @@ run_local_stage() {
 }
 
 say "6/8 Preparing the edge operating system"
-run_local_stage edge-os 02-prepare-os.sh "edge 02-prepare-os" || exit 1
+run_local_stage edge-os 02-prepare-os.sh "edge 02-prepare-os" \
+  "test \"\$(hostname -f)\" = \"$(kin_edge_host)\"" || exit 1
 
 say "7/8 Installing Zimbra on the edge (MTA + proxy, joining the directory)"
-run_local_stage edge-installed 03-install-zimbra.sh "edge 03-install-zimbra" || exit 1
+run_local_stage edge-installed 03-install-zimbra.sh "edge 03-install-zimbra" \
+  "test -x /opt/zimbra/bin/zmcontrol" || exit 1
 
 # --- 8. does the pair actually work -------------------------------------------
 say "8/8 Checking the pair"
