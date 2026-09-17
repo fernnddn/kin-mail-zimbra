@@ -463,7 +463,22 @@ grow_plan() {
     tail_name=$(partition_name "$PLAN_DISK" "$last_num")
     if [ "$tail_name" = "drbd-meta" ]; then
       fail meta-partition-in-the-way \
-        "${PLAN_PART} holds the mail data, and the replication meta partition (${PLAN_DISK}${last_num}) sits at the end of this disk behind it. New space added to this disk lands after that meta partition, so it cannot be given to the mail data without moving it, which is not something to do unattended on a live mail server. Add the space to the system disk instead, or ask KIN to restructure this disk during a maintenance window."
+        "${PLAN_PART} holds the mail data, and the replication meta partition (${PLAN_DISK}${last_num}) sits at the end of this disk behind it. New space added to this disk lands after that meta partition, so it cannot be given to the mail data without moving it, which is not something to do unattended on a live mail server. Either free that reserved partition (see below), or add the space to the system disk instead."
+      # ...and then say whether it can be freed, exactly as the generic branch
+      # does. This branch used to return here.
+      #
+      # That return was the bug, and it was invisible because it looked like
+      # extra precision: this is the branch that has POSITIVELY IDENTIFIED the
+      # blocker as the installer's own reserved partition, so it is the branch
+      # most entitled to offer the reclaim - and it was the only one that
+      # never did. Every appliance this product builds names that partition
+      # drbd-meta, so every appliance took this branch, and the console's
+      # reclaim button is driven by the KIN_GROW_RECLAIMABLE_RESERVED marker
+      # that only report_reserved_blocker prints. Result: a supported, tested,
+      # already-wired recovery path that no real deployment could reach. The
+      # operator enlarged the disk in VMware and was told to open a ticket for
+      # something the product does itself in one step.
+      report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
       return 1
     fi
     fail not-last-partition \

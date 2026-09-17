@@ -327,6 +327,25 @@ if printf '%s' "$OUT" | grep -q "system disk instead"; then
   pass "two-disk layout: tells the operator what they can actually do"
 else bad "two-disk layout: refusal offers no way forward"; fi
 
+# ...and the reclaim path has to be REACHABLE from here, because this is the
+# layout every appliance actually has.
+#
+# The console's "free the reserved partition" button is driven entirely by the
+# KIN_GROW_RECLAIMABLE_RESERVED marker, and only report_reserved_blocker prints
+# it. This branch - the one that recognises the partition by name - used to
+# return before calling it. So the generic "some partition is after yours" case
+# offered the operator a way out and the standard KIN Mail case did not: a
+# feature that is built, tested, and wired to the UI, and that no real
+# deployment could reach.
+#
+# Asserted against the source because the marker needs a real block device to
+# name (partition_device refuses a path that is not one), which the stubs here
+# cannot provide. The loop-device test below proves the behaviour itself.
+META_BRANCH=$(awk '/tail_name" = "drbd-meta"/,/^    fi$/' "$LIB")
+if printf '%s' "$META_BRANCH" | grep -q 'report_reserved_blocker'; then
+  pass "two-disk layout: the recognised-blocker branch still offers the reclaim"
+else bad "two-disk layout: recognising the partition by name skips the reclaim offer"; fi
+
 # The system disk on that same appliance must still be growable, because that
 # is where the space can safely go.
 STUB_SOURCE=/dev/sda2 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" \
@@ -608,8 +627,8 @@ if [ "$(id -u)" -eq 0 ] && command -v losetup >/dev/null 2>&1    && command -v m
     if truncate -s 260M "$CIMG" 2>/dev/null \
        && CLOOP=$(losetup --find --show "$CIMG" 2>/dev/null) \
        && parted -s "$CLOOP" mklabel gpt >/dev/null 2>&1 \
-       && parted -s "$CLOOP" mkpart data 1MiB 200MiB >/dev/null 2>&1 \
-       && parted -s "$CLOOP" mkpart meta 200MiB 256MiB >/dev/null 2>&1; then
+       && parted -s "$CLOOP" mkpart zimbra-data 1MiB 200MiB >/dev/null 2>&1 \
+       && parted -s "$CLOOP" mkpart drbd-meta 200MiB 256MiB >/dev/null 2>&1; then
       partx -a "$CLOOP" >/dev/null 2>&1 || true
       sleep 1
       if cryptsetup luksFormat --batch-mode --pbkdf pbkdf2 \
@@ -630,8 +649,15 @@ if [ "$(id -u)" -eq 0 ] && command -v losetup >/dev/null 2>&1    && command -v m
             KIN_GROW_ETC_ROOT="${CWORK}/etc" bash "$LIB" "$@" 2>&1 )
         }
 
+        # The partition names here are the ones prepare-zimbra-data-disk.sh
+        # actually writes. They used to be "data" and "meta", which meant this
+        # whole end-to-end test exercised the generic not-last-partition path
+        # and never the drbd-meta one - so it proved the reclaim worked on a
+        # layout this product does not build, while the layout it does build
+        # had lost the reclaim entirely. A fixture that does not match the
+        # installer is a test that passes for the wrong deployment.
         out=$(crun plan "$CMNT")
-        case "$out" in *"reason=not-last-partition"*)
+        case "$out" in *"reason=meta-partition-in-the-way"*)
           pass "mail layout: refuses while the reserved partition is in the way" ;;
           *) bad "mail layout: should refuse, got: ${out}" ;; esac
         case "$out" in *"KIN_GROW_RECLAIMABLE_RESERVED=${CLOOP}p2"*)
