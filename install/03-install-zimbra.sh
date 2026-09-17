@@ -411,15 +411,33 @@ if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; th
     tail -n 15 "$LOG" | sed 's/^/    /'
     exit 1
   }
-  # The one that actually blocks the install. Asserted rather than assumed,
-  # because the failure it causes names LDAP rather than a permission.
+  # The directory zmcertmgr writes the CA into, made ready rather than merely
+  # inspected.
+  #
+  # Two states are fine and one is fatal. Missing is fine: zmcertmgr creates it.
+  # Owned by zimbra is fine. Existing but owned by root is the fatal one - that
+  # is what the packages leave behind, and zmcertmgr runs AS ZIMBRA, so it
+  # cannot write there. The install then dies at "Setting up CA...failed" and
+  # prints a Java LDAP "Connection refused" stack, because slapd never started.
+  #
+  # An earlier version of this check asserted ownership without creating the
+  # directory, so a package set that does not ship it - the mailbox role does
+  # not - failed here reporting an owner of "?" when nothing was wrong.
+  if ! id zimbra >/dev/null 2>&1; then
+    fail "The zimbra user does not exist after installing packages."
+    exit 1
+  fi
+  install -d -o zimbra -g zimbra -m 755 /opt/zimbra/conf/ca || {
+    fail "Could not prepare /opt/zimbra/conf/ca"
+    exit 1
+  }
   _ca_owner=$(stat -c '%U' /opt/zimbra/conf/ca 2>/dev/null || printf '?')
   if [ "$_ca_owner" != zimbra ]; then
     fail "/opt/zimbra/conf/ca is owned by ${_ca_owner}, not zimbra."
     info "zmcertmgr runs as zimbra and cannot write there; configuration would fail."
     exit 1
   fi
-  ok "conf/ca owned by zimbra"
+  ok "conf/ca ready and owned by zimbra"
 
   say "5. Configuring from the generated file (10-20 minutes)"
   if ! /opt/zimbra/libexec/zmsetup.pl -c "$DEFAULTS" >>"$LOG" 2>&1; then

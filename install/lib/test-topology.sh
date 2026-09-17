@@ -462,6 +462,15 @@ else
   bad "stage 03 still refuses a prepared-but-empty /opt/zimbra"
 fi
 
+# conf/ca must be MADE ready, not merely inspected. Missing is a normal state
+# for a package set that does not ship it - the mailbox role does not - and
+# asserting ownership without creating it failed reporting an owner of "?".
+if grep -q 'install -d -o zimbra -g zimbra -m 755 /opt/zimbra/conf/ca' "$STAGE3"; then
+  ok "conf/ca is created and owned before configuration, not just checked"
+else
+  bad "stage 03 asserts conf/ca ownership without ensuring it exists"
+fi
+
 # An empty /opt/zimbra is the NORMAL state of a prepared mailbox: stage 02
 # mounts the spare data disk there and leaves it empty. Refusing on the
 # directory alone rejects a machine this deployment just finished preparing.
