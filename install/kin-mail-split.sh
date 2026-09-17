@@ -239,14 +239,22 @@ else
 fi
 
 # A mailbox that already has Zimbra is not something to build onto.
-if mbox_run 'test -d /opt/zimbra' 2>/dev/null; then
+#
+# The test is for an install, not for the directory. 02-prepare-os.sh mounts the
+# spare data disk at /opt/zimbra and leaves it empty, on purpose, so the
+# directory existing is the normal state of a prepared machine - refusing on
+# that alone rejected a mailbox this deployment had just finished preparing.
+# bin/zmcontrol is the thing that means "Zimbra lives here".
+if mbox_run 'test -x /opt/zimbra/bin/zmcontrol' 2>/dev/null; then
   if step_done mailbox-installed; then
-    info "mailbox already built (marker present)"
+    info "mailbox already built (marker present, confirmed on the machine)"
   else
-    fail "The mailbox already has /opt/zimbra but this deployment did not build it."
+    fail "The mailbox already has Zimbra installed, but this deployment did not build it."
     info "Wipe it first:  sudo ${REMOTE_ROOT}/install/kin-mail-uninstall.sh --detach"
     exit 1
   fi
+elif mbox_run 'test -d /opt/zimbra' 2>/dev/null; then
+  info "/opt/zimbra exists on the mailbox but holds no install (prepared data disk)"
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then

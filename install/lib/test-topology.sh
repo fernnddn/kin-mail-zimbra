@@ -434,6 +434,15 @@ else
   bad "a console-driven deploy would ship no disk selector"
 fi
 
+# An empty /opt/zimbra is the NORMAL state of a prepared mailbox: stage 02
+# mounts the spare data disk there and leaves it empty. Refusing on the
+# directory alone rejects a machine this deployment just finished preparing.
+if grep -q "test -x /opt/zimbra/bin/zmcontrol" "$SPLITTER"; then
+  ok "an existing install is detected by zmcontrol, not by the directory"
+else
+  bad "a prepared-but-empty mailbox would be refused as already installed"
+fi
+
 # --- the deploy changes the password it is using, and must follow it ---------
 # 02-prepare-os.sh calls chpasswd to set the OS account from KIN_USER_PASS.
 # MAILBOX_SSH_PASS is what the operator typed on the Topology step and what got
