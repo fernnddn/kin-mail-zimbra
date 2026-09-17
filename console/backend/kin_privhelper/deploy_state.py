@@ -276,6 +276,12 @@ def _normalize_topology(raw: str) -> str:
         return "1vm"
     if t in ("2vm", "2"):
         return "2vm"
+    # Named for its shape rather than a machine count: "3vm" would collide with
+    # the three-node HA cluster that deployment_topology_and_node_add_design_brief
+    # reserves that phrase for, and this is a different thing entirely - one
+    # Zimbra split across an edge and a mailbox, with no replication.
+    if t == "split":
+        return "split"
     return ""
 
 
@@ -577,7 +583,15 @@ def is_mail_deployed() -> bool:
         )
 
     if path_is_file(SETUP_COMPLETE_MARKER):
-        if topology == "1vm":
+        # A split finishes when the pipeline finishes, exactly like a single
+        # appliance: kin-mail-split.sh builds both machines in one run, so there
+        # is no second phase to wait for the way 2vm waits for HA orchestration.
+        #
+        # Saying so explicitly matters. Falling through to the "unknown
+        # topology" branch below would leave a fully deployed split appliance
+        # reporting setup as incomplete, which is what keeps the console
+        # login-free - an appliance holding live mail with an open console.
+        if topology in ("1vm", "split"):
             return True
         # Topology unknown: fail open (pre-deploy). Locking the operator out
         # here would block Build HA pair if config/draft were unreadable on a

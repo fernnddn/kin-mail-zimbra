@@ -87,11 +87,18 @@ class EveryEntryPointConsultsIt(unittest.TestCase):
         body = after[opens : after.index("\n}", opens)]
         self.assertIn("if (!HA_TOPOLOGY_OFFERED) return false;", body)
 
-    def test_the_wizard_selects_the_only_layout_on_offer(self) -> None:
-        # With one option, refusing to continue because nothing was chosen
-        # would block the operator on a choice never shown to them.
+    def test_the_wizard_only_chooses_when_there_is_nothing_to_choose(self) -> None:
+        # Auto-picking exists so an operator is never blocked on a choice they
+        # were never shown. The moment a second layout IS shown - the split -
+        # that same auto-pick becomes a bug: it would overwrite whatever they
+        # selected on the way back into the step.
         text = (SRC / "wizard/steps/TopologyStep.tsx").read_text(encoding="utf-8")
-        self.assertIn('!HA_TOPOLOGY_OFFERED && draft.topology !== "1vm"', text)
+        self.assertIn(
+            "if (SPLIT_TOPOLOGY_OFFERED || HA_TOPOLOGY_OFFERED) return;",
+            text,
+            "the wizard would pre-select a layout while offering more than one",
+        )
+        self.assertIn('draft.topology !== "1vm"', text)
 
 
 class TheCodeItselfStays(unittest.TestCase):

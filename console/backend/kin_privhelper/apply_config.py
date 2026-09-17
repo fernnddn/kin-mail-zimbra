@@ -64,6 +64,7 @@ _SINGLE_QUOTE_KEYS = frozenset(
         "AD_SEARCH_FILTER",
         "AD_SEARCH_BIND_PASSWORD",
         "AD_TEST_PASS",
+        "MAILBOX_SSH_PASS",
     }
 )
 
@@ -90,6 +91,8 @@ _KEY_ORDER = [
     "EDGE_HOST",
     "MAILBOX_IP",
     "MAILBOX_HOST",
+    "MAILBOX_SSH_USER",
+    "MAILBOX_SSH_PASS",
     "TIMEZONE",
     "ZIMBRA_TZ_NAME",
     "DNS_UPSTREAM_1",
@@ -535,8 +538,39 @@ def zimbra_tz(timezone: str) -> str:
 def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]:
     errs: list[str] = []
     topology = str(draft.get("topology") or "").strip()
-    if topology not in ("1vm", "2vm"):
-        errs.append("topology must be 1vm or 2vm")
+    if topology not in ("1vm", "2vm", "split"):
+        errs.append("topology must be 1vm, 2vm or split")
+
+    if topology == "split":
+        # Every one of these is cheap to catch here and expensive to find
+        # halfway through installing Zimbra on two machines.
+        edge_ip = str(draft.get("edge_ip") or "").strip()
+        mailbox_ip = str(draft.get("mailbox_ip") or "").strip()
+        edge_host = str(draft.get("edge_host") or "").strip()
+        mailbox_host = str(draft.get("mailbox_host") or "").strip()
+        if not edge_ip:
+            errs.append("edge_ip is required when topology is split")
+        elif not valid_ipv4(edge_ip):
+            errs.append("edge_ip must be an IPv4 address")
+        if not mailbox_ip:
+            errs.append("mailbox_ip is required when topology is split")
+        elif not valid_ipv4(mailbox_ip):
+            errs.append("mailbox_ip must be an IPv4 address")
+        if edge_ip and edge_ip == mailbox_ip:
+            errs.append("edge_ip and mailbox_ip must be different machines")
+        if not edge_host:
+            errs.append("edge_host is required when topology is split")
+        if not mailbox_host:
+            errs.append("mailbox_host is required when topology is split")
+        if edge_host and edge_host == mailbox_host:
+            errs.append("edge_host and mailbox_host must differ")
+        # The mailbox is built over SSH from the edge; without a password there
+        # is no channel to it and the operator would have to log in by hand,
+        # which is the whole thing this topology avoids.
+        if not str(draft.get("mailbox_ssh_pass") or "") and not str(
+            existing.get("MAILBOX_SSH_PASS") or ""
+        ):
+            errs.append("mailbox_ssh_pass is required when topology is split")
 
     peer_ip = str(draft.get("peer_host_ip") or "").strip()
     if topology == "2vm" and not peer_ip:
@@ -689,6 +723,29 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
         out["PEER_HOST_NAME"] = ""
         out["OBSERVABILITY_VM_IP"] = ""
         out["CLUSTER_VIP_IP"] = ""
+
+    if topology == "split":
+        out["EDGE_IP"] = str(draft.get("edge_ip") or "").strip()
+        out["EDGE_HOST"] = str(draft.get("edge_host") or "").strip()
+        out["MAILBOX_IP"] = str(draft.get("mailbox_ip") or "").strip()
+        out["MAILBOX_HOST"] = str(draft.get("mailbox_host") or "").strip()
+        out["MAILBOX_SSH_USER"] = (
+            str(draft.get("mailbox_ssh_user") or "").strip() or "kin"
+        )
+        # Preserve-on-empty, like ADMIN_PASS: the draft never returns a stored
+        # password to the browser, so an empty field on a later save means
+        # "unchanged", not "clear it". Clearing it would leave the edge with no
+        # way to reach the mailbox and no visible reason why.
+        mailbox_pass = str(draft.get("mailbox_ssh_pass") or "")
+        if mailbox_pass:
+            out["MAILBOX_SSH_PASS"] = mailbox_pass
+        elif "MAILBOX_SSH_PASS" not in out:
+            out["MAILBOX_SSH_PASS"] = ""
+    else:
+        out["EDGE_IP"] = ""
+        out["EDGE_HOST"] = ""
+        out["MAILBOX_IP"] = ""
+        out["MAILBOX_HOST"] = ""
 
     # OS admin identity for later host provisioning; passwords preserve-on-empty like ADMIN_PASS.
     out["KIN_OS_USER"] = "kin"

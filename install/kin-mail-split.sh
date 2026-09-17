@@ -69,10 +69,20 @@ mbox_run() {
     "${SSH_USER}@${MBOX_IP}" "$@"
 }
 mbox_sudo() {
-  # One sudo per call, reading its password from the same channel rather than
-  # from a second prompt this script would have to answer.
+  # The whole command runs inside ONE root shell.
+  #
+  # `sudo -S -p '' A && B` elevates only A: the shell splits on && before sudo
+  # ever sees it, so everything after the first command runs as the login user.
+  # That turned "remove the old tree, make a new one, unpack into it" into a
+  # root rm followed by an unprivileged mkdir, which failed with a permission
+  # error pointing at the wrong step. A single-command preflight cannot catch
+  # it, which is why it passed.
+  #
+  # printf %q quotes the whole chain so the remote shell hands it to bash -c
+  # intact rather than re-splitting it.
+  local cmd="$*"
   SSHPASS="$SSH_PASS" sshpass -e ssh "${SSH_OPTS[@]}" \
-    "${SSH_USER}@${MBOX_IP}" "sudo -S -p '' $*" <<EOF
+    "${SSH_USER}@${MBOX_IP}" "sudo -S -p '' bash -c $(printf '%q' "$cmd")" <<EOF
 ${SSH_PASS}
 EOF
 }
@@ -93,13 +103,19 @@ ok "sshpass present"
 
 if [ -z "$SSH_PASS" ]; then
   fail "No password for reaching the mailbox."
-  info "Set KIN_USER_PASS (or MAILBOX_SSH_PASS) in ${CONF_FILE}."
+  info "Set MAILBOX_SSH_PASS in ${CONF_FILE}, or re-run 00-config.sh --reset."
   exit 1
 fi
 
 if ! mbox_run true 2>/dev/null; then
-  fail "Cannot log in to ${SSH_USER}@${MBOX_IP}."
-  info "Check the address, the account and KIN_USER_PASS in ${CONF_FILE}."
+  fail "Cannot log in as ${SSH_USER}@${MBOX_IP}."
+  # Name the setting the wizard actually writes. An earlier version of this
+  # message named KIN_USER_PASS, which is the console's credential and not what
+  # is being used here, so an operator with a mistyped password went looking in
+  # the wrong place.
+  info "MAILBOX_SSH_USER / MAILBOX_SSH_PASS in ${CONF_FILE} must be an account"
+  info "on ${MBOX_IP} that can log in over SSH and use sudo. Check the password"
+  info "by hand first:  ssh ${SSH_USER}@${MBOX_IP}"
   exit 1
 fi
 ok "mailbox reachable as ${SSH_USER}@${MBOX_IP}"
@@ -108,7 +124,14 @@ if ! mbox_sudo true >/dev/null 2>&1; then
   fail "${SSH_USER} cannot use sudo on the mailbox."
   exit 1
 fi
-ok "sudo works on the mailbox"
+# Prove it for a CHAIN, not just one command. `sudo A && B` elevates only A,
+# and a preflight that tests a single command declares sudo working while every
+# multi-step operation this script performs still runs unprivileged.
+if ! mbox_sudo 'test "$(id -u)" -eq 0 && test "$(id -u)" -eq 0' >/dev/null 2>&1; then
+  fail "sudo on the mailbox does not carry through a multi-command step."
+  exit 1
+fi
+ok "sudo works on the mailbox, including multi-command steps"
 
 # Clocks. Zimbra's LDAP and TLS both care, and a skewed pair fails in ways that
 # read as authentication problems hours later.

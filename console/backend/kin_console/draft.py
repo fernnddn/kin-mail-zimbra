@@ -35,6 +35,7 @@ DRAFT_ECHO_SECRETS = (
     "admin_pass",
     "ad_search_bind_password",
     "ad_test_pass",
+    "mailbox_ssh_pass",
 )
 
 # Secrets are kept in the draft for review/redeploy later, but never echo'd in logs.
@@ -45,6 +46,7 @@ SECRET_KEYS = frozenset(
         "kin_user_pass",
         "ad_search_bind_password",
         "ad_test_pass",
+        "mailbox_ssh_pass",
     }
 )
 
@@ -60,11 +62,22 @@ class WizardDraft(BaseModel):
     current_step: str = "topology"
 
     # a. Topology
-    topology: str = ""  # "1vm" | "2vm"
+    topology: str = ""  # "1vm" | "2vm" | "split"
     peer_host_ip: str = ""
     peer_host_name: str = ""
     observability_vm_ip: str = ""
     cluster_vip_ip: str = ""
+
+    # Split topology: the two Zimbra machines and how the edge reaches the
+    # mailbox. The operator never logs into the mailbox; this is the only
+    # channel to it, which is why the password belongs in the draft rather than
+    # being asked for again at deploy time.
+    edge_ip: str = ""
+    edge_host: str = ""
+    mailbox_ip: str = ""
+    mailbox_host: str = ""
+    mailbox_ssh_user: str = "kin"
+    mailbox_ssh_pass: str = ""
 
     # Host credentials live in the privhelper vault, not in this JSON.
     host_root_pass: str = ""
@@ -218,6 +231,12 @@ class DraftPatch(BaseModel):
     peer_host_name: str | None = None
     observability_vm_ip: str | None = None
     cluster_vip_ip: str | None = None
+    edge_ip: str | None = None
+    edge_host: str | None = None
+    mailbox_ip: str | None = None
+    mailbox_host: str | None = None
+    mailbox_ssh_user: str | None = None
+    mailbox_ssh_pass: str | None = None
     host_root_pass: str | None = None
     kin_user_pass: str | None = None
     mail_domain: str | None = None

@@ -31,3 +31,9 @@
  * failure than showing a button too early.
  */
 export const HA_TOPOLOGY_OFFERED = false;
+
+/* The split layout: Zimbra's MTA and proxy on this machine, its directory and
+   mail store on a second one. Offered because it is what 0.1.11 deploys - the
+   machine facing the internet holds no mail - and because the whole build runs
+   from here, so the operator never logs into the mailbox. */
+export const SPLIT_TOPOLOGY_OFFERED = true;

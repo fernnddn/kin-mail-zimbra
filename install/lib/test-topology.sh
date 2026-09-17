@@ -382,6 +382,23 @@ else
   bad "the orchestrator puts the SSH password where ps can read it"
 fi
 
+# Remote privileged steps must run inside one root shell. `sudo -S A && B`
+# elevates only A - the shell splits on && before sudo sees it - so a step that
+# removed a directory as root then recreated it as the login user failed with a
+# permission error naming the wrong command.
+if grep -q "sudo -S -p '' bash -c" "$SPLITTER"; then
+  ok "remote sudo wraps the whole command in one root shell"
+else
+  bad "remote sudo elevates only the first command of a chain"
+fi
+# And the preflight has to prove it for a chain: a single-command check reports
+# sudo as working while every multi-step operation still runs unprivileged.
+if grep -q 'multi-command steps' "$SPLITTER"; then
+  ok "preflight checks sudo across a command chain, not just one command"
+else
+  bad "preflight would pass with sudo that breaks on the first &&"
+fi
+
 # An edge cannot be built before the mailbox exists: without the directory's
 # passwords it installs cleanly and then binds to nothing.
 if grep -q 'KIN_LDAP_ADMIN_PASS' "$STAGE3"; then

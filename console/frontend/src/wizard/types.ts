@@ -2,7 +2,7 @@ export type WizardDraft = {
   version: number;
   updated_at: string | null;
   current_step: string;
-  topology: "" | "1vm" | "2vm";
+  topology: "" | "1vm" | "2vm" | "split";
   /** Required when topology is 2vm; second server IP (no reachability check in this slice). */
   peer_host_ip: string;
   /** Optional hostname for the second server. */
@@ -11,6 +11,18 @@ export type WizardDraft = {
   observability_vm_ip: string;
   /** Floating mail VIP. Required when topology is 2vm; must not be a node NIC. */
   cluster_vip_ip: string;
+  /** Split topology: the edge node (MTA + proxy). This machine. */
+  edge_ip: string;
+  edge_host: string;
+  /** Split topology: the mailbox node (directory + mail store). Built over SSH. */
+  mailbox_ip: string;
+  mailbox_host: string;
+  /** Account on the mailbox that can log in and sudo. The operator never uses it by hand. */
+  mailbox_ssh_user: string;
+  /** Mailbox password. Sent on PUT; never returned by GET. */
+  mailbox_ssh_pass: string;
+  /** True when a mailbox password is stored (plaintext never leaves the appliance). */
+  mailbox_ssh_pass_set: boolean;
   /** This console host's IPv4 (from config or autodetection). Not stored in the draft. */
   local_host_ip?: string;
   /** Root password for host(s). Sent once to privhelper; never returned by GET. */
@@ -89,6 +101,13 @@ export function emptyDraft(): WizardDraft {
     peer_host_name: "",
     observability_vm_ip: "",
     cluster_vip_ip: "",
+    edge_ip: "",
+    edge_host: "",
+    mailbox_ip: "",
+    mailbox_host: "",
+    mailbox_ssh_user: "kin",
+    mailbox_ssh_pass: "",
+    mailbox_ssh_pass_set: false,
     host_root_pass: "",
     kin_user_pass: "",
     host_credentials_set: false,
