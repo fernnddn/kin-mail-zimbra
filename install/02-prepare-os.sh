@@ -172,7 +172,7 @@ ff00::0 ip6-mcastprefix
 ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 EOF
-ok "FQDN mapped to ${SERVER_IP}, 127.0.1.1 line removed"
+ok "FQDN mapped to ${KIN_THIS_IP}, 127.0.1.1 line removed"
 
 # Both halves of stage 3 undo themselves however the stage ends: the service
 # start block, and the background updaters we asked to stand down. Leaving

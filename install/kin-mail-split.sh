@@ -324,6 +324,30 @@ say "3/8 Preparing the mailbox operating system"
 run_remote_stage mailbox-os 02-prepare-os.sh "mailbox 02-prepare-os" \
   "test \"\$(hostname -f)\" = '${MBOX_HOST}'" || exit 1
 
+# Stage 02 just changed the password we are logging in with.
+#
+# It calls chpasswd to set the OS account to KIN_USER_PASS, which is what the
+# console collects on its Host credentials step. MAILBOX_SSH_PASS - what the
+# operator typed on the Topology step, and what got us in - stops working the
+# moment that runs. Every step after this one would be refused, and the failure
+# reads as a wrong password when nothing was typed wrong: the deploy changed it.
+#
+# So follow it. The account is the same; only the secret moved.
+if [ -n "${KIN_USER_PASS:-}" ] && [ "$KIN_USER_PASS" != "$SSH_PASS" ]; then
+  if SSHPASS="$KIN_USER_PASS" sshpass -e ssh "${SSH_OPTS[@]}" \
+       "${SSH_USER}@${MBOX_IP}" true 2>/dev/null; then
+    SSH_PASS="$KIN_USER_PASS"
+    ok "mailbox password was reset by 02-prepare-os; continuing with the new one"
+  elif mbox_run true 2>/dev/null; then
+    info "mailbox still accepts the original password"
+  else
+    fail "The mailbox now refuses both the original password and KIN_USER_PASS."
+    info "02-prepare-os.sh sets the OS account password from KIN_USER_PASS."
+    info "Check Host credentials in the wizard against the account on ${MBOX_IP}."
+    exit 1
+  fi
+fi
+
 say "4/8 Installing Zimbra on the mailbox (directory + mail store; 20-40 minutes)"
 run_remote_stage mailbox-installed 03-install-zimbra.sh "mailbox 03-install-zimbra" \
   "test -x /opt/zimbra/bin/zmcontrol" || exit 1

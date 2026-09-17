@@ -434,6 +434,36 @@ else
   bad "a console-driven deploy would ship no disk selector"
 fi
 
+# --- the deploy changes the password it is using, and must follow it ---------
+# 02-prepare-os.sh calls chpasswd to set the OS account from KIN_USER_PASS.
+# MAILBOX_SSH_PASS is what the operator typed on the Topology step and what got
+# the orchestrator in; the moment stage 02 runs on the mailbox, that secret
+# stops working and every later step is refused. The failure reads as a wrong
+# password when nothing was typed wrong - the deploy changed it.
+if grep -q 'KIN_USER_PASS' "$SPLITTER"; then
+  ok "the orchestrator follows the password 02-prepare-os sets"
+else
+  bad "every step after mailbox 02-prepare-os would be refused"
+fi
+pwswitch=$(grep -n 'was reset by 02-prepare-os' "$SPLITTER" | head -1 | cut -d: -f1)
+mbox_os=$(grep -n 'run_remote_stage mailbox-os' "$SPLITTER" | head -1 | cut -d: -f1)
+mbox_inst=$(grep -n 'run_remote_stage mailbox-installed' "$SPLITTER" | head -1 | cut -d: -f1)
+if [ -n "$pwswitch" ] && [ -n "$mbox_os" ] && [ -n "$mbox_inst" ] \
+   && [ "$pwswitch" -gt "$mbox_os" ] && [ "$pwswitch" -lt "$mbox_inst" ]; then
+  ok "it follows the change after stage 02 and before the next remote step"
+else
+  bad "the password switch is in the wrong place to help"
+fi
+
+# 02-prepare-os must describe the machine it is on, not the one that wrote the
+# config: on the mailbox, SERVER_IP names the edge.
+STAGE2="$(cd "$(dirname "$0")/.." && pwd)/02-prepare-os.sh"
+if grep -q 'FQDN mapped to ${KIN_THIS_IP}' "$STAGE2"; then
+  ok "stage 02 reports the address it actually wrote"
+else
+  bad "stage 02 reports SERVER_IP, which on the mailbox is the edge"
+fi
+
 # --- the operator must be told WHERE to fix a bad password -------------------
 # Pressing Deploy in the console runs apply_wizard_draft first, which rewrites
 # /etc/kin-mail/config from the saved wizard answers. An operator who edits that
