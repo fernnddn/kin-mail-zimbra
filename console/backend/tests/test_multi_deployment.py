@@ -173,3 +173,129 @@ class NothingHereIsAClusterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheStatusCommandSurvivesASplit(unittest.IsolatedAsyncioTestCase):
+    """The status op indexes Pacemaker keys directly - st["promoted"],
+    st["qdevice_ok"], st["drbd_uptodate"]. A split snapshot has none of them,
+    so without its own branch the command raised KeyError and the Cluster page
+    showed an error on every refresh, on every multi deployment.
+    """
+
+    async def _run(self) -> list[str]:
+        from kin_privhelper import maintenance
+
+        out: list[str] = []
+        async for ev in maintenance.cmd_maintenance({"op": "status"}):
+            if isinstance(ev, dict) and isinstance(ev.get("data"), str):
+                out.append(ev["data"])
+        return out
+
+    async def test_it_completes_and_emits_a_snapshot(self) -> None:
+        import json
+        from unittest import mock
+
+        from kin_privhelper import maintenance
+
+        snap = {
+            "kind": "split",
+            "nodes": [
+                {"role": "gateway", "title": "Mail gateway", "name": "gw", "present": False},
+                {
+                    "role": "edge",
+                    "title": "Edge",
+                    "name": "mail.example.test",
+                    "present": True,
+                    "ok": True,
+                    "checks": [{"label": "SMTP", "port": 25, "ok": True}],
+                },
+                {
+                    "role": "mailbox",
+                    "title": "Mailbox",
+                    "name": "store.example.test",
+                    "present": True,
+                    "ok": False,
+                    "checks": [{"label": "Directory", "port": 389, "ok": False}],
+                },
+            ],
+            "links": [],
+            "healthy": False,
+            "gateway_linked": False,
+        }
+        status = {
+            "local_host": "mail.example.test",
+            "topology": "split",
+            "deployment": snap,
+            "nodes": ["mail.example.test"],
+            "offline": ["store.example.test"],
+            "standby": [],
+            "stale_peers": [],
+            "rejoining": [],
+        }
+        with mock.patch.object(maintenance, "gather_status", return_value=status):
+            lines = await self._run()
+        text = "\n".join(lines)
+        self.assertIn("multi deployment status", text)
+        payload = [l for l in lines if "CLUSTER_STATUS_JSON:" in l]
+        self.assertTrue(payload, "no snapshot was emitted")
+        body = json.loads(payload[-1].split("CLUSTER_STATUS_JSON:", 1)[1])
+        self.assertEqual(body["topology"], "split")
+        self.assertEqual(len(body["deployment"]["nodes"]), 3)
+        # And nothing from the replicated pair leaked into the transcript.
+        for word in ("drbd", "qdevice", "promoted", "quorum"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, text.lower())
+
+
+class ClusterOperationsAreRefusedOnASplit(unittest.IsolatedAsyncioTestCase):
+    """Maintenance mode, failback, fail-count clearing and constraint clearing
+    are Pacemaker. There is none here: nothing to put in standby, nothing to
+    fail back to. Every one of them reaches run_preflight or the pair printer,
+    which index st["promoted"], st["drbd_uptodate"] and st["qdevice_ok"]
+    directly - so without this the operator gets a KeyError traceback.
+    """
+
+    async def _codes(self, op: str) -> tuple[int, str]:
+        from unittest import mock
+
+        from kin_privhelper import maintenance
+
+        code = -1
+        text = []
+        with mock.patch(
+            "kin_privhelper.deploy_state.saved_wizard_topology", return_value="split"
+        ):
+            async for ev in maintenance.cmd_maintenance({"op": op}):
+                if ev.get("type") == "done":
+                    code = int(ev.get("exit_code", -1))
+                elif isinstance(ev.get("data"), str):
+                    text.append(ev["data"])
+        return code, "".join(text)
+
+    async def test_each_cluster_op_refuses_with_a_reason(self) -> None:
+        for op in ("preflight", "enter", "exit", "cleanup", "failback", "clearban"):
+            with self.subTest(op=op):
+                code, text = await self._codes(op)
+                self.assertEqual(code, 2, f"{op} did not refuse")
+                self.assertIn("multi deployment", text)
+
+    async def test_status_is_still_allowed(self) -> None:
+        """It is the one the Cluster page calls on every refresh."""
+        from unittest import mock
+
+        from kin_privhelper import maintenance
+
+        status = {
+            "local_host": "m",
+            "topology": "split",
+            "deployment": {"nodes": []},
+            "nodes": [],
+            "offline": [],
+            "standby": [],
+            "stale_peers": [],
+            "rejoining": [],
+        }
+        with mock.patch.object(maintenance, "gather_status", return_value=status):
+            code, text = await self._codes("status")
+        self.assertEqual(code, 0)
+        self.assertIn("multi deployment status", text)

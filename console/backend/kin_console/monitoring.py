@@ -543,22 +543,6 @@ def scraped_nodes() -> list[dict[str, str]]:
     return out
 
 
-def local_instance_name() -> str:
-    """What Prometheus calls THIS machine.
-
-    The scrape config labels the loopback target with the node's own hostname,
-    so this is simply that - but it is read here rather than assumed, because
-    the console must be able to tell "the operator asked for this machine" from
-    "the operator asked for the other one".
-    """
-    import socket
-
-    try:
-        return socket.gethostname().strip()
-    except OSError:
-        return ""
-
-
 def host_facts_for_instance(instance: str) -> dict[str, Any]:
     """The same shape as host_facts(), for a node this one only scrapes.
 

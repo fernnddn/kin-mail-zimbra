@@ -186,6 +186,32 @@ class MonitoringCanSeeTheMailbox(unittest.TestCase):
             monitoring._label_selector('x" or up{a="b'), 'instance="xorupab"'
         )
 
+    def test_local_is_decided_by_role_not_by_comparing_hostnames(self) -> None:
+        """The loopback target's instance label is built from `hostname -f`
+        with a config fallback. socket.gethostname() is the kernel's name, and
+        on a host whose FQDN comes from /etc/hosts those are two strings for
+        one machine - so the edge would have taken the remote path on its own
+        tab and lost its CPU model, mail flow and gateway card, silently."""
+        src = (
+            REPO / "console/backend/kin_console/app.py"
+        ).read_text(encoding="utf-8")
+        head = src.index("async def monitoring_host(")
+        body = _no_comments(src[head : head + 2400])
+        self.assertIn('role != "edge"', body)
+        self.assertNotIn("gethostname", body)
+        self.assertNotIn("local_instance_name", body)
+
+    def test_an_unlabelled_instance_keeps_the_local_view(self) -> None:
+        """A config written before roles existed labels nothing. That machine
+        is this one, and failing towards the richer view is the safe way to be
+        wrong."""
+        src = (
+            REPO / "console/backend/kin_console/app.py"
+        ).read_text(encoding="utf-8")
+        head = src.index("async def monitoring_host(")
+        body = _no_comments(src[head : head + 2400])
+        self.assertIn("if role and role", body)
+
     def test_the_api_refuses_a_node_it_does_not_scrape(self) -> None:
         src = (
             REPO / "console/backend/kin_console/app.py"

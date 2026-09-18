@@ -343,7 +343,7 @@ def _topology_from_draft() -> str:
 
 
 def saved_wizard_topology() -> str:
-    """Return '1vm', '2vm', or '' if topology cannot be determined.
+    """Return '1vm', '2vm', 'split', or '' if topology cannot be determined.
 
     /etc/kin-mail/topology is preferred (world-readable, no secrets). Applied
     /etc/kin-mail/config and the wizard draft remain fallbacks for hosts that

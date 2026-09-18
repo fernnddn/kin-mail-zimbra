@@ -1483,8 +1483,74 @@ async def _maintenance_events(args: dict[str, Any] | None = None) -> Any:
         yield proto.event_done(2)
         return
 
+    # Maintenance mode, failback, fail-counts and constraint clearing are
+    # Pacemaker. A multi deployment has no Pacemaker: there is nothing to put
+    # in standby, nothing to fail back to, and no constraints to clear.
+    #
+    # Refusing here rather than per-op because every one of them reaches
+    # run_preflight or the pair printer, both of which index st["promoted"],
+    # st["drbd_uptodate"] and st["qdevice_ok"] directly - so the alternative to
+    # one guard is a KeyError traceback in the operator's face for each button
+    # that should not have been offered in the first place.
+    #
+    # status and opslog stay: one reports the deployment, the other is a log.
+    from .deploy_state import saved_wizard_topology as _topo_for_op
+
+    if op not in ("status", "opslog") and _topo_for_op() == "split":
+        yield proto.event_stderr(
+            f"'{op}' is a cluster operation and this is a multi deployment.\n"
+            "The edge and the mailbox are separate machines with separate jobs; "
+            "neither fails over to the other, so there is no maintenance mode "
+            "to enter and nothing to fail back.\n"
+        )
+        yield proto.event_done(2)
+        return
+
     if op == "status":
         st = await gather_status()
+
+        # A multi deployment prints its own transcript and returns here.
+        #
+        # Everything below indexes Pacemaker keys directly - st["promoted"],
+        # st["qdevice_ok"], st["drbd_uptodate"] - and a split snapshot has none
+        # of them, so falling through would raise KeyError and the Cluster page
+        # would show an error on every refresh for every multi deployment.
+        # Padding the snapshot with neutral values would avoid the crash and
+        # print "promoted=None qdevice_ok=False drbd_uptodate=False" into the
+        # ops log, which is the exact noise this release is removing.
+        if st.get("topology") == "split":
+            dep = st.get("deployment") or {}
+            yield await _emit("=== multi deployment status ===")
+            yield await _emit(f"local={st.get('local_host')}")
+            for node in dep.get("nodes") or []:
+                if not node.get("present"):
+                    yield await _emit(f"{node.get('role')}: not linked")
+                    continue
+                checks = ",".join(
+                    f"{c.get('label')}={'ok' if c.get('ok') else 'down'}"
+                    for c in node.get("checks") or []
+                )
+                yield await _emit(
+                    f"{node.get('role')}={node.get('name')} "
+                    f"{'ok' if node.get('ok') else 'DOWN'} [{checks}]"
+                )
+            public = {
+                "local_host": st.get("local_host") or "",
+                "topology": "split",
+                "deployment": dep,
+                "nodes": st.get("nodes") or [],
+                "offline": st.get("offline") or [],
+                "standby": [],
+                "stale_peers": [],
+                "rejoining": [],
+                "privileged_run": _running_job_snapshot(),
+            }
+            yield await _emit(
+                "CLUSTER_STATUS_JSON:" + json.dumps(public, separators=(",", ":"))
+            )
+            yield proto.event_done(0)
+            return
+
         yield await _emit("=== cluster maintenance status ===")
         yield await _emit(f"local={st['local_host']}")
         yield await _emit(f"nodes={st['nodes']}")

@@ -1552,12 +1552,25 @@ async def monitoring_host(
     # /proc belongs to the host this process runs on and nothing else. The name
     # has to be one Prometheus is actually scraping, so an arbitrary string
     # cannot be turned into a query.
+    #
+    # "Is this machine?" is answered by the ROLE, not by comparing hostnames.
+    # The label Prometheus carries for the loopback target is built from
+    # `hostname -f` with a fallback; socket.gethostname() here would be the
+    # kernel's name, and on a host whose FQDN comes from /etc/hosts those are
+    # different strings for the same machine. The edge would then have taken
+    # the remote path on its own tab and quietly lost its CPU model, its mail
+    # flow and its gateway card.
+    #
+    # Unlabelled falls to the local path on purpose: an instance scraped by a
+    # config written before roles existed is this machine, and failing towards
+    # the richer view is the safe direction.
     if instance:
-        known = {n["instance"] for n in await asyncio.to_thread(monitoring.scraped_nodes)}
+        nodes = await asyncio.to_thread(monitoring.scraped_nodes)
+        known = {n["instance"]: n for n in nodes}
         if instance not in known:
             raise HTTPException(status_code=404, detail=f"Unknown node: {instance}")
-        local = await asyncio.to_thread(monitoring.local_instance_name)
-        if instance != local:
+        role = known[instance].get("role") or ""
+        if role and role != "edge":
             return await asyncio.to_thread(
                 monitoring.host_facts_for_instance, instance
             )
