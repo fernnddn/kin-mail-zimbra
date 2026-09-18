@@ -180,12 +180,33 @@ apply_rules() {
   # except via the edge or the LAN. If the edge is down that is inconvenient.
   # Leaving the store on the internet is worse. Re-run with KIN_ADMIN_IPS to
   # add a workstation later.
-  if [ "$node_role" != "mailbox" ]; then
-    if [ -z "$ADMIN_IPS" ]; then
-      fail "KIN_ADMIN_IPS is required (set in /etc/kin-mail/config via 00-config wizard, or export KIN_ADMIN_IPS=…)"
-      exit 2
-    fi
-  elif [ -z "$ADMIN_IPS" ]; then
+  # The same reasoning reaches the same answer on a node that DOES open public
+  # ports, and refusing there was worse, not safer.
+  #
+  # Refusing means no ufw at all: every port on the machine open to the
+  # internet, including SSH, the console and Zimbra's admin port. Applying
+  # without an admin list means those three are reachable from this host's own
+  # subnet and from nowhere else, while the public ports are the mail ports and
+  # nothing more. There is no deployment in which the first is the safer of the
+  # two - and on a split it is the EDGE, the machine that faces the internet by
+  # design, that was being left unfirewalled.
+  #
+  # The wizard also calls Admin IPs optional and promises they can be narrowed
+  # "later from the console after mail is up". That promise was false while
+  # leaving the field blank meant the firewall never ran. It is true now.
+  #
+  # Trade: on a node whose address is public, its /24 is public too, so admin
+  # access is open to its neighbours rather than to the whole internet. That is
+  # a real weakening against a properly filled admin list, and it is still an
+  # enormous improvement on no firewall. The dead man covers the other
+  # direction: an operator whose own address is outside that subnet gets ufw
+  # switched back off in five minutes rather than being locked out.
+  if [ "$node_role" != "mailbox" ] && [ -z "$ADMIN_IPS" ]; then
+    warn "No admin IPs configured. This host will still be firewalled."
+    info "SSH, the console and Zimbra admin are opened to ${CLUSTER_NET:-the local subnet} only."
+    info "Public ports are the mail ports and nothing else."
+    warn "Narrow this properly: set Admin IPs in the console, then re-run this stage."
+  elif [ "$node_role" = "mailbox" ] && [ -z "$ADMIN_IPS" ]; then
     warn "No admin IPs configured. This mailbox will still be firewalled."
     info "SSH from a workstation is not opened. Reach it via the edge, or from the LAN."
     info "Re-run with KIN_ADMIN_IPS set when you want a workstation path."

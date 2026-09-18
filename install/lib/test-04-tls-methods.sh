@@ -128,6 +128,75 @@ else
 fi
 rm -rf "$work"
 
+# --- a certificate is not worth an unfirewalled server -----------------------
+# Every failure inside a TLS method calls exit 1. That ended the stage, and
+# because 04 sat in the hard-failing part of the pipeline it ended the install:
+# no DKIM key, no hardening, no host firewall, no admin-path lockdown, no
+# healthcheck. On a split that is the edge - the machine facing the internet -
+# left running with none of them, because a CA could not verify a DNS record
+# that a human had 25 minutes to publish.
+STAGE04="$(cd "$(dirname "$0")/.." && pwd)/04-tls-dkim.sh"
+MAIN="$(cd "$(dirname "$0")/.." && pwd)/kin-mail.sh"
+
+if grep -q 'TLS_PHASE_OK' "$STAGE04"; then
+  ok "a failed TLS phase is recorded rather than ending the stage"
+else
+  bad "the TLS methods still take the whole stage down with them"
+fi
+# The isolation has to be a subshell, because the failures are exit calls
+# scattered through three methods and their helpers.
+if awk '/^TLS_PHASE_OK=1$/,/TLS_PHASE_OK=0/' "$STAGE04" | grep -q '^  ($'; then
+  ok "the TLS methods run in a subshell, so their exits end only that phase"
+else
+  bad "the TLS methods are not isolated; an exit inside one still ends the stage"
+fi
+# DKIM is independent of TLS and must still be created.
+dkim_line=$(grep -n 'say "DKIM"' "$STAGE04" | head -1 | cut -d: -f1)
+tls_line=$(grep -n 'TLS_PHASE_OK" -eq 0' "$STAGE04" | head -1 | cut -d: -f1)
+exit_line=$(grep -n 'TLS_PHASE_OK" -eq 0' "$STAGE04" | tail -1 | cut -d: -f1)
+if [ -n "$dkim_line" ] && [ -n "$tls_line" ] && [ -n "$exit_line" ] \
+   && [ "$tls_line" -lt "$dkim_line" ] && [ "$dkim_line" -lt "$exit_line" ]; then
+  ok "DKIM is created even when the certificate was not, and the stage still exits non-zero"
+else
+  bad "DKIM sits on the wrong side of the TLS failure (tls=$tls_line dkim=$dkim_line exit=$exit_line)"
+fi
+# ...and the pipeline carries on to the stages that secure the host.
+if grep -q 'soft_failed_stages+=("04-tls-dkim.sh")' "$MAIN"; then
+  ok "the pipeline continues past a failed certificate and records it"
+else
+  bad "a failed certificate still stops the install before hardening and firewall"
+fi
+# It must stay honest about it: silent success here would be worse than the
+# original bug, because nobody would ever look.
+if grep -q 'Full install complete, with warnings' "$MAIN"; then
+  ok "the transcript says the install finished with warnings"
+else
+  bad "a soft-failed stage would be reported as a clean install"
+fi
+
+# --- an empty admin list must not mean an unfirewalled host ------------------
+# The wizard calls Admin IPs optional and says they can be narrowed later from
+# the console. While blank meant the firewall stage refused, that sentence was
+# false in the most expensive possible way: ufw never ran at all, so every port
+# stayed open - SSH and the console included - on a host that had just been
+# told it was finished.
+if grep -q 'KIN_ADMIN_IPS is empty - applying the firewall' "$MAIN"; then
+  ok "a console install with no admin IPs still applies the firewall"
+else
+  bad "an empty admin list still stops the firewall stage from running"
+fi
+FW="$(cd "$(dirname "$0")/.." && pwd)/10-host-firewall.sh"
+if grep -q 'No admin IPs configured. This host will still be firewalled' "$FW"; then
+  ok "the firewall stage itself no longer refuses without an admin list"
+else
+  bad "10-host-firewall still exits 2 on a non-mailbox node with no admin IPs"
+fi
+if grep -qE 'exit 2' "$FW" && grep -q 'MAILBOX_IP is not set' "$FW"; then
+  ok "it still refuses the things it genuinely cannot guess (a missing peer address)"
+else
+  bad "the refusals that protect against guessing were removed along with the rest"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1

@@ -15,19 +15,14 @@ SCRIPT="../10-host-firewall.sh"
 [ -f "$SCRIPT" ] || { echo "missing $SCRIPT" >&2; exit 1; }
 
 role_line=$(grep -n 'node_role=$(kin_node_role)' "$SCRIPT" | head -1 | cut -d: -f1)
-admin_line=$(grep -n 'KIN_ADMIN_IPS is required' "$SCRIPT" | head -1 | cut -d: -f1)
-exempt_line=$(grep -n 'node_role" != "mailbox"' "$SCRIPT" | head -1 | cut -d: -f1)
+admin_line=$(grep -n 'No admin IPs configured' "$SCRIPT" | head -1 | cut -d: -f1)
 keep_line=$(grep -n 'This mailbox will still be firewalled' "$SCRIPT" | head -1 | cut -d: -f1)
+host_line=$(grep -n 'This host will still be firewalled' "$SCRIPT" | head -1 | cut -d: -f1)
 
 if [ -n "$role_line" ] && [ -n "$admin_line" ] && [ "$role_line" -lt "$admin_line" ]; then
-  pass "role is decided before admin IPs are required"
+  pass "role is decided before the admin-IP question is answered"
 else
-  bad "ADMIN_IPS guard runs before the role is known (role=$role_line admin=$admin_line)"
-fi
-if [ -n "$exempt_line" ] && [ -n "$admin_line" ] && [ "$exempt_line" -le "$admin_line" ]; then
-  pass "the mailbox is exempt from the admin-IP requirement"
-else
-  bad "mailbox is not exempt (exempt=$exempt_line admin=$admin_line)"
+  bad "the admin-IP branch runs before the role is known (role=$role_line admin=$admin_line)"
 fi
 if [ -n "$keep_line" ]; then
   pass "an empty admin list still firewalled the mailbox, and says so"
@@ -35,12 +30,31 @@ else
   bad "mailbox empty-admin path does not say the firewall still applies"
 fi
 
-# The exemption is the mailbox, not every split node. An edge without admin
-# IPs would publish SSH and the console the moment ufw is enabled.
-if grep -A2 'node_role" != "mailbox"' "$SCRIPT" | grep -q 'KIN_ADMIN_IPS is required'; then
-  pass "edge and single-appliance still require admin IPs"
+# The exemption used to be the mailbox alone, on the grounds that an edge
+# without admin IPs "would publish SSH and the console". It would not: without
+# a list those stay open to CLUSTER_NET and nothing else, while the public
+# ports are the mail ports. What publishes them is REFUSING - ufw never runs,
+# so every port is open, on the node that faces the internet by design.
+if [ -n "$host_line" ]; then
+  pass "every node is firewalled without an admin list, not just the mailbox"
 else
-  bad "admin-IP requirement is no longer tied to non-mailbox nodes"
+  bad "a non-mailbox node with no admin IPs is still left unfirewalled"
+fi
+guard_block=$(awk '/node_role" != "mailbox" \] && \[ -z "\$ADMIN_IPS"/,/^  fi$/' "$SCRIPT")
+if printf '%s' "$guard_block" | grep -qE 'exit [12]'; then
+  bad "the empty-admin branch still exits, which is what leaves ufw off"
+else
+  pass "an empty admin list no longer aborts the stage"
+fi
+# The warning has to match the rules actually written.
+lan_ok=1
+for port in 22 7071 '"$CONSOLE_PORT"'; do
+  grep -q "ufw allow from \"\$CLUSTER_NET\" to any port ${port}" "$SCRIPT" || lan_ok=0
+done
+if [ "$lan_ok" -eq 1 ]; then
+  pass "SSH, Zimbra admin and the console are restricted to the local subnet"
+else
+  bad "the admin surface is not actually limited to CLUSTER_NET"
 fi
 
 # The trust between the two halves has to be symmetric and by ADDRESS.

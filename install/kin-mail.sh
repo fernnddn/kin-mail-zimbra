@@ -196,9 +196,18 @@ ensure_admin_ips_for_firewall() {
     return 0
   fi
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
-    fail "KIN_ADMIN_IPS is empty - cannot apply firewall from console"
-    info "Set KIN_ADMIN_IPS via wizard (apply_wizard_draft) before run_full_install."
-    return 1
+    # Not a refusal any more. Refusing meant the stage never ran, and a stage
+    # that never runs leaves ufw off - every port on an internet-facing host
+    # open, including SSH, the console and Zimbra admin. The firewall stage
+    # itself firewalls fine without an admin list: admin access falls back to
+    # this host's own subnet and the public ports stay the mail ports.
+    #
+    # The wizard calls this field optional and says it can be narrowed later
+    # from the console. Turning a blank optional field into an unfirewalled
+    # mail server is not what anyone reading that sentence would expect.
+    warn "KIN_ADMIN_IPS is empty - applying the firewall with LAN-only admin access"
+    info "Set Admin IPs in the console and re-run stage 10 to narrow it."
+    return 0
   fi
   say "KIN_ADMIN_IPS is empty - required for host firewall"
   info "Set once in the wizard, or enter sources now (also written to ${CONF_FILE})."
@@ -403,10 +412,32 @@ run_full_install() {
   fi
 
   # 04 + 06 need a live Zimbra tree (zmcertmgr / zmprov / auth probes).
+  #
+  # 04 is soft. Everything it can fail on - public DNS, propagation, a CA's rate
+  # limits, a human publishing a TXT record inside 25 minutes - is outside this
+  # machine, and none of it stops mail: Zimbra keeps serving its self-signed
+  # certificate and clients get a warning. What stopping here DID cost was every
+  # stage after it: hardening, the host firewall, the admin-path lockdown, the
+  # healthcheck. On a split that is the edge, the machine facing the internet,
+  # left running with no firewall because a certificate could not be issued.
+  # The smaller failure must not cause the larger one.
+  #
+  # 06 stays hard: it fails on this deployment's own configuration, which is
+  # something the operator can fix here and now, and a broken auth path is not
+  # something to harden around and call finished.
   for s in "${FULL_PIPELINE_ZIMBRA_STAGES[@]}"; do
     stage_action="$(full_install_zimbra_stage_action "$mid_handoff")"
     if [ "$stage_action" = "skip_mid_handoff" ]; then
       warn "Skipping ${s} (mid-handoff; empty /opt/zimbra mountpoint)"
+      continue
+    fi
+    if [ "$s" = "04-tls-dkim.sh" ]; then
+      run_stage "$s" || {
+        warn "04-tls-dkim.sh did not complete - continuing so this host still gets"
+        warn "hardened and firewalled. Re-run it once the certificate can be issued:"
+        info "  sudo ./04-tls-dkim.sh"
+        soft_failed_stages+=("04-tls-dkim.sh")
+      }
       continue
     fi
     run_stage "$s" || {
@@ -513,10 +544,12 @@ run_full_install() {
     say "Full install complete (mid-handoff path)"
     ok "OS stages finished; Zimbra-touching stages deferred to DRBD attach + Pacemaker"
   elif [ "${#soft_failed_stages[@]}" -gt 0 ]; then
-    # Mail itself is up (01-06/10 all stopped the pipeline on failure), so
-    # this is still "complete" - but claiming every stage exited 0 here was
-    # false, and the console UI takes that exact string as proof nothing
-    # needs attention (re-audit, 25 Aug 2026).
+    # Mail itself is up - 01-03, 06 and 10 all stop the pipeline on failure, so
+    # reaching here means the server runs and delivers. 04 is in this list too
+    # now: a certificate that could not be issued leaves mail working on a
+    # self-signed one, and is not worth leaving a host unfirewalled over.
+    # Claiming every stage exited 0 here was false, and the console UI takes
+    # that exact string as proof nothing needs attention (re-audit, 25 Aug 2026).
     say "Full install complete, with warnings"
     warn "${#soft_failed_stages[@]} stage(s) failed and were skipped, mail is live but not fully hardened:"
     for s in "${soft_failed_stages[@]}"; do

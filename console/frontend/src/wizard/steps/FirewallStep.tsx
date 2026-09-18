@@ -27,9 +27,19 @@ export default function FirewallStep() {
   return (
     <>
       <Title>Admin access from the internet</Title>
+      {/*
+        "Leave this blank and restrict it later" used to be untrue in the most
+        expensive way available: blank made the firewall stage refuse, so ufw
+        never ran and every port stayed open - SSH and this console included -
+        on a server the deploy had just reported as finished. The stage now
+        firewalls either way, and what blank actually costs is said here rather
+        than discovered.
+      */}
       <Lede>
-        Optional for now. You can leave this blank and restrict which office or home IPs may reach
-        admin tools later from the console after mail is up.
+        Optional. Leave it blank and the server is still firewalled: only the mail ports are
+        public, and SSH, this console and Zimbra admin are reachable from this server&rsquo;s own
+        local network. Fill it in and those three are narrowed to the addresses you list. You can
+        set it later from the console and re-run the firewall step.
       </Lede>
       <FieldRow>
         <FieldLabel htmlFor="kin_admin_ips" optional>
@@ -42,8 +52,7 @@ export default function FirewallStep() {
           placeholder="203.0.113.10 198.51.100.0/24"
         />
         <Hint>
-          Space-separated IPs or networks. Not required to continue setup, configure after
-          deployment if you prefer.
+          Space-separated IPs or networks. Your office or home address, not the mail server&rsquo;s.
         </Hint>
       </FieldRow>
       <Err>{error}</Err>

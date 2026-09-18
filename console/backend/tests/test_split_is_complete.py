@@ -365,31 +365,100 @@ class InternalMailFlowIsNotFailedOnTheWrongNode(unittest.TestCase):
         self.assertIn("exit 1", unknown)
 
 
-class TheMailboxFirewallAppliesWithoutAdminIps(unittest.TestCase):
-    """Hole 2.5: ADMIN_IPS required before the mailbox branch could run.
+class TheFirewallAppliesWithoutAdminIps(unittest.TestCase):
+    """Hole 2.5, and the rest of it.
 
-    The wizard treats Admin IPs as optional. The orchestrator still has to
-    firewall the mailbox. Refusing there printed SPLIT BUILD INCOMPLETE
-    over a store that was still on the internet.
+    The wizard treats Admin IPs as optional and says they can be narrowed
+    later from the console. Refusing to firewall without them printed
+    SPLIT BUILD INCOMPLETE over a store that was still on the internet.
+
+    That was fixed for the mailbox only, on the stated grounds that an edge
+    without admin IPs "would publish SSH and the console". It would not:
+    without an admin list those stay open to this host's own subnet via
+    CLUSTER_NET and to nothing else, while the public ports are the mail
+    ports. What publishes SSH and the console is refusing - because then ufw
+    never runs and every port on the machine is open, on the node that faces
+    the internet by design.
+
+    So the exemption is not the mailbox. It is every node.
     """
 
     def setUp(self) -> None:
         self.c = code("install/10-host-firewall.sh")
+        self.m = code("install/kin-mail.sh")
 
-    def test_the_role_is_known_before_admin_ips_are_required(self) -> None:
+    def test_the_role_is_known_before_the_admin_ip_decision(self) -> None:
         role = self.c.index("node_role=$(kin_node_role)")
-        required = self.c.index("KIN_ADMIN_IPS is required")
-        self.assertLess(role, required)
+        decision = self.c.index("No admin IPs configured")
+        self.assertLess(role, decision)
 
-    def test_the_mailbox_is_exempt_from_the_requirement(self) -> None:
-        self.assertIn('if [ "$node_role" != "mailbox" ]', self.c)
+    def test_the_mailbox_is_still_firewalled_without_admin_ips(self) -> None:
         self.assertIn("This mailbox will still be firewalled", self.c)
 
-    def test_edge_and_single_appliance_still_require_admin_ips(self) -> None:
-        # The exemption is the mailbox, not "any split node". An edge
-        # without admin IPs would publish SSH and the console.
-        block = self.c[self.c.index('if [ "$node_role" != "mailbox" ]') :][:400]
-        self.assertIn("exit 2", block)
+    def test_every_other_node_is_too(self) -> None:
+        self.assertIn("This host will still be firewalled", self.c)
+
+    def test_no_node_exits_over_a_missing_admin_list(self) -> None:
+        start = self.c.index('if [ "$node_role" != "mailbox" ] && [ -z "$ADMIN_IPS" ]')
+        block = self.c[start : self.c.index('say "Installing ufw', start)]
+        self.assertNotIn("exit 2", block)
+        self.assertNotIn("exit 1", block)
+
+    def test_admin_surface_without_a_list_is_the_lan_not_the_internet(self) -> None:
+        # The claim the warning makes has to be the rules the stage writes.
+        for port in ("22", "7071", '"$CONSOLE_PORT"'):
+            self.assertIn(
+                f'ufw allow from "$CLUSTER_NET" to any port {port}',
+                self.c,
+                f"port {port} is not restricted to the local subnet",
+            )
+
+    def test_the_console_path_no_longer_refuses_before_the_stage_runs(self) -> None:
+        # kin-mail.sh gated this too, so the stage never got the chance.
+        self.assertIn("KIN_ADMIN_IPS is empty - applying the firewall", self.m)
+        block = self.m[self.m.index("ensure_admin_ips_for_firewall()") :][:1400]
+        console = block[block.index('if [ "$CONSOLE_CONFIRMED" = "1" ]') :][:800]
+        self.assertIn("return 0", console)
+
+    def test_it_still_refuses_what_it_cannot_guess(self) -> None:
+        # Dropping the admin-IP refusal must not drop the refusals that stop
+        # the stage guessing a peer address it was never told.
+        self.assertIn("MAILBOX_IP is not set", self.c)
+        self.assertIn("EDGE_IP is not set", self.c)
+        self.assertIn("exit 2", self.c)
+
+
+class ACertificateIsNotWorthAnUnfirewalledServer(unittest.TestCase):
+    """04 issuance depends on public DNS, propagation, a CA's rate limits and,
+    for TLS_METHOD=manual, a human publishing a TXT record within 25 minutes.
+
+    All of it is outside the machine, and none of it stops mail: Zimbra keeps
+    serving its self-signed certificate. Stopping the pipeline there cost the
+    DKIM key, the hardening, the host firewall, the admin-path lockdown and the
+    healthcheck - on a split, on the edge.
+    """
+
+    def setUp(self) -> None:
+        self.c = code("install/04-tls-dkim.sh")
+        self.m = code("install/kin-mail.sh")
+
+    def test_a_failed_tls_phase_does_not_end_the_stage(self) -> None:
+        self.assertIn("TLS_PHASE_OK", self.c)
+
+    def test_dkim_still_runs_after_a_failed_certificate(self) -> None:
+        recorded = self.c.index('TLS_PHASE_OK" -eq 0')
+        dkim = self.c.index('say "DKIM"')
+        self.assertLess(recorded, dkim)
+
+    def test_the_stage_still_exits_non_zero(self) -> None:
+        dkim = self.c.index('say "DKIM"')
+        self.assertIn('TLS_PHASE_OK" -eq 0', self.c[dkim:])
+
+    def test_the_pipeline_continues_and_records_it(self) -> None:
+        self.assertIn('soft_failed_stages+=("04-tls-dkim.sh")', self.m)
+
+    def test_it_is_not_reported_as_a_clean_install(self) -> None:
+        self.assertIn("Full install complete, with warnings", self.m)
 
 
 class LifecycleKnowsTheMailboxHoldsTheMail(unittest.TestCase):

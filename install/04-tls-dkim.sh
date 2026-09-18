@@ -583,17 +583,64 @@ tls_customer() {
 # serves anything.
 #
 # Same reasoning as the DKIM block below: the primary and public DNS own this.
+TLS_PHASE_OK=1
 if kin_ha_peer_install; then
   warn "HA peer: not issuing a TLS certificate for ${MAIL_HOST}"
   info "The pair serves one certificate, for the service hostname, and it is"
   info "already on the replicated volume. This node presents it after failover."
   info "Renewal stays with the node that issued it."
 else
-  case "$TLS_METHOD" in
-    cloudflare) tls_cloudflare ;;
-    manual)     tls_manual ;;
-    customer)   tls_customer ;;
-  esac
+  # A subshell, deliberately.
+  #
+  # Every failure inside these methods calls exit 1, which ended the stage - and
+  # because this stage is in the hard-failing part of the pipeline, it ended the
+  # whole install. A certificate that could not be issued then meant: no DKIM
+  # key (it is created below, and has nothing to do with TLS), no hardening, no
+  # host firewall, no admin-path lockdown, no healthcheck. On a split that is
+  # the EDGE - the machine facing the internet - left running with none of them.
+  #
+  # Issuance depends on public DNS, on propagation, on a CA's rate limits and,
+  # for TLS_METHOD=manual, on a human publishing a TXT record within 25 minutes.
+  # Those are all outside this machine. A self-signed certificate means clients
+  # see a warning; an unfirewalled edge means anyone can reach it. Letting the
+  # smaller failure cause the larger one is the wrong way round.
+  #
+  # So the TLS phase ends here, the stage carries on, and the stage still exits
+  # non-zero at the end so nobody is told TLS worked when it did not. Nothing
+  # after this point reads a shell variable the subshell would have set.
+  (
+    case "$TLS_METHOD" in
+      cloudflare) tls_cloudflare ;;
+      manual)     tls_manual ;;
+      customer)   tls_customer ;;
+    esac
+  ) || TLS_PHASE_OK=0
+
+  if [ "$TLS_PHASE_OK" -eq 0 ]; then
+    echo
+    fail "TLS was not completed for ${MAIL_HOST}"
+    info "Zimbra keeps serving its self-signed certificate, so mail and webmail"
+    info "still work - clients will see a certificate warning until this is done."
+    info "The rest of this install continues, including the host firewall."
+    case "$TLS_METHOD" in
+      manual)
+        info "TLS_METHOD=manual waits for you to publish a DNS TXT record while"
+        info "the install is running. Publish it, then re-run this stage alone:"
+        info "  sudo ./04-tls-dkim.sh"
+        # Let's Encrypt allows 5 failed validations per hostname per hour.
+        # Re-running Deploy in a loop is the natural reaction to a red stage and
+        # it is how an operator gets locked out for an hour, with a different
+        # error that reads like a new problem.
+        warn "Do not retry repeatedly: the CA allows 5 failed validations per"
+        warn "hostname per hour. Publish the record first, then run it once."
+        ;;
+      cloudflare)
+        info "Check the API token and that the zone is the one being served,"
+        info "then re-run this stage alone: sudo ./04-tls-dkim.sh"
+        ;;
+    esac
+    echo
+  fi
 fi
 
 # --- DKIM (independent of TLS method) ----------------------------------------
@@ -653,3 +700,11 @@ else
   info "restart dnsmasq, amavis, and opendkim before verifying DKIM."
   echo
 fi
+
+# DKIM is done, which is why this is here and not where TLS failed. The exit
+# code is still the truth: the stage did not finish its job. What changed is
+# that the rest of the stage, and the rest of the install, no longer stop for it.
+if [ "$TLS_PHASE_OK" -eq 0 ]; then
+  exit 1
+fi
+exit 0
