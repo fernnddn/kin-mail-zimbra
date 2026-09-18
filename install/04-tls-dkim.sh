@@ -499,6 +499,20 @@ for _i in $(seq 1 150); do
         | tee -a /tmp/kin-mail-acme-challenge.txt
     fi
   fi
+  # Say something every two minutes.
+  #
+  # This loop is 150 turns of ten seconds and printed nothing between the first
+  # line and the timeout. Twenty-five silent minutes in a deploy stream reads as
+  # a hang, not as a wait - and the one person who could end it is the person
+  # watching it, who has to publish the record it is waiting for. Repeating the
+  # record is also the point: by the time they go looking, the original lines
+  # have scrolled away under the install log.
+  if [ $(( _i % 12 )) -eq 0 ]; then
+    echo "Still waiting (about $(( (150 - _i) / 6 )) min left). Publish this TXT to continue:" \
+      | tee -a /tmp/kin-mail-acme-challenge.txt
+    echo "  _acme-challenge.${CERTBOT_DOMAIN}  TXT  ${CERTBOT_VALIDATION}" \
+      | tee -a /tmp/kin-mail-acme-challenge.txt
+  fi
   sleep 10
 done
 echo "TIMEOUT waiting for TXT _acme-challenge.${CERTBOT_DOMAIN}" | tee -a /tmp/kin-mail-acme-challenge.txt

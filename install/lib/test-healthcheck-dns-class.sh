@@ -242,6 +242,39 @@ else
   bad "05-healthcheck.sh still fail-closes after amavis/opendkim restart"
 fi
 
+# One cause, one finding.
+#
+# When TLS has not been issued, the certificate is self-signed - which this
+# already reports as BLOCKED - and there is no renewal hook, because there is
+# nothing to renew. Reporting the missing hook as FAILED stopped the pipeline
+# at its last stage over a consequence of something already reported, and did
+# it with "TLS will break in 90 days": the expiry of a certificate that does
+# not exist.
+if grep -q 'TLS_TRUSTED=0' ../05-healthcheck.sh \
+  && grep -q 'b "No renewal hook yet - there is no certificate to renew"' ../05-healthcheck.sh; then
+  pass "a missing renewal hook is blocked, not failed, when there is no certificate"
+else
+  bad "05 still fails the whole run for a hook it could not have installed"
+fi
+# The check must still bite where it means something: a real certificate with
+# no renewal path is a silent expiry ninety days out, which is the failure this
+# product refuses to ship.
+hook_block=$(awk '/^if \[ "\$TLS_TRUSTED" -eq 0 \]/,/^fi$/' ../05-healthcheck.sh)
+if printf '%s' "$hook_block" | grep -q 'f "Deploy hook missing'; then
+  pass "a trusted certificate with no renewal hook still fails"
+else
+  bad "the renewal-hook check no longer fails on a real certificate"
+fi
+# And the wait for a manual DNS-01 record has to show it is alive. 150 turns of
+# ten seconds printed nothing between the first line and the timeout; twenty-
+# five silent minutes in a deploy stream reads as a hang to the one person who
+# can end it.
+if grep -q 'Still waiting (about' ../04-tls-dkim.sh; then
+  pass "the manual DNS-01 wait reports progress instead of going silent"
+else
+  bad "the ACME wait is still silent for 25 minutes"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf 'FAILED %s checks\n' "$fails"
   exit 1

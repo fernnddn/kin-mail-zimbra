@@ -91,10 +91,12 @@ SUB=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MA
       | openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
 ISSUER=$(printf '%s' "$SUB" | sed -n 's/^issuer=//p' | head -1)
 SUBJECT=$(printf '%s' "$SUB" | sed -n 's/^subject=//p' | head -1)
+TLS_TRUSTED=0
 if [ -z "$SUB" ]; then
   f "No TLS certificate presented on :443"
 elif printf '%s' "$SUB" | grep -qi "Let's Encrypt" \
   || { [ -n "$ISSUER" ] && [ -n "$SUBJECT" ] && [ "$ISSUER" != "$SUBJECT" ]; }; then
+  TLS_TRUSTED=1
   p "Trusted certificate installed"
   printf '%s\n' "$SUB" | sed 's/^/      /'
   EXP=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MAIL_HOST" 2>/dev/null \
@@ -104,7 +106,14 @@ elif printf '%s' "$SUB" | grep -qi "Let's Encrypt" \
 else
   b "Certificate is still self-signed - finish TLS (04) before production mail"
 fi
-if [ "${TLS_METHOD:-}" = "customer" ]; then
+if [ "$TLS_TRUSTED" -eq 0 ]; then
+  # A missing renewal hook here is a consequence of having no certificate, not
+  # a second, separate fault. Reporting it as FAILED stopped the whole pipeline
+  # at its last stage over something the line above had already said - and said
+  # it with "TLS will break in 90 days", which describes the expiry of a
+  # certificate that does not exist. One cause, one finding.
+  b "No renewal hook yet - there is no certificate to renew"
+elif [ "${TLS_METHOD:-}" = "customer" ]; then
   [ -x /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh ] \
     && p "Deploy hook installed" \
     || b "No Let's Encrypt deploy hook (expected when TLS_METHOD=customer)"
