@@ -197,9 +197,16 @@ RANGES: dict[str, tuple[int, int]] = {
     "1y": (365 * 86400, 86400),
 }
 
-# 1 hour, not 6. The first thing an operator looks at is what the box is doing
-# now; six hours of history flattens exactly the movement they came to see.
-DEFAULT_RANGE = "1h"
+# The live window, not an hour of it.
+#
+# The first thing an operator looks at is what the box is doing NOW, and an
+# hour-wide window averages away the spike that made them open the tab. "now"
+# is the last half hour at the scrape resolution, so the right-hand edge moves
+# while they watch. This is also the default the console opens on; the two are
+# deliberately the same value, because a server default that disagrees with the
+# client's opening view means the tab shows one window and the API answers for
+# another.
+DEFAULT_RANGE = "now"
 
 
 class MonitoringError(RuntimeError):
@@ -460,6 +467,164 @@ def _read(path: str) -> str:
             return fh.read()
     except OSError:
         return ""
+
+
+def _instant(query: str) -> list[dict[str, Any]]:
+    """One PromQL instant query. Built here, never sent by the browser."""
+    return parse_vector(_get("/api/v1/query", {"query": query}))
+
+
+def _one(query: str) -> float | None:
+    try:
+        rows = _instant(query)
+    except MonitoringError:
+        return None
+    for row in rows:
+        val = row.get("value")
+        if val is not None:
+            return float(val)
+    return None
+
+
+def _label_selector(instance: str) -> str:
+    """instance="name", with the name made safe for a PromQL string literal.
+
+    The name comes from the scrape config this product writes, not from the
+    browser - the API only ever accepts a name that is already present in the
+    catalogue of scraped instances - but building a query by concatenation is
+    worth closing off at the point of concatenation rather than trusting every
+    future caller to have checked.
+    """
+    safe = re.sub(r'[^A-Za-z0-9._:-]', "", instance)
+    return f'instance="{safe}"'
+
+
+# Machines the Monitoring tab can offer, and what to call them. The role label
+# is written by the scrape config (monitoring_stack/templates/prometheus.yml.j2).
+ROLE_LABELS = {"edge": "This server", "mailbox": "Mailbox"}
+
+
+def scraped_nodes() -> list[dict[str, str]]:
+    """Every node Prometheus currently has machine metrics for.
+
+    Read from the DATA, not from the scrape config: a target that is listed but
+    has never been scraped successfully has nothing to draw, and offering a tab
+    that opens on empty charts is worse than not offering the tab.
+    """
+    try:
+        payload = _get("/api/v1/query", {"query": "node_time_seconds"})
+    except MonitoringError:
+        return []
+    seen: dict[str, str] = {}
+    for item in payload.get("data", {}).get("result", []) or []:
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("metric") or {}
+        if not isinstance(labels, dict):
+            continue
+        name = str(labels.get("instance") or "").strip()
+        if not name:
+            continue
+        seen.setdefault(name, str(labels.get("role") or "").strip())
+    out = [
+        {
+            "instance": name,
+            "role": role,
+            # An unlabelled instance is one scraped by a config written before
+            # roles existed. Naming it after itself beats calling it nothing.
+            "label": ROLE_LABELS.get(role) or name,
+        }
+        for name, role in seen.items()
+    ]
+    # Edge first: it is the machine the console runs on and the one an operator
+    # opens the tab expecting to see.
+    order = {"edge": 0, "mailbox": 1}
+    out.sort(key=lambda n: (order.get(n["role"], 2), n["instance"]))
+    return out
+
+
+def local_instance_name() -> str:
+    """What Prometheus calls THIS machine.
+
+    The scrape config labels the loopback target with the node's own hostname,
+    so this is simply that - but it is read here rather than assumed, because
+    the console must be able to tell "the operator asked for this machine" from
+    "the operator asked for the other one".
+    """
+    import socket
+
+    try:
+        return socket.gethostname().strip()
+    except OSError:
+        return ""
+
+
+def host_facts_for_instance(instance: str) -> dict[str, Any]:
+    """The same shape as host_facts(), for a node this one only scrapes.
+
+    /proc is not available for another machine, so every figure here comes from
+    node_exporter through Prometheus. Two of them cannot: the CPU model needs a
+    collector jammy's node_exporter 1.3 does not enable, and mail-flow and
+    gateway health are the edge's own business. They come back empty rather
+    than guessed - a blank field reads as "not known from here", an invented
+    one reads as fact.
+    """
+    sel = _label_selector(instance)
+    threads = _one(f"count(count by (cpu) (node_cpu_seconds_total{{{sel}}}))")
+    total = _one(f"node_memory_MemTotal_bytes{{{sel}}}")
+    avail = _one(f"node_memory_MemAvailable_bytes{{{sel}}}")
+    uptime = _one(f"node_time_seconds{{{sel}}} - node_boot_time_seconds{{{sel}}}")
+    loads = [
+        _one(f"node_load1{{{sel}}}"),
+        _one(f"node_load5{{{sel}}}"),
+        _one(f"node_load15{{{sel}}}"),
+    ]
+
+    used = None
+    percent = None
+    if total is not None and avail is not None and total > 0:
+        used = total - avail
+        percent = round((used / total) * 100, 1)
+
+    disks: list[dict[str, Any]] = []
+    for mount in (MAIL_MOUNT, SYSTEM_MOUNT):
+        msel = f'{sel},mountpoint="{mount}"'
+        size = _one(f"node_filesystem_size_bytes{{{msel}}}")
+        free = _one(f"node_filesystem_avail_bytes{{{msel}}}")
+        if size is None or free is None or size <= 0:
+            continue
+        disks.append(
+            {
+                "mount": mount,
+                "total_bytes": int(size),
+                "used_bytes": int(size - free),
+                "free_bytes": int(free),
+                "percent": round(((size - free) / size) * 100, 1),
+            }
+        )
+
+    return {
+        "cpu": {
+            "model": "",
+            "threads": int(threads) if threads else 0,
+            "cores": int(threads) if threads else 0,
+            "load": [round(v, 2) for v in loads if v is not None],
+        },
+        "memory": {
+            "total_bytes": int(total) if total else 0,
+            "used_bytes": int(used) if used else 0,
+            "available_bytes": int(avail) if avail else 0,
+            "percent": percent,
+        },
+        "disks": disks,
+        # Two mountpoints reported by node_exporter are two filesystems; it
+        # does not publish a bind-mounted directory as its own mount, so the
+        # ambiguity the local reader has to warn about cannot arise here.
+        "disks_share_a_filesystem": False,
+        "uptime_seconds": int(uptime) if uptime else None,
+        "remote": True,
+        "instance": instance,
+    }
 
 
 def host_facts() -> dict[str, Any]:

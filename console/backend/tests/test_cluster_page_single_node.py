@@ -77,11 +77,23 @@ class TheHealthPanelOnlyJudgesARealPair(unittest.TestCase):
     def test_it_is_given_the_same_topology_the_cards_use(self) -> None:
         # One normalisation, one answer. Two sources is how the card and the
         # panel disagreed in the first place.
-        self.assertIn("healthLines(cluster, topology)", _strip_comments(self.src))
-        self.assertIn(
-            'const topology = cluster.topology === "2vm"',
-            _strip_comments(self.src),
-            "the page must normalise topology once, before either consumer",
+        #
+        # Asserted on the shape rather than on one line of source: pinning the
+        # exact text broke the moment a third topology made the expression
+        # multi-line, which is a reformat, not a regression.
+        stripped = _strip_comments(self.src)
+        self.assertIn("healthLines(cluster, topology)", stripped)
+        self.assertIn("clusterOverviewCards(cluster, topology)", stripped)
+        self.assertEqual(
+            stripped.count("const topology ="),
+            1,
+            "the page must normalise topology exactly once, before either consumer",
+        )
+        head = stripped[: stripped.index("const topology =")]
+        self.assertNotIn(
+            "healthLines(cluster, topology)",
+            head,
+            "health is judged before topology is normalised",
         )
 
     def test_cluster_only_checks_sit_behind_that_gate(self) -> None:

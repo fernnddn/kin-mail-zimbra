@@ -36,6 +36,19 @@ MONITORING_WORK_DIR = Path(
 # Same shape as an inventory hostname elsewhere in the tree: a DNS label or
 # FQDN, nothing that could carry shell or YAML meaning.
 HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,252})$")
+
+# What a scrape target may look like, checked before it reaches a YAML value.
+# The address comes out of /etc/kin-mail/config, which is root-owned and written
+# by the installer - but it is still the one string here that ends up inside a
+# generated Prometheus config, and an unvalidated value with a quote or a
+# newline in it would break the file rather than the scrape.
+_IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+_SCRAPE_ADDR_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$")
+
+# Where node_exporter listens. Matches monitoring_stack_node_exporter_listen in
+# the role defaults and the port 12-node-metrics.sh binds on the mailbox; the
+# test below fails if the three drift apart.
+NODE_EXPORTER_PORT = 9100
 # Where the outcome of the detached run is recorded.
 #
 # The install is deliberately detached (see run_after_install), which means
@@ -232,14 +245,14 @@ def read_metrics_state(*, now: datetime | None = None) -> dict[str, Any]:
 INSTALL_TIMEOUT_SEC = 30 * 60
 
 
-def _config_mail_hostname() -> str:
-    """MAIL_HOST or EDGE_HOST from the appliance config, or empty."""
+def _config_values(*wanted: str) -> dict[str, str]:
+    """Named keys out of the appliance config; missing ones come back empty."""
     path = Path(os.environ.get("KIN_MAIL_CONFIG", "/etc/kin-mail/config"))
+    keys = {name: "" for name in wanted}
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
-        return ""
-    keys = {"MAIL_HOST": "", "EDGE_HOST": ""}
+        return keys
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -248,7 +261,36 @@ def _config_mail_hostname() -> str:
         key = key.strip()
         if key in keys:
             keys[key] = value.strip().strip('"').strip("'")
+    return keys
+
+
+def _config_mail_hostname() -> str:
+    """MAIL_HOST or EDGE_HOST from the appliance config, or empty."""
+    keys = _config_values("MAIL_HOST", "EDGE_HOST")
     return keys["EDGE_HOST"] or keys["MAIL_HOST"]
+
+
+def mailbox_scrape_target() -> tuple[str, str]:
+    """(instance name, address:port) for the mailbox, or ("", "") for none.
+
+    Only on a multi deployment. The console runs on the edge and nobody logs
+    into the mailbox, so without this the machine holding every message is the
+    only one whose utilisation cannot be seen from anywhere.
+
+    Both a name and an address are required. A target with no address cannot be
+    scraped, and one with no name would land on the edge's charts - Prometheus
+    would still record it, under whatever label happened to be there, and two
+    machines would draw as one.
+    """
+    keys = _config_values("TOPOLOGY", "MAILBOX_HOST", "MAILBOX_IP")
+    if keys["TOPOLOGY"] != "split":
+        return "", ""
+    name = inventory_hostname(keys["MAILBOX_HOST"], fallback="")
+    addr = keys["MAILBOX_IP"].strip()
+    if not name or not _IPV4_RE.match(addr):
+        return "", ""
+    port = NODE_EXPORTER_PORT
+    return name, f"{addr}:{port}"
 
 
 def inventory_hostname(raw: str, *, fallback: str = "") -> str:
@@ -265,23 +307,48 @@ def inventory_hostname(raw: str, *, fallback: str = "") -> str:
     return "kin-mail"
 
 
-def local_inventory(hostname: str) -> str:
+def local_inventory(hostname: str, mailbox: tuple[str, str] | None = None) -> str:
     """Inventory naming this node only, over a local connection.
 
     `ansible_connection: local` on purpose: the playbook's one role installs
     packages and writes config on the host it runs on, and going out over SSH
     to reach ourselves would need credentials this command does not have and
     does not want.
+
+    `mailbox` adds a SCRAPE target, not a host to configure. The mailbox
+    installs its own node_exporter during the split build (12-node-metrics.sh),
+    reached over SSH by the orchestrator; all this node has to do is point
+    Prometheus at it. Keeping it out of mail_nodes is what stops this playbook
+    trying to apt-install anything on a machine it has no credentials for.
     """
     name = (hostname or "").strip()
     if not HOSTNAME_RE.match(name):
         raise ValueError("refusing to build an inventory for a non-hostname")
+    # Jinja, not literals: monitoring_stack_node_exporter_listen and
+    # inventory_hostname stay the single source of truth for this node, and
+    # ansible resolves them when the template is rendered.
+    scrape = [
+        "    monitoring_stack_scrape_nodes:",
+        '      - address: "{{ monitoring_stack_node_exporter_listen }}"',
+        '        instance: "{{ inventory_hostname }}"',
+        "        role: edge",
+    ]
+    if mailbox:
+        mb_name, mb_addr = mailbox
+        if not HOSTNAME_RE.match(mb_name) or not _SCRAPE_ADDR_RE.match(mb_addr):
+            raise ValueError("refusing to scrape a target that is not host:port")
+        scrape += [
+            f'      - address: "{mb_addr}"',
+            f'        instance: "{mb_name}"',
+            "        role: mailbox",
+        ]
     return "\n".join(
         [
             "all:",
             "  vars:",
             "    ansible_connection: local",
             "    ansible_become: true",
+            *scrape,
             "  children:",
             "    mail_nodes:",
             "      hosts:",
@@ -558,8 +625,11 @@ async def cmd_install_monitoring(
         return
 
     hostname = inventory_hostname(this_hostname(), fallback=_config_mail_hostname())
+    mb_name, mb_addr = mailbox_scrape_target()
     try:
-        inventory = local_inventory(hostname)
+        inventory = local_inventory(
+            hostname, (mb_name, mb_addr) if mb_name and mb_addr else None
+        )
     except ValueError as exc:
         release_maintenance_lock(lock_fh)
         yield proto.event_stderr(f"{exc} (hostname={hostname!r})\n")

@@ -402,7 +402,10 @@ function dayLabel(iso: string): string {
 }
 
 export function ReportsTab() {
-  const [period, setPeriod] = useState("last_month");
+  // This month, not last. The tab is opened to answer "what is happening",
+  // and a report that opens on a closed period reads as current until
+  // somebody notices the dates.
+  const [period, setPeriod] = useState("this_month");
   const {
     groupRef: periodGroupRef,
     activeRef: activePeriodRef,

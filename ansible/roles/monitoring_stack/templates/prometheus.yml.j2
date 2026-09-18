@@ -7,20 +7,24 @@ global:
     cluster: kin-mail
 
 scrape_configs:
+  # One static_config per node, each carrying its own instance label.
+  #
+  # This used to be a single target list with a relabel rule that rewrote
+  # EVERY instance to this host's name. That was right while the only target
+  # was loopback, and silently wrong the moment a second node was added: the
+  # mailbox's metrics would arrive labelled as the edge, land on the edge's
+  # charts, and the Monitoring tab would draw two machines as one.
   - job_name: node
     static_configs:
-      - targets:
-{% for target in monitoring_stack_targets %}
-          - "{{ target }}"
+{% for node in monitoring_stack_scrape_nodes %}
+      - targets: ["{{ node.address }}"]
+        labels:
+          instance: "{{ node.instance }}"
+          role: "{{ node.role | default('edge') }}"
 {% endfor %}
-    relabel_configs:
-      # Loopback scrape would label every series "127.0.0.1"; show the real
-      # hostname instead so a saved chart still says which node it came from.
-      - source_labels: [__address__]
-        regex: ".*"
-        target_label: instance
-        replacement: "{{ inventory_hostname }}"
 
   - job_name: prometheus
     static_configs:
       - targets: ["{{ monitoring_stack_listen }}"]
+        labels:
+          instance: "{{ inventory_hostname }}"

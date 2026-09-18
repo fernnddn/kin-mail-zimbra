@@ -197,6 +197,128 @@ function NodeGlyph({
   );
 }
 
+export type DeploymentCheck = { label: string; port: number; ok: boolean };
+
+export type DeploymentNode = {
+  role: "gateway" | "edge" | "mailbox" | string;
+  title: string;
+  name: string;
+  ip?: string;
+  present?: boolean;
+  ok?: boolean;
+  checks?: DeploymentCheck[];
+  detail?: string;
+  local?: boolean;
+};
+
+export type DeploymentLink = {
+  from: string;
+  to: string;
+  label: string;
+  present?: boolean;
+  ok?: boolean;
+};
+
+export type DeploymentSnap = {
+  kind?: string;
+  nodes?: DeploymentNode[];
+  links?: DeploymentLink[];
+  healthy?: boolean;
+  gateway_linked?: boolean;
+};
+
+/**
+ * Three machines along the path a message takes, not a cluster.
+ *
+ * Deliberately a different component from the pair above rather than another
+ * branch inside it. Nothing here replicates, fails over or votes, so there is
+ * no DRBD line to colour, no qdevice, no SBD and no observability node - and
+ * the surest way to have those reappear is to leave the code that draws them
+ * one `if` away.
+ *
+ * Drawn top to bottom in the order mail travels: internet to gateway, gateway
+ * to edge, edge to mailbox. An operator looking for where mail stopped reads
+ * down the page.
+ */
+export function MultiDeploymentTopology({ deployment }: { deployment: DeploymentSnap }) {
+  const nodes = deployment.nodes || [];
+  const links = deployment.links || [];
+  const byRole = (role: string) => nodes.find((n) => n.role === role);
+  const order = ["gateway", "edge", "mailbox"];
+  const stack = order.map(byRole).filter((n): n is DeploymentNode => Boolean(n));
+  const linkFor = (from: string) => links.find((l) => l.from === from);
+
+  const ROW_H = 96;
+  const GAP = 44;
+  const top = 16;
+  // max(0, ...) because an empty stack would otherwise subtract a gap and hand
+  // the svg a negative viewBox height, which renders as nothing at all.
+  const height = top * 2 + stack.length * ROW_H + Math.max(0, stack.length - 1) * GAP;
+
+  return (
+    <Wrap aria-label="Deployment topology">
+      <Head>
+        <Title>Topology</Title>
+        <Caption>
+          Three machines, one path. Each link is checked by connecting to the port it
+          carries, so a green line means the service answered and the firewall allowed it.
+        </Caption>
+      </Head>
+      <SvgWrap>
+        <svg viewBox={`0 0 760 ${height}`} width="100%" role="img">
+          <title>Multi deployment topology</title>
+          <defs>
+            <filter id="topoShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(26, 25, 22, 0.10)" />
+            </filter>
+          </defs>
+          {stack.map((node, i) => {
+            const cy = top + ROW_H / 2 + i * (ROW_H + GAP);
+            const link = i < stack.length - 1 ? linkFor(node.role) : undefined;
+            // Bottom edge of this card to the top edge of the next one. Cards
+            // are a fixed height, so the connector can never run under one.
+            const lineFrom = cy + ROW_H / 2;
+            const lineTo = lineFrom + GAP;
+            return (
+              <g key={node.role}>
+                {link ? (
+                  <>
+                    <line
+                      x1={380}
+                      y1={lineFrom}
+                      x2={380}
+                      y2={lineTo}
+                      stroke={cable(Boolean(link.ok), Boolean(link.present))}
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
+                      strokeDasharray={link.present ? undefined : "5 4"}
+                    />
+                    <LineLabel x={380} y={lineFrom + GAP / 2} text={link.label} />
+                  </>
+                ) : null}
+                <NodeGlyph
+                  cx={380}
+                  cy={cy}
+                  height={ROW_H}
+                  title={node.name}
+                  subtitle={node.title}
+                  ip={node.ip}
+                  healthy={Boolean(node.ok)}
+                  placeholder={!node.present}
+                  role={(node.checks || [])
+                    .filter((c) => !c.ok)
+                    .map((c) => c.label.toUpperCase())
+                    .join(" ")}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      </SvgWrap>
+    </Wrap>
+  );
+}
+
 /** A label that sits ON its connector, with a chip so the line never crosses it. */
 function LineLabel({ x, y, text }: { x: number; y: number; text: string }) {
   const w = text.length * 5.4 + 16;

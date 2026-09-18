@@ -149,11 +149,35 @@ class MoveMasterOutcomeTests(unittest.TestCase):
 
 
 class MonitoringDefaultsTests(unittest.TestCase):
-    def test_the_default_window_is_one_hour(self) -> None:
+    def test_the_default_window_is_the_live_one(self) -> None:
+        """An hour-wide window averages away the spike that made someone open
+        the tab. Operator asked for the live view on open (QA, 18 Sep 2026)."""
+        from kin_console import monitoring
+
         src = (
             REPO / "console/backend/kin_console/monitoring.py"
         ).read_text(encoding="utf-8")
-        self.assertIn('DEFAULT_RANGE = "1h"', src)
+        self.assertIn('DEFAULT_RANGE = "now"', src)
+        self.assertEqual(monitoring.DEFAULT_RANGE, "now")
+
+    def test_both_sides_open_on_the_same_window(self) -> None:
+        """The API's default and the tab's opening view have to be one value.
+
+        They disagreed once: the tab opened on a range the server's default no
+        longer matched, and the catalogue fetch that was meant to adopt the
+        server default compared against a literal that had moved on, so it
+        silently stopped adopting anything.
+        """
+        from kin_console import monitoring
+
+        src = (
+            REPO / "console/frontend/src/monitoring/MonitoringTab.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn(f'const INITIAL_RANGE = "{monitoring.DEFAULT_RANGE}";', src)
+        self.assertIn("useState(INITIAL_RANGE)", src)
+        self.assertIn("r === INITIAL_RANGE", src)
+        # No stray literal left behind to drift again.
+        self.assertNotIn('useState("1h")', src)
 
     def test_there_is_a_live_window(self) -> None:
         from kin_console import monitoring
@@ -177,7 +201,15 @@ class MonitoringDefaultsTests(unittest.TestCase):
             REPO / "console/frontend/src/monitoring/MonitoringTab.tsx"
         ).read_text(encoding="utf-8")
         self.assertIn('range === "now"', src)
-        self.assertIn('useState("1h")', src)
+
+    def test_reports_open_on_the_current_period(self) -> None:
+        """A report that opens on a closed period reads as current until
+        somebody checks the dates (QA, 18 Sep 2026)."""
+        src = (
+            REPO / "console/frontend/src/monitoring/ReportsTab.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn('useState("this_month")', src)
+        self.assertNotIn('useState("last_month")', src)
 
 
 if __name__ == "__main__":

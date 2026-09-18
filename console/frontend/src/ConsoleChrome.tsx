@@ -66,8 +66,22 @@ const RailMarker = styled.span`
   opacity: 0;
 `;
 
+/* Takes the space the nav does not use, so the alert bell and the account
+   button stay at the BOTTOM of the rail.
+
+   RailNav already carried `flex: 1 1 auto` for that, but it stopped working
+   the moment the nav was wrapped to host the sliding marker: the wrapper is
+   the flex child of the rail now, and it sized to its content, so everything
+   below it bunched up directly under the last nav item. The growth belongs to
+   whichever element the rail actually lays out. */
 const RailNavWrap = styled.div`
   position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+
+  @media (max-width: 860px) {
+    flex: 0 0 auto;
+  }
 `;
 
 const Rail = styled.aside`

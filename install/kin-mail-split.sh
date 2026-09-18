@@ -545,7 +545,21 @@ fi
 # connection comes from.
 if [ "$_fail" -eq 0 ]; then
   echo
-  say "9/9 Hardening and firewalling the mailbox"
+  say "9/9 Metrics, hardening and firewalling the mailbox"
+
+  # Metrics first, because the firewall below is the last thing that runs here
+  # and this needs a port open to the edge before that rule set is written.
+  #
+  # The console lives on the edge and nobody logs into the mailbox, so without
+  # this the one machine holding every message is the one whose CPU, memory and
+  # disk nobody can see. Not fatal: a mailbox with no metrics still delivers
+  # mail, and failing the build over a monitoring agent would be the same
+  # inversion that a certificate caused two releases ago.
+  run_remote_stage mailbox-metrics 12-node-metrics.sh "mailbox 12-node-metrics" "" || {
+    warn "Node metrics did not install on the mailbox."
+    info "Mail is unaffected; the Monitoring tab will have no Mailbox view."
+    info "Re-run: sudo ${REMOTE_ROOT}/install/12-node-metrics.sh on ${MBOX_HOST}"
+  }
 
   run_remote_stage mailbox-hardened 09-hardening.sh "mailbox 09-hardening" "" || {
     warn "Hardening did not complete on the mailbox."

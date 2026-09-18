@@ -23,16 +23,26 @@ monitoring_stack_scrape_interval: 15s
 monitoring_stack_listen: 127.0.0.1:9090
 monitoring_stack_node_exporter_listen: 127.0.0.1:9100
 
-# Each node scrapes ITSELF ONLY, over loopback.
+# Who gets scraped, and what each one is called on a chart.
 #
-# Scraping the peer would mean binding node_exporter to a routable address and
-# opening 9100 between the mail nodes - new network exposure and a new firewall
-# rule on an appliance whose whole point is a locked-down perimeter. Every node
-# keeps a full year of its own history either way, and the console the operator
-# reaches through the VIP is by definition the node serving mail. Peer metrics
-# are a deliberate follow-up, not an oversight.
-monitoring_stack_targets:
-  - "{{ monitoring_stack_node_exporter_listen }}"
+# Loopback only by default: on a single appliance Prometheus and node_exporter
+# are the same machine and nothing needs to cross a network.
+#
+# A multi deployment adds the MAILBOX here, because the console runs on the
+# edge and the operator never logs into the mailbox - so without it the one
+# machine holding every message is the one whose utilisation nobody can see.
+# That is the only case where 9100 is bound to a routable address, and the
+# mailbox's host firewall already allows the edge and refuses everything else,
+# so it costs no new exposure and no new rule. install/12-node-metrics.sh is
+# what binds it there; monitoring_install.py is what adds it here.
+#
+# Each entry carries its own instance label. A shared relabel rule cannot: it
+# would stamp every target with this host's name and the two machines would
+# draw as one.
+monitoring_stack_scrape_nodes:
+  - address: "{{ monitoring_stack_node_exporter_listen }}"
+    instance: "{{ inventory_hostname }}"
+    role: edge
 
 # Metrics this appliance publishes about itself, alongside the machine metrics
 # node_exporter collects. Written as .prom files into the textfile directory,

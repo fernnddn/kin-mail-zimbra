@@ -1111,6 +1111,40 @@ def _maintenance_provenance(standby: list[str]) -> tuple[str, str]:
 
 
 async def gather_status() -> dict[str, Any]:
+    # A multi deployment is not a cluster, so none of what follows applies to
+    # it. pcs, crm_mon and drbdadm are not installed on those machines; every
+    # call below would fail and the page would then describe three machines as
+    # an unhealthy single one - which is exactly what it did.
+    #
+    # Branching here rather than filtering afterwards also means a split does
+    # not pay for ten subprocess round trips on every refresh.
+    from .deploy_state import saved_wizard_topology as _saved_topology
+
+    if _saved_topology() == "split":
+        from . import multi_deployment
+
+        deployment = await multi_deployment.gather()
+        return {
+            "local_host": this_hostname(),
+            "topology": "split",
+            "deployment": deployment,
+            # Named the same as the replicated pair's field so the page has one
+            # shape to render, but derived from the links rather than from
+            # Pacemaker. Empty lists, not absent keys: a missing key reads as
+            # "unknown" in the UI and draws placeholders.
+            "nodes": [
+                n["name"] for n in deployment["nodes"] if n.get("present") and n.get("ok")
+            ],
+            "offline": [
+                n["name"]
+                for n in deployment["nodes"]
+                if n.get("present") and not n.get("ok")
+            ],
+            "standby": [],
+            "stale_peers": [],
+            "rejoining": [],
+        }
+
     nodes_text = await _pcs_nodes_text()
     nodes = parse_online_nodes(nodes_text)
     standby = parse_standby_nodes(nodes_text)

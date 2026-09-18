@@ -49,6 +49,10 @@ type SeriesResp = {
   series: Series[];
 };
 type CatalogueResp = { metrics: { metric: string; label: string; unit: string }[]; ranges: string[]; default_range: string };
+/** A machine Prometheus has metrics for. One on an appliance; edge and
+    mailbox on a multi deployment. */
+type MonitoredNode = { instance: string; role: string; label: string };
+type NodesResp = { nodes: MonitoredNode[] };
 // One request for every chart, sharing a single clock so the cards cannot
 // drift onto slightly different x-axes.
 type SeriesBatchResp = {
@@ -619,7 +623,11 @@ function HostPanel({ host }: { host: HostFacts }) {
           appliance looks perfectly healthy from every other card on this page:
           Zimbra up, CPU idle, memory fine, and the queue quietly climbing.
           This is the card that says why. */}
-      <GatewayCard gw={host.mail_gateway} />
+      {/* The gateway is the edge's business: it is the edge that relays to it
+          and the edge that a failure strands. Drawing an "Unknown" gateway
+          card under the mailbox's charts would report a fault that belongs to
+          another machine, and is not one. */}
+      {host.remote ? null : <GatewayCard gw={host.mail_gateway} />}
 
       <Card>
         <CardLabel>Uptime</CardLabel>
@@ -664,6 +672,11 @@ type HostFacts = {
   uptime_seconds: number | null;
   mail_flow?: MailFlowFreshness;
   mail_gateway?: MailGatewayHealth;
+  /** True when these figures came from Prometheus about ANOTHER machine, so
+      everything /proc-only (the CPU model) and everything edge-only (mail flow,
+      gateway health) is absent rather than unknown. */
+  remote?: boolean;
+  instance?: string;
   /** True when mail storage is a directory on the system disk, not its own volume. */
   disks_share_a_filesystem?: boolean;
 };
@@ -862,8 +875,14 @@ function Chart({ data }: { data: SeriesResp }) {
   );
 }
 
+// Live, not an hour of history. This tab is opened to see what the server is
+// doing NOW; an hour-wide window averages away the spike that made someone
+// open it. Kept as a constant because the catalogue fetch below has to be
+// able to tell "still on the opening view" from "the operator picked this".
+const INITIAL_RANGE = "now";
+
 export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boolean } = {}) {
-  const [range, setRange] = useState("1h");
+  const [range, setRange] = useState(INITIAL_RANGE);
 
   const [ranges, setRanges] = useState<string[]>(["now", "1h", "6h", "24h", "7d", "30d", "1y"]);
 
@@ -877,6 +896,14 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
   } = useSlidingIndicator<HTMLDivElement, HTMLButtonElement>([range, ranges]);
   const [charts, setCharts] = useState<SeriesResp[]>([]);
   const [host, setHost] = useState<HostFacts | null>(null);
+  // Which machine is being looked at. "" means this one, which is also what
+  // a single appliance always uses - it never sees the switcher at all.
+  const [nodes, setNodes] = useState<MonitoredNode[]>([]);
+  const [node, setNode] = useState("");
+  // load() is memoised with no dependencies so the polling effect does not
+  // rebuild on every render; it reads the node list through a ref rather than
+  // closing over a value that would be stale by the time a poll fires.
+  const nodesRef = useRef<MonitoredNode[]>([]);
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
   // Install is a privhelper command gated to the ops roles. Showing the button
@@ -911,8 +938,9 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
      extended shows its new size immediately rather than up to thirty seconds
      later. Watching a number not change is how an operator concludes a button
      did nothing. */
-  const refreshHost = useCallback(() => {
-    api<HostFacts>("/api/monitoring/host")
+  const refreshHost = useCallback((forNode: string) => {
+    const q = forNode ? `?instance=${encodeURIComponent(forNode)}` : "";
+    api<HostFacts>(`/api/monitoring/host${q}`)
       .then((h) => {
         if (alive.current) setHost(h);
       })
@@ -920,23 +948,41 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
   }, []);
 
   useEffect(() => {
-    refreshHost();
+    refreshHost(node);
     // Point-in-time facts: cheap, and disk usage is the one people watch.
-    const id = window.setInterval(refreshHost, 30000);
+    const id = window.setInterval(() => refreshHost(node), 30000);
     return () => window.clearInterval(id);
-  }, [refreshHost]);
+  }, [refreshHost, node]);
 
   useEffect(() => {
     api<CatalogueResp>("/api/monitoring/catalogue")
       .then((res) => {
         if (!alive.current) return;
         if (res.ranges?.length) setRanges(res.ranges);
-        if (res.default_range) setRange((r) => (r === "1h" ? res.default_range : r));
+        // Adopt the server default only while the operator has not chosen
+        // anything, and compare against the SAME constant the state starts
+        // at. This used to test for "1h" while the initial value moved,
+        // which quietly turned the adoption off.
+        if (res.default_range) setRange((r) => (r === INITIAL_RANGE ? res.default_range : r));
       })
       .catch(() => undefined);
   }, []);
 
-  const load = useCallback(async (window: string) => {
+  useEffect(() => {
+    api<NodesResp>("/api/monitoring/nodes")
+      .then((res) => {
+        if (!alive.current) return;
+        const list = res.nodes || [];
+        setNodes(list);
+        nodesRef.current = list;
+        // Default to the machine the console runs on. scraped_nodes sorts the
+        // edge first for exactly this reason.
+        setNode((cur) => (cur ? cur : list[0]?.instance || ""));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const load = useCallback(async (window: string, forNode: string) => {
     setError("");
     try {
       const batch = await api<SeriesBatchResp>(
@@ -944,8 +990,17 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
           `&range=${encodeURIComponent(window)}`,
       );
       if (!alive.current) return;
+      // One machine per view.
+      //
+      // Every chart draws series[0], and Prometheus returns one series per
+      // instance sorted by name. With a second node scraped that is a coin
+      // toss between two machines, on a card labelled neither - so the series
+      // are filtered here, where the answer is known, rather than left to an
+      // ordering nothing guarantees. An empty filter keeps everything, which
+      // is the single-appliance case.
+      const pick = (list: Series[]) =>
+        forNode ? list.filter((sx) => sx.instance === forNode) : list;
       const good: SeriesResp[] = (batch.charts || [])
-        .filter((c) => (c.series || []).length > 0)
         .map((c) => ({
           metric: c.metric,
           label: c.label,
@@ -953,18 +1008,32 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
           range: batch.range,
           start: batch.start,
           end: batch.end,
-          series: c.series,
-        }));
+          series: pick(c.series || []),
+        }))
+        .filter((c) => c.series.length > 0);
       setCharts(good);
-      setUnavailable(good.length === 0);
+      // Whether THIS console has metrics at all is a different question from
+      // whether the machine currently selected has any. Only the first one is
+      // fixed by the Install monitoring button below - it installs Prometheus
+      // here - so offering it for an empty mailbox view would be advice that
+      // cannot work.
+      const anyAtAll = (batch.charts || []).some((c) => (c.series || []).length > 0);
+      setUnavailable(!anyAtAll);
       if (good.length === 0) {
+        const other = forNode
+          ? nodesRef.current.find((n) => n.instance === forNode)?.label || forNode
+          : "";
         setError(
-          isOpsRole(userRef.current?.role)
-            ? "This appliance is not collecting metrics yet. Install monitoring " +
-              "below adds Prometheus and the mail flow collector on this node. " +
-              "Figures start from the moment it runs; nothing is back-filled."
-            : "This appliance is not collecting metrics yet. Ask KIN Support-Ops " +
-              "or a KIN Super Admin to add monitoring from this tab.",
+          anyAtAll
+            ? `No metrics from ${other} yet. Its collector may have just been ` +
+              "installed - figures start from the moment it runs, and nothing " +
+              "is back-filled."
+            : isOpsRole(userRef.current?.role)
+              ? "This appliance is not collecting metrics yet. Install monitoring " +
+                "below adds Prometheus and the mail flow collector on this node. " +
+                "Figures start from the moment it runs; nothing is back-filled."
+              : "This appliance is not collecting metrics yet. Ask KIN Support-Ops " +
+                "or a KIN Super Admin to add monitoring from this tab.",
         );
       }
     } catch (err: unknown) {
@@ -1051,12 +1120,8 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
 
     const tick = async () => {
       if (stop || !alive.current) return;
-      await load(range);
-      api<HostFacts>("/api/monitoring/host")
-        .then((h) => {
-          if (alive.current) setHost(h);
-        })
-        .catch(() => undefined);
+      await load(range, node);
+      refreshHost(node);
       if (stop || !alive.current) return;
       if (Date.now() - startedAt > giveUpAfterMs) {
         setSettling(false);
@@ -1084,7 +1149,7 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
 
   useEffect(() => {
     setLoading(true);
-    void load(range);
+    void load(range, node);
     // Short windows are live; a year of history does not need re-fetching often.
     // When there is no Prometheus at all, back right off: polling every 30s
     // fires a dozen failing requests a minute for as long as the tab is open.
@@ -1099,9 +1164,9 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
           : range === "6h"
             ? 60000
             : 300000;
-    const id = window.setInterval(() => void load(range), period);
+    const id = window.setInterval(() => void load(range, node), period);
     return () => window.clearInterval(id);
-  }, [range, load, unavailable]);
+  }, [range, node, load, unavailable]);
 
   if (loading && charts.length === 0 && !error) {
     return (
@@ -1135,6 +1200,24 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
             </RangeBtn>
           ))}
         </RangeGroup>
+        {/* Only when there is more than one machine to choose between. A single
+            appliance gets no switcher, because a control with one option is a
+            question with one answer. */}
+        {nodes.length > 1 ? (
+          <RangeGroup role="group" aria-label="Machine">
+            {nodes.map((n) => (
+              <RangeBtn
+                key={n.instance}
+                type="button"
+                $on={n.instance === node}
+                title={n.instance}
+                onClick={() => setNode(n.instance)}
+              >
+                {n.label}
+              </RangeBtn>
+            ))}
+          </RangeGroup>
+        ) : null}
         <Hint style={{ margin: 0 }}>
           Times shown in {localZoneLabel()}. Collected on this server and kept for a year;
           metrics never leave the appliance.
@@ -1227,7 +1310,9 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
       {/* Directly under the disk cards, because that is where an operator is
           standing when they notice a disk is filling up. Ops only: this moves
           a partition boundary on a live mail server. */}
-      {canInstall ? <DiskExtend onGrew={refreshHost} /> : null}
+      {/* Disk extend acts on the machine the console runs on, so it
+          refreshes that one regardless of which node is being viewed. */}
+      {canInstall ? <DiskExtend onGrew={() => refreshHost("")} /> : null}
 
       {CHART_GROUPS.map((group) => {
         const inGroup = charts.filter((c) => group.metrics.includes(c.metric));

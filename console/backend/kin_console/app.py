@@ -1513,8 +1513,28 @@ def monitoring_catalogue(
     }
 
 
+@app.get("/api/monitoring/nodes")
+async def monitoring_nodes(
+    _user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Machines the Monitoring tab can show, newest scrape wins.
+
+    On a single appliance this is one entry and the tab draws no switcher. On a
+    multi deployment it is the edge and the mailbox - the console runs on the
+    edge and nobody logs into the mailbox, so this is the only place its
+    utilisation can be seen at all.
+    """
+    import asyncio
+
+    from . import monitoring
+
+    nodes = await asyncio.to_thread(monitoring.scraped_nodes)
+    return {"nodes": nodes}
+
+
 @app.get("/api/monitoring/host")
 async def monitoring_host(
+    instance: str = "",
     _user: ConsoleUser = Depends(auth.require_console_user),
 ) -> dict[str, object]:
     """CPU model/cores, RAM in bytes, per-mount disk usage, uptime.
@@ -1527,6 +1547,20 @@ async def monitoring_host(
     import asyncio
 
     from . import monitoring
+
+    # A named instance that is not this machine is read through Prometheus:
+    # /proc belongs to the host this process runs on and nothing else. The name
+    # has to be one Prometheus is actually scraping, so an arbitrary string
+    # cannot be turned into a query.
+    if instance:
+        known = {n["instance"] for n in await asyncio.to_thread(monitoring.scraped_nodes)}
+        if instance not in known:
+            raise HTTPException(status_code=404, detail=f"Unknown node: {instance}")
+        local = await asyncio.to_thread(monitoring.local_instance_name)
+        if instance != local:
+            return await asyncio.to_thread(
+                monitoring.host_facts_for_instance, instance
+            )
 
     facts = await asyncio.to_thread(monitoring.host_facts)
     # node_exporter republishes a textfile forever after its writer dies, so a

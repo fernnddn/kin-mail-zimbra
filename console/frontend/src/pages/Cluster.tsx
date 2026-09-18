@@ -25,7 +25,12 @@ import {
   SkeletonCard,
   WarnBox,
 } from "../ui";
-import { ClusterTopology, type ObservabilitySnap } from "./ClusterTopology";
+import {
+  ClusterTopology,
+  MultiDeploymentTopology,
+  type DeploymentSnap,
+  type ObservabilitySnap,
+} from "./ClusterTopology";
 import { stripMachineLines } from "./clusterLog";
 import { useTasks } from "../tasks/TaskProvider";
 import { MonitoringTab } from "../monitoring/MonitoringTab";
@@ -62,6 +67,8 @@ type ClusterSnap = {
   offline?: string[];
   stale_peers?: string[];
   observability?: ObservabilitySnap;
+  /** Present only on a multi deployment. Three machines, no replication. */
+  deployment?: DeploymentSnap;
   // Tri-state: null/undefined means `pcs property` could not be read, which
   // is not the same as fencing being off.
   fencing_enabled?: boolean | null;
@@ -916,6 +923,57 @@ function ReplicationGauge({
 
 type StatusTone = "ok" | "warn" | "muted";
 
+/** "Edge + mailbox, gateway linked" - what the three machines add up to. */
+function deploymentSummary(cluster: ClusterSnap): string {
+  const dep = cluster.deployment;
+  if (!dep) return cluster.local_host || "-";
+  const present = (dep.nodes || []).filter((n) => n.present);
+  const down = present.filter((n) => !n.ok).map((n) => n.title.toLowerCase());
+  if (down.length) return `${down.join(" and ")} not answering`;
+  return dep.gateway_linked
+    ? "Gateway, edge and mailbox all answering"
+    : "Edge and mailbox answering; no gateway linked yet";
+}
+
+/**
+ * One card per machine, saying what it is for and what answered.
+ *
+ * Not a card per Pacemaker resource. There is no DRBD to be UpToDate, no VIP
+ * to be on the right node and no quorum to hold, so the things worth showing
+ * are the three jobs and whether each one is reachable.
+ */
+function multiDeploymentCards(cluster: ClusterSnap): ReactNode[] {
+  const dep = cluster.deployment;
+  if (!dep) return [];
+  return (dep.nodes || []).map((node) => {
+    // "warn" for a machine that is not answering, matching every other card
+    // on this page. The tone vocabulary here is ok / warn / muted; inventing
+    // a fourth one would style nothing and render as the default.
+    const tone: StatusTone = node.present && node.ok ? "ok" : "warn";
+    const failed = (node.checks || []).filter((c) => !c.ok);
+    return (
+      <OverviewCard key={`dep-${node.role}`} $tone={tone}>
+        <IconChip $tone={tone}>
+          <TopologyGlyph />
+        </IconChip>
+        <OverviewBody>
+          <OverviewLabel>{node.title}</OverviewLabel>
+          <OverviewValue>
+            {!node.present ? "Not linked" : node.ok ? "Answering" : "Not answering"}
+          </OverviewValue>
+          <OverviewSub>
+            {!node.present
+              ? node.detail || ""
+              : failed.length
+                ? `No answer on ${failed.map((c) => `${c.label} (${c.port})`).join(", ")}`
+                : node.name || node.ip || node.detail || ""}
+          </OverviewSub>
+        </OverviewBody>
+      </OverviewCard>
+    );
+  });
+}
+
 function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode[] {
   const cards: ReactNode[] = [];
   const nodeCount = uniqueNames(cluster.nodes, cluster.offline, cluster.stale_peers).length;
@@ -931,23 +989,28 @@ function clusterOverviewCards(cluster: ClusterSnap, topology: string): ReactNode
             and it is what a half-finished Remove Host leaves on the page. Say
             the state instead: configured for two, only one present. */}
         <OverviewValue>
-          {topology !== "2vm"
-            ? "Single server"
-            : nodeCount === 1
-              ? "HA pair, one node"
-              : "2-node HA pair"}
+          {topology === "split"
+            ? "Multi deployment"
+            : topology !== "2vm"
+              ? "Single server"
+              : nodeCount === 1
+                ? "HA pair, one node"
+                : "2-node HA pair"}
         </OverviewValue>
         <OverviewSub>
-          {topology !== "2vm"
-            ? cluster.local_host || "-"
-            : nodeCount === 1
-              ? "Configured for two; only this node is in the cluster"
-              : `${nodeCount} mail nodes configured`}
+          {topology === "split"
+            ? deploymentSummary(cluster)
+            : topology !== "2vm"
+              ? cluster.local_host || "-"
+              : nodeCount === 1
+                ? "Configured for two; only this node is in the cluster"
+                : `${nodeCount} mail nodes configured`}
         </OverviewSub>
       </OverviewBody>
     </OverviewCard>,
   );
 
+  if (topology === "split") return cards.concat(multiDeploymentCards(cluster));
   if (topology !== "2vm") return cards;
 
   const conflict = Boolean(cluster.promoted_conflict);
@@ -1220,6 +1283,35 @@ function healthLines(cluster: ClusterSnap, topology: string): HealthLine[] {
   // could not be read rendered as a dead cluster: DRBD not UpToDate, qdevice
   // not voting, VIP not configured. Pacemaker is absent on 1vm by design, so
   // reporting its absence as failure is reporting the design as an outage.
+  // A multi deployment has real health to report, and none of it is Pacemaker's.
+  // Each line is one link in the path a message takes, checked by connecting to
+  // the port that link carries.
+  if (topology === "split") {
+    const dep = cluster.deployment;
+    if (!dep) {
+      return [{ ok: false, label: "Deployment status could not be read" }];
+    }
+    const lines: HealthLine[] = [];
+    for (const node of dep.nodes || []) {
+      if (!node.present) {
+        lines.push({
+          ok: true,
+          label: `${node.title}: ${node.detail || "not part of this deployment yet"}`,
+        });
+        continue;
+      }
+      const failed = (node.checks || []).filter((c) => !c.ok);
+      lines.push({
+        ok: Boolean(node.ok),
+        label: node.ok
+          ? `${node.title} answering: ${node.name}`
+          : `${node.title} not answering on ${failed
+              .map((c) => `${c.label} (${c.port})`)
+              .join(", ")}`,
+      });
+    }
+    return lines;
+  }
   if (topology !== "2vm") {
     const name = cluster.local_host || "this server";
     return [
@@ -1887,7 +1979,18 @@ export default function ClusterPage() {
   const anyBusy = busy || serverBusy;
   const serverBusyLabel = OPERATION_LABELS[serverRun?.command || ""] || "An operation";
 
-  const topology = cluster.topology === "2vm" ? "2vm" : cluster.topology === "1vm" ? "1vm" : "";
+  // "split" is a multi deployment: gateway, edge and mailbox, each doing a
+  // different job. It used to fall through to "" here, which every branch
+  // below reads as "not a pair" and therefore prints as a single server -
+  // three machines described as one.
+  const topology =
+    cluster.topology === "2vm"
+      ? "2vm"
+      : cluster.topology === "split"
+        ? "split"
+        : cluster.topology === "1vm"
+          ? "1vm"
+          : "";
   // Which node should be in this pair and is not. A completed Remove Host
   // records last_removed_peer, but the half-removed state is exactly the case
   // where it never got that far, so fall back to the configured peer.
@@ -2337,7 +2440,18 @@ export default function ClusterPage() {
                   onClick={() => setHealthOpen((v) => !v)}
                 >
                   <HealthDot $ok={clusterOk} />
-                  {clusterOk ? "Cluster Healthy" : "Cluster Needs Attention"}
+                  {/* "Cluster" is the word this release is getting away from.
+                      A multi deployment is three machines with three jobs and
+                      no shared state; calling it a cluster is what made the
+                      page describe it with DRBD and quorum in the first
+                      place. */}
+                  {topology === "split"
+                    ? clusterOk
+                      ? "Deployment Healthy"
+                      : "Deployment Needs Attention"
+                    : clusterOk
+                      ? "Cluster Healthy"
+                      : "Cluster Needs Attention"}
                   <HealthCaret>{healthOpen ? "▴" : "▾"}</HealthCaret>
                 </HealthBtn>
                 <Dropdown open={healthOpen} onClose={() => setHealthOpen(false)} align="left">
@@ -2380,7 +2494,9 @@ export default function ClusterPage() {
                 </Dropdown>
               </HealthWrap>
               <OverviewHeader>
-                <OverviewTitle>Cluster Overview</OverviewTitle>
+                <OverviewTitle>
+                  {topology === "split" ? "Deployment Overview" : "Cluster Overview"}
+                </OverviewTitle>
                 <FreshnessRow>
                   <FreshnessBadge updatedAt={lastUpdated} />
                   <RefreshBtn
@@ -2394,7 +2510,9 @@ export default function ClusterPage() {
                 </FreshnessRow>
               </OverviewHeader>
               <OverviewGrid>{clusterOverviewCards(cluster, topology)}</OverviewGrid>
-              {topology === "1vm" ? (
+              {topology === "split" ? (
+                <MultiDeploymentTopology deployment={cluster.deployment || {}} />
+              ) : topology === "1vm" ? (
                 <>
                   <ClusterTopology
                     topology="1vm"
