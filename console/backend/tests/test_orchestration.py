@@ -760,8 +760,12 @@ class CheckModeSafetyTests(unittest.TestCase):
         self.assertNotIn('f "MX not published yet"', health)
         self.assertIn('b "SPF not published yet"', health)
         self.assertIn('b "DMARC not published yet"', health)
-        self.assertIn('b "Certificate is still self-signed', health)
+        # Wording follows the predicate: Zimbra installs a leaf signed by its
+        # own private CA, not a bare self-signed certificate, and calling that
+        # "still self-signed" was part of how it got reported as trusted.
+        self.assertIn('b "Certificate is not one clients will accept', health)
         self.assertNotIn('f "No trusted certificate yet', health)
+        self.assertNotIn('f "Certificate is not one clients will accept', health)
         self.assertIn('TLS_METHOD:-}" = "customer"', health)
         self.assertIn("No Let's Encrypt deploy hook (expected when TLS_METHOD=customer)", health)
         driver = (repo / "install/kin-mail.sh").read_text(encoding="utf-8")

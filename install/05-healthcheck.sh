@@ -16,6 +16,12 @@ need_root
 . ./lib/zimbra-data-disk-probe.sh
 # shellcheck source=lib/healthcheck-dns-class.sh
 . ./lib/healthcheck-dns-class.sh
+# cert_is_trusted / cert_trust_reason. Shared with stage 09 on purpose: 09 uses
+# the answer to decide whether to switch HSTS on, and this stage uses it to tell
+# the operator whether TLS is finished. Two different answers to that question
+# is how one of them ends up green while the other locks users out.
+# shellcheck source=lib/mail-surface-hardening.sh
+. ./lib/mail-surface-hardening.sh
 if zimbra_is_mid_handoff; then
   warn "Mid-handoff: /opt/zimbra is unmounted; skipping healthcheck (zmcontrol not reachable)."
   exit 0
@@ -89,13 +95,18 @@ if [ "$KIN_NODE_ROLE" = "mailbox" ]; then
 else
 SUB=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername "$MAIL_HOST" 2>/dev/null \
       | openssl x509 -noout -subject -issuer -enddate 2>/dev/null)
-ISSUER=$(printf '%s' "$SUB" | sed -n 's/^issuer=//p' | head -1)
-SUBJECT=$(printf '%s' "$SUB" | sed -n 's/^subject=//p' | head -1)
+# "Issued by somebody other than itself" is not the same question as "would a
+# client accept this". Zimbra issues its own certificate from its own private
+# CA - on a split the CA is on the mailbox, so the issuer is store.<domain> and
+# the subject is mail.<domain> - and the old test called that a trusted
+# certificate. This health check then told the operator, in green, that TLS was
+# installed and valid for 1824 days, on a deployment that had never obtained a
+# public certificate. It is the single line someone reads to decide TLS is
+# done. cert_is_trusted now asks the system trust store instead.
 TLS_TRUSTED=0
 if [ -z "$SUB" ]; then
   f "No TLS certificate presented on :443"
-elif printf '%s' "$SUB" | grep -qi "Let's Encrypt" \
-  || { [ -n "$ISSUER" ] && [ -n "$SUBJECT" ] && [ "$ISSUER" != "$SUBJECT" ]; }; then
+elif cert_is_trusted; then
   TLS_TRUSTED=1
   p "Trusted certificate installed"
   printf '%s\n' "$SUB" | sed 's/^/      /'
@@ -104,7 +115,11 @@ elif printf '%s' "$SUB" | grep -qi "Let's Encrypt" \
   DAYS=$(( ( $(date -d "$EXP" +%s) - $(date +%s) ) / 86400 ))
   [ "$DAYS" -gt 20 ] && p "Valid for ${DAYS} days" || f "Only ${DAYS} days left - check renewal"
 else
-  b "Certificate is still self-signed - finish TLS (04) before production mail"
+  b "Certificate is not one clients will accept - finish TLS (04) before production mail"
+  printf '%s\n' "$SUB" | sed 's/^/      /'
+  info "openssl: $(cert_trust_reason)"
+  info "Zimbra's own certificate is signed by Zimbra's private CA. Mail and"
+  info "webmail work; every browser and mail client shows a warning."
 fi
 if [ "$TLS_TRUSTED" -eq 0 ]; then
   # A missing renewal hook here is a consequence of having no certificate, not

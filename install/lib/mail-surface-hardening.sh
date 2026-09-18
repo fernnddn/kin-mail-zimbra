@@ -36,17 +36,51 @@ relay_scope_too_wide() {
 
 # cert_is_trusted
 #
-# Is the certificate on :443 issued by somebody other than itself? HSTS on a
-# self-signed certificate is a trap: the browser stops offering "proceed
-# anyway", and an operator who has not finished stage 04 can no longer reach
-# the console at all.
+# Would a browser or a mail client accept the certificate on :443?
+#
+# This used to ask "is the issuer different from the subject", and that is not
+# the same question. Zimbra issues its own certificate from its own private CA
+# - on a split, the CA lives on the mailbox - so subject and issuer differ on
+# every appliance that has not finished stage 04, and the old test called that
+# trusted. It was wrong in exactly the two places where being wrong costs the
+# most:
+#
+#   05-healthcheck reported "Trusted certificate installed" and "Valid for 1824
+#   days" on a deployment with no public certificate at all, which is the one
+#   line an operator reads to decide TLS is done.
+#
+#   This file's caller turned HSTS on. HSTS on an untrusted certificate is not
+#   a weak header, it is a denial of service against your own users: RFC 6797
+#   requires the browser to refuse the connection and forbids offering "proceed
+#   anyway", for a year, for everyone who loaded the page once. The comment at
+#   that call site describes this exact trap. The guard was right; its predicate
+#   was not.
+#
+# The real question is whether the chain validates against the system trust
+# store, which is what openssl reports as "Verify return code: 0 (ok)". No
+# hostname check: s_client connects to 127.0.0.1 and only the chain is in
+# question here.
 cert_is_trusted() {
-  local out issuer subject
-  out=$(echo | timeout 15 openssl s_client -connect 127.0.0.1:443 \
-    -servername "${MAIL_HOST:-localhost}" 2>/dev/null |
-    openssl x509 -noout -subject -issuer 2>/dev/null) || return 1
+  local out code
+  out=$(echo | timeout 15 openssl s_client -connect "${KIN_TLS_PROBE_ADDR:-127.0.0.1:443}" \
+    -servername "${MAIL_HOST:-localhost}" 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
-  issuer=$(printf '%s' "$out" | sed -n 's/^issuer=//p' | head -1)
-  subject=$(printf '%s' "$out" | sed -n 's/^subject=//p' | head -1)
-  [ -n "$issuer" ] && [ -n "$subject" ] && [ "$issuer" != "$subject" ]
+  # The last one: s_client prints a verify result per handshake, and a renegotiated
+  # or resumed session prints more than one.
+  code=$(printf '%s\n' "$out" |
+    sed -n 's/^ *Verify return code: *\([0-9][0-9]*\).*/\1/p' | tail -1)
+  [ -n "$code" ] || return 1
+  [ "$code" = "0" ]
+}
+
+# cert_trust_reason
+#
+# What openssl said, for a message the operator can act on. Empty when it could
+# not be read at all.
+cert_trust_reason() {
+  local out
+  out=$(echo | timeout 15 openssl s_client -connect "${KIN_TLS_PROBE_ADDR:-127.0.0.1:443}" \
+    -servername "${MAIL_HOST:-localhost}" 2>/dev/null) || return 0
+  printf '%s\n' "$out" |
+    sed -n 's/^ *Verify return code: *//p' | tail -1
 }

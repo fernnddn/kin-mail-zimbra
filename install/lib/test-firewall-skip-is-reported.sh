@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # A skipped host firewall must reach the deploy summary, not just the scrollback.
 #
-# 10-host-firewall.sh is allowed to be skipped: the wizard marks Admin IPs
-# optional, so a console-confirmed full install with KIN_ADMIN_IPS empty
-# returns success without applying ufw. That is a deliberate product decision
-# and it stays. What was wrong is that the skip was invisible afterwards: the
-# stage returned 0, nothing was added to soft_failed_stages, and the install
-# ended on "Full install complete / All selected pipeline stages exited 0".
+# 10-host-firewall.sh can be skipped only by an operator who declines it at the
+# prompt. It used to be skipped by an empty Admin IPs field as well, on the
+# reading that a blank optional field meant the same thing - it does not, and
+# that reading left internet-facing hosts with no firewall at all. What was
+# wrong in the first place is that the skip was invisible afterwards: the stage
+# returned 0, nothing was added to soft_failed_stages, and the install ended on
+# "Full install complete / All selected pipeline stages exited 0".
 #
 # For a single internet-facing mail node that is the wrong last word. The
 # console treats that exact string as proof nothing needs attention, so an
@@ -69,10 +70,16 @@ INNER
 }
 
 # 1. The console path that produced a silently unfirewalled appliance.
+#
+# It used to be asserted the other way round - skipped=1, applied=0 - on the
+# reasoning that a blank optional field meant the operator had declined. It did
+# not. The firewall now applies, with admin access falling back to this host's
+# own subnet, which is the only outcome that is not worse than leaving every
+# port open on an internet-facing mail server.
 out="$(run_case "" y 1)"
 case "$out" in
-  "rc=0 skipped=1 applied=0")
-    pass "console install with no admin IPs skips ufw and records the skip" ;;
+  "rc=0 skipped=0 applied=1")
+    pass "console install with no admin IPs still applies ufw" ;;
   *) bad "console install with no admin IPs: got '$out'" ;;
 esac
 
@@ -114,6 +121,43 @@ if grep -q 'Full install complete, with warnings' "$KIN_MAIL_SH"; then
   pass "a soft-failed stage still flips the transcript to 'with warnings'"
 else
   bad "the 'with warnings' summary line is gone"
+fi
+
+# An empty admin list must not stop the firewall, anywhere.
+#
+# This decision existed in FOUR places: the console branch of the stage runner,
+# ensure_admin_ips_for_firewall's console path, its interactive path, and the
+# firewall stage itself. Three were fixed across two rounds and the fourth ran
+# first, so the edge - the internet-facing half of a split - still finished a
+# "complete" deploy with ufw off and one warning to show for it.
+#
+# Counting the places is the guard. The policy lives in 10-host-firewall.sh; no
+# caller gets to pre-empt it.
+# Same path the rest of this file uses; a second spelling of it is how the two
+# drift apart.
+MAIN="$KIN_MAIL_SH"
+if ! grep -q 'Host firewall (ufw) not applied - no admin IPs' "$MAIN"; then
+  pass "the stage runner no longer skips the firewall over a blank optional field"
+else
+  bad "an empty admin list still skips stage 10 before the stage can decide"
+fi
+if ! grep -q 'Cannot apply firewall without KIN_ADMIN_IPS' "$MAIN"; then
+  pass "the interactive path no longer refuses either"
+else
+  bad "answering the admin-IP prompt with nothing still cancels the firewall"
+fi
+# FIREWALL_STAGE_SKIPPED is for an operator who actually declined. If an empty
+# admin list can still reach it, the skip is back under another name.
+skip_sites=$(grep -c 'FIREWALL_STAGE_SKIPPED=1' "$MAIN")
+if [ "$skip_sites" -eq 1 ]; then
+  pass "only a real decline marks the firewall as skipped"
+else
+  bad "${skip_sites} places mark the firewall skipped; one of them is not a decline"
+fi
+if grep -B3 'FIREWALL_STAGE_SKIPPED=1' "$MAIN" | grep -q 'ask_yn'; then
+  pass "the one that remains is the operator answering no"
+else
+  bad "the remaining skip is not gated on the operator declining"
 fi
 
 if [ "$fails" -eq 0 ]; then

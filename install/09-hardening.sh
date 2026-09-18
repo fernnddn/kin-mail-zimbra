@@ -475,12 +475,36 @@ configure_mail_surface() {
   add_response_header "X-Frame-Options" "SAMEORIGIN"
   add_response_header "Referrer-Policy" "strict-origin-when-cross-origin"
 
+  # Removing a header we set on a predicate that turned out to be wrong.
+  #
+  # cert_is_trusted used to answer "is the issuer different from the subject",
+  # which Zimbra's own private-CA certificate satisfies. So HSTS was switched on
+  # for a year on appliances whose certificate no browser accepts, and HSTS
+  # there is not a weak header - it is a lockout: the browser must refuse the
+  # connection and must not offer "proceed anyway". Re-running this stage has to
+  # be able to undo that, or every deployment that already took the bad branch
+  # stays broken for its users until each of them clears HSTS by hand.
+  remove_response_header() {
+    local name="$1" line
+    line=$(printf '%s\n' "$cur" | grep -i "^${name}:" | head -1)
+    [ -n "$line" ] || return 0
+    if zimbra_cmd zmprov mcf -zimbraResponseHeader "$line" >/dev/null 2>&1; then
+      ok "Removed ${name}: it was set while the certificate is not trusted"
+      headers_changed=1
+    else
+      warn "Could not remove ${name}. Do it by hand before anyone opens webmail:"
+      warn "  su - zimbra -c \"zmprov mcf -zimbraResponseHeader '${line}'\""
+    fi
+  }
+
   if cert_is_trusted; then
     add_response_header "Strict-Transport-Security" "max-age=31536000"
   else
-    warn "Skipping HSTS: the certificate on :443 is still self-signed."
+    warn "Skipping HSTS: clients would not accept the certificate on :443."
+    warn "openssl says: $(cert_trust_reason)"
     warn "HSTS would remove the browser's 'proceed anyway' option and lock you"
     warn "out of the console. Finish stage 04, then re-run this stage."
+    remove_response_header "Strict-Transport-Security"
   fi
 
   if [ "$headers_changed" -eq 0 ]; then

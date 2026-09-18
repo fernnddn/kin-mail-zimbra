@@ -209,13 +209,17 @@ ensure_admin_ips_for_firewall() {
     info "Set Admin IPs in the console and re-run stage 10 to narrow it."
     return 0
   fi
-  say "KIN_ADMIN_IPS is empty - required for host firewall"
+  say "KIN_ADMIN_IPS is empty"
   info "Set once in the wizard, or enter sources now (also written to ${CONF_FILE})."
+  info "Leave it blank to firewall this host with admin access limited to its own LAN."
   ask KIN_ADMIN_IPS "Admin source IPs/CIDRs (space-separated)" ""
   KIN_ADMIN_IPS=$(printf '%s' "$KIN_ADMIN_IPS" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
   if [ -z "$KIN_ADMIN_IPS" ]; then
-    fail "Cannot apply firewall without KIN_ADMIN_IPS"
-    return 1
+    # The operator already said yes to applying the firewall at the prompt
+    # before this one. Having no particular admin address is not withdrawing
+    # that. Refusing here was the fourth copy of the same wrong decision.
+    warn "No admin sources given - applying the firewall with LAN-only admin access"
+    return 0
   fi
   if [ -f "$CONF_FILE" ]; then
     if grep -q '^KIN_ADMIN_IPS=' "$CONF_FILE" 2>/dev/null; then
@@ -270,16 +274,22 @@ run_firewall_stage_interactive() {
   fi
 
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
-    # Wizard marks Admin IPs optional. Empty = skip stage 10 (same as CLI "no"),
-    # then continue to 11 and 05. Do not fail the whole pipeline.
+    # An empty optional field is not an operator declining the firewall.
+    #
+    # This branch used to treat it as exactly that - "Empty = skip stage 10
+    # (same as CLI no)" - and it is the THIRD place that decided the same
+    # thing. The other two were fixed and this one still ran first, so the
+    # deploy still finished with ufw off on the internet-facing edge and one
+    # warning to show for it. The rule now lives in the firewall stage alone,
+    # which firewalls either way: admin access falls back to this host's own
+    # subnet and the public ports stay the mail ports.
+    #
+    # Declining is still possible and still honoured - that is the CLI prompt
+    # in the else branch below. Saying nothing is not declining.
     admin_ips=$(printf '%s' "${KIN_ADMIN_IPS:-}" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
     if [ -z "$admin_ips" ]; then
-      warn "Host firewall (ufw) not applied - no admin IPs configured via wizard."
-      warn "Perimeter firewall (FortiGate) remains your only protection at host level until you set Admin access IPs and re-run this stage."
-      info "Console: run_script 10-host-firewall.sh apply"
-      info "CLI:     sudo ./10-host-firewall.sh apply"
-      FIREWALL_STAGE_SKIPPED=1
-      return 0
+      warn "No admin IPs configured - the firewall still applies, with LAN-only admin access."
+      info "Set Admin access IPs in the console and re-run this stage to narrow it."
     fi
     # Console UI button is the operator confirm - never invent a silent default-yes
     # for bare non-TTY runs without this flag.

@@ -174,10 +174,15 @@ else
   bad "05 or kin-mail.sh missing classifier / DKIM wait wiring"
 fi
 
-if grep -q 'b "Certificate is still self-signed' ../05-healthcheck.sh \
+# The wording moved with the predicate: "still self-signed" was inaccurate for
+# what Zimbra actually installs, which is a leaf signed by its own private CA.
+# What has to hold is the severity - an unfinished TLS setup is BLOCKED, never
+# FAILED, because it does not stop mail and it stops the pipeline.
+if grep -q 'b "Certificate is not one clients will accept' ../05-healthcheck.sh \
   && ! grep -q 'f "No trusted certificate yet' ../05-healthcheck.sh \
+  && ! grep -q 'f "Certificate is not one clients will accept' ../05-healthcheck.sh \
   && grep -q 'TLS_METHOD:-}" = "customer"' ../05-healthcheck.sh; then
-  pass "05-healthcheck.sh treats self-signed / customer hook as blocked not fail"
+  pass "05-healthcheck.sh treats an untrusted cert / customer hook as blocked not fail"
 else
   bad "05-healthcheck.sh still fail-closes TLS for commercial or customer certs"
 fi
