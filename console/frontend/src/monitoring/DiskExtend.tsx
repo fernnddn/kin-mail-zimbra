@@ -131,7 +131,14 @@ const TARGETS: Target[] = [
     id: "mail",
     name: "Mail storage",
     mount: "/opt/zimbra",
-    blurb: "Mailboxes, indexes and the mail queue.",
+    // Says which machine without needing to know the topology. On a multi
+    // deployment this disk is on the mailbox and the console reads it over
+    // SSH; the operator finds out from the output either way, but a
+    // destructive control should not wait until it is pressed to say what it
+    // is pointed at.
+    blurb:
+      "Mailboxes, indexes and the mail queue. On a multi deployment this disk " +
+      "is on the mailbox node, and Check reads it there.",
   },
 ];
 
