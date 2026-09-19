@@ -881,7 +881,10 @@ function Chart({ data }: { data: SeriesResp }) {
 // able to tell "still on the opening view" from "the operator picked this".
 const INITIAL_RANGE = "now";
 
-export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boolean } = {}) {
+export function MonitoringTab({
+  externallyBusy = false,
+  mailboxName = "",
+}: { externallyBusy?: boolean; mailboxName?: string } = {}) {
   const [range, setRange] = useState(INITIAL_RANGE);
 
   const [ranges, setRanges] = useState<string[]>(["now", "1h", "6h", "24h", "7d", "30d", "1y"]);
@@ -1312,7 +1315,9 @@ export function MonitoringTab({ externallyBusy = false }: { externallyBusy?: boo
           a partition boundary on a live mail server. */}
       {/* Disk extend acts on the machine the console runs on, so it
           refreshes that one regardless of which node is being viewed. */}
-      {canInstall ? <DiskExtend onGrew={() => refreshHost("")} /> : null}
+      {canInstall ? (
+        <DiskExtend onGrew={() => refreshHost("")} mailboxName={mailboxName} />
+      ) : null}
 
       {CHART_GROUPS.map((group) => {
         const inGroup = charts.filter((c) => group.metrics.includes(c.metric));

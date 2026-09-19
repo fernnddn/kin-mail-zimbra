@@ -910,7 +910,7 @@ async def _run_quiet(argv: list[str], env: dict[str, str]) -> int:
 
 
 async def _grow_disk_on_mailbox(
-    cfg: dict[str, str], op: str, reclaim: bool, script: Path
+    cfg: dict[str, str], op: str, reclaim: bool, script: Path, mountpoint: str
 ) -> AsyncIterator[dict[str, Any]]:
     """Run grow-disk.sh on the mailbox, over the channel the build already uses.
 
@@ -925,6 +925,14 @@ async def _grow_disk_on_mailbox(
     there. This carries the request and brings the output back.
     """
     from .orchestration import redact_text
+
+    # Belt and braces. cmd_grow_disk already maps a NAME to one of two
+    # mountpoints; this refuses anything else outright, so a future caller
+    # cannot turn this into "run a path as root on the other machine".
+    if mountpoint not in GROW_TARGETS.values():
+        yield proto.event_stderr(f"refusing an unknown mountpoint: {mountpoint}\n")
+        yield proto.event_done(2)
+        return
 
     ip = (cfg.get("MAILBOX_IP") or "").strip()
     user = (cfg.get("MAILBOX_SSH_USER") or cfg.get("KIN_OS_USER") or "kin").strip()
@@ -957,7 +965,7 @@ async def _grow_disk_on_mailbox(
     # fix to the resize rules takes effect without a full rebuild. grow-disk.sh
     # sources nothing, so one file is the whole of it.
     remote_script = "/usr/local/lib/kin-grow-disk.sh"
-    remote = f"{remote_script} {op} {GROW_TARGETS['mail']}"
+    remote = f"{remote_script} {op} {mountpoint}"
     if reclaim:
         remote += " --reclaim-reserved"
     # Installed root-owned and root-only before it is run, so the account we
@@ -990,10 +998,9 @@ async def _grow_disk_on_mailbox(
         # only a, because the shell splits on && before sudo sees it.
         f"sudo -S -p '' bash -c {shlex.quote(remote)}",
     ]
-    yield proto.event_stdout(
-        f"Reading the mail disk on {cfg.get('MAILBOX_HOST') or ip}, "
-        "which is where the mail store lives.\n"
-    )
+    where = cfg.get("MAILBOX_HOST") or ip
+    what = "mail store" if mountpoint == GROW_TARGETS["mail"] else "system disk"
+    yield proto.event_stdout(f"Reading the {what} on {where}.\n")
     push = [
         "sshpass",
         "-e",
@@ -1075,17 +1082,32 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
     # to run it on a machine this product exists to keep them out of - which
     # meant the one disk that actually fills up could not be grown from the
     # console at all.
+    #
+    # Two ways to end up there. An explicit node=mailbox, which is how the
+    # console offers that machine's disks; and target=mail on a split, which
+    # goes there whether asked or not, because /opt/zimbra on the edge is the
+    # MTA tree and growing it would report success while the store stays full.
+    node = str(args.get("node") or "").strip().lower()
     mailbox_cfg: dict[str, str] | None = None
-    if target == "mail":
-        elsewhere = mail_store_is_elsewhere()
-        if elsewhere:
-            cfg = _appliance_config()
-            if (cfg.get("MAILBOX_IP") or "").strip():
-                mailbox_cfg = cfg
-            else:
-                yield proto.event_stderr(elsewhere + "\n")
-                yield proto.event_done(2)
-                return
+    if node == "mailbox" or (target == "mail" and mail_store_is_elsewhere()):
+        cfg = _appliance_config()
+        if cfg.get("TOPOLOGY") != "split":
+            yield proto.event_stderr(
+                "This appliance is a single server; there is no mailbox node "
+                "to grow a disk on.\n"
+            )
+            yield proto.event_done(2)
+            return
+        if (cfg.get("MAILBOX_IP") or "").strip():
+            mailbox_cfg = cfg
+        else:
+            yield proto.event_stderr(
+                (mail_store_is_elsewhere() or "The mailbox address is not "
+                 "recorded in /etc/kin-mail/config, so it cannot be reached.")
+                + "\n"
+            )
+            yield proto.event_done(2)
+            return
 
     mountpoint = GROW_TARGETS[target]
 
@@ -1101,7 +1123,9 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
     # happen while a deploy runs is exactly when they want to look.
     if op == "plan":
         if mailbox_cfg is not None:
-            async for ev in _grow_disk_on_mailbox(mailbox_cfg, "plan", False, script):
+            async for ev in _grow_disk_on_mailbox(
+                mailbox_cfg, "plan", False, script, mountpoint
+            ):
                 yield ev
             return
         async for ev in _stream_subprocess([str(script), "plan", mountpoint]):
@@ -1135,7 +1159,9 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
         # it is what stops a resize overlapping a deploy, and a deploy is driven
         # from here even when it acts on the mailbox.
         if mailbox_cfg is not None:
-            async for ev in _grow_disk_on_mailbox(mailbox_cfg, "apply", reclaim, script):
+            async for ev in _grow_disk_on_mailbox(
+                mailbox_cfg, "apply", reclaim, script, mountpoint
+            ):
                 yield ev
             return
         argv = [str(script), "apply", mountpoint]

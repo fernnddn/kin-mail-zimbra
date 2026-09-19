@@ -889,7 +889,15 @@ async def wizard_deploy_stream(
             raise HTTPException(
                 status_code=400, detail="grow_disk reclaim only applies to apply"
             )
-        stream_args = {"op": op, "target": target, "reclaim": reclaim}
+        # Which machine. A name out of a fixed set, exactly like the target:
+        # the console never says WHERE, only WHICH, and the helper resolves it
+        # from the appliance config. Empty means the node the console runs on.
+        node = (request.query_params.get("node") or "").strip().lower()
+        if node not in ("", "this", "mailbox"):
+            raise HTTPException(
+                status_code=400, detail="grow_disk node must be this or mailbox"
+            )
+        stream_args = {"op": op, "target": target, "reclaim": reclaim, "node": node}
     elif cmd == proto.CMD_MAIL_GATEWAY:
         # Only the read-only and revert operations come through the streaming
         # endpoint, because a query string ends up in access logs and browser

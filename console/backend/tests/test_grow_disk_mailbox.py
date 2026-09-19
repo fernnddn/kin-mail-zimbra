@@ -123,7 +123,9 @@ class TheMailDiskIsGrownWhereItLives(unittest.TestCase):
                  mock.patch.object(commands, "try_lock_maintenance", create=True):
                 sh.which.return_value = "/usr/bin/sshpass"
                 _collect(
-                    commands._grow_disk_on_mailbox(SPLIT_CFG, "apply", reclaim, Path("/x/grow-disk.sh"))
+                    commands._grow_disk_on_mailbox(
+                    SPLIT_CFG, "apply", reclaim, Path("/x/grow-disk.sh"), "/opt/zimbra"
+                )
                 )
             joined = " ".join(seen["argv"])
             self.assertEqual("--reclaim-reserved" in joined, expect)
@@ -133,7 +135,9 @@ class TheMailDiskIsGrownWhereItLives(unittest.TestCase):
         console would show a spinner that never ends."""
         cfg = dict(SPLIT_CFG)
         cfg.pop("KIN_USER_PASS")
-        out, code = _collect(commands._grow_disk_on_mailbox(cfg, "plan", False, Path("/x/grow-disk.sh")))
+        out, code = _collect(commands._grow_disk_on_mailbox(
+            cfg, "plan", False, Path("/x/grow-disk.sh"), "/opt/zimbra"
+        ))
         self.assertEqual(code, 2)
         self.assertTrue(any("password" in line.lower() for line in out))
 
@@ -205,7 +209,7 @@ class TheMailDiskIsGrownWhereItLives(unittest.TestCase):
             sh.which.return_value = "/usr/bin/sshpass"
             _collect(
                 commands._grow_disk_on_mailbox(
-                    SPLIT_CFG, "plan", False, Path("/x/grow-disk.sh")
+                    SPLIT_CFG, "plan", False, Path("/x/grow-disk.sh"), "/opt/zimbra"
                 )
             )
         self.assertEqual(pushed["argv"][0], "sshpass")
@@ -233,7 +237,7 @@ class TheMailDiskIsGrownWhereItLives(unittest.TestCase):
             sh.which.return_value = "/usr/bin/sshpass"
             out, code = _collect(
                 commands._grow_disk_on_mailbox(
-                    SPLIT_CFG, "apply", True, Path("/x/grow-disk.sh")
+                    SPLIT_CFG, "apply", True, Path("/x/grow-disk.sh"), "/opt/zimbra"
                 )
             )
         self.assertEqual(code, 2)
@@ -247,8 +251,57 @@ class TheRemoteCommandIsFixed(unittest.TestCase):
         two mountpoints. A path arriving from outside would be a path being run
         as root on another machine."""
         src = inspect.getsource(commands._grow_disk_on_mailbox)
-        self.assertIn("GROW_TARGETS['mail']", src)
+        self.assertIn("mountpoint not in GROW_TARGETS.values()", src)
         self.assertNotIn("args", src)
+
+    def test_a_mountpoint_outside_the_table_is_refused(self) -> None:
+        """cmd_grow_disk already maps a NAME to one of two mountpoints. This is
+        the second lock: a future caller cannot turn this into "run a path as
+        root on the other machine"."""
+        out, code = _collect(
+            commands._grow_disk_on_mailbox(
+                SPLIT_CFG, "apply", True, Path("/x/g.sh"), "/etc"
+            )
+        )
+        self.assertEqual(code, 2)
+        self.assertTrue(any("unknown mountpoint" in line for line in out))
+
+    def test_the_system_disk_of_the_mailbox_is_reachable(self) -> None:
+        """node=mailbox with target=system. Without it the 50 GB added to the
+        mailbox's system disk could not be collected from the console at all."""
+        seen: dict[str, list[str]] = {}
+
+        async def fake_stream(argv, **kw):
+            seen["argv"] = list(argv)
+            yield {"type": "done", "exit_code": 0}
+
+        with mock.patch.object(commands, "_appliance_config", return_value=SPLIT_CFG), \
+             mock.patch.object(commands, "_local_ipv4s", return_value=["192.0.2.10"]), \
+             mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")), \
+             mock.patch.object(commands, "shutil") as sh, \
+             mock.patch.object(commands, "_run_quiet", _copy_ok), \
+             mock.patch.object(commands, "_stream_subprocess", fake_stream):
+            sh.which.return_value = "/usr/bin/sshpass"
+            _collect(
+                commands.cmd_grow_disk(
+                    {"op": "plan", "target": "system", "node": "mailbox"}
+                )
+            )
+        run = " ".join(seen["argv"])
+        self.assertIn("kin@192.0.2.11", run)
+        self.assertIn("kin-grow-disk.sh plan /", run)
+        self.assertNotIn("/opt/zimbra", run)
+
+    def test_a_single_appliance_has_no_mailbox_to_address(self) -> None:
+        with mock.patch.object(commands, "_appliance_config", return_value={"TOPOLOGY": "1vm"}), \
+             mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")):
+            out, code = _collect(
+                commands.cmd_grow_disk(
+                    {"op": "plan", "target": "system", "node": "mailbox"}
+                )
+            )
+        self.assertEqual(code, 2)
+        self.assertTrue(any("single server" in line for line in out))
 
     def test_it_does_not_run_whatever_the_last_deploy_left_there(self) -> None:
         """Running the mailbox's own copy would mean running whatever version

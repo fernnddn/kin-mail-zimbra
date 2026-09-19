@@ -2575,7 +2575,18 @@ export default function ClusterPage() {
             </>
           )
         ) : tab === "monitoring" ? (
-          <MonitoringTab externallyBusy={anyBusy} />
+          <MonitoringTab
+            externallyBusy={anyBusy}
+            /* The page already knows the deployment, so the disk control does
+               not have to ask anyone. "" on a single appliance, which is what
+               hides the per-machine grouping there. */
+            mailboxName={
+              topology === "split"
+                ? (cluster.deployment?.nodes || []).find((n) => n.role === "mailbox")
+                    ?.name || "Mailbox"
+                : ""
+            }
+          />
         ) : tab === "reports" ? (
           <ReportsTab />
         ) : (

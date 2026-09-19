@@ -42,6 +42,18 @@ const Blurb = styled.span`
   font-size: 0.82rem;
 `;
 
+/* Which machine the disks below are on. Only rendered when there is more than
+   one, so a single appliance is not asked to read a heading answering a
+   question it does not have. */
+const GroupName = styled.h4`
+  margin: 1rem 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: ${theme.surface[500]};
+`;
+
 /* One self-contained block per disk: the row, and whatever the appliance said
    about it.
 
@@ -118,27 +130,61 @@ const Working = styled.div`
   font-size: 0.85rem;
 `;
 
-type Target = { id: "system" | "mail"; name: string; mount: string; blurb: string };
+/** A disk the console can grow. `node` is the machine it is on: "" is the
+    one the console runs on, "mailbox" is the other half of a multi
+    deployment. The console sends a NAME for both, never a path or an
+    address; the helper resolves them from the appliance config. */
+type Target = {
+  id: "system" | "mail";
+  node: "" | "mailbox";
+  key: string;
+  name: string;
+  mount: string;
+  blurb: string;
+};
 
-const TARGETS: Target[] = [
+const LOCAL_TARGETS: Target[] = [
   {
     id: "system",
+    node: "",
+    key: "this-system",
     name: "System disk",
     mount: "/",
     blurb: "The operating system, the console and the logs.",
   },
   {
     id: "mail",
+    node: "",
+    key: "this-mail",
     name: "Mail storage",
     mount: "/opt/zimbra",
-    // Says which machine without needing to know the topology. On a multi
-    // deployment this disk is on the mailbox and the console reads it over
-    // SSH; the operator finds out from the output either way, but a
-    // destructive control should not wait until it is pressed to say what it
-    // is pointed at.
-    blurb:
-      "Mailboxes, indexes and the mail queue. On a multi deployment this disk " +
-      "is on the mailbox node, and Check reads it there.",
+    blurb: "Mailboxes, indexes and the mail queue.",
+  },
+];
+
+/* The other machine of a multi deployment.
+ *
+ * Its disks are the ones that actually fill up - it holds every message - and
+ * until now the console could not reach either of them. The operator never
+ * logs into that machine by design, so "run it over there" was not an answer.
+ *
+ * Offered only when there IS one. A single appliance never sees this. */
+const MAILBOX_TARGETS: Target[] = [
+  {
+    id: "system",
+    node: "mailbox",
+    key: "mailbox-system",
+    name: "System disk",
+    mount: "/",
+    blurb: "The operating system and the logs on the mailbox.",
+  },
+  {
+    id: "mail",
+    node: "mailbox",
+    key: "mailbox-mail",
+    name: "Mail storage",
+    mount: "/opt/zimbra",
+    blurb: "Mailboxes, indexes and the mail queue. Every message is here.",
   },
 ];
 
@@ -215,6 +261,7 @@ function TargetRow({
       let text = "";
       const es = new EventSource(
         `/api/wizard/deploy/stream?action=grow_disk&op=${op}&target=${target.id}` +
+          (target.node ? `&node=${target.node}` : "") +
           (reclaim ? "&reclaim=1" : ""),
       );
       let code: number | null = null;
@@ -387,8 +434,24 @@ function TargetRow({
   );
 }
 
-export default function DiskExtend({ onGrew }: { onGrew: () => void }) {
+export default function DiskExtend({
+  onGrew,
+  mailboxName = "",
+}: {
+  onGrew: () => void;
+  /** Hostname of the mailbox node, or "" on a single appliance. Passed down
+      from the page, which already knows the deployment, rather than fetched:
+      a disk control must not depend on Prometheus or on a second round trip
+      to tell it how many machines there are. */
+  mailboxName?: string;
+}) {
   const [busy, setBusy] = useState(false);
+  const groups: { heading: string; targets: Target[] }[] = mailboxName
+    ? [
+        { heading: "This server", targets: LOCAL_TARGETS.filter((t) => t.id === "system") },
+        { heading: mailboxName, targets: MAILBOX_TARGETS },
+      ]
+    : [{ heading: "", targets: LOCAL_TARGETS }];
   return (
     <Wrap>
       <Head>
@@ -398,14 +461,19 @@ export default function DiskExtend({ onGrew }: { onGrew: () => void }) {
           appliance checks first and says what it would do before doing it.
         </Blurb>
       </Head>
-      {TARGETS.map((t) => (
-        <TargetRow
-          key={t.id}
-          target={t}
-          busy={busy}
-          onBusyChange={setBusy}
-          onGrew={onGrew}
-        />
+      {groups.map((g) => (
+        <div key={g.heading || "one"}>
+          {g.heading ? <GroupName>{g.heading}</GroupName> : null}
+          {g.targets.map((t) => (
+            <TargetRow
+              key={t.key}
+              target={t}
+              busy={busy}
+              onBusyChange={setBusy}
+              onGrew={onGrew}
+            />
+          ))}
+        </div>
       ))}
       <Hint style={{ marginTop: "0.75rem" }}>
         Only the last partition on a disk can be extended, and only into space
