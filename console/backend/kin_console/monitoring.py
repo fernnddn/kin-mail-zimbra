@@ -511,8 +511,24 @@ def scraped_nodes() -> list[dict[str, str]]:
     has never been scraped successfully has nothing to draw, and offering a tab
     that opens on empty charts is worse than not offering the tab.
     """
+    # role!="" is the filter, and it is doing real work.
+    #
+    # The prometheus package ships its own /etc/prometheus/prometheus.yml that
+    # scrapes localhost:9090 and localhost:9100. Installing monitoring replaces
+    # that file, but the series it already wrote stay in the TSDB for the
+    # retention period, and for the first few minutes afterwards they are still
+    # inside Prometheus' staleness window - so an instant query for
+    # node_time_seconds answers with localhost:9100 as well as this appliance,
+    # and the Monitoring tab grew a third machine that does not exist. Seen on
+    # the live pair, 19 Sep 2026.
+    #
+    # Only the scrape config this product writes sets `role`, so requiring it
+    # is the difference between "a node we deployed" and "a series that once
+    # existed". An appliance whose prometheus.yml predates the label answers
+    # with nothing, the switcher does not appear, and the tab behaves exactly
+    # as it did before there was one - which is the right way to degrade.
     try:
-        payload = _get("/api/v1/query", {"query": "node_time_seconds"})
+        payload = _get("/api/v1/query", {"query": 'node_time_seconds{role!=""}'})
     except MonitoringError:
         return []
     seen: dict[str, str] = {}
@@ -523,15 +539,16 @@ def scraped_nodes() -> list[dict[str, str]]:
         if not isinstance(labels, dict):
             continue
         name = str(labels.get("instance") or "").strip()
-        if not name:
+        role = str(labels.get("role") or "").strip()
+        if not name or not role:
             continue
-        seen.setdefault(name, str(labels.get("role") or "").strip())
+        seen.setdefault(name, role)
     out = [
         {
             "instance": name,
             "role": role,
-            # An unlabelled instance is one scraped by a config written before
-            # roles existed. Naming it after itself beats calling it nothing.
+            # A role this build does not know about still names a real machine,
+            # so it is offered under its own name rather than dropped.
             "label": ROLE_LABELS.get(role) or name,
         }
         for name, role in seen.items()

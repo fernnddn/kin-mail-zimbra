@@ -459,11 +459,44 @@ grow_plan() {
     # lands after the meta partition rather than after the data. Saying only
     # "something is after it" would leave the operator guessing at their own
     # appliance's layout, so name it.
-    local tail_name
+    local tail_name tail_dev
     tail_name=$(partition_name "$PLAN_DISK" "$last_num")
+    # The device NODE, not the disk with the number glued on. /dev/sdb + 2 is
+    # /dev/sdb2 and the concatenation looked right for years, because every
+    # appliance this product has run on used sd*. It is wrong everywhere else:
+    # /dev/nvme0n1 + 2 reads as /dev/nvme0n12, and a loop device the same way -
+    # seen in the live rehearsal on 19 Sep 2026, which printed /dev/loop72.
+    # partition_device already answers this properly and is what every guard in
+    # the reclaim path uses; only the sentences an operator reads were still
+    # guessing, which is the half where being wrong sends someone looking for a
+    # device that does not exist.
+    tail_dev=$(partition_device "$PLAN_DISK" "$last_num") || tail_dev=""
+    # When it cannot be resolved, say what is true rather than what is likely.
+    # Falling back to the concatenation would reintroduce the invented path in
+    # exactly the case where the kernel could not confirm one exists.
+    [ -n "$tail_dev" ] || tail_dev="partition ${last_num} on ${PLAN_DISK}"
+
+    # Is there anything to unlock?
+    #
+    # The refusal below is the truth either way and is always printed. What is
+    # gated on this is the OFFER, because the offer deletes a partition and the
+    # console spends it on a button labelled "Free the reserved partition and
+    # extend". That trade is worth making when it releases space the operator
+    # has already added; it is not worth making for the 256 MiB of the reserved
+    # partition itself, and least of all when the operator believes they are
+    # about to get the 50 GB they just added in the hypervisor.
+    #
+    # Seen on the live pair, 19 Sep 2026: both mail disks reported this blocker
+    # and offered the reclaim while the trailing free space was 1 MiB, because
+    # the hypervisor resize had not reached the guests at all. Pressing the
+    # button would have destroyed a partition and gained nothing anyone asked
+    # for - on the machine holding every message.
+    local room=1
+    [ "$free" -lt "$MIN_GROW_BYTES" ] && room=0
+    mark "FREE_BYTES=${free}"
     if [ "$tail_name" = "drbd-meta" ]; then
       fail meta-partition-in-the-way \
-        "${PLAN_PART} holds the mail data, and the replication meta partition (${PLAN_DISK}${last_num}) sits at the end of this disk behind it. New space added to this disk lands after that meta partition, so it cannot be given to the mail data without moving it, which is not something to do unattended on a live mail server. Either free that reserved partition (see below), or add the space to the system disk instead."
+        "${PLAN_PART} holds the mail data, and the replication meta partition (${tail_dev}) sits at the end of this disk behind it. New space added to this disk lands after that meta partition, so it cannot be given to the mail data without moving it, which is not something to do unattended on a live mail server. Either free that reserved partition (see below), or add the space to the system disk instead."
       # ...and then say whether it can be freed, exactly as the generic branch
       # does. This branch used to return here.
       #
@@ -478,7 +511,14 @@ grow_plan() {
       # already-wired recovery path that no real deployment could reach. The
       # operator enlarged the disk in VMware and was told to open a ticket for
       # something the product does itself in one step.
-      report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
+      if [ "$room" -eq 1 ]; then
+        report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
+      else
+        say ""
+        say "Nothing has been added to ${PLAN_DISK} yet, so there is nothing for freeing"
+        say "it to release. Enlarge the disk in the hypervisor first; this will then"
+        say "offer to free ${tail_dev} so ${PLAN_MOUNT} can take the space."
+      fi
       return 1
     fi
     fail not-last-partition \
@@ -487,7 +527,9 @@ grow_plan() {
     # layout the blocker is always the same 256 MiB partition reserved for a
     # second server, and an operator who is told which partition and why can
     # act on it.
-    report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
+    if [ "$room" -eq 1 ]; then
+      report_reserved_blocker "$PLAN_DISK" "$PLAN_PARTNUM" "$last_num"
+    fi
     return 1
   fi
 

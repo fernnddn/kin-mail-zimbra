@@ -346,6 +346,69 @@ if printf '%s' "$META_BRANCH" | grep -q 'report_reserved_blocker'; then
   pass "two-disk layout: the recognised-blocker branch still offers the reclaim"
 else bad "two-disk layout: recognising the partition by name skips the reclaim offer"; fi
 
+# ...and the same layout BEFORE the hypervisor has given it anything.
+#
+# This is what both live mail nodes looked like on 19 Sep 2026: the disk is
+# exactly the size it was installed at, trailing free space is the 1 MiB of GPT
+# tail, and the reserved partition is still in the way. The refusal is the same
+# and must still be printed - but the OFFER must not be, because freeing the
+# partition would delete it and release nothing. The console spends that offer
+# on a button labelled "Free the reserved partition and extend", on the machine
+# that holds every message.
+PARTED_TWO_DISK_NO_ROOM='BYT;
+/dev/sdb:107374182400B:scsi:512:512:gpt:VMware Virtual disk;
+1:1048576B:107105746943B:107104698368B:ext4:zimbra-data:;
+2:107105746944B:107373133823B:267386880B::drbd-meta:;'
+
+STUB_SOURCE=/dev/sdb1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='/dev/sdb1 part
+/dev/sdb disk' STUB_PARTED="$PARTED_TWO_DISK_NO_ROOM" run plan /opt/zimbra
+if [ "$RC" -ne 0 ] && has "reason=meta-partition-in-the-way"; then
+  pass "no room yet: still refuses, and still names the meta partition"
+else bad "no room yet: lost the refusal (rc=$RC): $OUT"; fi
+if has "KIN_GROW_RECLAIMABLE_RESERVED"; then
+  bad "no room yet: OFFERED TO DELETE A PARTITION THAT WOULD RELEASE NOTHING"
+else
+  pass "no room yet: does not offer to free the reserved partition"
+fi
+if printf '%s' "$OUT" | grep -q "Enlarge the disk in the hypervisor first"; then
+  pass "no room yet: says which step is actually missing"
+else bad "no room yet: refuses without naming the hypervisor step"; fi
+
+# The partition named in the message has to be a device that exists.
+#
+# /dev/sdb + "2" reads as /dev/sdb2 and looked right for years, because every
+# appliance this has run on used sd*. On nvme and loop devices the same
+# concatenation produces /dev/nvme0n12 and /dev/loop72 - paths that do not
+# exist, sending an operator to look for a partition that is not there. The
+# guards already resolved this properly; only the sentences did not.
+PARTED_NVME_NO_ROOM='BYT;
+/dev/nvme0n1:107374182400B:nvme:512:512:gpt:Samsung;
+1:1048576B:107105746943B:107104698368B:ext4:zimbra-data:;
+2:107105746944B:107373133823B:267386880B::drbd-meta:;'
+STUB_SOURCE=/dev/nvme0n1p1 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN='/dev/nvme0n1p1 part
+/dev/nvme0n1 disk' STUB_PARTED="$PARTED_NVME_NO_ROOM" run plan /opt/zimbra
+if printf '%s' "$OUT" | grep -q "/dev/nvme0n12"; then
+  bad "names a device that does not exist (/dev/nvme0n12)"
+else
+  pass "nvme: does not invent /dev/nvme0n12 in the refusal"
+fi
+if printf '%s' "$OUT" | grep -q "partition 2 on /dev/nvme0n1"; then
+  pass "nvme: says which partition it means without guessing a path"
+else
+  bad "nvme: refusal does not identify the blocking partition at all: $OUT"
+fi
+
+# The generic blocker behaves the same way: a partition in the way and nothing
+# to gain is not a reason to delete anything.
+PARTED_TRAPPED_NO_ROOM='BYT;
+/dev/sda:107374182400B:scsi:512:512:gpt:VMware Virtual disk;
+2:1048576B:107105746943B:107104698368B:ext4::;
+3:107105746944B:107373133823B:267386880B::spare:;'
+STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_TRAPPED_NO_ROOM" run plan /
+if [ "$RC" -ne 0 ] && has "reason=not-last-partition" && ! has "KIN_GROW_RECLAIMABLE_RESERVED"; then
+  pass "generic blocker with no room: refuses and offers nothing"
+else bad "generic blocker with no room: rc=$RC OUT=$OUT"; fi
+
 # The system disk on that same appliance must still be growable, because that
 # is where the space can safely go.
 STUB_SOURCE=/dev/sda2 STUB_ROOT_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" \

@@ -229,6 +229,33 @@ class MonitoringCanSeeTheMailbox(unittest.TestCase):
         self.assertIn("sx.instance === forNode", src)
         self.assertIn('api<NodesResp>("/api/monitoring/nodes")', src)
 
+    def test_only_machines_this_product_scrapes_are_offered(self) -> None:
+        """The prometheus package ships its own config scraping localhost:9090
+        and localhost:9100. Installing monitoring replaces that file, but the
+        series it already wrote stay in the TSDB, and for the first few minutes
+        afterwards they are still inside Prometheus' staleness window - so an
+        unfiltered instant query answered with localhost:9100 too and the tab
+        grew a third machine that does not exist (live pair, 19 Sep 2026).
+
+        Only the scrape config this product writes sets `role`.
+        """
+        import inspect
+
+        from kin_console import monitoring
+
+        src = inspect.getsource(monitoring.scraped_nodes)
+        self.assertIn('role!=""', src)
+
+    def test_an_instance_with_no_role_is_not_offered(self) -> None:
+        """Requiring the label is the whole guard; dropping through to the
+        instance name would let the phantom back in."""
+        import inspect
+
+        from kin_console import monitoring
+
+        src = inspect.getsource(monitoring.scraped_nodes)
+        self.assertIn("if not name or not role:", src)
+
     def test_the_switcher_is_hidden_when_there_is_one_machine(self) -> None:
         src = MONITORING.read_text(encoding="utf-8")
         self.assertIn("nodes.length > 1 ?", src)
