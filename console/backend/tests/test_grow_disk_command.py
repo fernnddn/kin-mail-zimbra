@@ -287,22 +287,56 @@ class BothDiskLayoutsAreHandled(unittest.TestCase):
         self.assertIn("drbd-meta", lib)
 
 
-class GrowingTheMailDiskOnTheEdgeIsRefused(unittest.TestCase):
-    """The console runs on the edge. /opt/zimbra there holds no mail."""
+class GrowingTheMailDiskFromTheEdge(unittest.TestCase):
+    """The console runs on the edge. /opt/zimbra there holds no mail, so the
+    request goes to the mailbox rather than enlarging the MTA tree.
+
+    This used to be a flat refusal that told the operator to run it by hand on
+    the mailbox - a machine a multi deployment exists to keep them out of, and
+    the only one whose disk actually fills up.
+    """
 
     _SPLIT = {
         "TOPOLOGY": "split",
         "MAILBOX_IP": "192.0.2.20",
         "MAILBOX_HOST": "store.example.test",
+        "MAILBOX_SSH_USER": "kin",
+        "KIN_USER_PASS": "pw",
     }
 
-    def test_a_split_edge_refuses_to_grow_mail(self) -> None:
+    def test_a_split_edge_never_grows_its_own_zimbra_tree(self) -> None:
+        """The one thing that must not happen: growing /opt/zimbra HERE. That
+        enlarges the MTA tree while the store on the other machine stays full."""
+        from pathlib import Path
+
+        seen: dict[str, list[str]] = {}
+
+        async def fake_stream(argv, **kw):
+            seen["argv"] = list(argv)
+            yield {"type": "done", "exit_code": 0}
+
+        async def copy_ok(argv, env):
+            return 0
+
         with mock.patch.object(commands, "_appliance_config", return_value=self._SPLIT), \
+             mock.patch.object(commands, "_local_ipv4s", return_value={"192.0.2.10"}), \
+             mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")), \
+             mock.patch.object(commands, "shutil") as sh, \
+             mock.patch.object(commands, "_run_quiet", copy_ok), \
+             mock.patch.object(commands, "_stream_subprocess", fake_stream):
+            sh.which.return_value = "/usr/bin/sshpass"
+            _drain(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
+        argv = seen["argv"]
+        self.assertEqual(argv[0], "sshpass", "ran locally instead of on the mailbox")
+        self.assertIn("kin@192.0.2.20", argv)
+
+    def test_it_still_refuses_when_the_mailbox_address_is_unknown(self) -> None:
+        cfg = {k: v for k, v in self._SPLIT.items() if k != "MAILBOX_IP"}
+        with mock.patch.object(commands, "_appliance_config", return_value=cfg), \
              mock.patch.object(commands, "_local_ipv4s", return_value={"192.0.2.10"}):
             events = _drain(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
         self.assertEqual(_exit(events), 2)
         self.assertIn("holds no mail", _text(events))
-        self.assertIn("store.example.test", _text(events))
 
     def test_the_mailbox_node_is_allowed_to_plan(self) -> None:
         true = __import__("pathlib").Path("/bin/true")

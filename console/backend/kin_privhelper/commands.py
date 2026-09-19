@@ -7,6 +7,7 @@ import json
 import grp
 import os
 import re
+import shlex
 import shutil
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
@@ -871,6 +872,167 @@ def mail_store_is_elsewhere() -> str | None:
     )
 
 
+# The known-hosts file privhelperd is allowed to write. ProtectHome=true puts
+# /root out of reach, so ssh cannot use its default location; the orchestrator
+# already uses this one, so both paths trust the same host key.
+MAILBOX_KNOWN_HOSTS = "/etc/kin-mail/split-known-hosts"
+# Where the pushed copy lands before it is installed root-owned.
+STAGED_GROW_DISK = "/tmp/kin-grow-disk.staged.sh"
+
+
+def _mailbox_ssh_password(cfg: dict[str, str]) -> str:
+    """The password for the mailbox account.
+
+    MAILBOX_SSH_PASS is what the operator typed on the Topology step, and
+    02-prepare-os then sets that account's password to KIN_USER_PASS - so on a
+    built deployment the second one is the live value and the first is the one
+    that got it in the door. Trying the stored pair in that order is what the
+    orchestrator does; doing anything else here would work on a fresh build and
+    fail on every deployment that has finished.
+    """
+    return (cfg.get("KIN_USER_PASS") or cfg.get("MAILBOX_SSH_PASS") or "").strip()
+
+
+async def _run_quiet(argv: list[str], env: dict[str, str]) -> int:
+    """Run a command, discard its output, return its exit code.
+
+    For the copy step only. Its stdout is scp noise and its stderr can echo
+    the target path; what the operator needs is the result, and the caller
+    says what failed.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        env={**os.environ, **env},
+    )
+    return await proc.wait()
+
+
+async def _grow_disk_on_mailbox(
+    cfg: dict[str, str], op: str, reclaim: bool, script: Path
+) -> AsyncIterator[dict[str, Any]]:
+    """Run grow-disk.sh on the mailbox, over the channel the build already uses.
+
+    The console lives on the edge and the operator never logs into the mailbox -
+    that is the whole shape of a multi deployment. But the mail store is on the
+    mailbox, so "Extend a disk" for mail could not reach the only disk that
+    matters, and the refusal told the operator to go and run it on a machine
+    they are not supposed to touch.
+
+    Nothing about the decision moves here. grow-disk.sh runs on the mailbox,
+    with the mailbox's own view of its disks, and every refusal it makes is made
+    there. This carries the request and brings the output back.
+    """
+    from .orchestration import redact_text
+
+    ip = (cfg.get("MAILBOX_IP") or "").strip()
+    user = (cfg.get("MAILBOX_SSH_USER") or cfg.get("KIN_OS_USER") or "kin").strip()
+    password = _mailbox_ssh_password(cfg)
+    if not ip or not password:
+        yield proto.event_stderr(
+            "The mailbox address or its stored password is missing from "
+            "/etc/kin-mail/config, so this node cannot reach it.\n"
+        )
+        yield proto.event_done(2)
+        return
+    if shutil.which("sshpass") is None:
+        yield proto.event_stderr(
+            "sshpass is not installed on this node, so the mailbox cannot be "
+            "reached without a password prompt.\n"
+        )
+        yield proto.event_done(2)
+        return
+
+    # A fixed command, built here. Nothing from the browser reaches it: the
+    # console sends the NAME of a target, this file maps that to a mountpoint,
+    # and the only variable part left is a flag that is either present or not.
+    #
+    # The script is PUSHED first rather than the mailbox's own copy being run.
+    #
+    # That copy was left there by the last deploy, so it is whatever version
+    # that was - and this is the code path that deletes a partition on the
+    # machine holding every message. Version skew is not a risk worth carrying
+    # here: the mailbox runs exactly the logic this console shipped with, and a
+    # fix to the resize rules takes effect without a full rebuild. grow-disk.sh
+    # sources nothing, so one file is the whole of it.
+    remote_script = "/usr/local/lib/kin-grow-disk.sh"
+    remote = f"{remote_script} {op} {GROW_TARGETS['mail']}"
+    if reclaim:
+        remote += " --reclaim-reserved"
+    # Installed root-owned and root-only before it is run, so the account we
+    # logged in as cannot swap the file between the copy and the execution.
+    remote = (
+        f"install -m 0700 -o root -g root {STAGED_GROW_DISK} {remote_script}"
+        f" && {remote}"
+    )
+
+    argv = [
+        "sshpass",
+        "-e",
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "PreferredAuthentications=password",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        f"UserKnownHostsFile={MAILBOX_KNOWN_HOSTS}",
+        f"{user}@{ip}",
+        # One root shell for the whole command. `sudo -S -p '' a && b` elevates
+        # only a, because the shell splits on && before sudo sees it.
+        f"sudo -S -p '' bash -c {shlex.quote(remote)}",
+    ]
+    yield proto.event_stdout(
+        f"Reading the mail disk on {cfg.get('MAILBOX_HOST') or ip}, "
+        "which is where the mail store lives.\n"
+    )
+    push = [
+        "sshpass",
+        "-e",
+        "scp",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "PreferredAuthentications=password",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        f"UserKnownHostsFile={MAILBOX_KNOWN_HOSTS}",
+        str(script),
+        f"{user}@{ip}:{STAGED_GROW_DISK}",
+    ]
+    rc = await _run_quiet(push, {"SSHPASS": password})
+    if rc != 0:
+        yield proto.event_stderr(
+            f"Could not copy the resize helper to {ip} (scp exit {rc}). "
+            "Nothing on either machine has been changed.\n"
+        )
+        yield proto.event_done(2)
+        return
+    async for ev in _stream_subprocess(
+        argv,
+        # SSHPASS, never argv: a password on a command line is readable by
+        # every process on the box for as long as the command runs.
+        extra_env={"SSHPASS": password},
+        secrets=[password],
+        stdin_text=password + "\n",
+        line_filter=lambda line: redact_text(line, [password]),
+    ):
+        yield ev
+
+
 async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
     """Grow a filesystem into space added to its disk by the hypervisor.
 
@@ -908,12 +1070,22 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
         yield proto.event_done(2)
         return
 
+    # On a multi deployment the mail store is on the mailbox, so the request
+    # goes there. Refusing used to be the whole answer, and it told the operator
+    # to run it on a machine this product exists to keep them out of - which
+    # meant the one disk that actually fills up could not be grown from the
+    # console at all.
+    mailbox_cfg: dict[str, str] | None = None
     if target == "mail":
         elsewhere = mail_store_is_elsewhere()
         if elsewhere:
-            yield proto.event_stderr(elsewhere + "\n")
-            yield proto.event_done(2)
-            return
+            cfg = _appliance_config()
+            if (cfg.get("MAILBOX_IP") or "").strip():
+                mailbox_cfg = cfg
+            else:
+                yield proto.event_stderr(elsewhere + "\n")
+                yield proto.event_done(2)
+                return
 
     mountpoint = GROW_TARGETS[target]
 
@@ -928,6 +1100,10 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
     # blocked by an unrelated operation: an operator looking at what WOULD
     # happen while a deploy runs is exactly when they want to look.
     if op == "plan":
+        if mailbox_cfg is not None:
+            async for ev in _grow_disk_on_mailbox(mailbox_cfg, "plan", False, script):
+                yield ev
+            return
         async for ev in _stream_subprocess([str(script), "plan", mountpoint]):
             yield ev
         return
@@ -955,6 +1131,13 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
             f"Growing {mountpoint} into unused space on its disk. "
             "Mail keeps running; nothing is unmounted.\n"
         )
+        # The lock above is this node's. It is the right one to hold either way:
+        # it is what stops a resize overlapping a deploy, and a deploy is driven
+        # from here even when it acts on the mailbox.
+        if mailbox_cfg is not None:
+            async for ev in _grow_disk_on_mailbox(mailbox_cfg, "apply", reclaim, script):
+                yield ev
+            return
         argv = [str(script), "apply", mountpoint]
         if reclaim:
             argv.append("--reclaim-reserved")
