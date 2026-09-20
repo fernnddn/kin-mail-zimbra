@@ -209,6 +209,10 @@ export type DeploymentNode = {
   checks?: DeploymentCheck[];
   detail?: string;
   local?: boolean;
+  /** Things that are wrong but are not the machine being down. A host with no
+      firewall still carries mail; saying it is unhealthy would be the wrong
+      word, and saying nothing is how it went unnoticed for a day. */
+  warnings?: string[];
 };
 
 export type DeploymentLink = {
@@ -224,6 +228,7 @@ export type DeploymentSnap = {
   nodes?: DeploymentNode[];
   links?: DeploymentLink[];
   healthy?: boolean;
+  warned?: boolean;
   gateway_linked?: boolean;
 };
 

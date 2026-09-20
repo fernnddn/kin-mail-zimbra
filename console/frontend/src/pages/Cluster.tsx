@@ -930,6 +930,7 @@ function deploymentSummary(cluster: ClusterSnap): string {
   const present = (dep.nodes || []).filter((n) => n.present);
   const down = present.filter((n) => !n.ok).map((n) => n.title.toLowerCase());
   if (down.length) return `${down.join(" and ")} not answering`;
+  if (dep.warned) return "All answering, with something that needs attention";
   return dep.gateway_linked
     ? "Gateway, edge and mailbox all answering"
     : "Edge and mailbox answering; no gateway linked yet";
@@ -1309,6 +1310,13 @@ function healthLines(cluster: ClusterSnap, topology: string): HealthLine[] {
               .map((c) => `${c.label} (${c.port})`)
               .join(", ")}`,
       });
+      // A warning is its own line, marked not-ok so the panel turns amber. It
+      // is not folded into the node's health: a machine with no firewall is
+      // still carrying mail, and calling it "not answering" would send the
+      // operator looking for an outage that is not there.
+      for (const warning of node.warnings || []) {
+        lines.push({ ok: false, label: `${node.title}: ${warning}` });
+      }
     }
     return lines;
   }

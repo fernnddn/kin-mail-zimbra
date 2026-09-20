@@ -135,6 +135,36 @@ MAILBOX_LINKS: tuple[tuple[int, str], ...] = (
 GATEWAY_PORT = 26
 
 
+def _local_firewall_active() -> bool | None:
+    """Is ufw running on this machine? None when it cannot be determined.
+
+    Asked because it can switch itself off. Applying the host firewall arms a
+    dead man that disables ufw again after five minutes unless somebody
+    cancels it - which is the right design, because rules that lock the
+    operator out otherwise lock them out permanently.
+    ONLY the mailbox has that cancelled for it: the orchestrator holds an SSH
+    connection through the change and cancels on the proof that it survived.
+    Nobody does that for the edge, so an operator who misses the prompt is left
+    with an internet-facing mail server and no host firewall - and until now
+    nothing anywhere said so. Seen on the live edge, disabled for a day
+    (20 Sep 2026).
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("ufw") is None:
+        return None
+    try:
+        out = subprocess.run(
+            ["ufw", "status"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return "Status: active" in (out.stdout or "")
+
+
 async def gather() -> dict[str, Any]:
     """Nodes and links of a multi deployment, probed concurrently."""
     conf = _config()
@@ -170,6 +200,18 @@ async def gather() -> dict[str, Any]:
     ]
 
     edge_ok = all(s["ok"] for s in edge_services)
+    # Not folded into edge_ok. A host with no firewall still carries mail, and
+    # colouring the whole node red would say "mail is broken" about something
+    # that is a real and separate problem.
+    firewall = _local_firewall_active()
+    edge_warnings = []
+    if firewall is False:
+        edge_warnings.append(
+            "The host firewall is not running on this machine. Applying it arms "
+            "a dead man that switches ufw off again after five minutes unless "
+            "it is cancelled, and it was not. Re-apply it from Settings, then "
+            "cancel the dead man."
+        )
     mailbox_ok = bool(mailbox_ip) and all(link["ok"] for link in mailbox_links)
 
     nodes = [
@@ -205,6 +247,7 @@ async def gather() -> dict[str, Any]:
             "checks": edge_services,
             "detail": "MTA and proxy. Holds no mail.",
             "local": True,
+            "warnings": edge_warnings,
         },
         {
             "role": "mailbox",
@@ -236,10 +279,13 @@ async def gather() -> dict[str, Any]:
     ]
 
     healthy = edge_ok and mailbox_ok and (gateway_ok if gateway_linked else True)
+    # A warning is not an outage, but it must not be swallowed either: the page
+    # reads this to decide whether to say "needs attention".
     return {
         "kind": "split",
         "nodes": nodes,
         "links": links,
         "healthy": healthy,
+        "warned": bool(edge_warnings),
         "gateway_linked": gateway_linked,
     }

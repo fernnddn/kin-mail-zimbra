@@ -145,6 +145,78 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual([c["port"] for c in edge["checks"]], [25, 443, 587, 993])
 
 
+class AHostWithNoFirewallSaysSo(unittest.TestCase):
+    """Applying the host firewall arms a dead man that switches ufw off again
+    after five minutes unless somebody cancels it. That is the right design -
+    rules that lock the operator out would otherwise lock them out for good.
+
+    Only the mailbox gets it cancelled automatically: the orchestrator holds an
+    SSH connection through the change and cancels on the proof that it
+    survived. Nobody does that for the edge, so an operator who misses the
+    prompt is left with an internet-facing mail server and no host firewall -
+    and nothing anywhere said so. Seen on the live edge, off for a day.
+    """
+
+    def setUp(self) -> None:
+        self.work = tempfile.TemporaryDirectory()
+        self.conf = Path(self.work.name, "config")
+        self.conf.write_text('TOPOLOGY="split"\nEDGE_IP="192.0.2.10"\n', encoding="utf-8")
+        self._prev = os.environ.get("KIN_MAIL_CONFIG")
+        os.environ["KIN_MAIL_CONFIG"] = str(self.conf)
+
+    def tearDown(self) -> None:
+        if self._prev is None:
+            os.environ.pop("KIN_MAIL_CONFIG", None)
+        else:
+            os.environ["KIN_MAIL_CONFIG"] = self._prev
+        self.work.cleanup()
+
+    def _snap(self, firewall):
+        from unittest import mock
+
+        with mock.patch.object(md, "_local_firewall_active", return_value=firewall):
+            return asyncio.run(md.gather())
+
+    def test_an_inactive_firewall_is_reported(self) -> None:
+        snap = self._snap(False)
+        edge = next(n for n in snap["nodes"] if n["role"] == "edge")
+        self.assertTrue(edge["warnings"], "an unfirewalled host said nothing")
+        self.assertTrue(snap["warned"])
+        joined = " ".join(edge["warnings"]).lower()
+        self.assertIn("dead man", joined, "does not name the cause")
+
+    def test_an_active_firewall_warns_about_nothing(self) -> None:
+        snap = self._snap(True)
+        edge = next(n for n in snap["nodes"] if n["role"] == "edge")
+        self.assertEqual(edge["warnings"], [])
+        self.assertFalse(snap["warned"])
+
+    def test_not_knowing_is_not_a_warning(self) -> None:
+        """No ufw installed, or a command that failed. Crying wolf about a
+        machine that may be perfectly fine teaches operators to skim past it."""
+        snap = self._snap(None)
+        edge = next(n for n in snap["nodes"] if n["role"] == "edge")
+        self.assertEqual(edge["warnings"], [])
+
+    def test_it_does_not_call_the_node_unhealthy(self) -> None:
+        """A host with no firewall is still carrying mail. Colouring the node
+        red would say "mail is broken" about something else entirely."""
+        from unittest import mock
+
+        # A real async replacement, not a single coroutine handed out as a
+        # return_value: gather() awaits this six times, and the same coroutine
+        # object cannot be awaited twice.
+        async def answers(*_args, **_kwargs) -> bool:
+            return True
+
+        with mock.patch.object(md, "_local_firewall_active", return_value=False), \
+             mock.patch.object(md, "probe_tcp", answers):
+            snap = asyncio.run(md.gather())
+        edge = next(n for n in snap["nodes"] if n["role"] == "edge")
+        self.assertTrue(edge["ok"], "a firewall warning was folded into node health")
+        self.assertTrue(edge["warnings"], "the warning was lost as well")
+
+
 class NothingHereIsAClusterTests(unittest.TestCase):
     def test_the_module_never_mentions_replication(self) -> None:
         """Prose in the docstring explains why it is absent; code that consults
