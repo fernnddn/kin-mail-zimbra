@@ -67,6 +67,12 @@ def parse_admin_ips(raw: str) -> list[str]:
     return items
 
 
+# Where the mailbox keeps the stage that writes its own firewall. It is not
+# pushed from here: that script sources 00-config.sh and lib/, so it is the
+# copy the build installed, not a single file that can travel.
+MAILBOX_FIREWALL = "/opt/kin-mail-deploy/install/10-host-firewall.sh"
+
+
 def _config_value(key: str) -> str:
     """One key out of /etc/kin-mail/config, or "" when absent/unreadable."""
     try:
@@ -376,6 +382,86 @@ async def _set_firewall(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
     async for ev in _stream_subprocess([str(script), "apply"], extra_env={"KIN_ADMIN_IPS": joined}):
         yield ev
+
+    async for ev in _set_firewall_on_mailbox(joined):
+        yield ev
+
+
+async def _set_firewall_on_mailbox(joined: str) -> AsyncIterator[dict[str, Any]]:
+    """Carry the trusted IPs to the other machine of a multi deployment.
+
+    This setting's whole purpose is admin access, and on a split the Zimbra
+    admin console is on the MAILBOX - port 7071, served by mailboxd, which the
+    edge does not run. Applying it only here left that port open to the edge
+    and to nobody else, so the operator added their laptop, watched it apply,
+    and still could not reach the one page they wanted (20 Sep 2026).
+
+    Best effort. The edge's own firewall is already applied by the time this
+    runs; a mailbox that cannot be reached is worth a warning, not an undo.
+    """
+    from .commands import (
+        _mailbox_ssh_password,
+        _appliance_config,
+        mailbox_ssh_argv,
+        _stream_subprocess,
+    )
+
+    cfg = _appliance_config()
+    if cfg.get("TOPOLOGY") != "split":
+        return
+    ip = (cfg.get("MAILBOX_IP") or "").strip()
+    user = (cfg.get("MAILBOX_SSH_USER") or cfg.get("KIN_OS_USER") or "kin").strip()
+    password = _mailbox_ssh_password(cfg)
+    if not ip or not password:
+        yield _emit(
+            "The mailbox address or its stored password is missing, so its "
+            "firewall still allows only this machine. The Zimbra admin console "
+            "on that node will stay unreachable.",
+            err=True,
+        )
+        return
+    if shutil.which("sshpass") is None:
+        yield _emit("sshpass is not installed here, so the mailbox was not updated.", err=True)
+        return
+
+    # The value is interpolated, and it is safe to interpolate: parse_admin_ips
+    # has already refused anything that is not an IPv4 address or a CIDR, so it
+    # holds digits, dots, slashes and spaces and nothing a shell or sed would
+    # read as syntax. Written to the config as well as passed in the
+    # environment, because an environment variable does not survive the next
+    # time somebody re-runs that stage by hand.
+    conf = "/etc/kin-mail/config"
+    remote = (
+        f"sed -i 's|^KIN_ADMIN_IPS=.*|KIN_ADMIN_IPS=\"{joined}\"|' {conf}"
+        f" && grep -q '^KIN_ADMIN_IPS=' {conf}"
+        f" || printf 'KIN_ADMIN_IPS=\"{joined}\"\\n' >> {conf}; "
+        f"KIN_ADMIN_IPS=\"{joined}\" {MAILBOX_FIREWALL} apply"
+        # Cancelled on the same proof the build uses: this SSH connection is
+        # still open after the rules went live, so the rules did not cut it.
+        # Nobody is sitting at that machine to press a button.
+        f" && {MAILBOX_FIREWALL} cancel-deadman"
+    )
+    yield _emit(f"Applying the same trusted IPs on the mailbox ({ip}).")
+    rc = 0
+    async for ev in _stream_subprocess(
+        mailbox_ssh_argv(user, ip, remote),
+        extra_env={"SSHPASS": password},
+        secrets=[password],
+        stdin_text=password + "\n",
+    ):
+        if ev.get("type") == "done":
+            rc = int(ev.get("exit_code") or 0)
+            continue
+        yield ev
+    if rc == 0:
+        yield _emit("Mailbox firewall updated; its Zimbra admin console is reachable from those IPs.")
+    else:
+        yield _emit(
+            "The mailbox firewall was NOT updated. This machine is firewalled "
+            "correctly; the Zimbra admin console on the mailbox will still "
+            "refuse everything but this node.",
+            err=True,
+        )
 
 
 async def _set_license(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:

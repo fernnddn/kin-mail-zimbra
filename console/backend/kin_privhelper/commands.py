@@ -880,6 +880,59 @@ MAILBOX_KNOWN_HOSTS = "/etc/kin-mail/split-known-hosts"
 STAGED_GROW_DISK = "/tmp/kin-grow-disk.staged.sh"
 
 
+def _mailbox_ssh_options() -> list[str]:
+    """The option set the orchestrator proved during the build.
+
+    One spelling, used by both ssh and scp. Two spellings drift, and the one
+    that drifts is the one nobody runs until the day it matters - the
+    known-hosts file especially: privhelperd runs with ProtectHome=true, so
+    /root is not writable and ssh has nowhere to put a host key unless it is
+    told otherwise.
+    """
+    return [
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "PreferredAuthentications=password",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        f"UserKnownHostsFile={MAILBOX_KNOWN_HOSTS}",
+    ]
+
+
+def mailbox_ssh_argv(user: str, ip: str, remote: str) -> list[str]:
+    """Run a fixed command as root on the mailbox."""
+    return [
+        "sshpass",
+        "-e",
+        "ssh",
+        *_mailbox_ssh_options(),
+        f"{user}@{ip}",
+        # One root shell for the whole command. `sudo -S -p '' a && b` elevates
+        # only a, because the shell splits on && before sudo ever sees it.
+        f"sudo -S -p '' bash -c {shlex.quote(remote)}",
+    ]
+
+
+def mailbox_scp_argv(user: str, ip: str, local: str, remote_path: str) -> list[str]:
+    """Copy one file to the mailbox, with the same options."""
+    return [
+        "sshpass",
+        "-e",
+        "scp",
+        *_mailbox_ssh_options(),
+        local,
+        f"{user}@{ip}:{remote_path}",
+    ]
+
+
 def _mailbox_ssh_password(cfg: dict[str, str]) -> str:
     """The password for the mailbox account.
 
@@ -975,52 +1028,14 @@ async def _grow_disk_on_mailbox(
         f" && {remote}"
     )
 
-    argv = [
-        "sshpass",
-        "-e",
-        "ssh",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "PreferredAuthentications=password",
-        "-o",
-        "PubkeyAuthentication=no",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ServerAliveInterval=30",
-        "-o",
-        "LogLevel=ERROR",
-        "-o",
-        f"UserKnownHostsFile={MAILBOX_KNOWN_HOSTS}",
-        f"{user}@{ip}",
-        # One root shell for the whole command. `sudo -S -p '' a && b` elevates
-        # only a, because the shell splits on && before sudo sees it.
-        f"sudo -S -p '' bash -c {shlex.quote(remote)}",
-    ]
+    argv = mailbox_ssh_argv(user, ip, remote)
     where = cfg.get("MAILBOX_HOST") or ip
     what = "mail store" if mountpoint == GROW_TARGETS["mail"] else "system disk"
     yield proto.event_stdout(f"Reading the {what} on {where}.\n")
-    push = [
-        "sshpass",
-        "-e",
-        "scp",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "PreferredAuthentications=password",
-        "-o",
-        "PubkeyAuthentication=no",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "LogLevel=ERROR",
-        "-o",
-        f"UserKnownHostsFile={MAILBOX_KNOWN_HOSTS}",
-        str(script),
-        f"{user}@{ip}:{STAGED_GROW_DISK}",
-    ]
-    rc = await _run_quiet(push, {"SSHPASS": password})
+    rc = await _run_quiet(
+        mailbox_scp_argv(user, ip, str(script), STAGED_GROW_DISK),
+        {"SSHPASS": password},
+    )
     if rc != 0:
         yield proto.event_stderr(
             f"Could not copy the resize helper to {ip} (scp exit {rc}). "
