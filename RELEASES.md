@@ -65,6 +65,12 @@ afterwards.
   logs, with no mailbox on it — and it is a disk of its own in this layout, so
   it is offered and monitored as one.
 - **Reports open on the current month.**
+- **Zimbra's own Server Status page tells the truth about both machines.**
+  Each node reports its services to the logger over syslog, and on Ubuntu
+  nothing in Zimbra ever switches the logger's receiver on — so a healthy edge
+  delivering mail was drawn with every service down. The mailbox now listens
+  for it, on its own address and behind the rule that already admits only the
+  edge.
 
 ### Single server
 
@@ -89,9 +95,17 @@ or an observability VM.
   and says so. Restore overwrites the mailbox, and afterwards the edge must
   still bind to LDAP (the directory passwords have to match).
 - **TLS is issued on the edge only.** The mailbox keeps Zimbra's own private-CA
-  certificate on 7071/8443, which no browser trusts; the host firewall is what
-  limits who can reach it. There is no renewal path for a public certificate on
-  the mailbox.
+  certificate on 7071/8443, which no browser trusts, so the browser warning on
+  the Zimbra admin console is expected and is not a sign of interception. There
+  is no renewal path for a public certificate on the mailbox.
+- **Zimbra's admin console is on the mailbox, and only on the mailbox** —
+  `https://<mailbox address>:7071`. The edge does not serve it. After a deploy
+  it is open to private networks (10/8, 172.16/12, 192.168/16) and to any
+  listed Admin IPs, so an operator reaches it without configuring anything
+  first, and the site's own firewall decides who gets that far. It is never
+  open to the internet: no host out there can hold one of those addresses. To
+  allow only the listed addresses, delete the three `Zimbra admin private net`
+  rules.
 - **A public certificate is not required for mail to work**, and a failed
   issuance no longer stops the install: the rest of the pipeline runs, so the
   host is still hardened and firewalled. The deploy reports "with warnings".

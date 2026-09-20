@@ -250,6 +250,37 @@ apply_rules() {
       ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP'
       ufw allow from "$ip" to any port 7071 proto tcp comment 'Zimbra admin admin-IP'
     done
+    # Zimbra's admin console, from private networks only.
+    #
+    # This node is the only one that serves 7071, and until now the only rules
+    # that opened it came from the admin list - which the wizard calls optional
+    # and which is therefore usually empty. A deploy that finished cleanly left
+    # the admin console reachable from the edge and from nothing else, so the
+    # operator who went looking for it got a connection reset from every
+    # address they tried and had to discover Trusted console IPs to get in.
+    # Making the one console an operator needs on day one depend on a field
+    # they have not filled in yet is the wrong default.
+    #
+    # Sources, not destinations: an address inside these ranges is not
+    # routable across the internet, so no host on it can reach this port. What
+    # it does open is every network the operator's own site uses - which is
+    # exactly where their firewall already decides who gets through, and is
+    # what they asked to be left holding.
+    #
+    # Trade: anything already inside the operator's networks can now see the
+    # admin console's login page, where before it saw a closed port. It still
+    # has to get past that login.
+    #
+    # This is added whether or not an admin list is set, and deliberately: a
+    # site that has filled the list in is the site most likely to add a subnet
+    # later and find the console shut to it, which is the surprise this change
+    # exists to remove. An operator who wants only their listed addresses
+    # deletes these three rules - the admin-IP rules above stand on their own.
+    local privnet
+    for privnet in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+      ufw allow from "$privnet" to any port 7071 proto tcp comment 'Zimbra admin private net'
+    done
+    ok "Zimbra admin (7071) open to private networks; the internet cannot route to them"
     warn "No public mail ports on this node. Users reach mail through the edge."
     info "The directory and the mail store are not reachable from the internet."
     info "Admin IPs: ${ADMIN_IPS}"

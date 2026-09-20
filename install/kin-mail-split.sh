@@ -545,7 +545,7 @@ fi
 # connection comes from.
 if [ "$_fail" -eq 0 ]; then
   echo
-  say "9/9 Metrics, hardening and firewalling the mailbox"
+  say "9/9 Metrics, status reporting, hardening and firewalling the mailbox"
 
   # Metrics first, because the firewall below is the last thing that runs here
   # and this needs a port open to the edge before that rule set is written.
@@ -559,6 +559,19 @@ if [ "$_fail" -eq 0 ]; then
     warn "Node metrics did not install on the mailbox."
     info "Mail is unaffected; the Monitoring tab will have no Mailbox view."
     info "Re-run: sudo ${REMOTE_ROOT}/install/12-node-metrics.sh on ${MBOX_HOST}"
+  }
+
+  # Zimbra's own status reporting does not survive a split without this. Each
+  # node writes its service status to syslog and forwards it to the logger, and
+  # on Ubuntu nothing in Zimbra ever switches the logger's receiver on - so the
+  # admin console draws a perfectly healthy edge as entirely down. Not fatal to
+  # mail, and it is not allowed to fail the build for the same reason metrics
+  # are not: a reporting gap is not an outage.
+  run_remote_stage mailbox-log-relay 13-log-relay.sh "mailbox 13-log-relay" "" || {
+    warn "The log relay did not install on the mailbox."
+    info "Mail is unaffected. Zimbra Administration will show the edge's services"
+    info "as down even while they are running."
+    info "Re-run: sudo ${REMOTE_ROOT}/install/13-log-relay.sh on ${MBOX_HOST}"
   }
 
   run_remote_stage mailbox-hardened 09-hardening.sh "mailbox 09-hardening" "" || {

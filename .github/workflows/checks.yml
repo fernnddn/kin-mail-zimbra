@@ -199,6 +199,15 @@ jobs:
           #   test_*.py              - unit fixtures must name RFC1918 (and
           #                            CGNAT) addresses to prove classifiers;
           #                            token/key scan() still covers tests
+          # The three RFC1918 range bases, each with its own canonical prefix
+          # length, are not deployment addresses - they are the definition of
+          # "private", and firewall rules that filter by source have to name
+          # them. Nothing can be deployed at 10.0.0.0/8, so letting these
+          # through costs the gate nothing: 10.10.40.9 and even 10.10.40.0/24
+          # are still caught. Narrowing the pattern is better than exempting
+          # the files that need it, which is how an exclude list rots into
+          # covering everything.
+          private_range_bases='10\.0\.0\.0/8|192\.168\.0\.0/16|172\.16\.0\.0/12'
           scan_private_ip() {
             if grep -RInE "$1" "${includes[@]}" \
                  --exclude='*.example.yml' \
@@ -206,7 +215,7 @@ jobs:
                  --exclude='test_corosync_stub.py' \
                  --exclude='test_*.py' \
                  --exclude-dir=defaults \
-                 . ; then
+                 . | sed -E "s#${private_range_bases}##g" | grep -E "$1" ; then
               echo ">>> $2"; fail=1
             fi
           }
