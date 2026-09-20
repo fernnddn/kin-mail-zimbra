@@ -10,72 +10,109 @@ test.
 
 ---
 
-## 0.1.11 — the split mailbox
+## 0.1.11 — multi deployment
 
-**New, and not yet mature by the definition above.** Zimbra across two
-machines, with a Proxmox Mail Gateway in front of them.
+**Mature.** Zimbra split across two machines with a Proxmox Mail Gateway in
+front of them, deployed end to end on real hardware, its faults found by the
+people running it, and those faults fixed.
 
-Every stage is tested and the build is complete end to end in code, but a split
-has not yet finished a clean installation on real hardware. Deploy it with
-somebody watching, and read the output. **0.1.10 is the proven one**; it is
-unchanged here and remains the safe choice if tonight cannot go wrong.
-
-The node facing the internet holds no mail. It runs the MTA and the proxy; the
-directory and the mail store live on a second machine that nothing on the
-internet can reach. The whole build runs from the first machine over SSH, so
-the operator never logs into the second one.
+Three machines with three jobs and no shared state. This is a **multi
+deployment**, not a cluster and not a replicated pair: nothing fails over,
+nothing is replicated, there is no quorum and no fencing. The machine facing
+the internet holds no mail. The whole build runs from that machine over SSH, so
+the operator never logs into the other one.
 
 ```
 internet ──MX──▶ gateway ──filter──▶ edge (MTA + proxy) ──▶ mailbox (directory + store)
 ```
 
+Proven on real hardware through September 2026: both machines built from one
+command, the gateway linked from the console, mail delivered inbound and
+outbound through the whole chain, and the console driving both machines
+afterwards.
+
 - **Choose it in the wizard.** Address and hostname for the mailbox, and the
   password the edge uses to build it. Nothing else.
 - **One Deploy button.** The mailbox is built first, because the edge has no
-  directory to join until it exists. Then the edge. Then TLS, DKIM, hardening
-  and the firewall on both.
+  directory to join until it exists. Then the edge. Then metrics, TLS, DKIM,
+  hardening and the firewall on both.
 - **Each node is firewalled for what it is.** The edge faces the internet as a
   single appliance does. The mailbox accepts everything from the edge and
-  nothing from anywhere else.
+  nothing from anywhere else — and the edge trusts the mailbox by address, so
+  the two halves can sit on different subnets, which is the point of a DMZ.
 - **Every stage knows which machine it is on**, decided from addresses rather
   than hostnames, and refuses rather than guessing.
 
-Single-server (0.1.10) is unchanged and still supported. Choose it in the
-wizard for a one-machine deployment.
+### What the console shows and does, for both machines
 
-Known limits, stated rather than discovered:
+- **Topology is the mail path**, drawn as the three machines a message passes
+  through. Health is the links: each one is checked by opening a connection to
+  the port the next machine has to answer on, which proves the service is
+  listening *and* that the firewall allows it. A ping would prove neither.
+- **Monitoring has a view per machine.** The mailbox holds every message and
+  the operator never logs into it, so its CPU, memory and disk are read from
+  the edge — node_exporter bound to the mailbox's own address, which its
+  firewall already restricts to the edge. Opens live rather than on an hour of
+  history.
+- **Extend a disk reaches all four disks.** Both machines, both of their
+  disks: the system volume and Zimbra's own volume on each. After enlarging one
+  in the hypervisor, Check rescans, says what it would do, and does it only
+  when asked. A disk that is already taken in full says so rather than asking
+  for more space — the two read the same from the guest and call for opposite
+  actions.
+- **/opt/zimbra is named for whose it is.** On the mailbox it is the mail
+  store. On the edge it is Zimbra's MTA and proxy, the outbound queue and the
+  logs, with no mailbox on it — and it is a disk of its own in this layout, so
+  it is offered and monitored as one.
+- **Reports open on the current month.**
+
+### Single server
+
+0.1.10 single-server is unchanged and still supported. Choose it in the wizard
+for a one-machine deployment. The active-passive replicated pair is **not
+offered**: it is behind a feature flag, it is not what this release deploys,
+and nothing a 1vm or multi deployment can reach mentions DRBD, a quorum device
+or an observability VM.
+
+### Known limits, stated rather than discovered
 
 - **One gateway and one edge are each a single point of failure.** If either is
   down, mail queues rather than being lost, and nothing moves.
+- **The mail disk cannot grow without deleting something.** The installer lays
+  it out as a data partition followed by a 256 MiB partition reserved for a
+  second server, and new space lands behind it. The console offers to free that
+  partition — but only when there is space it would actually release, never to
+  gain the 256 MiB itself, and it refuses if anything at all is on it. Done on
+  a live mailbox holding mail on 20 September 2026: partition freed, LUKS
+  container and filesystem grown to the whole disk, nothing unmounted.
 - Backups run on the mailbox node, which is where the mail is. The edge refuses
-  and says so. Restore is the same: it overwrites the mailbox, and afterwards
-  the edge must still bind to LDAP (the directory passwords have to match).
-- TLS certificates and DKIM keys are issued on the edge. The mailbox does not
-  serve :443 and does not run opendkim.
-- The console and the mail-flow collector run on the edge. Zeros from a
-  mailbox node mean that node has no MTA, not that mail has stopped. Disk
-  fullness of the store is visible on the mailbox, not on the edge dashboard.
+  and says so. Restore overwrites the mailbox, and afterwards the edge must
+  still bind to LDAP (the directory passwords have to match).
+- **TLS is issued on the edge only.** The mailbox keeps Zimbra's own private-CA
+  certificate on 7071/8443, which no browser trusts; the host firewall is what
+  limits who can reach it. There is no renewal path for a public certificate on
+  the mailbox.
+- **A public certificate is not required for mail to work**, and a failed
+  issuance no longer stops the install: the rest of the pipeline runs, so the
+  host is still hardened and firewalled. The deploy reports "with warnings".
+- **HSTS is only switched on for a certificate clients actually accept**,
+  checked against the system trust store rather than by comparing the issuer to
+  the subject. Zimbra's own certificate satisfies the second test and no client
+  on earth accepts it; enabling HSTS there removes the browser's "proceed
+  anyway" for a year.
 - Removing a deployment means running the uninstaller on both machines. It
   names the one still standing.
-- An empty Admin IPs list still firewalled the mailbox (the store on the
-  internet is worse than no workstation SSH). Re-run stage 10 with
-  `KIN_ADMIN_IPS` set when you want a workstation path to that machine.
-- A leftover LDAP server object from a previous edge will confuse routing.
-  The build now fails if the directory does not list both nodes, and warns
-  if it lists more than two.
-
-What 0.1.11 closed after the tag, still without claiming the split is mature:
-
-- The store's `SMTPHOST` is the edge. Pointing it at the mailbox is how
-  outbound mail sits in a queue with no error.
-- Gateway `zmprov` writes `zimbraMtaRelayHost` on the edge server object
-  (`MTA_HOST`), not on the public name typed in the wizard.
-- Z-Push on the edge talks to mailboxd on the mailbox (`:8443`), not to
-  loopback.
-- Healthcheck T1, DKIM, and the other MTA checks are BLOCKED on the mailbox,
-  not FAILED. FAILED would stop the install.
-
----
+- An empty Admin IPs list no longer skips the firewall. Admin access falls back
+  to the node's own subnet and the public ports stay the mail ports; re-run
+  stage 10 with `KIN_ADMIN_IPS` set to narrow it properly.
+- A leftover LDAP server object from a previous edge will confuse routing. The
+  build fails if the directory does not list both nodes, and warns if it lists
+  more than two.
+- **The public side is yours.** MX, SPF, DMARC, the A record and the PTR are
+  DNS changes only the operator can make, and the gateway's public hostname and
+  address have to be recorded in the console before it can print the exact
+  records. It refuses to print a private address as SPF, because publishing one
+  authorises nobody.
 
 ## 0.1.10 — mature, with the Proxmox Mail Gateway
 

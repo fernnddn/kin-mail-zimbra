@@ -543,7 +543,19 @@ function GatewayCard({ gw }: { gw?: MailGatewayHealth }) {
   );
 }
 
-function HostPanel({ host }: { host: HostFacts }) {
+/* What /opt/zimbra is called depends on whose it is.
+ *
+ * On the mailbox, and on a single appliance, it is the mail store. On the edge
+ * of a multi deployment it is Zimbra's MTA and proxy, the outbound queue and
+ * the logs - no mailbox is stored there, and calling it "Mail storage" sends
+ * an operator to grow the wrong machine when the store fills up. */
+function HostPanel({
+  host,
+  mailLabel = "Mail storage",
+}: {
+  host: HostFacts;
+  mailLabel?: string;
+}) {
   /* The host cards arrive as a set. It reads as "here is the machine" rather
      than as six things appearing at once, and it is the same vocabulary the
      gateway page uses. Keyed on nothing: this panel renders once per load. */
@@ -585,7 +597,7 @@ function HostPanel({ host }: { host: HostFacts }) {
       </Card>
 
       {[
-        { label: "Mail storage", d: mail },
+        { label: mailLabel, d: mail },
         { label: "System disk", d: system },
       ].map(({ label, d }) =>
         d ? (
@@ -611,7 +623,10 @@ function HostPanel({ host }: { host: HostFacts }) {
                   root filesystem, so both cards show the same numbers. That is
                   correct and it reads like a bug, and an operator who takes it
                   for two disks will size the next one wrongly. */}
-              {label === "Mail storage" && host.disks_share_a_filesystem
+              {/* Keyed on the mountpoint, not on the label: the label moves
+                  with the machine being viewed, and a warning that switches
+                  itself off when a card is renamed is worse than no warning. */}
+              {d.mount !== "/" && host.disks_share_a_filesystem
                 ? " (on the system disk, not a separate volume)"
                 : ""}
             </Model>
@@ -1308,7 +1323,19 @@ export function MonitoringTab({
         </WarnBox>
       ) : null}
 
-      {host ? <HostPanel host={host} /> : null}
+      {host ? (
+        <HostPanel
+          host={host}
+          /* The mail store is on the mailbox. Viewing any other machine of a
+             multi deployment, /opt/zimbra is Zimbra's own services. */
+          mailLabel={
+            mailboxName &&
+            nodes.find((n) => n.instance === node)?.role !== "mailbox"
+              ? "Zimbra services"
+              : "Mail storage"
+          }
+        />
+      ) : null}
 
       {/* Directly under the disk cards, because that is where an operator is
           standing when they notice a disk is filling up. Ops only: this moves

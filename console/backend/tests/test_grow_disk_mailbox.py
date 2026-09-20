@@ -292,6 +292,67 @@ class TheRemoteCommandIsFixed(unittest.TestCase):
         self.assertIn("kin-grow-disk.sh plan /", run)
         self.assertNotIn("/opt/zimbra", run)
 
+    def test_the_edge_keeps_its_own_zimbra_disk(self) -> None:
+        """node=this means THIS machine even for the mail target.
+
+        The edge has its own /opt/zimbra - the MTA and proxy, the queue, the
+        logs - on its own disk. Routing every "mail" request to the mailbox
+        left that disk untouchable: nothing the console offered ever rescanned
+        it, so 50 GB added in the hypervisor stayed invisible to the guest.
+        """
+        seen: dict[str, list[str]] = {}
+
+        async def fake_stream(argv, **kw):
+            seen["argv"] = list(argv)
+            yield {"type": "done", "exit_code": 0}
+
+        with mock.patch.object(commands, "_appliance_config", return_value=SPLIT_CFG), \
+             mock.patch.object(commands, "_local_ipv4s", return_value=["192.0.2.10"]), \
+             mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")), \
+             mock.patch.object(commands, "_run_quiet", _copy_ok), \
+             mock.patch.object(commands, "_stream_subprocess", fake_stream):
+            _collect(
+                commands.cmd_grow_disk(
+                    {"op": "plan", "target": "mail", "node": "this"}
+                )
+            )
+        argv = seen["argv"]
+        self.assertNotEqual(argv[0], "sshpass", "the edge's own disk went to the mailbox")
+        self.assertIn("/opt/zimbra", argv)
+
+    def test_no_node_still_defaults_to_the_mail_store(self) -> None:
+        """A caller that predates the node parameter must not quietly grow the
+        wrong tree. Without a node, "mail" on a split still means the store."""
+        seen: dict[str, list[str]] = {}
+
+        async def fake_stream(argv, **kw):
+            seen["argv"] = list(argv)
+            yield {"type": "done", "exit_code": 0}
+
+        with mock.patch.object(commands, "_appliance_config", return_value=SPLIT_CFG), \
+             mock.patch.object(commands, "_local_ipv4s", return_value=["192.0.2.10"]), \
+             mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")), \
+             mock.patch.object(commands, "shutil") as sh, \
+             mock.patch.object(commands, "_run_quiet", _copy_ok), \
+             mock.patch.object(commands, "_stream_subprocess", fake_stream):
+            sh.which.return_value = "/usr/bin/sshpass"
+            _collect(commands.cmd_grow_disk({"op": "plan", "target": "mail"}))
+        self.assertEqual(seen["argv"][0], "sshpass")
+
+    def test_the_page_offers_both_of_the_edges_disks(self) -> None:
+        src = (
+            REPO / "console/frontend/src/monitoring/DiskExtend.tsx"
+        ).read_text(encoding="utf-8")
+        self.assertIn("SPLIT_LOCAL_TARGETS", src)
+        block = src[src.index("const SPLIT_LOCAL_TARGETS") :]
+        block = block[: block.index("\n];")]
+        self.assertIn('mount: "/"', block)
+        self.assertIn('mount: "/opt/zimbra"', block)
+        # Explicit, or the helper's protective default sends it to the mailbox.
+        self.assertEqual(block.count('node: "this"'), 2)
+        # And named for what it is there: no mailboxes live on the edge.
+        self.assertIn("Zimbra services", block)
+
     def test_a_single_appliance_has_no_mailbox_to_address(self) -> None:
         with mock.patch.object(commands, "_appliance_config", return_value={"TOPOLOGY": "1vm"}), \
              mock.patch.object(commands, "resolve_grow_disk", return_value=Path("/x/g.sh")):

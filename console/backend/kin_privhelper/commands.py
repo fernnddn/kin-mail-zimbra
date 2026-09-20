@@ -1089,7 +1089,21 @@ async def cmd_grow_disk(args: dict[str, Any] | None = None) -> AsyncIterator[dic
     # MTA tree and growing it would report success while the store stays full.
     node = str(args.get("node") or "").strip().lower()
     mailbox_cfg: dict[str, str] | None = None
-    if node == "mailbox" or (target == "mail" and mail_store_is_elsewhere()):
+    # node="this" means THIS machine, even for the mail target.
+    #
+    # The edge has its own /opt/zimbra - Zimbra's MTA and proxy, the queue and
+    # the logs - on its own disk in this product's layout, and it can fill up
+    # like any other. Routing every "mail" request to the mailbox left that
+    # disk untouchable: the console's own Check never rescanned it, so 50 GB
+    # added in the hypervisor was invisible to the guest for a day (live edge,
+    # 20 Sep 2026). An explicit node is the operator saying which machine.
+    #
+    # With no node at all the old protective default stands: on a split, "mail"
+    # means the mail store, which is on the mailbox. That keeps any caller that
+    # predates the node parameter from quietly growing the wrong tree.
+    if node == "this":
+        pass
+    elif node == "mailbox" or (target == "mail" and mail_store_is_elsewhere()):
         cfg = _appliance_config()
         if cfg.get("TOPOLOGY") != "split":
             yield proto.event_stderr(

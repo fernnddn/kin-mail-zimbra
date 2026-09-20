@@ -130,13 +130,14 @@ const Working = styled.div`
   font-size: 0.85rem;
 `;
 
-/** A disk the console can grow. `node` is the machine it is on: "" is the
-    one the console runs on, "mailbox" is the other half of a multi
-    deployment. The console sends a NAME for both, never a path or an
-    address; the helper resolves them from the appliance config. */
+/** A disk the console can grow. `node` is the machine it is on: "this" is the
+    one the console runs on, "mailbox" is the other half of a multi deployment,
+    and "" is a single appliance, where there is no choice to make. The console
+    sends a NAME for both, never a path or an address; the helper resolves them
+    from the appliance config. */
 type Target = {
   id: "system" | "mail";
-  node: "" | "mailbox";
+  node: "" | "this" | "mailbox";
   key: string;
   name: string;
   mount: string;
@@ -162,11 +163,44 @@ const LOCAL_TARGETS: Target[] = [
   },
 ];
 
+/* The edge's own two disks on a multi deployment.
+ *
+ * Both of them. /opt/zimbra here is not the mail store - it is Zimbra's MTA
+ * and proxy, the queue and the logs - but it is a real disk in this product's
+ * layout and it fills up like any other. Leaving it off the page meant nothing
+ * the console offered ever rescanned it, so 50 GB added in the hypervisor was
+ * invisible to the guest for a day, with no button anywhere that would have
+ * found it (live edge, 20 Sep 2026).
+ *
+ * node: "this" is explicit on purpose. Without it the helper's protective
+ * default sends anything called "mail" to the mailbox. */
+const SPLIT_LOCAL_TARGETS: Target[] = [
+  {
+    id: "system",
+    node: "this",
+    key: "this-system",
+    name: "System disk",
+    mount: "/",
+    blurb: "The operating system, the console and the logs.",
+  },
+  {
+    id: "mail",
+    node: "this",
+    key: "this-zimbra",
+    name: "Zimbra services",
+    mount: "/opt/zimbra",
+    blurb:
+      "The MTA and the proxy, the outbound queue and Zimbra's logs. " +
+      "No mailboxes are stored here.",
+  },
+];
+
 /* The other machine of a multi deployment.
  *
  * Its disks are the ones that actually fill up - it holds every message - and
- * until now the console could not reach either of them. The operator never
- * logs into that machine by design, so "run it over there" was not an answer.
+ * until recently the console could not reach either of them. The operator
+ * never logs into that machine by design, so "run it over there" was not an
+ * answer.
  *
  * Offered only when there IS one. A single appliance never sees this. */
 const MAILBOX_TARGETS: Target[] = [
@@ -448,7 +482,7 @@ export default function DiskExtend({
   const [busy, setBusy] = useState(false);
   const groups: { heading: string; targets: Target[] }[] = mailboxName
     ? [
-        { heading: "This server", targets: LOCAL_TARGETS.filter((t) => t.id === "system") },
+        { heading: "This server", targets: SPLIT_LOCAL_TARGETS },
         { heading: mailboxName, targets: MAILBOX_TARGETS },
       ]
     : [{ heading: "", targets: LOCAL_TARGETS }];

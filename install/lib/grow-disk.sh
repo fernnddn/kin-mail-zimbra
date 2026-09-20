@@ -437,7 +437,7 @@ grow_plan() {
     return 1
   fi
 
-  local tail last_num free trc
+  local tail last_num free trc last_end disk_size_bytes
   tail=$(disk_tail "$PLAN_DISK"); trc=$?
   if [ "$trc" -eq 2 ]; then
     fail not-root "Reading the partition table on ${PLAN_DISK} needs root."
@@ -448,6 +448,8 @@ grow_plan() {
     return 1
   fi
   last_num=$(printf '%s' "$tail" | awk '{print $1}')
+  last_end=$(printf '%s' "$tail" | awk '{print $2}')
+  disk_size_bytes=$(printf '%s' "$tail" | awk '{print $3}')
   free=$(printf '%s' "$tail" | awk '{print $4}')
 
   # The one guard that matters most. growpart moves the END of a partition
@@ -537,7 +539,28 @@ grow_plan() {
   mark "FREE_BYTES=${PLAN_FREE}"
   if [ "$PLAN_FREE" -lt "$MIN_GROW_BYTES" ]; then
     mark "NOTHING_TO_DO=1"
-    say "There is no unused space after ${PLAN_PART}. Enlarge the disk in the hypervisor first, then run this again."
+    # "Nothing to do" has two causes and they call for opposite actions.
+    #
+    # Either nobody has enlarged the disk, or somebody has and this already
+    # collected it. Both used to print "Enlarge the disk in the hypervisor
+    # first", which on a disk that was grown yesterday and taken today reads as
+    # a failure and sends the operator back to VMware to add space they have
+    # already added. Seen on the live edge: / was 150 GB and fully in use, and
+    # the message still asked for more (20 Sep 2026).
+    #
+    # The partition filling the disk is what tells them apart: it can only be
+    # that way because something extended it there.
+    local grown_pct=0
+    if [ "$disk_size_bytes" -gt 0 ]; then
+      grown_pct=$(( (last_end * 100) / disk_size_bytes ))
+    fi
+    if [ "$grown_pct" -ge 99 ]; then
+      mark "ALREADY_WHOLE_DISK=1"
+      say "${PLAN_MOUNT} already uses the whole disk ($(( disk_size_bytes / 1024 / 1024 / 1024 )) GB). Nothing to add."
+      say "To make it bigger, enlarge ${PLAN_DISK} in the hypervisor and run this again."
+    else
+      say "There is no unused space after ${PLAN_PART}. Enlarge the disk in the hypervisor first, then run this again."
+    fi
     return 1
   fi
   say "About $(( PLAN_FREE / 1024 / 1024 )) MiB of unused space follows ${PLAN_PART} and can be added to ${mp}."

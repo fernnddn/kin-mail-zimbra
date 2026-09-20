@@ -374,6 +374,33 @@ if printf '%s' "$OUT" | grep -q "Enlarge the disk in the hypervisor first"; then
   pass "no room yet: says which step is actually missing"
 else bad "no room yet: refuses without naming the hypervisor step"; fi
 
+# "Nothing to do" has two causes that call for opposite actions.
+#
+# A disk nobody enlarged needs the hypervisor. A disk that was enlarged and
+# already collected needs nothing at all - and telling that operator to "enlarge
+# the disk in the hypervisor first" sends them back to add space they added
+# yesterday. Seen on the live edge: / was 150 GB, entirely in use, and the
+# message still asked for more (20 Sep 2026).
+STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_FULL" run plan /
+if has "KIN_GROW_ALREADY_WHOLE_DISK=1" && printf '%s' "$OUT" | grep -q "already uses the whole disk"; then
+  pass "a disk already taken in full says so, instead of asking for more"
+else bad "a full disk still reads as never enlarged: $OUT"; fi
+if printf '%s' "$OUT" | grep -q "enlarge /dev/sda in the hypervisor"; then
+  pass "and still says how to make it bigger"
+else bad "no way forward offered for a disk that is genuinely full"; fi
+
+# A disk with a partition that stops well short of the end is the other case:
+# space was never added, and the hypervisor really is the missing step.
+PARTED_SHORT='BYT;
+/dev/sda:107374182400B:scsi:512:512:gpt:VMware Virtual disk;
+1:1048576B:2097151B:1048576B::bios_grub;
+2:2097152B:53687091200B:53686042624B:ext4::;'
+STUB_SOURCE=/dev/sda2 STUB_CHAIN="$CHAIN_PLAIN" STUB_PARTED="$PARTED_SHORT" \
+  KIN_GROW_MIN_BYTES=999999999999 run plan /
+if has "KIN_GROW_NOTHING_TO_DO=1" && ! has "ALREADY_WHOLE_DISK"; then
+  pass "a half-empty disk is not called full"
+else bad "a disk with room was reported as already whole: $OUT"; fi
+
 # The partition named in the message has to be a device that exists.
 #
 # /dev/sdb + "2" reads as /dev/sdb2 and looked right for years, because every
