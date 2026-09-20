@@ -474,6 +474,29 @@ def _instant(query: str) -> list[dict[str, Any]]:
     return parse_vector(_get("/api/v1/query", {"query": query}))
 
 
+def _one_label(query: str, label: str) -> str:
+    """One label value from an instant query, or "" when there is none.
+
+    parse_vector keeps only the instance and the sample value, which is right
+    for a number. Some facts are carried AS a label - a CPU model cannot be a
+    float - so this reads the raw payload instead of widening that parser for
+    one caller.
+    """
+    try:
+        payload = _get("/api/v1/query", {"query": query})
+    except MonitoringError:
+        return ""
+    for item in payload.get("data", {}).get("result", []) or []:
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("metric") or {}
+        if isinstance(labels, dict):
+            value = str(labels.get(label) or "").strip()
+            if value:
+                return value
+    return ""
+
+
 def _one(query: str) -> float | None:
     try:
         rows = _instant(query)
@@ -571,7 +594,16 @@ def host_facts_for_instance(instance: str) -> dict[str, Any]:
     one reads as fact.
     """
     sel = _label_selector(instance)
-    threads = _one(f"count(count by (cpu) (node_cpu_seconds_total{{{sel}}}))")
+    # Published by install/12-node-metrics.sh through node_exporter's textfile
+    # collector, because /proc belongs to the machine it is on and node_exporter
+    # 1.3 - what jammy ships - has no collector for the CPU model. Empty when
+    # that node has not been given the collector yet, which is honest: better a
+    # blank field than a model invented from this machine's own hardware.
+    model = _one_label(f"kin_node_cpu_info{{{sel}}}", "model")
+    threads = _one(f"kin_node_cpu_threads{{{sel}}}")
+    if threads is None:
+        threads = _one(f"count(count by (cpu) (node_cpu_seconds_total{{{sel}}}))")
+    cores = _one(f"kin_node_cpu_cores{{{sel}}}")
     total = _one(f"node_memory_MemTotal_bytes{{{sel}}}")
     avail = _one(f"node_memory_MemAvailable_bytes{{{sel}}}")
     uptime = _one(f"node_time_seconds{{{sel}}} - node_boot_time_seconds{{{sel}}}")
@@ -606,9 +638,13 @@ def host_facts_for_instance(instance: str) -> dict[str, Any]:
 
     return {
         "cpu": {
-            "model": "",
+            "model": model,
             "threads": int(threads) if threads else 0,
-            "cores": int(threads) if threads else 0,
+            # Cores, when the node publishes them. Falling back to the thread
+            # count is what the console did before either was available, and it
+            # is wrong on anything with hyper-threading - but it is the number
+            # node_cpu_seconds_total can actually answer for.
+            "cores": int(cores) if cores else (int(threads) if threads else 0),
             "load": [round(v, 2) for v in loads if v is not None],
         },
         "memory": {

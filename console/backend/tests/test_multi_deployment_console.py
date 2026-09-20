@@ -175,9 +175,48 @@ class MonitoringCanSeeTheMailbox(unittest.TestCase):
             REPO / "console/backend/kin_console/monitoring.py"
         ).read_text(encoding="utf-8")
         head = src.index("def host_facts_for_instance(")
-        body = _no_docstring(src[head : src.index("\ndef ", head + 10)])
+        # Comments too: the code now explains why /proc cannot be used for
+        # another machine, and matching that would fail the file for
+        # documenting the decision under test.
+        body = _no_comments(_no_docstring(src[head : src.index("\ndef ", head + 10)]))
         self.assertNotIn("/proc", body)
         self.assertIn("node_memory_MemTotal_bytes", body)
+
+    def test_a_remote_processor_is_read_from_what_that_node_publishes(self) -> None:
+        """node_exporter 1.3 - what jammy ships - has no collector for the CPU
+        model, and /proc belongs to the machine it is on. So the Mailbox view
+        showed four cores and a blank processor until the node published it
+        through the textfile collector (operator report, 20 Sep 2026)."""
+        import inspect
+
+        from kin_console import monitoring
+
+        src = inspect.getsource(monitoring.host_facts_for_instance)
+        self.assertIn("kin_node_cpu_info", src)
+        self.assertIn('"model": model', src)
+        # Never invented from this machine's own hardware.
+        self.assertNotIn("parse_cpu_model", src)
+
+    def test_a_label_carried_fact_is_read_as_a_label(self) -> None:
+        """parse_vector keeps the instance and the sample value, which is right
+        for a number. A CPU model cannot be a float."""
+        from kin_console import monitoring
+
+        self.assertTrue(hasattr(monitoring, "_one_label"))
+
+    def test_the_published_metric_names_match_the_stage_that_writes_them(self) -> None:
+        """Two files, one contract. They drift silently: the console would read
+        a metric nothing publishes and show a blank field with no error."""
+        import inspect
+
+        from kin_console import monitoring
+
+        stage = (REPO / "install/12-node-metrics.sh").read_text(encoding="utf-8")
+        src = inspect.getsource(monitoring.host_facts_for_instance)
+        for metric in ("kin_node_cpu_info", "kin_node_cpu_threads", "kin_node_cpu_cores"):
+            with self.subTest(metric=metric):
+                self.assertIn(metric, stage, f"{metric} is not published")
+                self.assertIn(metric, src, f"{metric} is not read")
 
     def test_an_instance_name_cannot_be_smuggled_into_a_query(self) -> None:
         from kin_console import monitoring
