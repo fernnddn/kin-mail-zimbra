@@ -85,8 +85,10 @@ zimbra_cmd() {
   esac
 }
 
-eval "$(awk '/^mailbox_server\(\) \{/,/^\}/' "$S")"
-eval "$(awk '/^zmprov_on_store\(\) \{/,/^\}/' "$S")"
+# The store-targeting helpers live in a library now, so both the stage that
+# deletes mailboxes and the one that brands the UI use one spelling of them.
+# shellcheck source=zimbra-store.sh
+. "$(pwd)/zimbra-store.sh"
 eval "$(awk '/^account_exists\(\) \{/,/^\}/' "$S")"
 eval "$(awk '/^delete_mailbox\(\) \{/,/^\}/' "$S")"
 eval "$(awk '/^rename_mailbox\(\) \{/,/^\}/' "$S")"
@@ -114,7 +116,7 @@ fi
 
 # The heart of it: if the operation silently does nothing, say so.
 reset_world
-OUT=$(zmprov_on_store() { zimbra_cmd zmprov "$@"; }
+OUT=$(kin_zmprov_on_store() { zimbra_cmd zmprov "$@"; }
   delete_mailbox jane@example.test 2>&1; printf 'rc=%s' "$?")
 if printf '%s' "$OUT" | grep -q "rc=1" && printf '%s' "$OUT" | grep -q "still lists"; then
   pass "a delete that changed nothing is reported as a failure"
@@ -146,7 +148,7 @@ else
 fi
 
 reset_world
-OUT=$(zmprov_on_store() { zimbra_cmd zmprov "$@"; }
+OUT=$(kin_zmprov_on_store() { zimbra_cmd zmprov "$@"; }
   rename_mailbox jane@example.test janet 2>&1; printf 'rc=%s' "$?")
 if printf '%s' "$OUT" | grep -q "rc=1"; then
   pass "a rename that changed nothing is reported as a failure"
@@ -157,7 +159,7 @@ fi
 # Half-done is worse than not done: the console would print the new address
 # while the old one still delivers.
 reset_world
-OUT=$(zmprov_on_store() { zimbra_cmd zmprov -s h "$@"; printf 'jane@example.test\n' >>"$ACCTS"; }
+OUT=$(kin_zmprov_on_store() { zimbra_cmd zmprov -s h "$@"; printf 'jane@example.test\n' >>"$ACCTS"; }
   rename_mailbox jane@example.test janet 2>&1; printf 'rc=%s' "$?")
 if printf '%s' "$OUT" | grep -q "rc=1" && printf '%s' "$OUT" | grep -q "still lists the old address"; then
   pass "a rename that leaves the old address behind is a failure"
@@ -173,10 +175,10 @@ printf '%s' "$OUT" | grep -q "rc=1" && pass "rename refuses an address already i
 
 # --- which host is asked ------------------------------------------------------
 IS_SPLIT=1 MBOX_HOST=store.example.test
-[ "$(mailbox_server)" = "store.example.test" ] \
+[ "$(kin_mailbox_server)" = "store.example.test" ] \
   && pass "on a multi deployment the mail store is asked" \
   || bad "wrong host on a multi deployment"
-[ "$(IS_SPLIT=0 mailbox_server)" = "single.example.test" ] \
+[ "$(IS_SPLIT=0 kin_mailbox_server)" = "single.example.test" ] \
   && pass "on a single appliance the local host is asked" \
   || bad "wrong host on a single appliance"
 # An unknown store must not become `-s ""`.
@@ -186,6 +188,37 @@ if grep -q '^da soap=0$' "$CALLS"; then
   pass "an unknown store falls back rather than passing an empty -s"
 else
   bad "an empty store name was passed to -s"
+fi
+
+# --- where mailboxd actually runs ---------------------------------------------
+# zmmailboxdctl is installed on every node, so its presence proves nothing.
+# Branding restarted it on the edge, which has no mailbox service, and failed
+# the whole stage - a multi deployment could not be branded at all.
+kin_node_role() { printf '%s\n' "${STUB_ROLE:-edge}"; }
+IS_SPLIT=1 STUB_ROLE=mailbox kin_mailboxd_is_local \
+  && pass "mailboxd is local on the mailbox node" || bad "mailbox node not recognised"
+IS_SPLIT=1 STUB_ROLE=edge kin_mailboxd_is_local \
+  && bad "the edge claimed to run mailboxd" || pass "the edge does not claim to run mailboxd"
+IS_SPLIT=0 kin_mailboxd_is_local \
+  && pass "a single appliance runs mailboxd locally" || bad "single appliance misjudged"
+
+B="$(pwd)/../12-branding.sh"
+[ -f "$B" ] || { bad "12-branding.sh not found"; }
+bash -n "$B" && pass "12-branding parses" || bad "12-branding syntax error"
+if grep -q 'kin_zmprov_on_store fc all' "$B"; then
+  pass "branding flushes the cache on the mail store"
+else
+  bad "branding still flushes the cache where the call is refused"
+fi
+if grep -q 'su - zimbra -c "zmprov fc all"' "$B"; then
+  bad "the old swallowed flushCache call is still there"
+else
+  pass "no bare flushCache left to be swallowed"
+fi
+if grep -q 'kin_mailboxd_is_local' "$B"; then
+  pass "branding restarts mailboxd only where it runs"
+else
+  bad "branding restarts mailboxd wherever it happens to be running"
 fi
 
 # --- reading the size back ----------------------------------------------------

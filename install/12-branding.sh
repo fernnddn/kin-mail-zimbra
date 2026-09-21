@@ -23,6 +23,8 @@
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
+# shellcheck source=lib/zimbra-store.sh
+. ./lib/zimbra-store.sh
 need_root
 
 OS_ONLY=0
@@ -202,7 +204,11 @@ apply_chameleon_ldap() {
     fail "zmprov md ${MAIL_DOMAIN} chameleon attrs failed"
     exit 1
   fi
-  su - zimbra -c "zmprov fc all" >/dev/null 2>&1 || true
+  # Aimed at the mail store. flushCache is refused outright in LDAP-only mode
+  # ("can only be used with SOAP"), so on a multi deployment this ran from the
+  # edge, failed, and was swallowed by the `|| true` - the skin attributes were
+  # written to the directory and nothing was ever told to re-read them.
+  kin_zmprov_on_store fc all >/dev/null 2>&1 || true
   NEED_MAILBOXD=1
   if [ "$need_ldap" -eq 0 ]; then
     info "LDAP values already matched; still flushing cache + mailboxd so skins pick them up"
@@ -236,6 +242,20 @@ restart_zimbra_frontends() {
       trap - EXIT
       exit 1
     fi
+  fi
+  # mailboxd serves the branded UI, and on a multi deployment it is on the
+  # other machine. zmmailboxdctl exists here regardless - Zimbra ships it on
+  # every node - so its presence proves nothing, and restarting it on an edge
+  # failed the whole stage. Branding a split was impossible.
+  #
+  # The cache flush above has already told the mail store to re-read the
+  # attributes, which is what makes the skin change; the restart is belt and
+  # braces. Say what is left rather than failing over it.
+  if [ "${NEED_MAILBOXD:-0}" -eq 1 ] && ! kin_mailboxd_is_local; then
+    warn "mailboxd is on the mailbox node, not here; not restarting it."
+    info "The cache flush above is usually enough. If the skin has not changed,"
+    info "run on the mailbox:  su - zimbra -c 'zmmailboxdctl restart'"
+    NEED_MAILBOXD=0
   fi
   if [ "${NEED_MAILBOXD:-0}" -eq 1 ]; then
     if ! su - zimbra -c "zmmailboxdctl restart" >/tmp/kin-brand-mailboxd.out 2>&1; then

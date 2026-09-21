@@ -73,6 +73,13 @@ afterwards.
   It is applied once and then left alone — a size an operator chose is not
   reimposed by later maintenance — and it refuses to apply at all if any
   mailbox is already larger, rather than silently stopping that person's mail.
+- **Branding reaches the machine that serves the UI.** Its cache flush was
+  refused on the edge — `flushCache` is SOAP-only — and swallowed by a
+  `|| true`, so the skin attributes were written to the directory and nothing
+  was ever told to re-read them. It then tried to restart mailboxd, which does
+  not run on an edge, and failed the whole stage: a multi deployment could not
+  be branded at all. The flush now goes to the mail store, and the restart
+  happens only where mailboxd actually runs.
 - **Deleting and renaming a mailbox now actually do it.** `zmprov` on a node
   with no local mailboxd falls back to LDAP-only mode without saying so, and
   there the destructive operations refuse to run unattended: they ask

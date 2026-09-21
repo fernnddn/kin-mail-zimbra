@@ -18,6 +18,8 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 # shellcheck disable=SC1091
 . ./lib/quota-gate.sh
+# shellcheck source=lib/zimbra-store.sh
+. ./lib/zimbra-store.sh
 need_root
 
 if [ ! -d /opt/zimbra ]; then
@@ -124,7 +126,7 @@ list_mailboxes() {
   #
   # It also needs SOAP, which is why it goes through the mail store: zmprov on
   # an edge has no local mailboxd and refuses this one outright.
-  quota=$(zmprov_on_store getQuotaUsage "$(mailbox_server | head -1)" 2>/dev/null || true)
+  quota=$(kin_zmprov_on_store getQuotaUsage "$(kin_mailbox_server | head -1)" 2>/dev/null || true)
   tmp_raw=$(mktemp)
   tmp_quota=$(mktemp)
   printf '%s\n' "$raw" > "$tmp_raw"
@@ -233,39 +235,12 @@ PY
   return 0
 }
 
-# Which machine runs mailboxd.
-#
-# zmprov on a node without a local mailboxd falls back to LDAP-only mode
-# WITHOUT saying so. In that mode the destructive operations refuse to act
-# unattended: `da` and `ra` print "Continue? [Y]es, [N]o", read end-of-file,
-# print "aborted" - and exit 0. Nothing here runs on a terminal, so that is
-# every console-driven delete and rename on a multi deployment.
-#
-# The console checked the exit status, saw 0, and told the operator the mailbox
-# was deleted. It was still there: still receiving mail, still holding a seat,
-# and for a departed employee still reachable. Rename reported the new address
-# while the old one kept working. Measured on the live pair, 21 Sep 2026.
-mailbox_server() {
-  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
-    kin_mailbox_host
-    return 0
-  fi
-  zimbra_cmd zmhostname 2>/dev/null | tr -d '\r'
-}
-
-# zmprov, aimed at the machine that can actually carry the request out. -s
-# names the SOAP target, which is what keeps it out of the LDAP-only path.
-zmprov_on_store() {
-  local host
-  host=$(mailbox_server | head -1)
-  if [ -n "$host" ]; then
-    zimbra_cmd zmprov -s "$host" "$@"
-  else
-    # No idea which node holds the store: better to try than to refuse, and
-    # the result is checked by the caller either way.
-    zimbra_cmd zmprov "$@"
-  fi
-}
+# Deleting and renaming go through lib/zimbra-store.sh, which aims zmprov at
+# the machine that can carry them out. Without that, on a node with no local
+# mailboxd, `da` and `ra` print "Continue? [Y]es, [N]o", read end-of-file,
+# abort - and exit 0. The console checked the exit status, saw 0, and told the
+# operator the mailbox was deleted while it was still receiving mail and still
+# holding a seat. Measured on the live pair, 21 Sep 2026.
 
 account_exists() {
   zimbra_cmd zmprov -l ga "$1" >/dev/null 2>&1
@@ -280,7 +255,7 @@ delete_mailbox() {
   fi
   say "Deleting mailbox ${email}"
   local out
-  if ! out=$(zmprov_on_store da "$email" 2>&1); then
+  if ! out=$(kin_zmprov_on_store da "$email" 2>&1); then
     fail "zmprov da failed"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     return 1
@@ -317,7 +292,7 @@ rename_mailbox() {
   fi
   say "Renaming ${email} to ${new_email}"
   local out
-  if ! out=$(zmprov_on_store ra "$email" "$new_email" 2>&1); then
+  if ! out=$(kin_zmprov_on_store ra "$email" "$new_email" 2>&1); then
     fail "zmprov ra failed"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     return 1
