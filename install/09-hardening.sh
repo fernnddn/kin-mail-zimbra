@@ -38,6 +38,19 @@ need_root
 
 FAIL2BAN_IGNORE_IP="${KIN_FAIL2BAN_IGNORE_IP:-}"
 LOCKOUT_MAX="${KIN_LOCKOUT_MAX_FAILURES:-8}"
+# How large a new mailbox is allowed to get, in whole GB, before Zimbra starts
+# refusing mail for it. 0 means no cap. Override in /etc/kin-mail/config with
+# DEFAULT_MAILBOX_QUOTA_GB, or per account in the Zimbra admin console.
+#
+# A default exists at all because the alternative is what a fresh deployment
+# had: every mailbox unlimited, and the first anyone hears of it is the mail
+# store filling up.
+DEFAULT_QUOTA_GB="${DEFAULT_MAILBOX_QUOTA_GB:-10}"
+QUOTA_MARKER="${KIN_QUOTA_MARKER:-/etc/kin-mail/.default-mailbox-quota-applied}"
+# Overridable so the unit test can exercise this on a machine with no Zimbra.
+# Without it the whole default-size suite skips itself in CI, which is the same
+# as not having written it.
+ZIMBRA_ROOT="${KIN_ZIMBRA_ROOT:-/opt/zimbra}"
 LOCKOUT_DURATION="${KIN_LOCKOUT_DURATION:-30m}"
 LOCKOUT_WINDOW="${KIN_LOCKOUT_FAILURE_LIFETIME:-1h}"
 OS_ONLY=0
@@ -260,6 +273,81 @@ configure_lockout() {
     zimbraPasswordLockoutDuration "$LOCKOUT_DURATION" \
     zimbraPasswordLockoutFailureLifetime "$LOCKOUT_WINDOW"
   ok "default COS lockout: enabled max=${LOCKOUT_MAX} duration=${LOCKOUT_DURATION} window=${LOCKOUT_WINDOW}"
+}
+
+configure_default_quota() {
+  say "3b. Default mailbox size (default COS)"
+  if [ ! -d "$ZIMBRA_ROOT" ]; then
+    warn "Skipping default mailbox size - ${ZIMBRA_ROOT} not present"
+    return 0
+  fi
+  # The COS lives in the directory, and on a multi deployment the directory
+  # lives with the mail store. Writing it from both nodes would mean two
+  # machines each keeping their own record of whether it had been applied.
+  if [ "${KIN_NODE_ROLE:-all}" = "edge" ]; then
+    info "The default mailbox size belongs to the mailbox node; set there."
+    return 0
+  fi
+  # Applied once, deliberately. This is the size a fresh deployment starts
+  # with, not a setting to reimpose on every run - an operator who raised it in
+  # the admin console must not find it back at the default after maintenance.
+  if [ -f "$QUOTA_MARKER" ]; then
+    ok "Default mailbox size already chosen once; leaving it as it is"
+    info "Change it in the admin console, or per account. Marker: ${QUOTA_MARKER}"
+    return 0
+  fi
+  case "$DEFAULT_QUOTA_GB" in
+    '' | *[!0-9]*)
+      warn "DEFAULT_MAILBOX_QUOTA_GB is not a whole number of GB; leaving the default alone"
+      return 0
+      ;;
+  esac
+  # Four digits is 9999 GB. Beyond that the multiplication below stops being
+  # arithmetic and starts being a bash error that evaluates to something else.
+  if [ "${#DEFAULT_QUOTA_GB}" -gt 4 ]; then
+    warn "DEFAULT_MAILBOX_QUOTA_GB is implausibly large; leaving the default alone"
+    return 0
+  fi
+  local bytes=$((DEFAULT_QUOTA_GB * 1024 * 1024 * 1024))
+
+  # Never cut off a mailbox that is already bigger. On a fresh deployment there
+  # is nothing to check; on a live one this is the difference between setting a
+  # policy and silently stopping someone's mail.
+  if [ "$bytes" -gt 0 ]; then
+    local host over
+    host=$(zimbra_cmd zmhostname 2>/dev/null | tr -d '\r' | head -1)
+    if [ -n "$host" ]; then
+      over=$(zimbra_cmd zmprov -s "$host" getQuotaUsage "$host" 2>/dev/null |
+        awk -v cap="$bytes" 'NF >= 3 && $3 + 0 > cap { print $1 }' | head -3)
+      if [ -n "$over" ]; then
+        warn "Not setting a ${DEFAULT_QUOTA_GB} GB default: mailboxes are already larger."
+        printf '%s\n' "$over" | sed 's/^/         /'
+        info "They would stop accepting mail. Set a size per account instead."
+        return 0
+      fi
+    fi
+  fi
+
+  if ! zimbra_cmd zmprov mc default zimbraMailQuota "$bytes" >/dev/null 2>&1; then
+    warn "Could not set the default mailbox size; mailboxes stay uncapped."
+    return 0
+  fi
+  # Checked, not announced - the failure this whole release keeps meeting.
+  local got
+  got=$(zimbra_cmd zmprov -l gc default zimbraMailQuota 2>/dev/null |
+    sed -n 's/^zimbraMailQuota: //p' | head -1)
+  if [ "$got" != "$bytes" ]; then
+    warn "The default COS reports ${got:-nothing} rather than ${bytes}; not recording it as set."
+    return 0
+  fi
+  install -d -m 0755 /etc/kin-mail
+  : >"$QUOTA_MARKER"
+  if [ "$bytes" -eq 0 ]; then
+    ok "New mailboxes have no size limit"
+  else
+    ok "New mailboxes default to ${DEFAULT_QUOTA_GB} GB; users are warned at 90%"
+    info "Change it per account in the admin console, or for everyone in the default COS."
+  fi
 }
 
 configure_cleartext() {
@@ -691,6 +779,7 @@ if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; th
 fi
 
 configure_lockout
+configure_default_quota
 configure_cleartext
 configure_tls
 if [ "$KIN_NODE_ROLE" = "mailbox" ]; then

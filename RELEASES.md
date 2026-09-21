@@ -65,6 +65,23 @@ afterwards.
   logs, with no mailbox on it — and it is a disk of its own in this layout, so
   it is offered and monitored as one.
 - **Reports open on the current month.**
+- **New mailboxes get 10 GB by default**, set on the default COS during the
+  deploy, so a fresh estate is never a set of unlimited mailboxes nobody
+  noticed until the store filled up. Change it for everyone in the Zimbra admin
+  console, or per account when creating one; set `DEFAULT_MAILBOX_QUOTA_GB` in
+  `/etc/kin-mail/config` to deploy with a different figure, or `0` for no cap.
+  It is applied once and then left alone — a size an operator chose is not
+  reimposed by later maintenance — and it refuses to apply at all if any
+  mailbox is already larger, rather than silently stopping that person's mail.
+- **Deleting and renaming a mailbox now actually do it.** `zmprov` on a node
+  with no local mailboxd falls back to LDAP-only mode without saying so, and
+  there the destructive operations refuse to run unattended: they ask
+  "Continue? [Y]es, [N]o", read end-of-file, abort — and exit 0. Nothing here
+  runs on a terminal, so on a multi deployment every console delete and rename
+  reported success and changed nothing: a departed employee's mailbox went on
+  receiving mail and holding a seat. They are now carried out on the mail
+  store, and the directory is read back afterwards — a change that did not take
+  is reported as the failure it is, in those words.
 - **Zimbra's own Server Status page tells the truth about both machines.**
   Each node reports its services to the logger over syslog, and on Ubuntu
   nothing in Zimbra ever switches the logger's receiver on — so a healthy edge

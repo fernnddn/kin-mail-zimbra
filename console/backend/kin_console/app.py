@@ -1135,6 +1135,16 @@ def _human_mailbox_error(log: str, error: str) -> str:
             "New mailboxes cannot be created while the license is invalid, in grace, or expired. "
             "Existing mail still flows."
         )
+    # The stage checked the directory afterwards and found the change had not
+    # taken. That is the one failure an operator must not read as routine: the
+    # mailbox is still there, still taking mail, still holding a seat. A
+    # generic "did not succeed" would be true and useless.
+    if "still lists" in text or "does not list" in text:
+        return (
+            "The change did not take effect - the directory still shows this mailbox "
+            "as it was. It has not been deleted or renamed, and it is still receiving "
+            "mail. Do not treat it as done."
+        )
     return error or "The mailbox change did not succeed."
 
 

@@ -116,7 +116,15 @@ list_mailboxes() {
     emit_seats_json 1
     return 1
   fi
-  quota=$(zimbra_cmd zmprov getQuotaUsage "$MAIL_DOMAIN" 2>/dev/null || true)
+  # getQuotaUsage takes a SERVER, and this asked it for a DOMAIN. Zimbra
+  # resolves the argument as a hostname, so it answered "No address associated
+  # with hostname <domain>" and returned nothing - the Storage column has been
+  # empty for every mailbox since it was written, and an empty answer renders
+  # as "no cap set" rather than as a failed call.
+  #
+  # It also needs SOAP, which is why it goes through the mail store: zmprov on
+  # an edge has no local mailboxd and refuses this one outright.
+  quota=$(zmprov_on_store getQuotaUsage "$(mailbox_server | head -1)" 2>/dev/null || true)
   tmp_raw=$(mktemp)
   tmp_quota=$(mktemp)
   printf '%s\n' "$raw" > "$tmp_raw"
@@ -129,17 +137,21 @@ text = open(raw_path, encoding="utf-8", errors="replace").read()
 quota = {}
 for line in open(quota_path, encoding="utf-8", errors="replace"):
     parts = line.split()
+    # "<account> <limit> <used>", proven on a live store by setting a 1 GiB cap
+    # and watching which column moved. This was read the other way round for its
+    # whole life - the cap reported as bytes in use and vice versa - and had no
+    # symptom only because the call above never returned a row to misread.
     if len(parts) >= 2 and "@" in parts[0]:
         try:
-            used = int(parts[1])
+            limit = int(parts[1])
         except ValueError:
-            used = None
-        limit = None
+            limit = None
+        used = None
         if len(parts) >= 3:
             try:
-                limit = int(parts[2])
+                used = int(parts[2])
             except ValueError:
-                limit = None
+                used = None
         quota[parts[0].lower()] = {"used_bytes": used, "quota_bytes": limit}
 
 rows = []
@@ -164,6 +176,10 @@ def flush():
         return
     email = acct["email"]
     q = quota.get(email.lower(), {})
+    try:
+        cap = int(acct["quota"])
+    except (KeyError, TypeError, ValueError):
+        cap = q.get("quota_bytes")
     rows.append({
         "email": email,
         "display_name": acct.get("display") or "",
@@ -171,7 +187,12 @@ def flush():
         "surname": acct.get("sn") or "",
         "status": acct.get("status") or "",
         "used_bytes": q.get("used_bytes"),
-        "quota_bytes": q.get("quota_bytes"),
+        # The cap is an LDAP attribute and already in the listing above, so it
+        # survives a mail store that cannot be reached; the SOAP figure is only
+        # a fallback. Zimbra writes 0 for "no cap", which is not the same as
+        # unknown - a deployment whose default COS is 10 GB must not read as
+        # uncapped just because the store did not answer.
+        "quota_bytes": cap,
     })
     acct = {}
 
@@ -191,6 +212,8 @@ for line in text.splitlines():
         acct["sn"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraAccountStatus:"):
         acct["status"] = line.split(":", 1)[1].strip()
+    elif line.startswith("zimbraMailQuota:"):
+        acct["quota"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraIsSystemAccount:"):
         acct["sys"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraIsSystemResource:"):
@@ -210,17 +233,64 @@ PY
   return 0
 }
 
+# Which machine runs mailboxd.
+#
+# zmprov on a node without a local mailboxd falls back to LDAP-only mode
+# WITHOUT saying so. In that mode the destructive operations refuse to act
+# unattended: `da` and `ra` print "Continue? [Y]es, [N]o", read end-of-file,
+# print "aborted" - and exit 0. Nothing here runs on a terminal, so that is
+# every console-driven delete and rename on a multi deployment.
+#
+# The console checked the exit status, saw 0, and told the operator the mailbox
+# was deleted. It was still there: still receiving mail, still holding a seat,
+# and for a departed employee still reachable. Rename reported the new address
+# while the old one kept working. Measured on the live pair, 21 Sep 2026.
+mailbox_server() {
+  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+    kin_mailbox_host
+    return 0
+  fi
+  zimbra_cmd zmhostname 2>/dev/null | tr -d '\r'
+}
+
+# zmprov, aimed at the machine that can actually carry the request out. -s
+# names the SOAP target, which is what keeps it out of the LDAP-only path.
+zmprov_on_store() {
+  local host
+  host=$(mailbox_server | head -1)
+  if [ -n "$host" ]; then
+    zimbra_cmd zmprov -s "$host" "$@"
+  else
+    # No idea which node holds the store: better to try than to refuse, and
+    # the result is checked by the caller either way.
+    zimbra_cmd zmprov "$@"
+  fi
+}
+
+account_exists() {
+  zimbra_cmd zmprov -l ga "$1" >/dev/null 2>&1
+}
+
 delete_mailbox() {
   local email="$1"
   require_same_domain "$email" || return $?
-  if ! zimbra_cmd zmprov -l ga "$email" >/dev/null 2>&1; then
+  if ! account_exists "$email"; then
     fail "Account not found: ${email}"
     return 1
   fi
   say "Deleting mailbox ${email}"
   local out
-  if ! out=$(zimbra_cmd zmprov da "$email" 2>&1); then
+  if ! out=$(zmprov_on_store da "$email" 2>&1); then
     fail "zmprov da failed"
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    return 1
+  fi
+  # Checked, not announced. A delete that quietly did nothing and a delete that
+  # worked are the same exit status, and the difference is a mailbox that still
+  # takes mail for someone who is supposed to be gone.
+  if account_exists "$email"; then
+    fail "The directory still lists ${email} after the delete."
+    info "Nothing was removed. Do not treat this mailbox as deleted."
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     return 1
   fi
@@ -237,19 +307,32 @@ rename_mailbox() {
     return 2
   fi
   local new_email="${new_local}@${MAIL_DOMAIN}"
-  if ! zimbra_cmd zmprov -l ga "$email" >/dev/null 2>&1; then
+  if ! account_exists "$email"; then
     fail "Account not found: ${email}"
     return 1
   fi
-  if zimbra_cmd zmprov -l ga "$new_email" >/dev/null 2>&1; then
+  if account_exists "$new_email"; then
     fail "Account already exists: ${new_email}"
     return 1
   fi
   say "Renaming ${email} to ${new_email}"
   local out
-  if ! out=$(zimbra_cmd zmprov ra "$email" "$new_email" 2>&1); then
+  if ! out=$(zmprov_on_store ra "$email" "$new_email" 2>&1); then
     fail "zmprov ra failed"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
+    return 1
+  fi
+  # Both halves, because a rename that half happened is worse than one that did
+  # not: the console said the address changed, and the old one still delivers.
+  if ! account_exists "$new_email"; then
+    fail "The directory does not list ${new_email} after the rename."
+    info "Nothing changed. ${email} is still the address."
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    return 1
+  fi
+  if account_exists "$email"; then
+    fail "The directory still lists the old address ${email}."
+    info "Mail sent to it will still be delivered. Do not treat it as renamed."
     return 1
   fi
   ok "Renamed to ${new_email}"
@@ -313,6 +396,16 @@ create_mailbox_gated() {
       printf '%s\n' "$out" | sed 's/^/    /' >&2
       return 1
     fi
+  fi
+
+  # Checked, not announced - the same reason delete and rename now verify.
+  # `ca` does work in LDAP-only mode today, unlike `da` and `ra`, which is the
+  # only reason this path was not silently broken too. That is a property of
+  # zmprov, not a guarantee, so confirm rather than assume.
+  if ! account_exists "$email"; then
+    fail "zmprov ca reported success but the directory does not list ${email}."
+    info "No mailbox was created. Nothing here should be treated as done."
+    return 1
   fi
 
   # zmprov ca already succeeded - the account exists and a seat is consumed
