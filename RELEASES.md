@@ -65,6 +65,21 @@ afterwards.
   logs, with no mailbox on it — and it is a disk of its own in this layout, so
   it is offered and monitored as one.
 - **Reports open on the current month.**
+- **Storage is allocated per mailbox, from Mailboxes.** Each row has a Storage
+  action: a number and MB or GB, or 0 for no cap. It writes Zimbra's own
+  `zimbraMailQuota`, so the Zimbra admin console agrees with it. Setting a cap
+  below what the mailbox already holds is allowed and says so at the time —
+  Zimbra will refuse new mail for that account until it is back under the cap,
+  and that is a decision to take deliberately rather than discover later. A cap
+  is not a seat: licensing counts mailboxes, and capping one changes no count,
+  so this is never blocked by the seat gate or by a license in grace.
+- **The Storage column now has something in it.** It had been blank for every
+  mailbox since it was written: the figure comes from `getQuotaUsage`, which
+  takes a *server* and was being handed the mail *domain*, so Zimbra tried to
+  resolve the domain as a hostname and returned nothing — which rendered as
+  "no storage cap" rather than as a failed call. The cap itself is now read
+  from the directory instead, so it survives a mail store that cannot be
+  reached, and only the bytes-in-use figure needs the store.
 - **Zimbra's own Server Status page tells the truth about both machines.**
   Each node reports its services to the logger over syslog, and on Ubuntu
   nothing in Zimbra ever switches the logger's receiver on — so a healthy edge

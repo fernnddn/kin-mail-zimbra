@@ -132,13 +132,36 @@ const FormTitle = styled.h2`
   font-weight: 650;
 `;
 
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+function formatSize(n: number): string {
+  if (n >= GB) return `${(n / GB).toFixed(n >= 10 * GB ? 0 : 1)} GB`;
+  const mb = n / MB;
+  return mb >= 10 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
+}
+
+// Typed by hand, so it is checked rather than trusted: an empty box, a minus
+// sign or a stray letter must not be sent as a cap. Blank is not zero - zero
+// is a deliberate "no cap" the operator has to type.
+function quotaValid(amount: string): boolean {
+  const n = Number(amount);
+  return amount.trim() !== "" && Number.isFinite(n) && n >= 0;
+}
+
+function quotaBytes(amount: string, unit: string): number {
+  return Math.round(Number(amount) * (unit === "GB" ? GB : MB));
+}
+
+// The cap and the bytes in use come from two different places - the cap from
+// the directory, the usage from the mail store - so either can be present
+// without the other. Showing "n/a" whenever usage was missing hid a cap the
+// operator had just set.
 function formatUsage(row: MailboxRow): string {
-  if (row.used_bytes == null) return "n/a";
-  const mb = row.used_bytes / (1024 * 1024);
-  const used = mb >= 10 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`;
-  if (!row.quota_bytes) return `${used} (no storage cap)`;
-  const cap = row.quota_bytes / (1024 * 1024);
-  return `${used} / ${cap >= 10 ? Math.round(cap) : cap.toFixed(1)} MB`;
+  const capped = !!row.quota_bytes;
+  if (row.used_bytes == null) return capped ? `cap ${formatSize(row.quota_bytes!)}` : "no cap";
+  const used = formatSize(row.used_bytes);
+  return capped ? `${used} / ${formatSize(row.quota_bytes!)}` : `${used} (no cap)`;
 }
 
 export default function CreateMailboxPage() {
@@ -163,6 +186,9 @@ export default function CreateMailboxPage() {
   const [deleting, setDeleting] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameLocal, setRenameLocal] = useState("");
+  const [quotaFor, setQuotaFor] = useState<string | null>(null);
+  const [quotaAmount, setQuotaAmount] = useState("");
+  const [quotaUnit, setQuotaUnit] = useState("GB");
 
   async function refresh() {
     const st = await api<ListResp>("/api/mailbox");
@@ -245,6 +271,47 @@ export default function CreateMailboxPage() {
     }
   }
 
+  function openQuota(row: MailboxRow) {
+    setQuotaFor(row.email);
+    setRenaming(null);
+    // Seed with what is already set, in the unit that reads naturally, so
+    // adjusting an existing cap does not start from a blank field.
+    if (!row.quota_bytes) {
+      setQuotaAmount("");
+      setQuotaUnit("GB");
+    } else if (row.quota_bytes % GB === 0) {
+      setQuotaAmount(String(row.quota_bytes / GB));
+      setQuotaUnit("GB");
+    } else {
+      setQuotaAmount(String(Math.round(row.quota_bytes / MB)));
+      setQuotaUnit("MB");
+    }
+  }
+
+  async function applyQuota(email: string, bytes: number) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const res = await api<{ over_cap?: boolean; used_bytes?: number | null }>(
+        "/api/mailbox/quota",
+        { method: "POST", body: JSON.stringify({ email, quota_bytes: bytes }) },
+      );
+      setQuotaFor(null);
+      setMessage(
+        bytes === 0
+          ? `${email} now has no storage cap.`
+          : res.over_cap
+            ? `${email} is capped at ${formatSize(bytes)}, but already holds ${formatSize(res.used_bytes || 0)}. New mail for this account will be refused until it is back under the cap.`
+            : `${email} is capped at ${formatSize(bytes)}.`,
+      );
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not set the storage cap");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function applyRename(email: string) {
     setBusy(true);
     setMessage("");
@@ -269,7 +336,7 @@ export default function CreateMailboxPage() {
         <PageHeader
           icon={<MailIcon />}
           title="Mailboxes"
-          subtitle="Create, list, rename, and delete accounts on the mail domain. Licensing is a seat count only. There is no per-mailbox storage cap from this console."
+          subtitle="Create, list, rename, delete, and set the storage cap for accounts on the mail domain. Licensing counts seats, not bytes: a cap limits one mailbox's size and does not change how many you may have."
         />
 
         {maintHint ? <WarnBox>{maintHint}</WarnBox> : null}
@@ -344,14 +411,68 @@ export default function CreateMailboxPage() {
                           {row.status || "unknown"}
                         </StatusPill>
                       </td>
-                      <td>{formatUsage(row)}</td>
+                      <td>
+                        {quotaFor === row.email ? (
+                          <LocalRow>
+                            <Input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={quotaAmount}
+                              onChange={(e) => setQuotaAmount(e.target.value)}
+                              aria-label="Storage cap"
+                              placeholder="0 = no cap"
+                              style={{ width: "6rem" }}
+                            />
+                            <Select
+                              value={quotaUnit}
+                              onChange={(e) => setQuotaUnit(e.target.value)}
+                              aria-label="Unit"
+                              style={{ width: "4.5rem" }}
+                            >
+                              <option value="MB">MB</option>
+                              <option value="GB">GB</option>
+                            </Select>
+                            <Button
+                              type="button"
+                              variant="primary"
+                              style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                              disabled={busy || !quotaValid(quotaAmount)}
+                              onClick={() =>
+                                void applyQuota(row.email, quotaBytes(quotaAmount, quotaUnit))
+                              }
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                              onClick={() => setQuotaFor(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </LocalRow>
+                        ) : (
+                          formatUsage(row)
+                        )}
+                      </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
+                          onClick={() => openQuota(row)}
+                        >
+                          Storage
+                        </Button>
                         <Button
                           type="button"
                           variant="ghost"
                           style={{ padding: "0.3rem 0.55rem", fontSize: "0.8rem" }}
                           onClick={() => {
                             setRenaming(row.email);
+                            setQuotaFor(null);
                             setRenameLocal(row.email.split("@")[0] || "");
                           }}
                         >

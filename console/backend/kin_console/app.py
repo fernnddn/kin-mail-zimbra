@@ -568,6 +568,15 @@ class MailboxEmailBody(BaseModel):
     email: str = Field(min_length=3, max_length=256)
 
 
+class MailboxQuotaBody(BaseModel):
+    email: str = Field(min_length=3, max_length=256)
+    # Bytes, and 0 means no cap - Zimbra's own spelling for zimbraMailQuota,
+    # carried unchanged rather than translated at each layer. The ceiling is
+    # 2^53 because this number is rendered by a browser, which cannot hold a
+    # larger integer exactly.
+    quota_bytes: int = Field(ge=0, le=2**53)
+
+
 class MailboxRenameBody(BaseModel):
     email: str = Field(min_length=3, max_length=256)
     new_local_part: str = Field(min_length=1, max_length=64)
@@ -794,6 +803,54 @@ async def mailbox_rename(
             detail=_human_mailbox_error(str(result.get("log") or ""), str(result.get("error") or "")),
         )
     return {"ok": True, "email": parsed.get("email") or "", "previous": parsed.get("previous") or ""}
+
+
+@app.post("/api/mailbox/quota")
+async def mailbox_quota(
+    body: MailboxQuotaBody,
+    user: ConsoleUser = Depends(auth.require_console_user),
+) -> dict[str, object]:
+    """Set one mailbox's storage cap. Not a create, so no seat gate and no license block.
+
+    The seat gate counts mailboxes against a contract and a cap changes no
+    count; blocking this on an expired license would stop an operator shrinking
+    a mailbox that is filling the disk, which is the opposite of useful.
+    """
+    if not command_allowed(user.role, proto.CMD_CREATE_MAILBOX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(user.role, proto.CMD_CREATE_MAILBOX),
+        )
+    result = await _collect_privhelper(
+        proto.CMD_CREATE_MAILBOX,
+        user.username,
+        args={
+            "op": "set_quota",
+            "email": body.email.strip().lower(),
+            "quota_bytes": body.quota_bytes,
+        },
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_human_mailbox_error(
+                str(result.get("log") or ""), str(result.get("error") or "")
+            ),
+        )
+    parsed = _json_from_log(str(result.get("log") or ""), "QUOTA_JSON:")
+    used = parsed.get("used_bytes")
+    return {
+        "ok": True,
+        "email": body.email.strip().lower(),
+        "quota_bytes": body.quota_bytes,
+        "used_bytes": used if isinstance(used, int) else None,
+        # Said here as well as in the script, because the console is where an
+        # operator will do this and the script's warning goes to a log nobody
+        # has open.
+        "over_cap": bool(
+            body.quota_bytes and isinstance(used, int) and used > body.quota_bytes
+        ),
+    }
 
 
 @app.post("/api/mailbox/delete")

@@ -9,10 +9,13 @@
 #   sudo ./08-create-mailbox.sh --list
 #   sudo ./08-create-mailbox.sh --delete user@domain
 #   sudo ./08-create-mailbox.sh --rename user@domain newlocal
+#   sudo ./08-create-mailbox.sh --set-quota user@domain <bytes>   # 0 = unlimited
 #   sudo ./08-create-mailbox.sh user@domain 'Pass' ['Display Name'] [--given N] [--sn N] [--account-status active|locked]
 #
-# SCOPE: new mailbox creation is quota-gated. Rename / delete / status / list
-# are not create operations and must NOT call the seat gate.
+# SCOPE: new mailbox creation is quota-gated. Rename / delete / status / list /
+# set-quota are not create operations and must NOT call the seat gate. The seat
+# gate counts mailboxes against a contract; a storage cap is about one mailbox's
+# size and changes no count (lib/quota-gate.sh says the same in its own SCOPE).
 # =============================================================================
 set -u
 cd "$(dirname "$0")" && . ./00-config.sh
@@ -32,6 +35,7 @@ Usage:
   sudo ./08-create-mailbox.sh --list
   sudo ./08-create-mailbox.sh --delete <email>
   sudo ./08-create-mailbox.sh --rename <email> <new-local-part>
+  sudo ./08-create-mailbox.sh --set-quota <email> <bytes>      # 0 = unlimited
   sudo ./08-create-mailbox.sh <email> <password> [displayName] [--given NAME] [--sn NAME] [--account-status active|locked]
   sudo ./08-create-mailbox.sh          # interactive prompts
 
@@ -108,6 +112,35 @@ require_same_domain() {
   return 0
 }
 
+# Which machine holds the mail store.
+#
+# getQuotaUsage takes a SERVER, and this asked it for a DOMAIN. Zimbra treats
+# the argument as a hostname, so on a split it answered "No address associated
+# with hostname <domain>" and on a single server it found nothing either - the
+# Storage column has been blank for every mailbox since it was written, and it
+# looked like "no cap set" rather than like a failed call.
+mailbox_server() {
+  if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split; then
+    kin_mailbox_host
+    return 0
+  fi
+  zimbra_cmd zmhostname 2>/dev/null | tr -d '\r'
+}
+
+# Bytes used, which only the mail store can answer.
+#
+# -s points zmprov at that store: on an edge there is no local mailboxd, so
+# zmprov falls back to LDAP-only mode and refuses this call outright. The cap
+# does NOT come from here - it is an LDAP attribute every node can read, and
+# keeping the two apart means a mailbox still shows the cap an operator set
+# even when the store is unreachable.
+quota_usage_lines() {
+  local host
+  host=$(mailbox_server | head -1)
+  [ -n "$host" ] || return 0
+  zimbra_cmd zmprov -s "$host" getQuotaUsage "$host" 2>/dev/null || true
+}
+
 list_mailboxes() {
   local raw quota tmp_raw tmp_quota
   say "Listing mailboxes on ${MAIL_DOMAIN}"
@@ -116,7 +149,7 @@ list_mailboxes() {
     emit_seats_json 1
     return 1
   fi
-  quota=$(zimbra_cmd zmprov getQuotaUsage "$MAIL_DOMAIN" 2>/dev/null || true)
+  quota=$(quota_usage_lines)
   tmp_raw=$(mktemp)
   tmp_quota=$(mktemp)
   printf '%s\n' "$raw" > "$tmp_raw"
@@ -129,17 +162,21 @@ text = open(raw_path, encoding="utf-8", errors="replace").read()
 quota = {}
 for line in open(quota_path, encoding="utf-8", errors="replace"):
     parts = line.split()
+    # "<account> <limit> <used>", proven on a live store by setting a cap and
+    # watching which column moved. Read the other way round for its whole life,
+    # so the cap was reported as the bytes in use and vice versa - harmless only
+    # because the call above never returned a row to misread.
     if len(parts) >= 2 and "@" in parts[0]:
         try:
-            used = int(parts[1])
+            limit = int(parts[1])
         except ValueError:
-            used = None
-        limit = None
+            limit = None
+        used = None
         if len(parts) >= 3:
             try:
-                limit = int(parts[2])
+                used = int(parts[2])
             except ValueError:
-                limit = None
+                used = None
         quota[parts[0].lower()] = {"used_bytes": used, "quota_bytes": limit}
 
 rows = []
@@ -164,6 +201,13 @@ def flush():
         return
     email = acct["email"]
     q = quota.get(email.lower(), {})
+    # The cap is an LDAP attribute and is already in the listing above, so it
+    # survives a mail store that cannot be reached; the SOAP figure is only a
+    # fallback. Zimbra writes 0 for "no cap", which is not the same as unknown.
+    try:
+        cap = int(acct["quota"])
+    except (KeyError, TypeError, ValueError):
+        cap = q.get("quota_bytes")
     rows.append({
         "email": email,
         "display_name": acct.get("display") or "",
@@ -171,7 +215,7 @@ def flush():
         "surname": acct.get("sn") or "",
         "status": acct.get("status") or "",
         "used_bytes": q.get("used_bytes"),
-        "quota_bytes": q.get("quota_bytes"),
+        "quota_bytes": cap,
     })
     acct = {}
 
@@ -191,6 +235,8 @@ for line in text.splitlines():
         acct["sn"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraAccountStatus:"):
         acct["status"] = line.split(":", 1)[1].strip()
+    elif line.startswith("zimbraMailQuota:"):
+        acct["quota"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraIsSystemAccount:"):
         acct["sys"] = line.split(":", 1)[1].strip()
     elif line.startswith("zimbraIsSystemResource:"):
@@ -254,6 +300,67 @@ rename_mailbox() {
   fi
   ok "Renamed to ${new_email}"
   echo "RENAME_JSON:{\"email\":\"${new_email}\",\"previous\":\"${email}\"}"
+  return 0
+}
+
+# Storage cap for one mailbox. NOT a create, so no seat gate (see SCOPE above).
+#
+# zimbraMailQuota is bytes, and 0 means no cap - Zimbra's own spelling, kept
+# rather than inventing a separate "unlimited" flag that would have to be
+# translated at every layer.
+set_quota() {
+  local email="$1" bytes="$2"
+  require_same_domain "$email" || return $?
+  case "$bytes" in
+    '' | *[!0-9]*)
+      fail "Quota must be a whole number of bytes, or 0 for no cap"
+      return 2
+      ;;
+  esac
+  # Length before value, and not merely for tidiness: a digit string longer
+  # than a machine integer makes `[ -gt ]` fail with "integer expression
+  # expected" and evaluate FALSE, so an absurd cap would sail past the ceiling
+  # check below and reach zmprov. 2^53 is 16 digits.
+  if [ "${#bytes}" -gt 16 ]; then
+    fail "Quota is too large to represent exactly (max 9007199254740992 bytes)"
+    return 2
+  fi
+  # 2^53. Above this a JSON number loses precision in the browser that shows
+  # it, so a cap would display as a different number from the one stored.
+  if [ "$bytes" -gt 9007199254740992 ]; then
+    fail "Quota is too large to represent exactly (max 9007199254740992 bytes)"
+    return 2
+  fi
+  if ! zimbra_cmd zmprov -l ga "$email" >/dev/null 2>&1; then
+    fail "Account not found: ${email}"
+    return 1
+  fi
+  say "Setting the storage cap for ${email}"
+  local out
+  if ! out=$(zimbra_cmd zmprov -l ma "$email" zimbraMailQuota "$bytes" 2>&1); then
+    fail "zmprov ma failed"
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    return 1
+  fi
+
+  # Report what the mailbox already holds, so a cap set below it is visible
+  # here and not discovered later as mail that stopped arriving.
+  local used
+  used=$(quota_usage_lines | awk -v e="$email" 'tolower($1) == tolower(e) { print $3; exit }')
+  case "$used" in
+    '' | *[!0-9]*) used=null ;;
+  esac
+
+  if [ "$bytes" = "0" ]; then
+    ok "${email}: no storage cap"
+  else
+    ok "${email}: capped at ${bytes} bytes"
+    if [ "$used" != "null" ] && [ "$used" -gt "$bytes" ]; then
+      warn "This mailbox already holds ${used} bytes, which is over the new cap."
+      info "Zimbra will refuse new mail for ${email} until it is back under it."
+    fi
+  fi
+  echo "QUOTA_JSON:{\"email\":\"${email}\",\"quota_bytes\":${bytes},\"used_bytes\":${used}}"
   return 0
 }
 
@@ -392,6 +499,11 @@ while [ $# -gt 0 ]; do
     --rename)
       shift
       rename_mailbox "${1:-}" "${2:-}"
+      exit $?
+      ;;
+    --set-quota)
+      shift
+      set_quota "${1:-}" "${2:-}"
       exit $?
       ;;
     --given)

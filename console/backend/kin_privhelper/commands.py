@@ -164,8 +164,25 @@ def validate_create_mailbox_args(args: dict[str, Any]) -> tuple[str, list[str]]:
         if not new_local or "@" in new_local or not _LOCAL_PART_RE.match(new_local):
             raise ValueError("new_local_part must be a valid local part")
         return "rename", ["--rename", email, new_local]
+    if op == "set_quota":
+        email = str(args.get("email") or "").strip().lower()
+        if "@" not in email:
+            raise ValueError("email is required to set a storage cap")
+        raw = args.get("quota_bytes")
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            # A float is refused rather than rounded: 5.5 GB entered somewhere
+            # upstream should be turned into bytes there, where the unit is
+            # still known, not silently truncated here.
+            raise ValueError("quota_bytes must be a whole number of bytes")
+        if raw < 0:
+            raise ValueError("quota_bytes cannot be negative (0 means no cap)")
+        if raw > 2**53:
+            raise ValueError("quota_bytes is too large to represent exactly")
+        return "set_quota", ["--set-quota", email, str(raw)]
     if op != "create":
-        raise ValueError("create_mailbox op must be create, status, list, delete, or rename")
+        raise ValueError(
+            "create_mailbox op must be create, status, list, delete, rename, or set_quota"
+        )
 
     local_part = str(args.get("local_part") or "").strip().lower()
     password = str(args.get("password") or "")
@@ -1329,7 +1346,7 @@ async def cmd_create_mailbox(args: dict[str, Any] | None = None) -> AsyncIterato
         yield proto.event_stdout(f"Running fixed script: {script} --status\n")
     elif op == "list":
         yield proto.event_stdout(f"Running fixed script: {script} --list\n")
-    elif op in ("delete", "rename"):
+    elif op in ("delete", "rename", "set_quota"):
         yield proto.event_stdout(f"Running fixed script: {script} {op} {argv_tail[1]}\n")
     else:
         # Never print password. Email is always the first positional.
