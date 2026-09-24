@@ -264,6 +264,33 @@ if [ "$LOCAL_FAIL" -ne 0 ]; then
 fi
 if [ "$AD_APPLY_OK" -eq 0 ] || [ "$AD_FAIL" -ne 0 ]; then
   warn "AD path not verified. Local mail still works. Fix URL/bind DN/filter and re-run 06-hybrid-auth.sh"
+  # An ldaps:// URL adds a failure the message above does not describe, and it
+  # is the likely one the first time anyone points this at a Windows CA.
+  #
+  # Active Directory's LDAPS certificate is issued by the domain's own private
+  # CA. Zimbra's LDAP client validates it against Java's trust store, which has
+  # never heard of that CA, so the bind fails on TLS - before any password is
+  # even considered. The error surfaces as an auth failure and sends whoever
+  # reads it to check the bind DN and the filter, which are fine.
+  #
+  # Measured on the lab AD, 24 Sep 2026: openssl reports
+  # "unable to get local issuer certificate" against the system store and
+  # "Verify return code: 0" once the domain CA is supplied.
+  case "${AD_LDAP_URL}" in
+    ldaps://*)
+      echo
+      warn "This is an ldaps:// URL. If the bind failed on TLS rather than on the"
+      warn "password, Zimbra does not trust the certificate the domain controller"
+      warn "presents - Active Directory signs it with the domain's own private CA."
+      info "Check it from this node:"
+      info "  openssl s_client -connect <dc-host>:636 </dev/null 2>&1 | grep 'Verify return'"
+      info "A non-zero code means the CA has to be imported, on the MAILBOX node:"
+      info "  su - zimbra -c 'zmcertmgr addcacert /path/to/domain-ca.cer'"
+      info "  su - zimbra -c 'zmmailboxdctl restart'"
+      info "Export that file from the CA, or read it out of the directory itself:"
+      info "  CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,<base>"
+      ;;
+  esac
   exit 0
 fi
 say "DONE - both auth paths verified"

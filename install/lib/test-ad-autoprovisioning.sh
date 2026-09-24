@@ -119,6 +119,27 @@ else
   bad "mailboxes are created automatically with no mention of the seat cost"
 fi
 
+# --- the failure an ldaps:// URL adds ----------------------------------------
+# AD signs its LDAPS certificate with the domain's own private CA. Zimbra
+# validates against Java's trust store, which has never heard of it, so the
+# bind fails on TLS before the password is considered - and surfaces as an auth
+# failure that sends the reader to check the bind DN and filter, which are fine.
+if grep -q 'ldaps://\*)' "$S"; then
+  pass "an ldaps:// URL gets its own explanation when the bind fails"
+else
+  bad "an ldaps:// TLS failure is reported as a generic auth failure"
+fi
+if grep -q 'zmcertmgr addcacert' "$S"; then
+  pass "the fix names the command that imports the CA"
+else
+  bad "the operator is not told how to make Zimbra trust the CA"
+fi
+if grep -q 'on the MAILBOX node' "$S"; then
+  pass "and says which machine to run it on"
+else
+  bad "does not say which node holds the trust store"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD auto-provisioning tests passed\n'
   exit 0
