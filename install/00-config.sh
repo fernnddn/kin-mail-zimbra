@@ -771,6 +771,22 @@ fi
 : "${AD_BIND_DN_TEMPLATE:=}"
 : "${AD_TEST_USER:=}"
 : "${AD_TEST_PASS:=}"
+# Whether Zimbra creates mailboxes from Active Directory by itself.
+#
+# zimbraAuthMech=ad only delegates the PASSWORD CHECK. It never reads the
+# directory's account list, so a user who exists in AD does not exist in Zimbra
+# and cannot receive mail - which reads to an operator as "AD is not syncing"
+# (QA, 24 Sep 2026). Zimbra's answer to that is auto-provisioning, and this
+# product was not using it.
+#
+#   (empty)       nothing changes - the behaviour every existing install has
+#   LAZY          the mailbox is created on that person's first AD login
+#   MANUAL        an admin searches AD from the Zimbra console and picks who
+#   LAZY,MANUAL   both
+#
+# Empty by default on purpose: creating mailboxes consumes contracted seats,
+# and that is not a side effect to hand anyone without them asking for it.
+: "${AD_AUTOPROV_MODE:=}"
 : "${TLS_METHOD:=cloudflare}"
 # PLACEHOLDER_UNSET until the operator confirms the real contracted seat count.
 # Empty legacy configs behave the same as PLACEHOLDER_UNSET (gate denies creates).

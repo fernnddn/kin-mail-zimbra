@@ -105,6 +105,92 @@ fi
 su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech zimbraAuthLdapURL zimbraAuthLdapSearchBase zimbraAuthLdapSearchFilter zimbraAuthLdapSearchBindDn zimbraAuthFallbackToLocal zimbraAuthLdapBindDn" 2>/dev/null \
   | sed 's/^/    /'
 
+# -----------------------------------------------------------------------------
+# Mailboxes created from Active Directory.
+#
+# zimbraAuthMech=ad, applied above, only delegates the password check. It does
+# not read the directory's account list, so someone who exists in AD still has
+# no mailbox and cannot receive mail. To an operator that looks like AD failing
+# to sync - reported as exactly that in QA on 24 Sep 2026, against a
+# configuration that was entirely correct.
+#
+# Zimbra's own answer is auto-provisioning. Off unless asked for: creating
+# mailboxes spends contracted seats.
+#
+# Every attribute is checked to exist on THIS Zimbra build before it is set.
+# These names are stable across Zimbra 8-10, but "stable" is not "verified",
+# and a name this build lacks would half-configure the directory with no clue
+# left behind as to why.
+autoprov_supported() {
+  su - zimbra -c "zmprov desc -a $1" >/dev/null 2>&1
+}
+
+apply_autoprov() {
+  local mode="$1" attr
+  say "1b. Creating mailboxes from AD (auto-provisioning: ${mode})"
+  for attr in zimbraAutoProvMode zimbraAutoProvAuthMech zimbraAutoProvLdapURL \
+    zimbraAutoProvLdapAdminBindDn zimbraAutoProvLdapAdminBindPassword \
+    zimbraAutoProvLdapSearchBase zimbraAutoProvLdapSearchFilter \
+    zimbraAutoProvAccountNameMap; do
+    if ! autoprov_supported "$attr"; then
+      warn "This Zimbra build has no ${attr} - skipping auto-provisioning."
+      info "Mailboxes stay manual. AD still checks passwords for accounts that exist."
+      return 0
+    fi
+  done
+
+  # The same URL, base, bind and filter the auth path already uses. A second
+  # copy would be a second thing to get wrong and a second thing to keep in step.
+  if ! zm md "$MAIL_DOMAIN" \
+    zimbraAutoProvMode "$mode" \
+    zimbraAutoProvAuthMech LDAP \
+    zimbraAutoProvLdapURL "$AD_LDAP_URL" \
+    zimbraAutoProvLdapAdminBindDn "$AD_SEARCH_BIND_DN" \
+    zimbraAutoProvLdapAdminBindPassword "$AD_SEARCH_BIND_PASSWORD" \
+    zimbraAutoProvLdapSearchBase "$AD_SEARCH_BASE" \
+    zimbraAutoProvLdapSearchFilter "$AD_SEARCH_FILTER" \
+    zimbraAutoProvAccountNameMap sAMAccountName; then
+    warn "Could not apply auto-provisioning - mailboxes stay manual."
+    info "Mail is unaffected; AD still checks passwords for accounts that exist."
+    return 0
+  fi
+
+  # Carry the person's name across, so a provisioned mailbox is not a bare
+  # address with nothing in the address book.
+  if autoprov_supported zimbraAutoProvAttrMap; then
+    zm md "$MAIL_DOMAIN" \
+      zimbraAutoProvAttrMap displayName=displayName \
+      zimbraAutoProvAttrMap givenName=givenName \
+      zimbraAutoProvAttrMap sn=sn >/dev/null 2>&1 \
+      || warn "Name attributes were not mapped; mailboxes will have no display name."
+  fi
+
+  # Checked, not announced.
+  local got
+  got=$(su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAutoProvMode" 2>/dev/null |
+    sed -n 's/^zimbraAutoProvMode: //p' | tr '\n' ',' | sed 's/,$//')
+  if [ -z "$got" ]; then
+    warn "The directory does not report an auto-provisioning mode; treating it as not applied."
+    return 0
+  fi
+  ok "Auto-provisioning active: ${got}"
+  case ",${got}," in
+    *,LAZY,*) info "A mailbox is created the first time someone signs in with their AD password." ;;
+  esac
+  case ",${got}," in
+    *,MANUAL,*) info "AD accounts can now be searched and created from the Zimbra admin console." ;;
+  esac
+  warn "Each mailbox created this way spends one contracted seat."
+}
+
+if [ "$AD_APPLY_OK" -eq 1 ] && [ -n "${AD_AUTOPROV_MODE}" ]; then
+  apply_autoprov "$AD_AUTOPROV_MODE"
+elif [ "$AD_APPLY_OK" -eq 1 ]; then
+  info "AD_AUTOPROV_MODE is empty: mailboxes are created by hand."
+  info "AD checks passwords for accounts that exist; it does not create them."
+  info "Set AD_AUTOPROV_MODE=LAZY,MANUAL in ${CONF_FILE} to let Zimbra create them."
+fi
+
 say "2. Test accounts - pure local + AD-backed"
 
 # Local-only mailbox: not expected to exist in AD, so external bind fails and
