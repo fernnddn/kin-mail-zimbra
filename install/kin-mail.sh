@@ -294,7 +294,25 @@ run_firewall_stage_interactive() {
     # Console UI button is the operator confirm - never invent a silent default-yes
     # for bare non-TTY runs without this flag.
     say "KIN_CONSOLE_CONFIRMED=1 - applying firewall (console operator confirmed)"
-    warn "Dead-man will be armed. Console will NOT auto-cancel it."
+    # Five minutes is the right window for someone who just typed the command
+    # and is watching the terminal. It is the wrong one here: from the console
+    # this stage runs near the end of a 20-40 minute deploy, and an operator
+    # who is not staring at the screen at that exact moment misses it entirely.
+    #
+    # What that cost, twice, on live internet-facing edges (20 and 24 Sep 2026):
+    # ufw switched itself back off and the machine ran with no host firewall,
+    # with nothing saying so until the Cluster page learned to report it.
+    #
+    # A longer window does not weaken the protection the dead man exists for -
+    # an operator genuinely locked out still gets back in, they just wait
+    # longer. An unfirewalled mail server on the internet is the worse of the
+    # two, and it is the one that kept happening. An explicit
+    # KIN_UFW_DEADMAN_SEC still wins: this only replaces the default.
+    if [ -z "${KIN_UFW_DEADMAN_SEC:-}" ]; then
+      KIN_UFW_DEADMAN_SEC=1800
+      export KIN_UFW_DEADMAN_SEC
+    fi
+    warn "Dead-man will be armed for ${KIN_UFW_DEADMAN_SEC}s. Console will NOT auto-cancel it."
     info "After verifying SSH + cluster + mail, cancel via console or:"
     info "  sudo ./10-host-firewall.sh cancel-deadman"
   else
@@ -318,7 +336,8 @@ run_firewall_stage_interactive() {
     # Dead-man stays armed in the background. Do not stall or fail Deploy
     # waiting for cancel - the operator cancels from the console after SSH
     # still works. If they never cancel, ufw reverts when the timer ends.
-    warn "Dead-man stays armed. Verify SSH, then cancel from the console (or sudo ./10-host-firewall.sh cancel-deadman)."
+    warn "Dead-man stays armed for ${KIN_UFW_DEADMAN_SEC:-300}s. Verify SSH, then cancel from the console (or sudo ./10-host-firewall.sh cancel-deadman)."
+    warn "If nobody cancels it, this machine ends up with NO host firewall, facing the internet."
     info "Continuing the install; ufw will auto-disable if you do not cancel in time."
     return 0
   fi

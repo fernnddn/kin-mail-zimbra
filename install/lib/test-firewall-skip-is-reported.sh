@@ -160,6 +160,30 @@ else
   bad "the remaining skip is not gated on the operator declining"
 fi
 
+# --- the dead man an operator never sees ------------------------------------
+# From the console the firewall stage runs near the end of a 20-40 minute
+# deploy. A five-minute window to cancel is one the operator is not watching
+# for, and twice it ended with an internet-facing edge running no firewall at
+# all. The window has to be long enough to be noticed.
+K="$(pwd)/../kin-mail.sh"
+if grep -q 'KIN_UFW_DEADMAN_SEC=1800' "$K"; then
+  pass "a console deploy arms a dead man long enough to be cancelled"
+else
+  bad "the console deploy still uses a window the operator cannot act within"
+fi
+# An operator who chose their own window keeps it.
+if grep -q 'if \[ -z "${KIN_UFW_DEADMAN_SEC:-}" \]; then' "$K"; then
+  pass "an explicit KIN_UFW_DEADMAN_SEC is not overridden"
+else
+  bad "the stage overrides a window the operator set deliberately"
+fi
+# And the consequence is stated where it is armed, not only in a design note.
+if grep -q 'NO host firewall, facing the internet' "$K"; then
+  pass "the cost of not cancelling is spelled out"
+else
+  bad "the operator is not told what happens if they do nothing"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All firewall-skip-reporting tests passed\n'
 else
