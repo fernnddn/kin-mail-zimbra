@@ -57,6 +57,33 @@ else
   bad "the admin surface is not actually limited to CLUSTER_NET"
 fi
 
+# ...but CLUSTER_NET alone is this host's own /24, and an operator is rarely on
+# it. Admin IPs would cover them, and Admin IPs are optional in the wizard and
+# usually empty - so a clean deploy left the console reachable from the server
+# subnet and from nowhere else. That is the fault the Zimbra admin port already
+# had (20 Sep 2026), on the one page an operator needs *before* they can set
+# Admin IPs at all.
+if grep -q "port \"\$CONSOLE_PORT\" proto tcp comment 'KIN console private net'" "$SCRIPT"; then
+  pass "the console is reachable from private networks without Admin IPs"
+else
+  bad "the console still needs Admin IPs to be reachable off the server subnet"
+fi
+# Private SOURCES only - an internet host cannot hold one, so this never opens
+# the console to the world.
+if grep -q "ufw allow ${CONSOLE_PORT:-9443}/tcp" "$SCRIPT" || grep -qE "ufw allow \"?\\\$CONSOLE_PORT\"?/tcp" "$SCRIPT"; then
+  bad "the console is opened without a source restriction"
+else
+  pass "the console is never opened to any source"
+fi
+# The three ranges, and the loop variable that writes them.
+for net in '10.0.0.0/8' '172.16.0.0/12' '192.168.0.0/16'; do
+  if grep -q "$net" "$SCRIPT"; then
+    pass "covers ${net}"
+  else
+    bad "does not cover ${net}"
+  fi
+done
+
 # The trust between the two halves has to be symmetric and by ADDRESS.
 #
 # The mailbox names EDGE_IP. The edge named nothing: the only thing letting the

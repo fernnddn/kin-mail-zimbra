@@ -122,6 +122,15 @@ or an observability VM.
   certificate on 7071/8443, which no browser trusts, so the browser warning on
   the Zimbra admin console is expected and is not a sign of interception. There
   is no renewal path for a public certificate on the mailbox.
+- **The KIN console is reachable after a deploy, from any of the operator's
+  own networks.** It listens on 9443 on the edge, and its firewall rules were
+  the edge's own /24 plus whatever Admin IPs had been filled in — a field the
+  wizard calls optional. An operator on any other internal subnet therefore
+  could not open the one page they need in order to set Admin IPs. It is now
+  open to private source ranges as well, on the same terms as Zimbra's admin
+  port: no internet host can hold such an address, and the console still
+  requires a login. Delete the three `KIN console private net` rules to narrow
+  it to the listed addresses only.
 - **Zimbra's admin console is on the mailbox, and only on the mailbox** —
   `https://<mailbox address>:7071`. The edge does not serve it. After a deploy
   it is open to private networks (10/8, 172.16/12, 192.168/16) and to any

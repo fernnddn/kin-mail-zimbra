@@ -379,6 +379,25 @@ apply_rules() {
     ufw allow from "$ip" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console admin-IP'
   done
   ufw allow from "$CLUSTER_NET" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console LAN'
+  # The console, from private networks - the same reasoning the mailbox already
+  # applies to Zimbra's admin port, and for the same reason.
+  #
+  # CLUSTER_NET above is only this host's own /24. An operator whose workstation
+  # sits on any other internal subnet could not reach the console at all unless
+  # they had filled in Admin IPs, which the wizard calls optional and which is
+  # therefore usually empty. That is how the Zimbra admin port refused every
+  # address an operator owned (20 Sep 2026), and the console is the *primary*
+  # interface - it would be a worse version of the same fault, on the one page
+  # an operator needs before they can set Admin IPs in the first place.
+  #
+  # Sources, not destinations: no host on the internet can hold one of these
+  # addresses, so this opens the operator's own networks and nothing else. The
+  # console still requires a login. To narrow it to the listed addresses only,
+  # delete the three 'KIN console private net' rules.
+  local consolenet
+  for consolenet in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+    ufw allow from "$consolenet" to any port "$CONSOLE_PORT" proto tcp comment 'KIN console private net'
+  done
 
   # Cluster / HA - peers + mon only (never any)
   # allow_from <addr> <port-spec> <proto> <comment>: silently skips an address
