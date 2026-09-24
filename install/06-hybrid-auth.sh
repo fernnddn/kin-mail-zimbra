@@ -191,6 +191,22 @@ elif [ "$AD_APPLY_OK" -eq 1 ]; then
   info "Set AD_AUTOPROV_MODE=LAZY,MANUAL in ${CONF_FILE} to let Zimbra create them."
 fi
 
+# An ldaps:// directory signs its certificate with the domain's own private CA,
+# which Zimbra does not trust until it is told to. Left to the operator that is
+# four steps across two operating systems; done here it is none. Never fatal:
+# the stage below reports an untrusted certificate clearly enough either way.
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  case "${AD_LDAP_URL}" in
+    ldaps://*)
+      if [ -x ./14-ad-trust.sh ]; then
+        ./14-ad-trust.sh || warn "Certificate trust step did not complete; AD sign-in may fail on TLS."
+      else
+        warn "14-ad-trust.sh is missing; the directory certificate was not checked."
+      fi
+      ;;
+  esac
+fi
+
 say "2. Test accounts - pure local + AD-backed"
 
 # Local-only mailbox: not expected to exist in AD, so external bind fails and
