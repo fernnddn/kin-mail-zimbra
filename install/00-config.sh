@@ -801,11 +801,20 @@ fi
 : "${AD_CA_FILE:=}"
 # How often the AD sync timer runs, in systemd's own spelling (30s, 5min, 1h).
 #
-# Every run is one LDAP search plus one listing of the domain's accounts, so
-# the cost is small but not free, and it scales with the directory. One minute
-# makes a new joiner appear almost at once; an hour is plenty when people are
-# added in batches. Five minutes is the balance most estates want.
-: "${AD_SYNC_INTERVAL:=1h}"
+# Every run is one LDAP search plus one listing of the domain's accounts. A run
+# that finds nothing to do was measured at 3 seconds on the lab pair, so at two
+# minutes the sweep costs about 2.5% of one core on the mailbox and nothing at
+# all on the edge.
+#
+# The default was an hour, which is the wrong shape for the question people
+# actually ask: "I have just added someone in AD - why are they not in Zimbra?"
+# An hour of that is indistinguishable from the sync being broken, and the
+# operator goes looking for a fault that is not there. Two minutes is short
+# enough that adding a person and watching them appear reads as one action.
+#
+# Raise it for a large directory where the sweep stops being free; the timer is
+# rewritten from this value every time 15-ad-sync.sh --schedule runs.
+: "${AD_SYNC_INTERVAL:=2min}"
 : "${TLS_METHOD:=cloudflare}"
 # PLACEHOLDER_UNSET until the operator confirms the real contracted seat count.
 # Empty legacy configs behave the same as PLACEHOLDER_UNSET (gate denies creates).

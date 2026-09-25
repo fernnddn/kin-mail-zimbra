@@ -74,6 +74,21 @@ if grep -q 'AD_SYNC_SKIP.*administrator guest krbtgt' "$S"; then
 else
   bad "would create a mailbox for krbtgt"
 fi
+# Skipping them silently produced the report "6 enabled people in the
+# directory / 5 already have a mailbox; 0 do not" - which does not add up, and
+# is indistinguishable from the sync losing somebody. That arithmetic is the
+# exact shape of the complaint this feature was built to answer, so the counts
+# must reconcile against the directory total.
+if grep -q 'POLICY_SKIPPED' "$S"; then
+  pass "accounts dropped by policy are counted, not dropped silently"
+else
+  bad "the numbers cannot add up to the directory total"
+fi
+if grep -q 'accounted for' "$S"; then
+  pass "a total that does not reconcile is reported rather than printed as fact"
+else
+  bad "somebody could be dropped uncounted and the report would look clean"
+fi
 
 # --- safe to run twice, and to preview ---------------------------------------
 if grep -q 'grep -qxF "\$email"' "$S"; then
@@ -119,10 +134,42 @@ fi
 # How often is the operator's call, not a number baked in here. One minute
 # makes a new joiner appear almost at once; an hour is plenty for batches.
 C="$(pwd)/../00-config.sh"
-if grep -q ': "${AD_SYNC_INTERVAL:=1h}"' "$C"; then
-  pass "the interval is configurable, with a sane default"
+if grep -qE ': "\$\{AD_SYNC_INTERVAL:=[0-9]+(s|min)\}"' "$C"; then
+  pass "the interval is configurable, and defaults to seconds or minutes"
 else
-  bad "the sync interval is hardcoded"
+  bad "the sync interval is hardcoded, or defaults to hours"
+fi
+# Hours specifically: the default was 1h, and an hour between adding someone in
+# AD and seeing them in Zimbra is indistinguishable from the sync being broken.
+# The operator then goes looking for a fault that does not exist. A no-op sweep
+# was measured at 3 seconds, so the hour was never buying anything.
+if grep -qE ': "\$\{AD_SYNC_INTERVAL:=[0-9]+(h|hour)' "$C"; then
+  bad "a new AD account would take up to an hour to appear, which reads as broken"
+else
+  pass "a new AD account appears in minutes, not hours"
+fi
+# systemd spends its default one-minute accuracy by firing LATE. On an hourly
+# timer that is invisible; on a two-minute one the operator is timing it.
+if grep -q 'AccuracySec=' "$S"; then
+  pass "the timer sets its own accuracy rather than taking systemd's minute"
+else
+  bad "a short interval would drift by up to a minute against what it promises"
+fi
+# This is a monotonic timer (OnUnitActiveSec), so systemd leaves its realtime
+# columns empty and `list-timers` prints "n/a  n/a" under NEXT and LEFT. That
+# was the command this script told the operator to check it with - measured on
+# the lab mailbox, 25 Sep 2026 - and it reads as a dead timer.
+if grep -q 'systemctl list-timers kin-ad-sync' "$S"; then
+  bad "sends the operator to a command that shows n/a for this kind of timer"
+else
+  pass "does not send the operator to a command that reports n/a here"
+fi
+# An enabled timer with nothing scheduled fires once and never again, and is
+# indistinguishable from a working one until somebody is not created.
+if grep -q 'NextElapseUSecMonotonic' "$S"; then
+  pass "confirms a next sweep is actually scheduled before claiming it is installed"
+else
+  bad "reports the timer installed without checking anything is scheduled"
 fi
 # A timer that silently fell back to a default nobody asked for would run at
 # the wrong rate forever, and nothing would say so.

@@ -174,6 +174,36 @@ else
   bad "a soft-failed stage would be reported as a clean install"
 fi
 
+# --- the certificate must not be able to cost the customer their AD login ----
+# Asked directly on 25 Sep 2026: "can I keep TLS_METHOD=manual and still have
+# Active Directory sync with no issue?"
+#
+# The two share nothing at runtime - AD is reached over LDAPS to the domain
+# controller, behind a CA of its own that 14-ad-trust imports - but they do
+# share this pipeline, and 04 runs first. TLS_METHOD=manual is the method most
+# likely to fail: it waits up to 25 minutes for a human to publish a TXT
+# record. If that failure ended the run, the deployment would come up with no
+# AD authentication at all, and nothing in the transcript would connect an
+# empty admin console to a DNS record nobody published in time.
+stage_order=$(sed -n '/^FULL_PIPELINE_ZIMBRA_STAGES=(/,/^)$/p' "$MAIN")
+tls_pos=$(printf '%s\n' "$stage_order" | grep -n '04-tls-dkim.sh' | head -1 | cut -d: -f1)
+auth_pos=$(printf '%s\n' "$stage_order" | grep -n '06-hybrid-auth.sh' | head -1 | cut -d: -f1)
+if [ -n "$tls_pos" ] && [ -n "$auth_pos" ] && [ "$tls_pos" -lt "$auth_pos" ]; then
+  ok "authentication is configured after TLS, so it sees a finished certificate when there is one"
+else
+  bad "the pipeline no longer runs 04 before 06 (tls=$tls_pos auth=$auth_pos)"
+fi
+# `continue` is the whole mechanism: it returns to the loop, which still has 06
+# to run. A `return` here would take the certificate failure and spend the
+# directory integration on it.
+soft_branch=$(sed -n '/if \[ "\$s" = "04-tls-dkim.sh" \]; then/,/^    fi$/p' "$MAIN")
+if printf '%s' "$soft_branch" | grep -q 'continue' &&
+   ! printf '%s' "$soft_branch" | grep -q 'return'; then
+  ok "a certificate that could not be issued still leaves AD to be configured"
+else
+  bad "04's failure path leaves the loop, so TLS_METHOD=manual could cost the AD login"
+fi
+
 # --- an empty admin list must not mean an unfirewalled host ------------------
 # The wizard calls Admin IPs optional and says they can be narrowed later from
 # the console. While blank meant the firewall stage refused, that sentence was

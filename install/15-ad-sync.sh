@@ -130,6 +130,8 @@ EXISTING=$(zimbra_cmd zmprov -l gaa "$MAIL_DOMAIN" 2>/dev/null | tr 'A-Z' 'a-z')
 CREATED=0
 SKIPPED=0
 BLOCKED=0
+POLICY_SKIPPED=0
+POLICY_NAMES=""
 MISSING=""
 
 MISSING_FILE=$(mktemp)
@@ -139,6 +141,8 @@ while IFS=$'\t' read -r name given surname display; do
   lname=$(printf '%s' "$name" | tr 'A-Z' 'a-z')
   case " $AD_SYNC_SKIP " in
     *" $lname "*)
+      POLICY_SKIPPED=$((POLICY_SKIPPED + 1))
+      POLICY_NAMES="${POLICY_NAMES}${lname} "
       continue
       ;;
   esac
@@ -156,6 +160,20 @@ EOF
 MISSING_N=0
 for _ in $MISSING; do MISSING_N=$((MISSING_N + 1)); done
 info "${SKIPPED} already have a mailbox; ${MISSING_N} do not"
+# The numbers have to add up to the directory total, or the operator is left
+# with the question this product already received once: "AD has six people and
+# Zimbra shows five - which one is missing, and why?" Accounts dropped by
+# policy were skipped silently, so 6 / 5 / 0 was the whole story an operator
+# got, and the only way to find the sixth was to read this script.
+if [ "$POLICY_SKIPPED" -gt 0 ]; then
+  info "${POLICY_SKIPPED} not a person, so no mailbox: ${POLICY_NAMES}"
+fi
+_accounted=$((SKIPPED + MISSING_N + POLICY_SKIPPED))
+if [ "$_accounted" -ne "${TOTAL:-0}" ]; then
+  warn "${TOTAL} read from the directory but only ${_accounted} accounted for."
+  info "Somebody is being dropped without being counted. Treat the list below"
+  info "as incomplete and report this - do not assume the directory is in sync."
+fi
 
 if [ "$MISSING_N" -eq 0 ]; then
   echo
@@ -259,6 +277,11 @@ Description=KIN Mail - Active Directory sync every ${AD_SYNC_INTERVAL}
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=${AD_SYNC_INTERVAL}
+# systemd's default accuracy is one minute, which it spends by firing LATE.
+# On an hourly timer that is invisible; on a two-minute one it means a sweep
+# the operator was told happens every two minutes can take three, and the
+# person watching for their new AD account to appear is timing it.
+AccuracySec=10s
 Persistent=true
 
 [Install]
@@ -268,7 +291,20 @@ EOF
   systemctl daemon-reload >/dev/null 2>&1 || true
   if systemctl enable --now kin-ad-sync.timer >/dev/null 2>&1; then
     ok "Sync installed: new AD people get a mailbox within ${AD_SYNC_INTERVAL}"
-    info "Check it with: systemctl list-timers kin-ad-sync.timer"
+    # Not `systemctl list-timers`. This is a monotonic timer, so its realtime
+    # columns are empty and that command prints "n/a  n/a" for NEXT and LEFT -
+    # which reads as a dead timer to anyone who did not write it. `status`
+    # prints the real thing: "Trigger: <time>; 1min 13s left".
+    info "Check it with: systemctl status kin-ad-sync.timer"
+    _next=$(systemctl show kin-ad-sync.timer -p NextElapseUSecMonotonic --value 2>/dev/null)
+    if [ -n "$_next" ] && [ "$_next" != "0" ]; then
+      ok "Next sweep is scheduled"
+    else
+      # An enabled timer with nothing scheduled runs once and never again,
+      # which looks identical to a working one until somebody is not created.
+      warn "The timer is enabled but has no next run scheduled."
+      info "Run it by hand after adding people: sudo ./15-ad-sync.sh"
+    fi
   else
     warn "Could not enable the timer; run this stage by hand when people are added."
   fi
