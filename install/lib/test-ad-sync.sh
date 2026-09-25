@@ -188,6 +188,41 @@ else
   bad "reads the fields as parallel lists, which desynchronise"
 fi
 
+# --- reaching the mailbox at all ---------------------------------------------
+# MAILBOX_SSH_PASS is the password that machine had BEFORE anything was
+# installed. 02-prepare-os.sh then changes the account to KIN_USER_PASS. Trying
+# only the first is how the synchronisation silently never ran: ssh refused,
+# one warning in a forty-minute log, and an empty admin console (QA, 25 Sep).
+Z="$(pwd)/zimbra-store.sh"
+if grep -q 'for pw in "${MAILBOX_SSH_PASS:-}" "${KIN_USER_PASS:-}"' "$Z"; then
+  pass "both SSH passwords are tried, as the orchestrator already does"
+else
+  bad "only one SSH password is tried; a stale one silently kills the sync"
+fi
+if sed -n '/^kin_run_stage_on_store/,/^}/p' "$Z" | grep -q 'true >/dev/null 2>&1'; then
+  pass "the password is proven with a cheap probe before the real run"
+else
+  bad "the stage is run blind, so a refusal reads as the stage failing"
+fi
+# Not reaching the mailbox and the stage failing are different problems with
+# different fixes, and must not arrive as the same message.
+if grep -q 'return 3' "$Z"; then
+  pass "unreachable is its own return code, distinct from a stage failure"
+else
+  bad "unreachable is indistinguishable from a failed stage"
+fi
+H="$(pwd)/../06-hybrid-auth.sh"
+if grep -q 'THE DIRECTORY WAS NOT SYNCHRONISED' "$H"; then
+  pass "a sync that did not happen is stated loudly, not warned about in passing"
+else
+  bad "a silent sync failure is easy to miss in a long deploy log"
+fi
+if grep -q 'No Active Directory users were synchronised' "$H"; then
+  pass "a failed AD apply also says the account list will be empty"
+else
+  bad "an operator is left to work out why the console is empty"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD sync tests passed\n'
   exit 0

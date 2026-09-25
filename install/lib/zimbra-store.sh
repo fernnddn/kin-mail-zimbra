@@ -83,18 +83,43 @@ kin_run_stage_on_store() {
     "${KIN_MAIL_INSTALL_DIR}/${stage}" "$@"
     return $?
   fi
-  local mb user pass remote_root
+  local mb user remote_root cmd
   mb=$(kin_mailbox_ip)
-  user="${MAILBOX_SSH_USER:-${OS_USER:-kin}}"
-  pass="${MAILBOX_SSH_PASS:-${KIN_USER_PASS:-}}"
+  user="${MAILBOX_SSH_USER:-${KIN_OS_USER:-kin}}"
   remote_root="${KIN_REMOTE_DEPLOY_ROOT:-/opt/kin-mail-deploy}"
-  if [ -z "$mb" ] || [ -z "$pass" ] || ! command -v sshpass >/dev/null 2>&1; then
+  if [ -z "$mb" ] || ! command -v sshpass >/dev/null 2>&1; then
     return 3
   fi
-  local cmd
   cmd="${remote_root}/install/${stage} $*"
-  SSHPASS="$pass" sshpass -e ssh \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=20 -o LogLevel=ERROR \
-    "${user}@${mb}" "echo '${pass}' | sudo -S -p '' ${cmd}"
+
+  # Two passwords, in order, exactly as the orchestrator does it (and for the
+  # same reason).
+  #
+  # MAILBOX_SSH_PASS is what the operator typed on the Topology step - the
+  # password that machine had BEFORE anything was installed. 02-prepare-os.sh
+  # then runs chpasswd on it and sets the account to KIN_USER_PASS from the
+  # Default credentials step. By the time any stage after the build wants to
+  # reach the mailbox, the first password is usually the stale one.
+  #
+  # Trying only the first is how the user synchronisation silently never ran:
+  # ssh was refused, the stage warned once in the middle of a forty-minute
+  # deploy log, and the operator was left with authentication working and an
+  # empty admin console (QA, 25 Sep 2026).
+  local pw
+  for pw in "${MAILBOX_SSH_PASS:-}" "${KIN_USER_PASS:-}"; do
+    [ -n "$pw" ] || continue
+    if SSHPASS="$pw" sshpass -e ssh \
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 \
+      -o PreferredAuthentications=password -o LogLevel=ERROR \
+      "${user}@${mb}" true >/dev/null 2>&1; then
+      SSHPASS="$pw" sshpass -e ssh \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=20 -o LogLevel=ERROR \
+        "${user}@${mb}" "echo '${pw}' | sudo -S -p '' ${cmd}"
+      return $?
+    fi
+  done
+  # Neither worked: say so as its own condition, not as the stage's failure.
+  return 3
 }

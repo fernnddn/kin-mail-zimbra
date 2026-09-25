@@ -219,14 +219,28 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
   if [ -x ./15-ad-sync.sh ] || [ "$(kin_mailboxd_is_local; echo $?)" -ne 0 ]; then
     say "1c. Bringing Active Directory's people into Zimbra"
     kin_run_stage_on_store 15-ad-sync.sh --schedule
-    case $? in
-      0) ;;
-      3)
-        warn "Could not reach the mailbox to run the sync from here."
-        info "Run there:  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --schedule"
-        ;;
-      *) warn "The directory sync did not complete; mail is unaffected." ;;
-    esac
+      _sync_rc=$?
+      case "$_sync_rc" in
+        0) ;;
+        3)
+          echo
+          fail "THE DIRECTORY WAS NOT SYNCHRONISED - the mailbox could not be reached."
+          warn "Authentication is configured, but the admin console will show no AD users"
+          warn "and nobody can sign in until their mailbox exists."
+          info "Neither SSH password worked. Check MAILBOX_SSH_PASS and KIN_USER_PASS"
+          info "in ${CONF_FILE}, then run ON THE MAILBOX:"
+          info "  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --schedule"
+          echo
+          ;;
+        *)
+          echo
+          fail "THE DIRECTORY WAS NOT SYNCHRONISED (exit ${_sync_rc})."
+          warn "Authentication is configured, but the admin console will show no AD users."
+          info "Run on the mailbox to see why:"
+          info "  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --dry-run"
+          echo
+          ;;
+      esac
   fi
 fi
 
@@ -303,6 +317,7 @@ if [ "$LOCAL_FAIL" -ne 0 ]; then
 fi
 if [ "$AD_APPLY_OK" -eq 0 ] || [ "$AD_FAIL" -ne 0 ]; then
   warn "AD path not verified. Local mail still works. Fix URL/bind DN/filter and re-run 06-hybrid-auth.sh"
+  warn "No Active Directory users were synchronised, so the admin console lists only local accounts."
   # An ldaps:// URL adds a failure the message above does not describe, and it
   # is the likely one the first time anyone points this at a Windows CA.
   #
