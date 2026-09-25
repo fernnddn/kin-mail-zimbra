@@ -88,7 +88,7 @@ else
 fi
 
 # --- checked, not announced ---------------------------------------------------
-if sed -n '/zmprov ca "\$email"/,/^    fi$/p' "$S" | grep -q 'zmprov -l ga "\$email"'; then
+if sed -n '/Creating the missing mailboxes/,/done <"\$MISSING_FILE"/p' "$S" | grep -q 'zmprov -l ga "\$email"'; then
   pass "confirms each account exists before counting it as created"
 else
   bad "counts a create that zmprov only claimed to do"
@@ -135,6 +135,57 @@ if grep -q 'AD_AUTH_ENABLED.*!= "yes"' "$S"; then
   pass "does nothing on a deployment with no AD"
 else
   bad "runs even where there is no directory to read"
+fi
+
+# --- it has to run without anyone remembering it ------------------------------
+# A deploy that finishes with authentication configured and an empty admin
+# console is the failure this release exists to remove: AD holds 130 people,
+# Zimbra holds none, and the operator is told to go and run something on the
+# other machine.
+H="$(pwd)/../06-hybrid-auth.sh"
+if grep -q '15-ad-sync.sh' "$H"; then
+  pass "the deploy runs the sync itself"
+else
+  bad "nothing runs the sync; the operator is back in a terminal"
+fi
+if grep -q 'kin_run_stage_on_store 15-ad-sync.sh --schedule' "$H"; then
+  pass "and installs the timer, so it keeps up afterwards"
+else
+  bad "runs once at most, with nothing to catch later joiners"
+fi
+if sed -n '/15-ad-sync.sh --schedule/,+8p' "$H" | grep -q 'warn '; then
+  pass "a sync failure never stops the deploy"
+else
+  bad "a mailbox-creation convenience can abort the install"
+fi
+Z="$(pwd)/zimbra-store.sh"
+if grep -q 'kin_run_stage_on_store' "$Z"; then
+  pass "running a stage on the mail store has one spelling, in the library"
+else
+  bad "the SSH carry-over is duplicated per stage and will drift"
+fi
+
+# --- the person comes across, not just the address ---------------------------
+# A mailbox that is only an address has nobody's name on it - not in the
+# address book, not in the From line, nowhere a colleague would look.
+if grep -q 'givenName sn displayName' "$S"; then
+  pass "asks the directory for the name fields"
+else
+  bad "only reads the account name"
+fi
+for a in givenName sn displayName; do
+  if sed -n '/attrs=()/,/^    fi$/p' "$S" | grep -q "attrs+=($a"; then
+    pass "carries ${a} onto the new mailbox"
+  else
+    bad "does not carry ${a}"
+  fi
+done
+# A directory is not obliged to be tidy: a missing surname must not shift the
+# other fields along.
+if grep -q 'function flush' "$S"; then
+  pass "parses LDIF per entry, so a missing field cannot shift the others"
+else
+  bad "reads the fields as parallel lists, which desynchronise"
 fi
 
 if [ "$fails" -eq 0 ]; then

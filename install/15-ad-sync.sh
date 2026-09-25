@@ -90,7 +90,7 @@ say "1. Reading the directory"
 RAW=$(LDAPTLS_REQCERT=allow "$LDAPSEARCH" -LLL \
   -H "$AD_LDAP_URL" \
   -D "$AD_SEARCH_BIND_DN" -w "$AD_SEARCH_BIND_PASSWORD" \
-  -b "$AD_SEARCH_BASE" "$AD_SYNC_FILTER" sAMAccountName displayName 2>&1) || {
+  -b "$AD_SEARCH_BASE" "$AD_SYNC_FILTER" sAMAccountName givenName sn displayName 2>&1) || {
   fail "Could not read the directory."
   printf '%s\n' "$RAW" | sed 's/^/    /' | tail -4
   info "Check AD_LDAP_URL, AD_SEARCH_BIND_DN and AD_SEARCH_BIND_PASSWORD."
@@ -98,8 +98,25 @@ RAW=$(LDAPTLS_REQCERT=allow "$LDAPSEARCH" -LLL \
 }
 
 # LDIF folds long values onto continuation lines beginning with a space.
-UNFOLDED=$(printf '%s\n' "$RAW" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g')
-NAMES=$(printf '%s\n' "$UNFOLDED" | sed -n 's/^sAMAccountName: //p' | tr -d '\r')
+UNFOLDED=$(printf '%s\n' "$RAW" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g' | tr -d '\r')
+
+# One record per person: name, given name, surname, display name. Entries are
+# separated by a blank line, and any of the name fields may be absent - a
+# directory is not obliged to be tidy, and a missing surname must not shift the
+# other fields along.
+PEOPLE=$(printf '%s\n' "$UNFOLDED" | awk -F': ' '
+  function flush(  out) {
+    if (n != "") { printf "%s\t%s\t%s\t%s\n", n, g, s, d }
+    n = ""; g = ""; s = ""; d = ""
+  }
+  /^$/                 { flush(); next }
+  /^sAMAccountName: /  { n = substr($0, 17); next }
+  /^givenName: /       { g = substr($0, 12); next }
+  /^sn: /              { s = substr($0, 5);  next }
+  /^displayName: /     { d = substr($0, 14); next }
+  END { flush() }
+')
+NAMES=$(printf '%s\n' "$PEOPLE" | cut -f1)
 TOTAL=$(printf '%s\n' "$NAMES" | grep -c . || true)
 if [ "${TOTAL:-0}" -eq 0 ]; then
   warn "The directory returned nobody. Refusing to treat that as 'everyone has left'."
@@ -115,7 +132,10 @@ SKIPPED=0
 BLOCKED=0
 MISSING=""
 
-for name in $NAMES; do
+MISSING_FILE=$(mktemp)
+trap 'rm -f "$MISSING_FILE"' EXIT
+while IFS=$'\t' read -r name given surname display; do
+  [ -n "$name" ] || continue
   lname=$(printf '%s' "$name" | tr 'A-Z' 'a-z')
   case " $AD_SYNC_SKIP " in
     *" $lname "*)
@@ -127,8 +147,11 @@ for name in $NAMES; do
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
+  printf '%s\t%s\t%s\t%s\n' "$email" "$given" "$surname" "$display" >>"$MISSING_FILE"
   MISSING="${MISSING}${email} "
-done
+done <<EOF
+$(printf '%s\n' "$PEOPLE")
+EOF
 
 MISSING_N=0
 for _ in $MISSING; do MISSING_N=$((MISSING_N + 1)); done
@@ -150,7 +173,8 @@ fi
 
 if [ "$MISSING_N" -gt 0 ]; then
   say "3. Creating the missing mailboxes"
-  for email in $MISSING; do
+  while IFS=$'\t' read -r email given surname display; do
+    [ -n "$email" ] || continue
     # The seat gate, per account, exactly as the console and the CLI do it. A
     # directory sync must not be a way around a contracted limit - the point of
     # the gate is that it holds no matter who is asking.
@@ -164,19 +188,31 @@ if [ "$MISSING_N" -gt 0 ]; then
     # only because Zimbra requires the field. Anyone who could use it would
     # have to read the directory as root first.
     placeholder="KinAdSync-$(head -c 18 /dev/urandom | base64 | tr -d '/+=')"
-    if out=$(zimbra_cmd zmprov ca "$email" "$placeholder" 2>&1); then
+    # The person's name comes across with them. A mailbox that is only an
+    # address has nobody's name on it in the address book, in the From line, or
+    # anywhere a colleague would look for them.
+    attrs=()
+    [ -n "$given" ] && attrs+=(givenName "$given")
+    [ -n "$surname" ] && attrs+=(sn "$surname")
+    [ -n "$display" ] && attrs+=(displayName "$display")
+    if [ "${#attrs[@]}" -gt 0 ]; then
+      out=$(zimbra_cmd zmprov ca "$email" "$placeholder" "${attrs[@]}" 2>&1)
+    else
+      out=$(zimbra_cmd zmprov ca "$email" "$placeholder" 2>&1)
+    fi
+    if printf '%s' "$out" | grep -qiE "ERROR|exception"; then
+      warn "could not create ${email}"
+      printf '%s\n' "$out" | sed 's/^/      /' | tail -2
+    else
       # Checked, not announced.
       if zimbra_cmd zmprov -l ga "$email" >/dev/null 2>&1; then
-        ok "created ${email}"
+        ok "created ${email}${display:+ (${display})}"
         CREATED=$((CREATED + 1))
       else
         fail "zmprov ca reported success but ${email} is not in the directory"
       fi
-    else
-      warn "could not create ${email}"
-      printf '%s\n' "$out" | sed 's/^/      /' | tail -2
     fi
-  done
+  done <"$MISSING_FILE"
 fi
 
 if [ "$SCHEDULE" -eq 1 ]; then

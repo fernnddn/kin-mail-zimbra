@@ -17,6 +17,8 @@ need_root
 
 # shellcheck disable=SC1091
 . ./lib/zimbra-data-disk-probe.sh
+# shellcheck source=lib/zimbra-store.sh
+. ./lib/zimbra-store.sh
 if zimbra_is_mid_handoff; then
   warn "Mid-handoff: /opt/zimbra is unmounted; skipping hybrid auth (zmprov not reachable)."
   exit 0
@@ -205,6 +207,27 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
       fi
       ;;
   esac
+fi
+
+# Bring the directory's people across, and keep doing it.
+#
+# Without this the deploy ends with authentication configured and an empty
+# admin console: AD holds 130 people, Zimbra holds none of them, and the
+# operator is told to run something on the other machine. That is the step this
+# release exists to remove. Never fatal - mail does not depend on it.
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  if [ -x ./15-ad-sync.sh ] || [ "$(kin_mailboxd_is_local; echo $?)" -ne 0 ]; then
+    say "1c. Bringing Active Directory's people into Zimbra"
+    kin_run_stage_on_store 15-ad-sync.sh --schedule
+    case $? in
+      0) ;;
+      3)
+        warn "Could not reach the mailbox to run the sync from here."
+        info "Run there:  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --schedule"
+        ;;
+      *) warn "The directory sync did not complete; mail is unaffected." ;;
+    esac
+  fi
 fi
 
 say "2. Test accounts - pure local + AD-backed"

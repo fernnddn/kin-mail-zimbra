@@ -66,3 +66,35 @@ kin_mailboxd_is_local() {
   fi
   return 0
 }
+
+# Run one install stage on the machine that holds the mail store.
+#
+# Several stages act on the directory or on mailboxd, and both live with the
+# mailbox. Run from the edge they would do nothing useful while reporting
+# success - so they are carried across the same SSH channel the orchestrator
+# already uses, rather than left as a step an operator has to remember on the
+# other machine.
+#
+# Prints nothing of its own: the stage's own output is what the operator reads.
+kin_run_stage_on_store() {
+  local stage="$1"
+  shift
+  if kin_mailboxd_is_local; then
+    "${KIN_MAIL_INSTALL_DIR}/${stage}" "$@"
+    return $?
+  fi
+  local mb user pass remote_root
+  mb=$(kin_mailbox_ip)
+  user="${MAILBOX_SSH_USER:-${OS_USER:-kin}}"
+  pass="${MAILBOX_SSH_PASS:-${KIN_USER_PASS:-}}"
+  remote_root="${KIN_REMOTE_DEPLOY_ROOT:-/opt/kin-mail-deploy}"
+  if [ -z "$mb" ] || [ -z "$pass" ] || ! command -v sshpass >/dev/null 2>&1; then
+    return 3
+  fi
+  local cmd
+  cmd="${remote_root}/install/${stage} $*"
+  SSHPASS="$pass" sshpass -e ssh \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=20 -o LogLevel=ERROR \
+    "${user}@${mb}" "echo '${pass}' | sudo -S -p '' ${cmd}"
+}
