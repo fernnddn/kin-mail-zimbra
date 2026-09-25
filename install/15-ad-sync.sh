@@ -190,13 +190,25 @@ After=network-online.target
 Type=oneshot
 ExecStart=${KIN_MAIL_INSTALL_DIR}/15-ad-sync.sh
 EOF
-  cat >/etc/systemd/system/kin-ad-sync.timer <<'EOF'
+  # systemd's own spelling, straight from the operator. Refused rather than
+  # guessed at: a timer that silently fell back to a default nobody asked for
+  # would be a sync that quietly runs at the wrong rate forever.
+  case "${AD_SYNC_INTERVAL}" in
+    *[0-9]s | *[0-9]sec | *[0-9]min | *[0-9]m | *[0-9]h | *[0-9]hour*) ;;
+    *)
+      fail "AD_SYNC_INTERVAL=${AD_SYNC_INTERVAL} is not a systemd interval (30s, 5min, 1h)"
+      exit 2
+      ;;
+  esac
+  # A first run soon after boot, so a machine that was off overnight catches up
+  # before anyone notices people missing.
+  cat >/etc/systemd/system/kin-ad-sync.timer <<EOF
 [Unit]
-Description=KIN Mail - Active Directory sync, hourly
+Description=KIN Mail - Active Directory sync every ${AD_SYNC_INTERVAL}
 
 [Timer]
-OnBootSec=10min
-OnUnitActiveSec=1h
+OnBootSec=2min
+OnUnitActiveSec=${AD_SYNC_INTERVAL}
 Persistent=true
 
 [Install]
@@ -205,7 +217,7 @@ EOF
   chmod 0644 /etc/systemd/system/kin-ad-sync.service /etc/systemd/system/kin-ad-sync.timer
   systemctl daemon-reload >/dev/null 2>&1 || true
   if systemctl enable --now kin-ad-sync.timer >/dev/null 2>&1; then
-    ok "Hourly sync installed: new AD people get a mailbox within the hour"
+    ok "Sync installed: new AD people get a mailbox within ${AD_SYNC_INTERVAL}"
     info "Check it with: systemctl list-timers kin-ad-sync.timer"
   else
     warn "Could not enable the timer; run this stage by hand when people are added."

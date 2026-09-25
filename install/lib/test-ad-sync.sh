@@ -111,10 +111,25 @@ else
 fi
 
 # --- keeps itself in step -----------------------------------------------------
-if grep -q 'kin-ad-sync.timer' "$S" && grep -q 'OnUnitActiveSec=1h' "$S"; then
+if grep -q 'kin-ad-sync.timer' "$S" && grep -q 'OnUnitActiveSec=${AD_SYNC_INTERVAL}' "$S"; then
   pass "can install a timer so new people are picked up without anyone asking"
 else
   bad "has no way to stay in step after the first run"
+fi
+# How often is the operator's call, not a number baked in here. One minute
+# makes a new joiner appear almost at once; an hour is plenty for batches.
+C="$(pwd)/../00-config.sh"
+if grep -q ': "${AD_SYNC_INTERVAL:=1h}"' "$C"; then
+  pass "the interval is configurable, with a sane default"
+else
+  bad "the sync interval is hardcoded"
+fi
+# A timer that silently fell back to a default nobody asked for would run at
+# the wrong rate forever, and nothing would say so.
+if grep -q 'is not a systemd interval' "$S"; then
+  pass "an interval systemd cannot parse is refused, not guessed at"
+else
+  bad "a malformed interval would be written into the timer"
 fi
 if grep -q 'AD_AUTH_ENABLED.*!= "yes"' "$S"; then
   pass "does nothing on a deployment with no AD"
