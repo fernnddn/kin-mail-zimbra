@@ -787,6 +787,18 @@ fi
 # Empty by default on purpose: creating mailboxes consumes contracted seats,
 # and that is not a side effect to hand anyone without them asking for it.
 : "${AD_AUTOPROV_MODE:=}"
+# A CA certificate file to trust for ldaps://, when the directory's own copy is
+# not the right one to use.
+#
+# Three shapes of customer, and only this one needs the setting:
+#   a public certificate on the DC   nothing to do - it is trusted already
+#   AD CS                            the CA is published in the directory and
+#                                    is read from there automatically
+#   their own internal root CA       not necessarily in the directory at all.
+#                                    Point this at the file they supply.
+# PEM or DER; it is converted either way, and checked to actually sign what
+# the directory presents before anything is imported.
+: "${AD_CA_FILE:=}"
 : "${TLS_METHOD:=cloudflare}"
 # PLACEHOLDER_UNSET until the operator confirms the real contracted seat count.
 # Empty legacy configs behave the same as PLACEHOLDER_UNSET (gate denies creates).

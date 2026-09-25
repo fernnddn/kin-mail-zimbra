@@ -116,6 +116,38 @@ else
   bad "a certificate step can abort authentication setup"
 fi
 
+# --- three shapes of customer -------------------------------------------------
+# A public certificate on the DC needs nothing. AD CS publishes its CA in the
+# directory. A customer's own internal root may be in neither - and that is the
+# one the operator asked about, having an existing SSL of their own.
+if grep -q 'AD_CA_FILE' "$S"; then
+  pass "an operator-supplied CA file is accepted"
+else
+  bad "a customer's own root CA cannot be used"
+fi
+if grep -q 'openssl x509 -inform DER' "$S"; then
+  pass "takes the file as PEM or DER, rather than making the difference their problem"
+else
+  bad "only one certificate encoding is accepted"
+fi
+if grep -q 'AD_CA_FILE is set to' "$S"; then
+  pass "an unreadable AD_CA_FILE is refused with the path named"
+else
+  bad "a missing CA file fails without saying which file"
+fi
+# Whatever the source, the proof is the same.
+if sed -n '/does it actually sign/,/^fi$/p' "$S" | grep -q -- '-CAfile'; then
+  pass "a supplied file is proved against the directory too, not trusted on sight"
+else
+  bad "a supplied CA is imported without checking it belongs to this directory"
+fi
+C="$(pwd)/../00-config.sh"
+if grep -q ': "${AD_CA_FILE:=}"' "$C"; then
+  pass "AD_CA_FILE defaults to empty, so nothing changes for anyone else"
+else
+  bad "AD_CA_FILE has no default"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD trust tests passed\n'
   exit 0

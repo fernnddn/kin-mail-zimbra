@@ -87,7 +87,11 @@ info "Not yet - the certificate is signed by a CA nothing here knows."
 # From the directory itself. Active Directory publishes its own CA certificate
 # under Public Key Services, so the operator does not have to export anything
 # on Windows and copy it across.
-say "2. Reading the CA out of the directory"
+# An operator who was handed a CA file - their own internal root, an offline
+# root that was never published, a certificate from a PKI that is not AD CS -
+# supplies it here instead. Nothing about the proof below changes: whatever the
+# source, it still has to verify what the directory actually presents.
+say "2. Where the CA comes from"
 CA_PEM="/opt/zimbra/conf/kin-ad-ca.cer"
 TMP_CA=$(mktemp)
 trap 'rm -f "$TMP_CA"' EXIT
@@ -100,6 +104,26 @@ trap 'rm -f "$TMP_CA"' EXIT
 # the certificate is not trusted yet. What comes back is a public certificate,
 # and it is checked below to actually sign what the server presents - that is
 # the proof, not the transport it arrived over.
+if [ -n "${AD_CA_FILE}" ]; then
+  if [ ! -r "$AD_CA_FILE" ]; then
+    fail "AD_CA_FILE is set to ${AD_CA_FILE}, which cannot be read."
+    info "Put the file where this machine can reach it, or clear AD_CA_FILE to"
+    info "read the CA out of the directory instead."
+    exit 1
+  fi
+  info "Using the file the operator supplied: ${AD_CA_FILE}"
+  # PEM or DER - accept whichever they were given, rather than making the
+  # difference their problem.
+  if openssl x509 -in "$AD_CA_FILE" -out "$TMP_CA" 2>/dev/null ||
+    openssl x509 -inform DER -in "$AD_CA_FILE" -out "$TMP_CA" 2>/dev/null; then
+    ok "Read: $(openssl x509 -in "$TMP_CA" -noout -subject 2>/dev/null)"
+  else
+    fail "${AD_CA_FILE} is not a certificate this can read (tried PEM and DER)."
+    exit 1
+  fi
+else
+  info "No AD_CA_FILE set - reading the CA out of the directory."
+
 LDAPSEARCH=/opt/zimbra/common/bin/ldapsearch
 if [ ! -x "$LDAPSEARCH" ]; then
   fail "Zimbra's ldapsearch is not at ${LDAPSEARCH}"
@@ -132,7 +156,8 @@ if [ ! -s "$TMP_CA" ]; then
   fail "The directory returned no CA certificate."
   exit 1
 fi
-ok "Read: $(openssl x509 -in "$TMP_CA" -noout -subject 2>/dev/null || echo 'unreadable')"
+  ok "Read: $(openssl x509 -in "$TMP_CA" -noout -subject 2>/dev/null || echo 'unreadable')"
+fi
 
 # --- does it actually sign what the server presents? --------------------------
 # Checked, not assumed. A CA read from a connection that was not validated
