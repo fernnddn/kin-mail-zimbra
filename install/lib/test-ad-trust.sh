@@ -97,10 +97,27 @@ if grep -q 'zmcertmgr addcacert' "$S" && grep -q 'zmmailboxdctl restart' "$S"; t
 else
   bad "imports without restarting, so nothing changes until something else does"
 fi
-if sed -n '/^else$/,$p' "$S" | grep -q 'sshpass'; then
-  pass "carries the work to the mailbox when run from the edge"
+# Carried by the shared helper, not by an SSH invocation of its own. This stage
+# had its own copy, and that copy tried one password - MAILBOX_SSH_PASS, the one
+# the mailbox had before 02-prepare-os.sh changed it. It was refused, the
+# certificate was never imported, and authentication was configured against a
+# directory nothing trusted (25 Sep 2026).
+if grep -q 'kin_run_stage_on_store 14-ad-trust.sh' "$S"; then
+  pass "carries the work to the mailbox through the shared helper"
 else
   bad "run from the edge it would silently do nothing useful"
+fi
+if grep -q 'sshpass' "$S"; then
+  bad "still has its own SSH invocation, which will drift from the helper"
+else
+  pass "has no SSH invocation of its own left to drift"
+fi
+# Not reaching the mailbox is the end of the road for AD sign-in, so it is a
+# failure, not a note in passing.
+if sed -n '/kin_run_stage_on_store 14-ad-trust.sh/,/esac/p' "$S" | grep -q 'exit 1'; then
+  pass "an unreachable mailbox fails the stage rather than passing quietly"
+else
+  bad "the certificate can go unimported while the stage reports success"
 fi
 
 # --- wired in so nobody has to know it exists --------------------------------

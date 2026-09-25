@@ -223,6 +223,51 @@ else
   bad "an operator is left to work out why the console is empty"
 fi
 
+# --- a sync that created nobody is not a success ------------------------------
+# 25 Sep 2026: the sync ran, the timer was installed, the stage exited 0, and
+# the admin console stayed empty - the contracted seat count had never been set,
+# so the gate refused every create. Nothing anywhere said so.
+if grep -q 'exit 4' "$S"; then
+  pass "being blocked before creating anybody exits non-zero"
+else
+  bad "a run that created nobody still reports success"
+fi
+if grep -q 'Nobody was brought across from the directory' "$S"; then
+  pass "and says so in the words an operator needs"
+else
+  bad "the failure is a number with no explanation"
+fi
+# "Not configured" and "limit reached" need different answers: the first is a
+# wizard step that was skipped, the second is a contract that is full.
+if grep -q 'PLACEHOLDER_UNSET' "$S"; then
+  pass "an unset seat count is distinguished from a full one"
+else
+  bad "a skipped wizard step is reported as a contract limit"
+fi
+H="$(pwd)/../06-hybrid-auth.sh"
+if sed -n '/_sync_rc/,/esac/p' "$H" | grep -q '4)'; then
+  pass "the deploy surfaces that exit code specifically"
+else
+  bad "the deploy treats it as a generic failure"
+fi
+
+# --- the lockdown stage must not fail on a proxy that is still starting -------
+# It regenerates nginx and restarts zmproxy, then sampled once. nginx takes a
+# few seconds to bind; that sample returned 000, the stage failed, and the
+# deploy stopped with the health check and monitoring steps never run - on a
+# machine where nothing was wrong (25 Sep 2026).
+A="$(pwd)/../11-admin-path-lockdown.sh"
+if grep -q '_root_ready' "$A"; then
+  pass "the lockdown waits for the proxy before judging it"
+else
+  bad "the lockdown samples once, immediately after restarting the proxy"
+fi
+if sed -n '/_root_ready=0/,/^fi$/p' "$A" | grep -q 'sleep 2'; then
+  pass "it polls rather than sleeping a fixed guess"
+else
+  bad "it uses a fixed sleep, which is wrong on both fast and slow machines"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD sync tests passed\n'
   exit 0

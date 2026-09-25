@@ -129,6 +129,31 @@ if [ "$NEED_RELOAD" -eq 1 ]; then
 fi
 
 say "Verify"
+
+# Wait for the proxy to answer before judging it.
+#
+# This stage regenerates the nginx template and restarts zmproxy immediately
+# above. nginx takes a few seconds to bind, and a single sample taken at that
+# moment returns 000 - which is read as "webmail broken after lockdown", fails
+# the stage, and stops the deploy on a machine where nothing is wrong. Seen on
+# a live deploy 25 Sep 2026: the console reported "Deployment failed - Admin
+# path lockdown", the health check and monitoring steps never ran, and the same
+# stage re-run by hand a minute later passed first time.
+#
+# Polled rather than slept: a fixed sleep is either too short on a loaded
+# machine or wasted time on an idle one. Same reasoning as 12-node-metrics.sh.
+_root_ready=0
+for _try in $(seq 1 30); do
+  if [ "$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 https://127.0.0.1/ || true)" = "200" ]; then
+    _root_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "$_root_ready" -ne 1 ]; then
+  warn "Webmail did not answer within 60s of the proxy restart; sampling anyway."
+fi
+
 code443=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1/zimbraAdmin/ || true)
 code_root=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1/ || true)
 code7071=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1:7071/zimbraAdmin/ || true)

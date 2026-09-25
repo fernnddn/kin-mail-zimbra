@@ -190,32 +190,33 @@ if kin_mailboxd_is_local; then
   fi
 else
   # The trust store belongs to mailboxd, which is on the other machine.
-  MB=$(kin_mailbox_ip)
-  SSH_USER="${MAILBOX_SSH_USER:-${OS_USER:-kin}}"
-  SSH_PASS="${MAILBOX_SSH_PASS:-${KIN_USER_PASS:-}}"
-  if [ -z "$MB" ] || [ -z "$SSH_PASS" ] || ! command -v sshpass >/dev/null 2>&1; then
-    warn "This is the edge; the trust store is on the mailbox and cannot be reached from here."
-    info "Run this same stage on ${MB:-the mailbox}:"
-    info "  sudo ${KIN_MAIL_INSTALL_DIR}/14-ad-trust.sh"
-    exit 0
-  fi
-  info "Carrying it to the mailbox (${MB})"
-  B64=$(base64 -w0 "$TMP_CA")
-  REMOTE="printf '%s' '${B64}' | base64 -d > /tmp/kin-ad-ca.cer"
-  REMOTE="${REMOTE} && install -o zimbra -g zimbra -m 0644 /tmp/kin-ad-ca.cer ${CA_PEM}"
-  REMOTE="${REMOTE} && rm -f /tmp/kin-ad-ca.cer"
-  REMOTE="${REMOTE} && su - zimbra -c 'zmcertmgr addcacert ${CA_PEM}'"
-  REMOTE="${REMOTE} ; su - zimbra -c 'zmmailboxdctl restart' >/dev/null 2>&1 || true"
-  if SSHPASS="$SSH_PASS" sshpass -e ssh \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=15 -o LogLevel=ERROR \
-    "${SSH_USER}@${MB}" "echo '${SSH_PASS}' | sudo -S -p '' bash -c $(printf '%q' "$REMOTE")" >/dev/null 2>&1; then
-    ok "Imported on the mailbox and mailboxd restarted."
-  else
-    fail "Could not import on the mailbox."
-    info "Run there by hand:  sudo ${KIN_MAIL_INSTALL_DIR}/14-ad-trust.sh"
-    exit 1
-  fi
+  #
+  # Carried by the shared helper rather than by an SSH invocation of its own.
+  # This stage had its own copy, and that copy tried MAILBOX_SSH_PASS and
+  # stopped - the password the mailbox had BEFORE 02-prepare-os.sh changed it.
+  # It was refused, the warning went past in a long deploy log, and the
+  # certificate was never imported: authentication was configured against a
+  # directory nothing trusted, so every sign-in failed (25 Sep 2026). The
+  # helper tries both passwords, as the orchestrator always has.
+  info "The trust store is on the mailbox; carrying this there."
+  kin_run_stage_on_store 14-ad-trust.sh
+  _rc=$?
+  case "$_rc" in
+    0) ok "Imported on the mailbox." ;;
+    3)
+      fail "Could not reach the mailbox, so the certificate was NOT imported."
+      warn "Active Directory sign-in will fail until it is: nothing trusts the"
+      warn "certificate the directory presents."
+      info "Check MAILBOX_SSH_PASS and KIN_USER_PASS in ${CONF_FILE}, then run"
+      info "ON THE MAILBOX:  sudo ${KIN_MAIL_INSTALL_DIR}/14-ad-trust.sh"
+      exit 1
+      ;;
+    *)
+      fail "The certificate was not imported on the mailbox (exit ${_rc})."
+      warn "Active Directory sign-in will fail until it is."
+      exit 1
+      ;;
+  esac
 fi
 
 echo

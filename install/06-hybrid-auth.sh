@@ -95,9 +95,44 @@ if ! zm md "$MAIL_DOMAIN" zimbraAuthMech ad \
   warn "zmprov failed to apply domain auth (URL/search/bind) - local Zimbra auth stays active"
   AD_APPLY_OK=0
 fi
-if [ "$AD_APPLY_OK" -eq 1 ] && [ -n "${AD_BIND_DN_TEMPLATE}" ]; then
-  zm md "$MAIL_DOMAIN" zimbraAuthLdapBindDn "$AD_BIND_DN_TEMPLATE" \
-    || warn "zmprov failed to set zimbraAuthLdapBindDn (continuing)"
+# zimbraAuthMech=ad needs a bind template, and the wizard calls it optional.
+#
+# With mech=ad Zimbra binds to the directory AS THE USER, forming the bind name
+# from this template. The search base, filter and bind DN set above are how the
+# `ldap` mechanism finds people; `ad` still needs to know what to bind as. With
+# the template left blank - which is what the wizard tells the operator to do -
+# there is nothing to bind with, and every single sign-in fails while every
+# setting on the page looks correct.
+#
+# That is what happened on 25 Sep 2026: the service account bound fine by hand
+# and could find the user, the certificate was trusted, and nobody could log in.
+#
+# Derived from the search base rather than asked for again: DC=kampretos,DC=my,
+# DC=id is the same domain, written the other way round, and asking twice for
+# one fact is how the two come to disagree.
+if [ "$AD_APPLY_OK" -eq 1 ]; then
+  _bind_tpl="${AD_BIND_DN_TEMPLATE}"
+  if [ -z "$_bind_tpl" ]; then
+    # Only the dc= components, joined with dots. A search base narrowed to an
+    # organisational unit - OU=Staff,DC=corp,DC=local - is perfectly normal, and
+    # treating the whole string as the domain would produce "ou=staff.corp.local".
+    _ad_domain=$(printf '%s' "$AD_SEARCH_BASE" | tr 'A-Z' 'a-z' | tr -d '[:space:]' |
+      grep -oE 'dc=[^,]+' | sed 's/^dc=//' | paste -sd. -)
+    case "$_ad_domain" in
+      *.*)
+        _bind_tpl="%u@${_ad_domain}"
+        info "No bind template given; using ${_bind_tpl} from the search base."
+        ;;
+      *)
+        warn "Could not derive an AD domain from AD_SEARCH_BASE (${AD_SEARCH_BASE})."
+        warn "Set AD_BIND_DN_TEMPLATE in ${CONF_FILE}, or sign-in will fail."
+        ;;
+    esac
+  fi
+  if [ -n "$_bind_tpl" ]; then
+    zm md "$MAIL_DOMAIN" zimbraAuthLdapBindDn "$_bind_tpl" \
+      || warn "zmprov failed to set zimbraAuthLdapBindDn (continuing)"
+  fi
 fi
 if [ "$AD_APPLY_OK" -eq 1 ]; then
   ok "zimbraAuthMech=ad + local fallback TRUE"
@@ -230,6 +265,16 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
           info "Neither SSH password worked. Check MAILBOX_SSH_PASS and KIN_USER_PASS"
           info "in ${CONF_FILE}, then run ON THE MAILBOX:"
           info "  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --schedule"
+          echo
+          ;;
+        4)
+          echo
+          fail "THE DIRECTORY WAS NOT SYNCHRONISED - no mailboxes could be created."
+          warn "Authentication works, but the admin console will list no AD users"
+          warn "and those people cannot sign in until their mailbox exists."
+          info "The usual cause is that the contracted seat count was never set."
+          info "Set Mailbox seats in the console, then run ON THE MAILBOX:"
+          info "  sudo /opt/kin-mail-deploy/install/15-ad-sync.sh"
           echo
           ;;
         *)

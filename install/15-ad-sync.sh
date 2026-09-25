@@ -179,8 +179,22 @@ if [ "$MISSING_N" -gt 0 ]; then
     # directory sync must not be a way around a contracted limit - the point of
     # the gate is that it holds no matter who is asking.
     if ! kin_quota_gate_allow_new_mailbox "$MAIL_DOMAIN" >/dev/null 2>&1; then
-      warn "Seat limit reached - stopping at ${email}"
-      info "${KIN_QUOTA_MESSAGE:-}"
+      # Two different situations arrive here and they need different answers.
+      # "Not configured" is a step the operator skipped in the wizard; "limit
+      # reached" is a contract they have filled. Reporting the first as the
+      # second sends them to buy seats they already have.
+      case "${KIN_QUOTA_MESSAGE:-}" in
+        *PLACEHOLDER_UNSET* | *"not configured"*)
+          fail "The contracted seat count is not set, so no mailbox can be created."
+          info "Nobody from the directory was brought across. Set the seat count:"
+          info "  Mailbox seats in the console, or CONTRACTED_SEATS in ${CONF_FILE}"
+          info "Then re-run:  sudo ${KIN_MAIL_INSTALL_DIR}/15-ad-sync.sh"
+          ;;
+        *)
+          warn "Seat limit reached - stopping at ${email}"
+          info "${KIN_QUOTA_MESSAGE:-}"
+          ;;
+      esac
       BLOCKED=$((BLOCKED + 1))
       break
     fi
@@ -263,6 +277,16 @@ fi
 echo
 say "DONE"
 ok "created ${CREATED}, already present ${SKIPPED}"
+# A run that was blocked before creating anybody is not a success, and must not
+# be reported as one. It looked like one on 25 Sep 2026: the sync ran, the timer
+# was installed, the stage exited 0, and the admin console stayed empty because
+# the seat count had never been set. Nothing anywhere said so.
+if [ "$BLOCKED" -ne 0 ] && [ "$CREATED" -eq 0 ]; then
+  echo
+  fail "Nobody was brought across from the directory."
+  info "The mailboxes listed above still do not exist, and those people cannot sign in."
+  exit 4
+fi
 [ "$BLOCKED" -eq 0 ] || warn "stopped early on the seat limit - raise CONTRACTED_SEATS and re-run"
 info "Removing people is never done here. A mailbox outliving its AD account is"
 info "a decision for an operator, not a side effect of a search returning less."
