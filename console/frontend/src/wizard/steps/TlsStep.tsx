@@ -58,7 +58,10 @@ export default function TlsStep() {
           onClick={() => pick("cloudflare")}
         >
           <strong>Automatic (Cloudflare DNS)</strong>
-          <span>Requires a Cloudflare API token. Renewals can be automated.</span>
+          <span>
+            Issued during the deploy and renewed every 90 days with nobody present. Needs a
+            Cloudflare API token.
+          </span>
         </Choice>
         <Choice
           type="button"
@@ -67,8 +70,8 @@ export default function TlsStep() {
         >
           <strong>Manual DNS record</strong>
           <span>
-            Works with any DNS provider; someone creates a one-time TXT record when issuing the
-            certificate.
+            Works with any DNS provider, but <strong>not automatic</strong>: the deploy stops and
+            waits up to 25 minutes for someone to publish a TXT record, and again every 90 days.
           </span>
         </Choice>
         <Choice
@@ -126,7 +129,17 @@ export default function TlsStep() {
         </>
       )}
       {draft.tls_method === "manual" && (
-        <Hint>Manual mode needs an operator available each time a certificate is issued or renewed.</Hint>
+        <Hint>
+          Be at the DNS panel before you start the deploy. Stage 4 prints a TXT record and waits
+          up to 25 minutes; if nobody publishes it, no certificate is issued, the deploy carries
+          on, and Zimbra keeps serving its own self-signed certificate - so every browser and mail
+          client shows a warning. Renewal is never automatic in this mode: the same TXT record has
+          to be published again every 90 days, by hand.
+          <br />
+          <br />
+          If the domain is on Cloudflare, choose <strong>Automatic</strong> instead - it does all
+          of this with nobody present.
+        </Hint>
       )}
       <Err>{fieldErr || error}</Err>
       <NavRow>

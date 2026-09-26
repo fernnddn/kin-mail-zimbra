@@ -227,6 +227,47 @@ else
   bad "the refusals that protect against guessing were removed along with the rest"
 fi
 
+# --- manual is not automatic, and the wizard has to say so -------------------
+# 26 Sep 2026: an operator who had asked for automatic Let's Encrypt chose
+# "Manual DNS record", because the wizard described it as "someone creates a
+# one-time TXT record when issuing the certificate" - which reads like a small
+# chore, not like the deploy halting for 25 minutes and finishing on a
+# self-signed certificate if nobody is there. And "one-time" was wrong: the
+# same record is needed again at every renewal.
+T="$(cd "$(dirname "$0")/../../console/frontend/src/wizard/steps" && pwd)/TlsStep.tsx"
+if [ -f "$T" ]; then
+  if grep -q 'not automatic' "$T"; then
+    ok "the manual choice says outright that it is not automatic"
+  else
+    bad "manual still reads as a minor chore"
+  fi
+  if grep -q '25 minutes' "$T"; then
+    ok "and says the deploy waits, with a number on it"
+  else
+    bad "the operator is not told the deploy stops and waits"
+  fi
+  if grep -q 'one-time TXT record' "$T"; then
+    bad "still calls the TXT record one-time; it is needed at every renewal"
+  else
+    ok "no longer calls the record one-time"
+  fi
+  if grep -q 'self-signed' "$T"; then
+    ok "and names the outcome when nobody publishes it"
+  else
+    bad "nothing says what happens if the record never appears"
+  fi
+else
+  ok "TlsStep.tsx not present here; skipped"
+fi
+# Preflight repeats it before anything is installed, because the wizard runs
+# once and a config can be carried over.
+P="$(cd "$(dirname "$0")/.." && pwd)/01-preflight.sh"
+if grep -q 'TLS_METHOD:-}" = "manual"' "$P"; then
+  ok "preflight warns about manual before the install starts"
+else
+  bad "the 25-minute wait is a surprise that arrives at stage 4"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1

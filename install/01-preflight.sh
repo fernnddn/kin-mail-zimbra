@@ -275,6 +275,28 @@ if [ "${AD_AUTH_ENABLED:-no}" = "yes" ]; then
   esac
 fi
 
+# --- 9. does the certificate need somebody standing by -----------------------
+# Not fatal - manual is a legitimate choice. But it is the one TLS method that
+# cannot finish on its own, and finding that out when stage 4 has already
+# started its 25-minute wait is too late to go and find the DNS password.
+#
+# 26 Sep 2026: a deploy ran with TLS_METHOD=manual, printed the TXT record,
+# waited out the full 25 minutes with nobody publishing it, and finished with
+# Zimbra's self-signed certificate. The operator had asked for automatic
+# Let's Encrypt; manual is by definition not that.
+if [ "${TLS_METHOD:-}" = "manual" ]; then
+  echo
+  say "9. Certificate issuance needs you present"
+  warn "TLS_METHOD=manual does NOT issue a certificate on its own."
+  info "Stage 4 will print a DNS TXT record and wait up to 25 minutes for you"
+  info "to publish it. If nobody does, no certificate is issued, the deploy"
+  info "carries on, and Zimbra keeps serving its own self-signed certificate."
+  info "Renewal is not automatic either - the same record, by hand, every 90 days."
+  info "Open the DNS panel now, before starting the deploy."
+  info "For issuance and renewal with nobody present, choose the Cloudflare"
+  info "method in the wizard and supply an API token for this zone."
+fi
+
 # --- verdict -----------------------------------------------------------------
 echo
 say "VERDICT"
