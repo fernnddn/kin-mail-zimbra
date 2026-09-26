@@ -202,6 +202,47 @@ else
   info "SMTP sending address not measured (swaks unavailable or port 25 filtered)"
 fi
 
+# --- 8. the directory has somewhere to land ----------------------------------
+# Checked here, in the first half-minute, because the alternative is finding out
+# in the fortieth.
+#
+# With Active Directory configured, the sync creates a mailbox per person and
+# each one spends a contracted seat. An unset seat count refuses all of them, so
+# the install runs to completion, authentication is configured correctly, the
+# sweep timer is installed - and the admin console lists nobody, so not one
+# person can sign in. That happened on three deploys in a row (24-26 Sep 2026).
+#
+# The wizard now refuses to leave the count unset when AD is on, in the browser
+# and in validate_draft and in the CLI wizard. This catches the path none of
+# those cover: a config carried over from an earlier build, or edited by hand.
+if [ "${AD_AUTH_ENABLED:-no}" = "yes" ]; then
+  echo
+  say "8. Directory sync has seats to use"
+  case "${CONTRACTED_SEATS:-}" in
+    '' | PLACEHOLDER_UNSET)
+      fail "AD is enabled but CONTRACTED_SEATS is not set."
+      info "The directory sync spends one seat per person, so with no count it"
+      info "will create nobody and no AD user will be able to sign in."
+      info "Set CONTRACTED_SEATS in ${CONF_FILE} to the contracted number, or"
+      info "Mailbox seats in the console wizard, then run this again."
+      FATAL=$((FATAL + 1))
+      ;;
+    *[!0-9]*)
+      fail "CONTRACTED_SEATS='${CONTRACTED_SEATS}' is not a whole number."
+      info "Set it in ${CONF_FILE} to the contracted number of mailboxes."
+      FATAL=$((FATAL + 1))
+      ;;
+    0)
+      fail "CONTRACTED_SEATS is 0 while AD is enabled."
+      info "No mailbox can be created at all, so no AD user could sign in."
+      FATAL=$((FATAL + 1))
+      ;;
+    *)
+      ok "${CONTRACTED_SEATS} seats available for the directory sync"
+      ;;
+  esac
+fi
+
 # --- verdict -----------------------------------------------------------------
 echo
 say "VERDICT"

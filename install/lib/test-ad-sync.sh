@@ -367,6 +367,27 @@ else
   bad "every deploy now has to invent a seat count"
 fi
 
+# --- caught in the first minute, not the fortieth ----------------------------
+# The wizard refuses an unset seat count when AD is on, in three places. None of
+# them covers a config carried over from an earlier build or edited by hand, and
+# that path ends the same way: forty minutes of install, then an empty console.
+P="$(pwd)/../01-preflight.sh"
+if grep -q 'CONTRACTED_SEATS' "$P" && grep -q 'AD_AUTH_ENABLED:-no}" = "yes"' "$P"; then
+  pass "preflight checks the seat count against AD before anything is installed"
+else
+  bad "a hand-edited config still gets found out at the end of the deploy"
+fi
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -c 'FATAL=$((FATAL + 1))' | grep -q '^3$'; then
+  pass "unset, non-numeric and zero are all refused"
+else
+  bad "one of unset/non-numeric/zero would be allowed through"
+fi
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'no AD user will be able to sign in'; then
+  pass "and it says what the consequence would have been"
+else
+  bad "the refusal is a rule with no reason attached"
+fi
+
 # --- the lockdown stage must not fail on a proxy that is still starting -------
 # It regenerates nginx and restarts zmproxy, then sampled once. nginx takes a
 # few seconds to bind; that sample returned 000, the stage failed, and the
