@@ -710,7 +710,7 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
             "can be created, so no AD user could sign in"
         )
 
-    # Only emptiness was checked on the URL. "daps://10.0.0.200:636" - one
+    # Only emptiness was checked on the URL. "daps://dc.example.test:636" - one
     # character short of ldaps:// - passed every layer, was written into the
     # config, copied onto the Zimbra domain as zimbraAuthLdapURL, and surfaced
     # forty minutes later as "Could not parse LDAP URI(s) (3)". It cost the
