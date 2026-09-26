@@ -241,6 +241,38 @@ if [ "${AD_AUTH_ENABLED:-no}" = "yes" ]; then
       ok "${CONTRACTED_SEATS} seats available for the directory sync"
       ;;
   esac
+  # And that the directory address is an LDAP address at all.
+  #
+  # AD_LDAP_URL="daps://<host>:636" - one character short of ldaps:// - was
+  # accepted by every layer, written into the config, copied onto the Zimbra
+  # domain, and surfaced forty minutes later as "Could not parse LDAP URI(s)".
+  # It cost the whole feature three different ways: nobody was created from the
+  # directory, 14-ad-trust skipped itself because the scheme was not ldaps://,
+  # and no AD user could sign in. Nothing named the cause (26 Sep 2026).
+  case "${AD_LDAP_URL:-}" in
+    ldaps://?*|ldap://?*)
+      ok "Directory address: ${AD_LDAP_URL}"
+      case "${AD_LDAP_URL}" in
+        ldap://*)
+          info "Plain ldap:// - Windows refuses unsigned binds by default since"
+          info "2020. Use ldaps:// unless this directory is known to allow it."
+          ;;
+      esac
+      ;;
+    '')
+      fail "AD is enabled but AD_LDAP_URL is empty."
+      info "Set it in ${CONF_FILE}, e.g. ldaps://dc.example.test:636"
+      FATAL=$((FATAL + 1))
+      ;;
+    *)
+      fail "AD_LDAP_URL='${AD_LDAP_URL}' is not an LDAP address."
+      info "It must start with ldaps:// (or ldap://) and name a host."
+      info "A single wrong character here stops every AD user being created,"
+      info "skips the certificate trust step, and blocks every AD sign-in."
+      info "Set it in ${CONF_FILE}, e.g. ldaps://dc.example.test:636"
+      FATAL=$((FATAL + 1))
+      ;;
+  esac
 fi
 
 # --- verdict -----------------------------------------------------------------

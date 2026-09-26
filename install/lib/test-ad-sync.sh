@@ -377,7 +377,11 @@ if grep -q 'CONTRACTED_SEATS' "$P" && grep -q 'AD_AUTH_ENABLED:-no}" = "yes"' "$
 else
   bad "a hand-edited config still gets found out at the end of the deploy"
 fi
-if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -c 'FATAL=$((FATAL + 1))' | grep -q '^3$'; then
+# Scoped to the seat case, not the whole section: counting every FATAL in
+# section 8 broke the moment a second check was added beside it, which is a
+# test reporting on its own arithmetic rather than on the behaviour.
+_seatcase=$(sed -n '/case "\${CONTRACTED_SEATS:-}" in/,/^  esac$/p' "$P")
+if [ "$(printf '%s' "$_seatcase" | grep -c 'FATAL=$((FATAL + 1))')" -eq 3 ]; then
   pass "unset, non-numeric and zero are all refused"
 else
   bad "one of unset/non-numeric/zero would be allowed through"
@@ -386,6 +390,30 @@ if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'no AD user wil
   pass "and it says what the consequence would have been"
 else
   bad "the refusal is a rule with no reason attached"
+fi
+
+# --- one character in the directory address --------------------------------
+# AD_LDAP_URL="daps://<host>:636", one short of ldaps://, passed the wizard,
+# passed validate_draft, reached the Zimbra domain, and cost the whole feature
+# three ways: nobody created, 14-ad-trust skipped itself because the scheme was
+# not ldaps://, and no AD sign-in worked (26 Sep 2026). Only emptiness had ever
+# been checked.
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'is not an LDAP address'; then
+  pass "preflight refuses a directory address that is not an LDAP URL"
+else
+  bad "a mistyped scheme still gets found out forty minutes in"
+fi
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'ldaps://?\*|ldap://?\*'; then
+  pass "and requires a host after the scheme, not just the scheme"
+else
+  bad "'ldaps://' with nothing after it would be accepted"
+fi
+# Refusing plain ldap:// outright would be a policy decision wearing a typo
+# check: some estates genuinely run it on an isolated segment.
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'refuses unsigned binds'; then
+  pass "plain ldap:// is allowed but flagged, not silently blessed"
+else
+  bad "ldap:// is either refused outright or passed without comment"
 fi
 
 # --- the lockdown stage must not fail on a proxy that is still starting -------

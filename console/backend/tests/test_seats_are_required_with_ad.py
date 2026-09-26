@@ -112,5 +112,57 @@ class SeatsStayOptionalWithoutADirectory(unittest.TestCase):
         self.assertTrue(seat_errors(ad_auth_enabled=False, contracted_seats="ten"))
 
 
+class TheDirectoryUrlHasToBeAnLdapUrl(unittest.TestCase):
+    """26 Sep 2026: AD_LDAP_URL="daps://10.0.0.200:636".
+
+    One character short of ldaps://. Only emptiness was checked, so it passed
+    the wizard, passed here, was written into the config, copied onto the Zimbra
+    domain as zimbraAuthLdapURL, and surfaced forty minutes later as "Could not
+    parse LDAP URI(s) (3)".
+
+    Three symptoms, none naming the cause: nobody was created from the
+    directory; 14-ad-trust skipped itself silently because the scheme was not
+    ldaps://; and no AD user could sign in.
+    """
+
+    def url_errors(self, url: str) -> list[str]:
+        return [
+            e
+            for e in validate_draft(draft(ad_ldap_url=url), dict(EXISTING))
+            if "ad_ldap_url" in e
+        ]
+
+    def test_the_typo_that_happened_is_refused(self) -> None:
+        errs = self.url_errors("daps://10.0.0.200:636")
+        self.assertTrue(errs)
+        self.assertIn("ldaps://", errs[0])
+
+    def test_a_bare_host_is_refused(self) -> None:
+        self.assertTrue(self.url_errors("dc.example.test:636"))
+
+    def test_a_scheme_with_no_host_is_refused(self) -> None:
+        self.assertTrue(self.url_errors("ldaps://"))
+
+    def test_another_protocol_is_refused(self) -> None:
+        self.assertTrue(self.url_errors("http://dc.example.test"))
+
+    def test_ldaps_is_accepted(self) -> None:
+        self.assertEqual(self.url_errors("ldaps://dc.example.test:636"), [])
+
+    def test_plain_ldap_is_still_accepted(self) -> None:
+        # Some estates genuinely run unencrypted LDAP on an isolated segment.
+        # Refusing it here would be a policy decision wearing a typo check.
+        self.assertEqual(self.url_errors("ldap://dc.example.test:389"), [])
+
+    def test_the_error_quotes_what_was_given(self) -> None:
+        # "must start with ldaps://" beside the value is what makes a missing
+        # character visible; the operator read their own input as correct.
+        self.assertIn("daps://", self.url_errors("daps://dc.example.test")[0])
+
+    def test_no_url_check_without_a_directory(self) -> None:
+        d = draft(ad_auth_enabled=False, ad_ldap_url="nonsense")
+        self.assertEqual([e for e in validate_draft(d, dict(EXISTING)) if "ad_ldap_url" in e], [])
+
+
 if __name__ == "__main__":
     unittest.main()

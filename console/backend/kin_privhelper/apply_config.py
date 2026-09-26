@@ -710,6 +710,21 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
             "can be created, so no AD user could sign in"
         )
 
+    # Only emptiness was checked on the URL. "daps://10.0.0.200:636" - one
+    # character short of ldaps:// - passed every layer, was written into the
+    # config, copied onto the Zimbra domain as zimbraAuthLdapURL, and surfaced
+    # forty minutes later as "Could not parse LDAP URI(s) (3)". It cost the
+    # whole feature: nobody was created from the directory, the certificate
+    # trust stage skipped itself because the scheme was not ldaps://, and
+    # nobody could sign in (26 Sep 2026).
+    if draft.get("ad_auth_enabled"):
+        ad_url = str(draft.get("ad_ldap_url") or "").strip()
+        if ad_url and not re.match(r"^ldaps?://[^/\s:][^/\s]*", ad_url, re.I):
+            errs.append(
+                "ad_ldap_url must start with ldaps:// or ldap:// and name a "
+                f"host, e.g. ldaps://dc.example.test:636 (got {ad_url!r})"
+            )
+
     if draft.get("ad_auth_enabled"):
         required_ad = [
             ("ad_ldap_url", "AD LDAP URL"),

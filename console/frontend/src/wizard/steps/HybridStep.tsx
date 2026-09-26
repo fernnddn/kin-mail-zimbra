@@ -14,6 +14,7 @@ import {
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
+import { adLdapUrlError } from "../adLdapUrl";
 
 export default function HybridStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
@@ -60,6 +61,17 @@ export default function HybridStep() {
     if (!draft.ad_test_pass && !draft.ad_test_pass_set) missing.push("Test account password");
     if (missing.length) {
       setFieldErr(`Fill the required Active Directory fields: ${missing.join(", ")}.`);
+      return;
+    }
+    // Only emptiness was checked here before. "daps://10.0.0.1:636" - one
+    // character short of ldaps:// - passed every layer, reached the domain as
+    // zimbraAuthLdapURL, and surfaced forty minutes later as "Could not parse
+    // LDAP URI(s)". It cost the whole feature: nobody was created, the
+    // certificate-trust stage skipped itself because the scheme was not
+    // ldaps://, and nobody could sign in (26 Sep 2026).
+    const urlProblem = adLdapUrlError(draft.ad_ldap_url);
+    if (urlProblem) {
+      setFieldErr(urlProblem);
       return;
     }
     setFieldErr("");
