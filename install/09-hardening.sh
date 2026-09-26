@@ -350,6 +350,74 @@ configure_default_quota() {
   fi
 }
 
+configure_admin_mail_client_access() {
+  # Anyone on the internet can lock the administrator out of the admin console.
+  #
+  # THE REPORT THIS EXISTS FOR
+  #
+  # 26 September 2026, mid-handover: the operator could not sign in at :7071
+  # with the password recorded in /etc/kin-mail/config. The account was not
+  # mistyped and the password was not wrong - zimbraAccountStatus was "lockout".
+  #
+  # From the audit log, 24 of these in forty minutes, one every ~41 seconds:
+  #
+  #   [oip=<a Microsoft 365 address>; via=Microsoft Office 365/...] security - cmd=Auth;
+  #   account=admin@<domain>; protocol=imap;
+  #   error=authentication failed for [admin@<domain>], invalid password
+  #
+  # A mail client somewhere in the customer's Microsoft 365 tenant had been
+  # pointed at this server as admin@<domain> with a stale password, and kept
+  # retrying. Zimbra's lockout policy - 8 failures, 30 minutes - did exactly
+  # what it is for, and the operator was the one locked out.
+  #
+  # The retry interval is shorter than the lockout, so it relocks for ever.
+  # Nothing about it needs a valid credential, and the edge publishes IMAP and
+  # POP to the internet, so this is a remote denial of service against the
+  # appliance's administration that anybody can run by accident.
+  #
+  # The administrator is not a person's mailbox. No mail client should ever log
+  # into it, so it does not need IMAP or POP, and without them the attempt is
+  # refused before the password is checked and never reaches the lockout
+  # counter. Measured after applying this: three deliberate wrong-password IMAP
+  # logins as admin, all refused, failure count unchanged.
+  say "3c. Mail-client access for the administrator"
+  if [ ! -d "$ZIMBRA_ROOT" ]; then
+    warn "Skipping - ${ZIMBRA_ROOT} not present"
+    return 0
+  fi
+  # The account lives in the directory, which lives with the mail store.
+  if [ "${KIN_NODE_ROLE:-all}" = "edge" ]; then
+    info "The administrator account belongs to the mailbox node; set there."
+    return 0
+  fi
+  if [ -z "${MAIL_DOMAIN:-}" ]; then
+    warn "MAIL_DOMAIN is not set; leaving the administrator account alone"
+    return 0
+  fi
+  local acct="admin@${MAIL_DOMAIN}"
+  if ! zimbra_cmd zmprov -l ga "$acct" zimbraId >/dev/null 2>&1; then
+    warn "${acct} not found; leaving mail-client access alone"
+    return 0
+  fi
+  if ! zimbra_cmd zmprov -l ma "$acct" zimbraImapEnabled FALSE zimbraPop3Enabled FALSE; then
+    warn "Could not turn off IMAP/POP for ${acct}"
+    info "A mail client with a stale password can lock the admin console."
+    return 0
+  fi
+  # Read it back. "zmprov said so" is not the same as "the directory says so",
+  # and this one is a security control.
+  local got
+  got=$(zimbra_cmd zmprov -l ga "$acct" zimbraImapEnabled zimbraPop3Enabled 2>/dev/null |
+    grep -cE '^(zimbraImapEnabled|zimbraPop3Enabled): FALSE')
+  if [ "${got:-0}" -eq 2 ]; then
+    ok "${acct} cannot be used from a mail client, so it cannot be locked out from one"
+  else
+    warn "IMAP/POP still look enabled for ${acct} after the change"
+    info "Check with: zmprov ga ${acct} zimbraImapEnabled zimbraPop3Enabled"
+  fi
+  info "The admin console at :7071 and the web client are unaffected."
+}
+
 configure_cleartext() {
   say "4. Disable IMAP/POP cleartext login (server attrs)"
   if [ ! -d /opt/zimbra ]; then
@@ -780,6 +848,7 @@ fi
 
 configure_lockout
 configure_default_quota
+configure_admin_mail_client_access
 configure_cleartext
 configure_tls
 if [ "$KIN_NODE_ROLE" = "mailbox" ]; then

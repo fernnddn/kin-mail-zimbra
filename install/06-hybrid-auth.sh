@@ -91,10 +91,30 @@ if ! zm md "$MAIL_DOMAIN" zimbraAuthMech ad \
     zimbraAuthLdapSearchFilter "$AD_SEARCH_FILTER" \
     zimbraAuthLdapSearchBindDn "$AD_SEARCH_BIND_DN" \
     zimbraAuthLdapSearchBindPassword "$AD_SEARCH_BIND_PASSWORD" \
+    zimbraAuthMechAdmin zimbra \
     zimbraAuthFallbackToLocal TRUE; then
   warn "zmprov failed to apply domain auth (URL/search/bind) - local Zimbra auth stays active"
   AD_APPLY_OK=0
 fi
+# zimbraAuthMechAdmin=zimbra - the administrator is not in the directory.
+#
+# zimbraAuthMech applies to the whole domain, administrator included, and the
+# administrator is a Zimbra account that does not exist in Active Directory. So
+# without this, every admin console sign-in first binds to AD as admin@<domain>
+# and AD answers
+#
+#   LDAPBindException: 80090308 ... AcceptSecurityContext error, data 52e
+#
+# before zimbraAuthFallbackToLocal lets the local password through. Sign-in
+# still works - that was measured both ways on the live pair, 26 Sep 2026 -
+# so this is not load-bearing for logging in.
+#
+# What it removes is a failed bind against the customer's domain controller on
+# every single admin login: noise in their security log, a slower sign-in, and
+# an account-lockout policy on the AD side being fed failures for a name the
+# operator does not control. Zimbra documents the attribute as "mechanism to
+# use for verifying password for admin", and a local administrator is exactly
+# what it is for.
 # zimbraAuthMech=ad needs a bind template, and the wizard calls it optional.
 #
 # With mech=ad Zimbra binds to the directory AS THE USER, forming the bind name
@@ -107,7 +127,7 @@ fi
 # That is what happened on 25 Sep 2026: the service account bound fine by hand
 # and could find the user, the certificate was trusted, and nobody could log in.
 #
-# Derived from the search base rather than asked for again: DC=kampretos,DC=my,
+# Derived from the search base rather than asked for again: DC=example,DC=co,
 # DC=id is the same domain, written the other way round, and asking twice for
 # one fact is how the two come to disagree.
 if [ "$AD_APPLY_OK" -eq 1 ]; then
@@ -135,11 +155,33 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
   fi
 fi
 if [ "$AD_APPLY_OK" -eq 1 ]; then
-  ok "zimbraAuthMech=ad + local fallback TRUE"
+  # mailboxd caches the domain, and on a multi deployment these writes were
+  # made from the edge - where zmprov has no local mailboxd and drops silently
+  # to LDAP-only mode, so nothing tells the mail store its copy is stale.
+  #
+  # Measured on the live pair, 26 Sep 2026, while recovering a locked-out
+  # administrator: several changes written through `zmprov -l` were correct in
+  # the directory and still not honoured, and the admin console kept refusing a
+  # password that was right, until the cache was flushed. Which attribute was
+  # the stale one was never isolated, and that is the point - anything written
+  # this way can be.
+  #
+  # Waiting for a cache to expire is not something to hand an operator at the
+  # end of a forty-minute deploy.
+  if kin_zmprov_on_store fc domain "$MAIL_DOMAIN" >/dev/null 2>&1; then
+    ok "Domain cache flushed on the mail store - the new settings are live now"
+  else
+    warn "Could not flush the domain cache on the mail store."
+    info "The settings are correct in the directory, but mailboxd may serve a"
+    info "stale copy for a while. If sign-in is refused with a password you"
+    info "know is right, run ON THE MAILBOX:"
+    info "  su - zimbra -c 'zmprov fc domain ${MAIL_DOMAIN}'"
+  fi
+  ok "zimbraAuthMech=ad for people, zimbraAuthMechAdmin=zimbra for the console"
 fi
 
 # Show non-secret attrs for the progress/audit trail.
-su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech zimbraAuthLdapURL zimbraAuthLdapSearchBase zimbraAuthLdapSearchFilter zimbraAuthLdapSearchBindDn zimbraAuthFallbackToLocal zimbraAuthLdapBindDn" 2>/dev/null \
+su - zimbra -c "zmprov gd ${MAIL_DOMAIN} zimbraAuthMech zimbraAuthMechAdmin zimbraAuthLdapURL zimbraAuthLdapSearchBase zimbraAuthLdapSearchFilter zimbraAuthLdapSearchBindDn zimbraAuthFallbackToLocal zimbraAuthLdapBindDn" 2>/dev/null \
   | sed 's/^/    /'
 
 # -----------------------------------------------------------------------------

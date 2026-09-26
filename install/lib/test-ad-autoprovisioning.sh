@@ -140,6 +140,48 @@ else
   bad "does not say which node holds the trust store"
 fi
 
+# --- the admin console must not depend on the customer's directory -----------
+#
+# zimbraAuthMech applies to the whole domain, administrator included, and the
+# administrator is a Zimbra account that does not exist in Active Directory.
+# Without zimbraAuthMechAdmin, every admin console sign-in first binds to AD as
+# admin@<domain> and gets
+#
+#   LDAPBindException: 80090308 ... AcceptSecurityContext error, data 52e
+#
+# before zimbraAuthFallbackToLocal lets the local password through. Sign-in
+# still works either way - measured both ways on the live pair, 26 Sep 2026 -
+# so this is not what keeps the operator logged in. What it removes is a failed
+# bind against the customer's domain controller on every admin login: noise in
+# their security log, and their own lockout policy being fed failures for a
+# name the operator does not control.
+if sed -n '/^if ! zm md "\$MAIL_DOMAIN" zimbraAuthMech ad/,/^fi$/p' "$S" |
+     grep -q 'zimbraAuthMechAdmin zimbra'; then
+  pass "the admin console checks the local password instead of the directory"
+else
+  bad "every admin login makes a doomed bind against the customer's AD"
+fi
+if grep -q 'data 52e' "$S"; then
+  pass "the reasoning is recorded where the next reader will look"
+else
+  bad "a future edit could drop the attribute without knowing what it was for"
+fi
+# mailboxd caches the domain. These writes are made from the edge on a multi
+# deployment, where zmprov has no local mailboxd and drops silently to LDAP-only
+# mode - so nothing tells the mail store its copy is stale. Measured today: the
+# console kept refusing a correct password until the cache was flushed, with
+# the setting already correct in LDAP.
+if grep -q 'kin_zmprov_on_store fc domain' "$S"; then
+  pass "the mail store's domain cache is flushed so the change is live at once"
+else
+  bad "the settings are correct in LDAP while mailboxd serves a stale copy"
+fi
+if sed -n '/kin_zmprov_on_store fc domain/,/^  fi$/p' "$S" | grep -q 'zmprov fc domain'; then
+  pass "and a failed flush tells the operator the command to run by hand"
+else
+  bad "a failed flush leaves no way to recover except waiting for a cache"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD auto-provisioning tests passed\n'
   exit 0

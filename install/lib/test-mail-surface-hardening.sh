@@ -195,6 +195,78 @@ else
   bad "the split-only reconciliation is not gated on the node role"
 fi
 
+# --- the administrator must not be lockable from a mail client ---------------
+#
+# THE REPORT THIS EXISTS FOR
+#
+# 26 September 2026, mid-handover: the operator could not sign in at :7071 with
+# the password recorded in /etc/kin-mail/config. Nothing was mistyped;
+# zimbraAccountStatus was "lockout".
+#
+# From the audit log, 24 of these in forty minutes, one every ~41 seconds:
+#
+#   [oip=<a Microsoft 365 address>; via=Microsoft Office 365/...] cmd=Auth;
+#   account=admin@<domain>; protocol=imap;
+#   error=authentication failed for [admin@<domain>], invalid password
+#
+# A mail client in the customer's Microsoft 365 tenant had been pointed at this
+# server as admin@<domain> with a stale password and kept retrying. Zimbra's
+# lockout policy - 8 failures, 30 minutes - did what it is for, and the person
+# it locked out was the operator.
+#
+# The retry interval is shorter than the lockout, so it relocks for ever, and
+# the edge publishes IMAP and POP to the internet. No valid credential is
+# needed at any point: this is a remote denial of service against the
+# appliance's own administration that anyone can run by accident.
+H="$(cd "$(dirname "$0")/.." && pwd)/09-hardening.sh"
+if grep -q 'configure_admin_mail_client_access' "$H"; then
+  ok "the administrator's mail-client access is configured at all"
+else
+  bad "admin@ keeps IMAP and POP, so a stale client can lock the console"
+fi
+blk=$(sed -n '/^configure_admin_mail_client_access() {/,/^}/p' "$H")
+if printf '%s' "$blk" | grep -q 'zimbraImapEnabled FALSE' &&
+   printf '%s' "$blk" | grep -q 'zimbraPop3Enabled FALSE'; then
+  ok "both IMAP and POP are turned off for it"
+else
+  bad "only one protocol is closed; the other still reaches the lockout counter"
+fi
+# It is called, not merely defined. A security control that nothing runs is the
+# same as no control.
+if sed -n '/^configure_lockout$/,$p' "$H" | grep -q '^configure_admin_mail_client_access$'; then
+  ok "and the stage actually runs it"
+else
+  bad "the function exists but is never called"
+fi
+# zmprov reporting success is not the directory saying so, and this one is a
+# security control.
+if printf '%s' "$blk" | grep -q 'zmprov -l ga .*zimbraImapEnabled'; then
+  ok "the setting is read back rather than announced"
+else
+  bad "a failed write would be reported as applied"
+fi
+# The account lives in the directory, which on a multi deployment lives with
+# the mail store - not the edge.
+if printf '%s' "$blk" | grep -q 'KIN_NODE_ROLE:-all}" = "edge"'; then
+  ok "it is left to the mailbox node on a multi deployment"
+else
+  bad "the edge would try to change an account it does not hold"
+fi
+# A missing account is not a reason to fail the stage, but it is a reason not
+# to claim the control is in place.
+if printf '%s' "$blk" | grep -q 'not found; leaving mail-client access alone'; then
+  ok "a missing admin account is reported, not silently skipped"
+else
+  bad "a missing account would pass as success"
+fi
+# Webmail and the admin console are a different path and must keep working -
+# this closes IMAP and POP only.
+if printf '%s' "$blk" | grep -q 'admin console at :7071 and the web client are unaffected'; then
+  ok "the transcript says what is still reachable"
+else
+  bad "an operator could read this as having locked themselves out"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1
