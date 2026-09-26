@@ -201,15 +201,35 @@ export function parseInstallProgress(log: string): InstallProgress {
     }
   }
 
+  // Which stage actually stopped the pipeline, if one did. kin-mail.sh prints
+  // this at every hard-failure site - both stage loops, the firewall and the
+  // healthcheck - so it, not the last stage to have started, is the answer to
+  // "where did this stop".
+  const stopped = stripAnsi(log).match(/Pipeline stopped at (\S+)/i);
+
   const failed =
     // A metrics install that exited non-zero. Mail is fine, but the appliance
     // is not collecting anything, and a green checklist here is the lie.
     /KIN_METRICS_END exit=(?!0\b)\d+/.test(stripAnsi(log)) ||
-    /Pipeline stopped at /i.test(log) ||
+    stopped !== null ||
     /Install stopped unexpectedly/i.test(log) ||
-    /\[FAIL\]/.test(log) ||
     /^Refusing:/m.test(log) ||
     /Full install complete,\s*with warnings/i.test(log);
+  // `[FAIL]` used to be in that list, and it is a finding, not a verdict.
+  //
+  // Stages print it for things they then carry on past: 06 prints three of
+  // them when the directory could not be synchronised, and still exits 0
+  // because authentication itself is configured. One of those lines turned the
+  // whole deploy red the moment it scrolled by - while the install was still
+  // running - and it never turned back. Reported from a live deploy on
+  // 26 Sep 2026: "Deployment failed, stopped at Mobile email", over a
+  // transcript that says "07-zpush.sh finished (exit 0)" and an installer
+  // still running two stages later.
+  //
+  // A stage that genuinely ends the run says so, at one of the four sites
+  // above; an installer that dies without saying anything is caught by
+  // "Install stopped unexpectedly"; and a stage that failed and was skipped
+  // reaches the end as "complete, with warnings". Nothing needs this grep.
   // Mail being installed is not the whole deploy any more. kin-mail.sh prints
   // "Full install complete" and exits, and only THEN does the privhelper run
   // the built-in monitoring install, so treating the installer's own last line
@@ -237,11 +257,24 @@ export function parseInstallProgress(log: string): InstallProgress {
   }
 
   if (failed) {
+    // Blame the stage that stopped, not the one that happened to be running
+    // when the UI noticed. Those differ whenever a later stage has already
+    // started, and naming the wrong one sends the operator to read the logs of
+    // a stage that exited 0.
+    let failIndex = -1;
+    if (stopped) {
+      failIndex = FULL_INSTALL_STAGES.findIndex((s) => s.script === stopped[1]);
+    }
+    const culprit = failIndex >= 0 ? FULL_INSTALL_STAGES[failIndex] : null;
     return {
-      current: current || 1,
+      current: culprit ? failIndex + 1 : current || 1,
       total,
-      label: current ? `${label} (failed)` : "Failed",
-      script,
+      label: culprit
+        ? `${culprit.label} (failed)`
+        : current
+          ? `${label} (failed)`
+          : "Failed",
+      script: culprit ? culprit.script : script,
       complete: false,
       failed: true,
     };

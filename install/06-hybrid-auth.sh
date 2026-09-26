@@ -286,6 +286,23 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
           echo
           ;;
       esac
+      # Carry this to the end of the deploy.
+      #
+      # This stage exits 0 on purpose: authentication itself is configured, and
+      # stopping the pipeline here would leave the host unhardened and
+      # unfirewalled over a mailbox-creation problem. But exiting 0 also meant
+      # the run finished "complete, all stages exited 0" while the admin console
+      # listed nobody and the whole point of the directory integration was
+      # missing. The three FAIL lines above had scrolled past by then.
+      #
+      # kin-mail.sh reads this marker after the stage loop and names it in the
+      # summary, so the deploy ends saying what is wrong and what to do.
+      if [ "$_sync_rc" -eq 0 ]; then
+        rm -f /etc/kin-mail/.ad-sync-incomplete 2>/dev/null || true
+      else
+        mkdir -p /etc/kin-mail 2>/dev/null || true
+        printf '%s\n' "$_sync_rc" >/etc/kin-mail/.ad-sync-incomplete 2>/dev/null || true
+      fi
   fi
 fi
 

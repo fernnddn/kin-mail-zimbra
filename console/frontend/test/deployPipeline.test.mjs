@@ -212,5 +212,71 @@ chk(
   false,
 );
 
+
+// --- a [FAIL] line is a finding, not a verdict -------------------------------
+//
+// From a live deploy, 26 Sep 2026. The operator saw "Deployment failed -
+// stopped at Mobile email", over a transcript that says 07-zpush.sh exited 0
+// and an installer that was still running two stages later. 06 prints three
+// [FAIL] lines when the directory could not be synchronised - the contracted
+// seat count had not been set - and still exits 0, because authentication
+// itself is configured and stopping there would leave the host unfirewalled.
+//
+// One of those lines painted the whole run red the moment it scrolled by, and
+// it never turned back.
+const stillRunning = [
+  "==> 01-preflight.sh",
+  "==> 02-prepare-os.sh",
+  "==> 03-install-zimbra.sh",
+  "==> 04-tls-dkim.sh",
+  "==> 06-hybrid-auth.sh",
+  "  [FAIL]   The contracted seat count is not set, so no mailbox can be created.",
+  "  [FAIL]   Nobody was brought across from the directory.",
+  "  [FAIL]   THE DIRECTORY WAS NOT SYNCHRONISED - no mailboxes could be created.",
+  "  [ OK ]   06-hybrid-auth.sh finished (exit 0)",
+  "==> 07-zpush.sh",
+  "  [ OK ]   07-zpush.sh finished (exit 0)",
+].join("\n");
+{
+  const p = parseInstallProgress(stillRunning);
+  chk("a [FAIL] from a stage that exited 0 does not fail the deploy", p.failed, false);
+  chk("...and the run is still reported as in progress", p.complete, false);
+  chk("...on the stage that is actually running", p.label, "Mobile email");
+}
+
+// --- the failure is attributed to the stage that stopped ---------------------
+// These differ whenever a later stage has already started. Naming the wrong one
+// sends the operator to read the logs of a stage that exited 0.
+{
+  const stopped = [
+    "==> 04-tls-dkim.sh",
+    "==> 06-hybrid-auth.sh",
+    "  [FAIL]   Pipeline stopped at 06-hybrid-auth.sh",
+  ].join("\n");
+  const p = parseInstallProgress(stopped);
+  chk("a stopped pipeline is a failure", p.failed, true);
+  chk("and it names the stage that stopped", p.label, "Directory login (failed)");
+  chk("and points at that stage's script", p.script, "06-hybrid-auth.sh");
+}
+{
+  // The marker arrives while a later stage heading is already in the buffer:
+  // run_stage prints the heading before the stage runs.
+  const lagging = [
+    "==> 04-tls-dkim.sh",
+    "  [FAIL]   Pipeline stopped at 04-tls-dkim.sh",
+    "==> 06-hybrid-auth.sh",
+  ].join("\n");
+  const p = parseInstallProgress(lagging);
+  chk("a later heading does not steal the blame", p.label, "Certificates & DKIM (failed)");
+  chk("and the step number is the one that stopped", p.current, 4);
+}
+
+// A soft-failed stage still has to reach the operator: mail is up, but
+// something was skipped and the checklist must not read as clean.
+{
+  const warned = "==> 09-hardening.sh\n==> Full install complete, with warnings";
+  chk("a run that finished with warnings is not clean", parseInstallProgress(warned).failed, true);
+}
+
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

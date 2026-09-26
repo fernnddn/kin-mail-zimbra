@@ -478,6 +478,16 @@ run_full_install() {
     }
   done
 
+  # 06 configures authentication and exits 0 even when no mailbox could be
+  # created, because stopping here would leave the host unhardened over a
+  # mailbox problem. That is the right call for the pipeline and the wrong one
+  # for the summary: the deploy then ends "all selected pipeline stages exited
+  # 0" while the admin console lists nobody from the directory, which is the
+  # entire feature missing. Reported from a live deploy, 26 Sep 2026.
+  if [ -f /etc/kin-mail/.ad-sync-incomplete ]; then
+    soft_failed_stages+=("06-hybrid-auth.sh (no Active Directory users were created - they cannot sign in)")
+  fi
+
   # 07 - optional (wizard ZPUSH_ENABLED); needs live /opt/zimbra
   if [ "${ZPUSH_ENABLED:-yes}" != "yes" ]; then
     warn "ZPUSH_ENABLED=${ZPUSH_ENABLED:-} - skipping 07-zpush.sh"

@@ -434,7 +434,29 @@ class UnexpectedInstallStopTests(unittest.TestCase):
             ds.transcript_has_terminal_outcome("Full install complete, with warnings\n")
         )
         self.assertTrue(ds.transcript_has_terminal_outcome("Pipeline stopped at 03-install-zimbra.sh\n"))
-        self.assertTrue(ds.transcript_has_terminal_outcome("[FAIL] something\n"))
+        self.assertTrue(ds.transcript_has_terminal_outcome("Install stopped unexpectedly\n"))
+
+    def test_a_fail_line_mid_stage_is_not_an_ending(self) -> None:
+        # 06 prints these and still exits 0: authentication is configured even
+        # when no mailbox could be created. Treating one as the outcome meant a
+        # deploy that later died was never stamped, so the console showed it
+        # running for ever. Live deploy, 26 Sep 2026.
+        mid_run = (
+            "==> 06-hybrid-auth.sh\n"
+            "  [FAIL]   THE DIRECTORY WAS NOT SYNCHRONISED - no mailboxes could be created.\n"
+            "  [ OK ]   06-hybrid-auth.sh finished (exit 0)\n"
+            "==> 07-zpush.sh\n"
+        )
+        self.assertFalse(ds.transcript_has_terminal_outcome(mid_run))
+
+    def test_a_crash_after_a_fail_line_still_gets_stamped(self) -> None:
+        self.log.write_text(
+            "  [FAIL]   Nobody was brought across from the directory.\n"
+            "==> 09-hardening.sh\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(ds.append_unexpected_stop_if_needed(self.log))
+        self.assertIn("stopped unexpectedly", self.log.read_text(encoding="utf-8").lower())
 
     def test_reclaim_stamps_fail_when_process_gone(self) -> None:
         self.running.write_text("started\n", encoding="utf-8")

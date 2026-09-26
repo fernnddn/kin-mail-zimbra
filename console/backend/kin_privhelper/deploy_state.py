@@ -618,8 +618,18 @@ def transcript_has_terminal_outcome(text: str) -> bool:
         return True
     if re.search(r"Install stopped unexpectedly", text, re.I):
         return True
-    if re.search(r"\[FAIL\]", text):
-        return True
+    # A bare [FAIL] is NOT a terminal outcome.
+    #
+    # Stages print it for findings they then carry on past: 06 prints three
+    # when the directory could not be synchronised and still exits 0. Counting
+    # those as an outcome meant a deploy that later died - killed helper, lost
+    # power, OOM - was never stamped "stopped unexpectedly", because a FAIL
+    # line from half an hour earlier already looked like the ending. The
+    # transcript then ends mid-stage with no verdict, and the console shows a
+    # run that is still in progress for ever.
+    #
+    # Every real ending has its own words: the two completions, "Pipeline
+    # stopped at", and this stamp itself.
     return False
 
 

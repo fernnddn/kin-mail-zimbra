@@ -297,6 +297,41 @@ if sed -n '/_sync_rc/,/esac/p' "$H" | grep -q '4)'; then
 else
   bad "the deploy treats it as a generic failure"
 fi
+# 06 exits 0 whatever the sync did, deliberately - stopping the pipeline here
+# would leave the host unhardened and unfirewalled over a mailbox problem. The
+# cost is that the deploy then ends "all selected pipeline stages exited 0"
+# with an admin console that lists nobody, and the FAIL lines forty minutes up
+# the log. Live deploy, 26 Sep 2026.
+M="$(pwd)/../kin-mail.sh"
+# One name, spelled the same in three places, or the marker is written where
+# nothing looks and the deploy reports a clean run anyway. Grepping for the
+# name "somewhere in the file" is not enough: it passes while the write uses
+# one spelling and the read another.
+_written=$(grep -oE '>/etc/kin-mail/\.[a-z-]+' "$H" | head -1 | sed 's/^>//')
+_cleared=$(grep -oE 'rm -f /etc/kin-mail/\.[a-z-]+' "$H" | head -1 | sed 's/^rm -f //')
+_read=$(grep -oE '\[ -f /etc/kin-mail/\.[a-z-]+ \]' "$M" | head -1 | sed -e 's/^\[ -f //' -e 's/ \]$//')
+if [ -n "$_written" ]; then
+  pass "an unsynchronised directory is recorded for the end-of-deploy summary"
+else
+  bad "the only trace is three FAIL lines in the middle of a long transcript"
+fi
+if [ -n "$_read" ] && grep -q 'soft_failed_stages+=("06-hybrid-auth.sh' "$M"; then
+  pass "and the deploy summary names it rather than reporting a clean run"
+else
+  bad "a deploy where nobody can sign in still reports every stage exited 0"
+fi
+if [ -n "$_written" ] && [ "$_written" = "$_read" ]; then
+  pass "the stage writes the same marker the deploy reads"
+else
+  bad "written as '${_written}' but read as '${_read}' - the warning never appears"
+fi
+# The marker must not outlive the problem: a later run that succeeds has to
+# clear it, or every deploy on that host warns for ever.
+if [ -n "$_cleared" ] && [ "$_cleared" = "$_written" ]; then
+  pass "a successful sync clears the same marker it would have written"
+else
+  bad "cleared '${_cleared}' but writes '${_written}' - the warning would persist"
+fi
 
 # --- the lockdown stage must not fail on a proxy that is still starting -------
 # It regenerates nginx and restarts zmproxy, then sampled once. nginx takes a
