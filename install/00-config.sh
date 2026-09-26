@@ -596,18 +596,50 @@ run_wizard() {
   echo; say "Licensing / mailbox seats"
   info "CONTRACTED_SEATS limits NEW mailbox creation only (quota gate)."
   info "Password reset and other modify operations are never gated by this value."
-  info "Use PLACEHOLDER_UNSET until the operator confirms the real contracted count."
-  info "Do not invent a production number here."
-  ask CONTRACTED_SEATS "Contracted mailbox seats" "PLACEHOLDER_UNSET"
-  case "$CONTRACTED_SEATS" in
-    ''|PLACEHOLDER_UNSET)
-      CONTRACTED_SEATS=PLACEHOLDER_UNSET
-      ;;
-    *[!0-9]*)
-      warn "Not a non-negative integer - storing PLACEHOLDER_UNSET"
-      CONTRACTED_SEATS=PLACEHOLDER_UNSET
-      ;;
-  esac
+  if [ "$AD_AUTH_ENABLED" = "yes" ]; then
+    # Not optional once a directory is configured.
+    #
+    # Every account the sync creates spends a seat, so an unset count refuses
+    # every one of them: the deploy finishes, authentication is configured, and
+    # the admin console lists nobody. Three deploys in a row ended that way
+    # (24-26 Sep 2026) because this question offered PLACEHOLDER_UNSET as its
+    # default and called itself optional - which it is, right up until the
+    # moment a directory is involved, and then it decides whether the product
+    # does the one thing it was bought for.
+    warn "Active Directory is enabled, so this is REQUIRED."
+    info "Every person the directory sync brings across spends a seat. With no"
+    info "count set, it creates nobody and no AD user can sign in."
+    while :; do
+      ask CONTRACTED_SEATS "Contracted mailbox seats (required - AD is enabled)" ""
+      case "$CONTRACTED_SEATS" in
+        ''|PLACEHOLDER_UNSET)
+          warn "This cannot be left blank while AD is enabled."
+          ;;
+        *[!0-9]*)
+          warn "Enter a whole number."
+          ;;
+        0)
+          warn "Zero seats means no mailbox can ever be created, including AD users."
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+  else
+    info "Use PLACEHOLDER_UNSET until the operator confirms the real contracted count."
+    info "Do not invent a production number here."
+    ask CONTRACTED_SEATS "Contracted mailbox seats" "PLACEHOLDER_UNSET"
+    case "$CONTRACTED_SEATS" in
+      ''|PLACEHOLDER_UNSET)
+        CONTRACTED_SEATS=PLACEHOLDER_UNSET
+        ;;
+      *[!0-9]*)
+        warn "Not a non-negative integer - storing PLACEHOLDER_UNSET"
+        CONTRACTED_SEATS=PLACEHOLDER_UNSET
+        ;;
+    esac
+  fi
 
   echo; say "Host firewall - admin sources"
   info "Space-separated IPs/CIDRs allowed for SSH:22 and Zimbra Admin:7071"

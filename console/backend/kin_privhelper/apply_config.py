@@ -689,6 +689,27 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     if seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
         errs.append("contracted_seats must be PLACEHOLDER_UNSET or a non-negative integer")
 
+    # An unset seat count is a commercial detail to settle later - unless a
+    # directory is configured, and then it is the difference between a working
+    # deployment and an empty one. Every account the sync creates spends a
+    # seat, so PLACEHOLDER_UNSET refuses all of them: the deploy finishes,
+    # authentication is configured, and nobody from the directory can sign in.
+    #
+    # Three deploys ended that way (24-26 Sep 2026) before this was checked
+    # anywhere. Caught here rather than only in the wizard, because the wizard
+    # is not the only thing that writes a draft.
+    if draft.get("ad_auth_enabled") and seats == "PLACEHOLDER_UNSET":
+        errs.append(
+            "contracted_seats is required when Active Directory is enabled: "
+            "with no seat count the directory sync creates nobody and no AD "
+            "user can sign in"
+        )
+    if draft.get("ad_auth_enabled") and seats.isdigit() and int(seats) == 0:
+        errs.append(
+            "contracted_seats is 0 with Active Directory enabled: no mailbox "
+            "can be created, so no AD user could sign in"
+        )
+
     if draft.get("ad_auth_enabled"):
         required_ad = [
             ("ad_ldap_url", "AD LDAP URL"),

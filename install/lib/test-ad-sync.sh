@@ -333,6 +333,40 @@ else
   bad "cleared '${_cleared}' but writes '${_written}' - the warning would persist"
 fi
 
+# --- the seat count stops being optional once there is a directory -----------
+# Three QA reports in three days (24-26 Sep 2026), each one a screenshot of AD
+# beside an almost-empty Zimbra admin console. Every time the cause was this
+# field left blank: the sync spends a contracted seat per person, so an unset
+# count refuses all of them, and the deploy still finishes.
+#
+# The CLI wizard offered PLACEHOLDER_UNSET as the default answer and advised
+# taking it. That is right with no directory and wrong with one.
+if sed -n '/Licensing . mailbox seats/,/^  echo; say "Host firewall/p' "$C" |
+     grep -q 'AD_AUTH_ENABLED" = "yes"'; then
+  pass "the CLI wizard asks differently once a directory is configured"
+else
+  bad "the CLI wizard still offers PLACEHOLDER_UNSET when AD is enabled"
+fi
+if sed -n '/AD_AUTH_ENABLED" = "yes"/,/^  else$/p' "$C" | grep -q 'while :; do'; then
+  pass "and will not move on until a number is given"
+else
+  bad "the operator can still press Enter past it with AD enabled"
+fi
+# Zero passes "is it a whole number" and then refuses every create - the same
+# empty console by a different route.
+if sed -n '/AD_AUTH_ENABLED" = "yes"/,/^  else$/p' "$C" | grep -qE '^ +0\)'; then
+  pass "zero is refused too, not just blank"
+else
+  bad "zero seats would be accepted and create nobody"
+fi
+# With no directory this is a commercial figure that is often unknown on build
+# day. Demanding it from every deploy would be the wrong trade.
+if sed -n '/^  else$/,/^  fi$/p' "$C" | grep -q 'PLACEHOLDER_UNSET'; then
+  pass "and it stays optional when there is no directory"
+else
+  bad "every deploy now has to invent a seat count"
+fi
+
 # --- the lockdown stage must not fail on a proxy that is still starting -------
 # It regenerates nginx and restarts zmproxy, then sampled once. nginx takes a
 # few seconds to bind; that sample returned 000, the stage failed, and the
