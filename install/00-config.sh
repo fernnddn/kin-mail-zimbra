@@ -494,13 +494,17 @@ run_wizard() {
     detect_latest_zcs
   fi
   if [ -z "$ZCS_FILE" ]; then
-    ask ZCS_VERSION "Version tag"  "10.1.18.p1"
+    ask ZCS_VERSION "Version tag"  "10.1.20.p1"
     . /etc/os-release 2>/dev/null || true
     case "${VERSION_ID:-22.04}" in
       24.04) _plat_hint="UBUNTU24_64" ;;
       *)     _plat_hint="UBUNTU22_64" ;;
     esac
-    ask ZCS_FILE    "File name"  "zcs-10.1.18_GA_4200001.${_plat_hint}.20260801175919.tgz"
+    # The build timestamp in this name belongs to upstream, not to us. A
+    # rebuild moved it by six seconds on 27 Sep 2026 and every config carrying
+    # the old name started 404ing ten minutes into a deploy. Keep it current,
+    # and let detect_latest_zcs above be the normal path.
+    ask ZCS_FILE    "File name"  "zcs-10.1.20_GA_4200001.${_plat_hint}.20260820122323.tgz"
   fi
   if [ -z "${ZCS_BASE:-}" ] && [ -n "${ZCS_VERSION:-}" ]; then
     . /etc/os-release 2>/dev/null || true

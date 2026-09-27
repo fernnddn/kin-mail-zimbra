@@ -99,6 +99,37 @@ else
   info "TLS_METHOD=customer - skipping Let's Encrypt API reachability"
 fi
 
+# --- 4b. the Zimbra package this config names --------------------------------
+# The filename carries a build timestamp that upstream owns, and upstream
+# rebuilds. On 27 Sep 2026 the 10.1.18 artefact was rebuilt, the stamp moved
+# from ...175919 to ...175925, and a deploy died on a 404 - after ten minutes
+# of package updates and disk preparation, with an error that read like a
+# misconfiguration the operator had made.
+#
+# One HEAD request answers it before anything is installed.
+if [ -n "${ZCS_BASE:-}" ] && [ -n "${ZCS_FILE:-}" ]; then
+  echo; say "4b. Zimbra package named in this config"
+  _zcs_url="${ZCS_BASE}/${ZCS_FILE}"
+  _zcs_code=$(curl -s -m 25 -o /dev/null -w '%{http_code}' -IL "${_zcs_url}.sha256" 2>/dev/null)
+  case "$_zcs_code" in
+    200)
+      ok "${ZCS_FILE}"
+      ;;
+    000)
+      warn "Could not reach GitHub to check ${ZCS_FILE}"
+      info "If the install fails at 'Downloading', this is why."
+      ;;
+    *)
+      fail "${ZCS_FILE} is not there (HTTP ${_zcs_code})."
+      info "Upstream stamps a build time into this name and rebuilds change it."
+      info "Find the current one at:"
+      info "  https://github.com/maldua/zimbra-foss/releases"
+      info "then set ZCS_FILE (and ZCS_VERSION / ZCS_BASE) in ${CONF_FILE}."
+      FATAL=$((FATAL + 1))
+      ;;
+  esac
+fi
+
 # --- 5. outbound SMTP - the decisive test ------------------------------------
 echo; say "5. Outbound SMTP  ${DIM}(banner grab, not a connect test)${RST}"
 info "A TCP connect can succeed while an inline device silently drops the"

@@ -469,19 +469,77 @@ def resolve_latest_zcs_artefacts() -> dict[str, str] | None:
     }
 
 
+# Known release tags, newest first. Only used to ask the plain releases page
+# for its asset list when the API is unavailable; nothing is downloaded from
+# this list itself.
+_ZCS_KNOWN_TAGS = ("10.1.20.p1", "10.1.18.p1")
+
+
+def resolve_zcs_artefacts_without_api() -> dict[str, str] | None:
+    """Same answer as the API route, from the page anyone can open in a browser.
+
+    api.github.com allows 60 unauthenticated requests an hour per address. An
+    office behind one NAT gets through that easily, and when it does the API
+    returns 403 - so the console silently fell back to a hardcoded filename,
+    which is the failure this exists to remove.
+
+    /releases/expanded_assets/<tag> is plain HTML, served by the same host the
+    tarball itself comes from, and is not on that budget.
+    """
+    plat, tag_prefix = _zcs_platform()
+    import re
+    import urllib.request
+
+    for version in _ZCS_KNOWN_TAGS:
+        tag = f"{tag_prefix}/{version}"
+        url = f"https://github.com/maldua/zimbra-foss/releases/expanded_assets/{tag}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "kin-mail-console"})
+            with urllib.request.urlopen(req, timeout=25) as resp:  # noqa: S310
+                html = resp.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        names = sorted(set(re.findall(rf"zcs-[A-Za-z0-9._]*{plat}[A-Za-z0-9._]*\.tgz", html)))
+        if not names:
+            continue
+        return {
+            "ZCS_VERSION": version,
+            "ZCS_FILE": names[-1],
+            "ZCS_BASE": (
+                f"https://github.com/maldua/zimbra-foss/releases/download/{tag_prefix}/{version}"
+            ),
+            "ZCS_SRC": "/opt/zcs-src",
+        }
+    return None
+
+
 def default_zcs_artefacts() -> dict[str, str]:
     """ZCS download defaults - prefer live GitHub resolve, else last-known good."""
     resolved = resolve_latest_zcs_artefacts()
     if resolved:
         return resolved
+    resolved = resolve_zcs_artefacts_without_api()
+    if resolved:
+        return resolved
     plat, tag = _zcs_platform()
-    # Fallback must include the Maldua build-id suffix or downloads 404.
+    # Last resort, and it has a shelf life.
+    #
+    # The name carries a build timestamp that upstream owns. On 27 Sep 2026 a
+    # deploy failed here with a 404: the 10.1.18 artefact had been rebuilt and
+    # the stamp moved from ...175919 to ...175925 - six seconds - so the name
+    # written into every config that could not reach the API pointed at a file
+    # that no longer existed. Ten minutes of OS preparation happened first, and
+    # the operator read it as something they had misconfigured.
+    #
+    # Refreshed to a build that exists; the two routes above are what keep this
+    # from mattering, and preflight now checks the name before anything is
+    # installed.
     if plat == "UBUNTU24_64":
-        zcs_version = "10.1.18.p1"
-        zcs_file = "zcs-10.1.18_GA_4200001.UBUNTU24_64.20260801175919.tgz"
+        zcs_version = "10.1.20.p1"
+        zcs_file = "zcs-10.1.20_GA_4200001.UBUNTU24_64.20260820122323.tgz"
     else:
-        zcs_version = "10.1.18.p1"
-        zcs_file = "zcs-10.1.18_GA_4200001.UBUNTU22_64.20260801175919.tgz"
+        zcs_version = "10.1.20.p1"
+        zcs_file = "zcs-10.1.20_GA_4200001.UBUNTU22_64.20260820122323.tgz"
     return {
         "ZCS_VERSION": zcs_version,
         "ZCS_FILE": zcs_file,

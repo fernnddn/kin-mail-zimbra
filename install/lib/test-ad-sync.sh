@@ -431,6 +431,41 @@ else
   bad "no limit passes silently, which reads like no answer"
 fi
 
+# --- the Zimbra tarball name belongs to upstream ----------------------------
+# 27 Sep 2026: a deploy ran ten minutes of package updates and disk preparation
+# on the mailbox, then died downloading a file that no longer existed. The
+# 10.1.18 artefact had been rebuilt and the build stamp in its name moved by
+# six seconds. Nothing checked the name until curl did.
+if grep -q '4b. Zimbra package named in this config' "$P"; then
+  pass "preflight checks the package name before anything is installed"
+else
+  bad "a renamed upstream artefact is still found out ten minutes in"
+fi
+if sed -n '/4b. Zimbra package named in this config/,/^fi$/p' "$P" | grep -q 'sha256'; then
+  pass "it asks for a file the download step will actually need"
+else
+  bad "the check does not test the artefact it is about to fetch"
+fi
+# Unreachable and absent are different problems with different fixes, and only
+# one of them is this config's fault.
+if sed -n '/4b. Zimbra package named in this config/,/^fi$/p' "$P" | grep -q '000)'; then
+  pass "no network is a warning, not a verdict on the filename"
+else
+  bad "a blocked network would be reported as a bad package name"
+fi
+if sed -n '/4b. Zimbra package named in this config/,/^fi$/p' "$P" | grep -q 'stamps a build time into this name'; then
+  pass "and the refusal says why the name goes stale, with where to look"
+else
+  bad "the operator is told 404 with nothing to act on"
+fi
+# The name that actually 404'd must not be sitting in the tree as a default.
+C2="$(pwd)/../00-config.sh"
+if grep -q '20260801175919' "$C2"; then
+  bad "the wizard still defaults to the filename that was withdrawn upstream"
+else
+  pass "the withdrawn filename is not a default any more"
+fi
+
 # --- one character in the directory address --------------------------------
 # AD_LDAP_URL="daps://<host>:636", one short of ldaps://, passed the wizard,
 # passed validate_draft, reached the Zimbra domain, and cost the whole feature
