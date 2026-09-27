@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kin_privhelper.apply_config import validate_draft
+from kin_privhelper.apply_config import merge_draft, validate_draft
 
 EXISTING: dict[str, str] = {"SERVER_IP": "192.0.2.6", "NET_IFACE": "ens33"}
 
@@ -162,6 +162,55 @@ class TheDirectoryUrlHasToBeAnLdapUrl(unittest.TestCase):
     def test_no_url_check_without_a_directory(self) -> None:
         d = draft(ad_auth_enabled=False, ad_ldap_url="nonsense")
         self.assertEqual([e for e in validate_draft(d, dict(EXISTING)) if "ad_ldap_url" in e], [])
+
+
+class NoLimitIsAThirdAnswer(unittest.TestCase):
+    """Asked for on 27 Sep 2026, and it is a real gap rather than a shortcut.
+
+    An operator deploying for a customer whose headcount next year is unknown
+    had two choices: pick a number and refuse real joiners later, or invent a
+    figure nobody agreed to. "unlimited" is the answer that was missing.
+
+    It is a word, never an empty box. Blank already means "nobody has said
+    yet", which is the opposite answer, and a gate that reads emptiness as
+    permission is one typo away from not being a gate.
+    """
+
+    def seat_errs(self, value: str) -> list[str]:
+        return [
+            e
+            for e in validate_draft(draft(contracted_seats=value), dict(EXISTING))
+            if "seat" in e
+        ]
+
+    def test_unlimited_satisfies_the_ad_requirement(self) -> None:
+        self.assertEqual(self.seat_errs("unlimited"), [])
+
+    def test_any_case_is_accepted(self) -> None:
+        for v in ("UNLIMITED", "UnLiMiTeD", "  unlimited  "):
+            with self.subTest(v=v):
+                self.assertEqual(self.seat_errs(v), [])
+
+    def test_it_is_stored_as_one_spelling(self) -> None:
+        merged = merge_draft(draft(contracted_seats="  UNLIMITED "), dict(EXISTING))
+        self.assertEqual(merged["CONTRACTED_SEATS"], "unlimited")
+
+    def test_blank_is_still_not_unlimited(self) -> None:
+        self.assertTrue(self.seat_errs("PLACEHOLDER_UNSET"))
+        self.assertTrue(self.seat_errs(""))
+
+    def test_zero_is_still_not_a_way_to_say_unlimited(self) -> None:
+        # "No cap" and "a cap of none" read alike in English and are opposite
+        # in effect. Zero still creates nobody.
+        self.assertTrue(self.seat_errs("0"))
+
+    def test_nonsense_is_still_refused(self) -> None:
+        self.assertTrue(self.seat_errs("unlimited-ish"))
+        self.assertTrue(self.seat_errs("ten"))
+
+    def test_it_works_without_a_directory_too(self) -> None:
+        d = draft(ad_auth_enabled=False, contracted_seats="unlimited")
+        self.assertEqual([e for e in validate_draft(d, dict(EXISTING)) if "seat" in e], [])
 
 
 if __name__ == "__main__":

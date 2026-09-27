@@ -219,6 +219,12 @@ if [ "${AD_AUTH_ENABLED:-no}" = "yes" ]; then
   echo
   say "8. Directory sync has seats to use"
   case "${CONTRACTED_SEATS:-}" in
+    [Uu][Nn][Ll][Ii][Mm][Ii][Tt][Ee][Dd])
+      ok "No seat limit - the directory sync will create everybody it finds"
+      info "That is a decision, not a default. A wrong search base or filter"
+      info "then has nothing stopping it, so check AD_SEARCH_BASE is the OU"
+      info "you meant before this runs."
+      ;;
     '' | PLACEHOLDER_UNSET)
       fail "AD is enabled but CONTRACTED_SEATS is not set."
       info "The directory sync spends one seat per person, so with no count it"

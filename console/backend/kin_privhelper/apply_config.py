@@ -686,8 +686,17 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
         errs.append("tls_method must be cloudflare, manual, or customer")
 
     seats = str(draft.get("contracted_seats") or "").strip() or "PLACEHOLDER_UNSET"
-    if seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
-        errs.append("contracted_seats must be PLACEHOLDER_UNSET or a non-negative integer")
+    # "unlimited" is a third answer, not a blank one. An operator who does not
+    # know next year's headcount should not have to choose between refusing
+    # real joiners and inventing a figure nobody agreed to (asked 27 Sep 2026).
+    seats_unlimited = seats.lower() == "unlimited"
+    if seats_unlimited:
+        seats = "unlimited"
+    if not seats_unlimited and seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
+        errs.append(
+            "contracted_seats must be a non-negative integer, 'unlimited', "
+            "or PLACEHOLDER_UNSET"
+        )
 
     # An unset seat count is a commercial detail to settle later - unless a
     # directory is configured, and then it is the difference between a working
@@ -698,13 +707,13 @@ def validate_draft(draft: dict[str, Any], existing: dict[str, str]) -> list[str]
     # Three deploys ended that way (24-26 Sep 2026) before this was checked
     # anywhere. Caught here rather than only in the wizard, because the wizard
     # is not the only thing that writes a draft.
-    if draft.get("ad_auth_enabled") and seats == "PLACEHOLDER_UNSET":
+    if draft.get("ad_auth_enabled") and not seats_unlimited and seats == "PLACEHOLDER_UNSET":
         errs.append(
             "contracted_seats is required when Active Directory is enabled: "
             "with no seat count the directory sync creates nobody and no AD "
             "user can sign in"
         )
-    if draft.get("ad_auth_enabled") and seats.isdigit() and int(seats) == 0:
+    if draft.get("ad_auth_enabled") and not seats_unlimited and seats.isdigit() and int(seats) == 0:
         errs.append(
             "contracted_seats is 0 with Active Directory enabled: no mailbox "
             "can be created, so no AD user could sign in"
@@ -763,7 +772,9 @@ def merge_draft(draft: dict[str, Any], existing: dict[str, str]) -> dict[str, st
     le = str(draft.get("le_email") or "").strip()
     tls = str(draft.get("tls_method") or "").strip()
     seats = str(draft.get("contracted_seats") or "").strip() or "PLACEHOLDER_UNSET"
-    if seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
+    if seats.lower() == "unlimited":
+        seats = "unlimited"
+    elif seats != "PLACEHOLDER_UNSET" and not seats.isdigit():
         seats = "PLACEHOLDER_UNSET"
 
     topology = str(draft.get("topology") or "").strip()

@@ -164,8 +164,15 @@ async def cmd_apply_appliance_settings(
 
 async def _set_seats(args: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
     raw = str(args.get("seats") or "").strip()
-    if not raw.isdigit() or int(raw) < 1:
-        yield _emit("seats must be a positive integer", err=True)
+    # "unlimited" is a third answer the wizard can already give, so Settings
+    # must be able to give it too - otherwise the only way to remove a cap
+    # after deploy is to hand-edit /etc/kin-mail/config, which is exactly the
+    # terminal work this console exists to remove. A signed licence still wins
+    # below; this only decides what a human may type.
+    if raw.lower() == "unlimited":
+        raw = "unlimited"
+    elif not raw.isdigit() or int(raw) < 1:
+        yield _emit("seats must be a positive integer, or 'unlimited'", err=True)
         yield proto.event_done(2)
         return
     token = read_license_token()

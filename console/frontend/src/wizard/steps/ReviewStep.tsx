@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { seatsAreUnlimited } from "../seatRule";
 import { Button, Err, Lede, NavRow, SummaryTable, Title } from "../../ui";
 import { DnsRecordsPanel } from "../DnsRecordsPanel";
 import { useWizard } from "../WizardContext";
@@ -27,8 +28,9 @@ export default function ReviewStep() {
         : draft.tls_method === "customer"
           ? "Customer-provided"
           : "-";
-  const seatsLabel =
-    !draft.contracted_seats || draft.contracted_seats === "PLACEHOLDER_UNSET"
+  const seatsLabel = seatsAreUnlimited(draft.contracted_seats)
+    ? "No limit"
+    : !draft.contracted_seats || draft.contracted_seats === "PLACEHOLDER_UNSET"
       ? "Not set yet (optional)"
       : draft.contracted_seats;
 

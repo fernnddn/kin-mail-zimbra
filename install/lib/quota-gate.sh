@@ -104,6 +104,27 @@ kin_quota_gate_allow_new_mailbox() {
     return 2
   fi
 
+  # An operator who has decided there is no cap.
+  #
+  # Distinct from PLACEHOLDER_UNSET, and deliberately a word rather than a
+  # blank: "nobody has said yet" and "there is no limit" are opposite answers,
+  # and a gate that treats an empty field as permission is one typo away from
+  # having no gate. Asked for on 27 Sep 2026 - a customer whose headcount for
+  # next year is not known, where picking a number means either refusing real
+  # joiners or inventing a figure nobody agreed to.
+  case "$seats_raw" in
+    [Uu][Nn][Ll][Ii][Mm][Ii][Tt][Ee][Dd])
+      if ! used=$(kin_quota_count_active_mailboxes "$domain"); then
+        used=""
+      fi
+      KIN_QUOTA_USED="$used"
+      KIN_QUOTA_LIMIT="unlimited"
+      KIN_QUOTA_REMAINING="unlimited"
+      KIN_QUOTA_MESSAGE="no seat limit configured (CONTRACTED_SEATS=unlimited)${used:+ - ${used} active now} - new mailbox create allowed"
+      return 0
+      ;;
+  esac
+
   # Placeholder / unset - never invent a production seat count.
   if [ -z "$seats_raw" ] || [ "$seats_raw" = "PLACEHOLDER_UNSET" ]; then
     KIN_QUOTA_USED=""

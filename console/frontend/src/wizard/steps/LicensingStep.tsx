@@ -12,7 +12,7 @@ import {
   Title,
 } from "../../ui";
 import { useWizard } from "../WizardContext";
-import { normaliseSeats, seatCountError } from "../seatRule";
+import { normaliseSeats, seatCountError, seatsAreUnlimited } from "../seatRule";
 
 export default function LicensingStep() {
   const { draft, setLocal, save, error, saving } = useWizard();
@@ -45,8 +45,11 @@ export default function LicensingStep() {
     navigate("/wizard/firewall");
   }
 
+  const noLimit = seatsAreUnlimited(draft.contracted_seats);
   const displaySeats =
-    draft.contracted_seats === "PLACEHOLDER_UNSET" ? "" : draft.contracted_seats;
+    draft.contracted_seats === "PLACEHOLDER_UNSET" || noLimit
+      ? ""
+      : draft.contracted_seats;
 
   return (
     <>
@@ -72,15 +75,43 @@ export default function LicensingStep() {
         <Input
           id="contracted_seats"
           value={displaySeats}
+          disabled={noLimit}
           onChange={(e) => {
             setFieldErr("");
             setLocal({ contracted_seats: e.target.value || "PLACEHOLDER_UNSET" });
           }}
-          placeholder={adOn ? "e.g. 150" : "Leave blank to set later"}
+          placeholder={noLimit ? "No limit" : adOn ? "e.g. 150" : "Leave blank to set later"}
           inputMode="numeric"
         />
+        {/* A word the operator picks, never an inference from an empty box:
+            "nobody has said yet" and "there is no cap" are opposite answers,
+            and a gate that reads blank as permission is one typo from being no
+            gate. Asked for on 27 Sep 2026 by an operator who cannot know next
+            year's headcount and did not want to invent a figure. */}
+        <label
+          htmlFor="seats_unlimited"
+          style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.6rem" }}
+        >
+          <input
+            id="seats_unlimited"
+            type="checkbox"
+            checked={noLimit}
+            onChange={(e) => {
+              setFieldErr("");
+              setLocal({ contracted_seats: e.target.checked ? "unlimited" : "PLACEHOLDER_UNSET" });
+            }}
+          />
+          <span>No limit - do not cap how many mailboxes can be created</span>
+        </label>
         <Hint>
-          {adOn ? (
+          {noLimit ? (
+            <>
+              Nothing will stop mailboxes being created, including by the
+              directory sync. Worth knowing: the seat count is also what limits
+              the damage from a wrong AD search base, so check that it points at
+              the OU you meant.
+            </>
+          ) : adOn ? (
             <>
               Set it to at least the number of people in the directory who need a mailbox.
               Only limits creating <strong>new</strong> mailboxes - password resets and other

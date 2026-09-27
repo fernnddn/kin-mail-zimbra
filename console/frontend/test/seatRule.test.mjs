@@ -23,7 +23,7 @@ execFileSync(
    `--outfile=${bundle}`, "--log-level=error"],
   { stdio: "inherit" },
 );
-const { seatCountError, normaliseSeats } = await import(pathToFileURL(bundle).href);
+const { seatCountError, normaliseSeats, seatsAreUnlimited } = await import(pathToFileURL(bundle).href);
 rmSync(out, { recursive: true, force: true });
 
 let pass = 0;
@@ -67,6 +67,29 @@ chk("the offer to leave it blank only appears when that is true",
 // --- what gets stored ---------------------------------------------------------
 chk("blank is stored as the placeholder", normaliseSeats(""), "PLACEHOLDER_UNSET");
 chk("a number is stored trimmed", normaliseSeats("  150 "), "150");
+
+// --- "no limit" is a third answer, not a blank one ---------------------------
+// Asked for on 27 Sep 2026: a customer whose headcount for next year is not
+// known. Picking a number there means either refusing real joiners later or
+// inventing a figure nobody agreed to.
+//
+// It has to be a word the operator chooses. Reading an empty box as "no limit"
+// would put the gate one typo away from not existing - and empty already means
+// "nobody has said yet", which is the opposite answer.
+chk("unlimited satisfies the AD requirement", blocked("unlimited", true), false);
+chk("and is fine with no directory too", blocked("unlimited", false), false);
+chk("any case is accepted", [blocked("UNLIMITED", true), blocked("UnLiMiTeD", true)], [false, false]);
+chk("surrounding space does not break it", blocked("  unlimited  ", true), false);
+chk("it is stored as one spelling", normaliseSeats("  UNLIMITED "), "unlimited");
+chk("blank is still not unlimited", blocked("", true), true);
+chk("and the placeholder is still not unlimited", blocked("PLACEHOLDER_UNSET", true), true);
+chk("the flag says so", [seatsAreUnlimited("unlimited"), seatsAreUnlimited("UNLIMITED ")], [true, true]);
+chk("...and only for that word", [seatsAreUnlimited(""), seatsAreUnlimited("150"),
+  seatsAreUnlimited("PLACEHOLDER_UNSET"), seatsAreUnlimited("unlimited-ish")],
+  [false, false, false, false]);
+// Zero is still refused with AD on. "No cap" and "a cap of none" read alike in
+// English and are opposite in effect.
+chk("zero is still not a way to say unlimited", blocked("0", true), true);
 
 console.log(fail ? `\n${fail} failure(s)` : `\nALL OK (${pass} checks)`);
 process.exit(fail ? 1 : 0);

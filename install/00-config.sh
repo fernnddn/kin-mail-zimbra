@@ -609,9 +609,14 @@ run_wizard() {
     warn "Active Directory is enabled, so this is REQUIRED."
     info "Every person the directory sync brings across spends a seat. With no"
     info "count set, it creates nobody and no AD user can sign in."
+    info "Enter a number, or the word 'unlimited' if this customer has no cap."
     while :; do
-      ask CONTRACTED_SEATS "Contracted mailbox seats (required - AD is enabled)" ""
+      ask CONTRACTED_SEATS "Contracted mailbox seats, or 'unlimited' (required - AD is enabled)" ""
       case "$CONTRACTED_SEATS" in
+        [Uu][Nn][Ll][Ii][Mm][Ii][Tt][Ee][Dd])
+          CONTRACTED_SEATS=unlimited
+          break
+          ;;
         ''|PLACEHOLDER_UNSET)
           warn "This cannot be left blank while AD is enabled."
           ;;
@@ -629,8 +634,11 @@ run_wizard() {
   else
     info "Use PLACEHOLDER_UNSET until the operator confirms the real contracted count."
     info "Do not invent a production number here."
-    ask CONTRACTED_SEATS "Contracted mailbox seats" "PLACEHOLDER_UNSET"
+    ask CONTRACTED_SEATS "Contracted mailbox seats, or 'unlimited'" "PLACEHOLDER_UNSET"
     case "$CONTRACTED_SEATS" in
+      [Uu][Nn][Ll][Ii][Mm][Ii][Tt][Ee][Dd])
+        CONTRACTED_SEATS=unlimited
+        ;;
       ''|PLACEHOLDER_UNSET)
         CONTRACTED_SEATS=PLACEHOLDER_UNSET
         ;;
@@ -848,6 +856,12 @@ fi
 # rewritten from this value every time 15-ad-sync.sh --schedule runs.
 : "${AD_SYNC_INTERVAL:=2min}"
 : "${TLS_METHOD:=cloudflare}"
+# A whole number, the word "unlimited", or PLACEHOLDER_UNSET.
+#
+# "unlimited" is a decision and is written as one. Blank is not a synonym for
+# it: "nobody has said yet" and "there is no cap" are opposite answers, and a
+# gate that reads an empty field as permission is one typo from being no gate.
+#
 # PLACEHOLDER_UNSET until the operator confirms the real contracted seat count.
 # Empty legacy configs behave the same as PLACEHOLDER_UNSET (gate denies creates).
 : "${CONTRACTED_SEATS:=PLACEHOLDER_UNSET}"

@@ -392,6 +392,45 @@ else
   bad "the refusal is a rule with no reason attached"
 fi
 
+# --- "no limit" has to be sayable -------------------------------------------
+# Asked for on 27 Sep 2026: deploying for a customer whose headcount next year
+# is unknown, the operator had two choices - pick a number and refuse real
+# joiners later, or invent a figure nobody agreed to.
+#
+# It is a word, never an empty box. Blank already means "nobody has said yet",
+# the opposite answer, and a gate that reads emptiness as permission is one
+# typo away from not being a gate.
+Q="$(pwd)/quota-gate.sh"
+if grep -q '\[Uu\]\[Nn\]\[Ll\]\[Ii\]\[Mm\]\[Ii\]\[Tt\]\[Ee\]\[Dd\]' "$Q"; then
+  pass "the seat gate understands an explicit 'unlimited'"
+else
+  bad "there is no way to deploy without capping mailbox creation"
+fi
+if sed -n '/Uu\]\[Nn\]\[Ll\]/,/;;/p' "$Q" | grep -q 'return 0'; then
+  pass "and it allows the create rather than falling through"
+else
+  bad "'unlimited' is recognised but still refuses"
+fi
+# Blank must not become a synonym on the way past.
+if sed -n '/^kin_quota_gate_allow_new_mailbox() {/,/^}$/p' "$Q" |
+     grep -q 'seat limit not configured'; then
+  pass "an unset count still refuses, separately from unlimited"
+else
+  bad "unset and unlimited have been collapsed into one answer"
+fi
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'No seat limit'; then
+  pass "preflight accepts it instead of failing the deploy"
+else
+  bad "preflight would refuse a deployment the wizard allows"
+fi
+# It is a decision, so the transcript says what was decided rather than
+# printing nothing and moving on.
+if sed -n '/8. Directory sync has seats/,/^fi$/p' "$P" | grep -q 'That is a decision, not a default'; then
+  pass "and says what was chosen, with what it costs"
+else
+  bad "no limit passes silently, which reads like no answer"
+fi
+
 # --- one character in the directory address --------------------------------
 # AD_LDAP_URL="daps://<host>:636", one short of ldaps://, passed the wizard,
 # passed validate_draft, reached the Zimbra domain, and cost the whole feature

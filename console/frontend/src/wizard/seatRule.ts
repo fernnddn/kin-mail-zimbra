@@ -15,11 +15,23 @@
  * as its placeholder. Nothing on the page connected that choice to an empty
  * mailbox list forty minutes later.
  */
+/** True when the operator has said outright that there is no cap.
+ *
+ * A third answer, not a blank one. "Nobody has said yet" and "there is no
+ * limit" are opposite, and a gate that reads an empty field as permission is
+ * one typo away from being no gate - so this is a word the operator chooses,
+ * never an inference from emptiness.
+ */
+export function seatsAreUnlimited(seats: string): boolean {
+  return (seats || "").trim().toLowerCase() === "unlimited";
+}
+
 export function seatCountError(opts: {
   seats: string;
   adEnabled: boolean;
 }): string {
   const raw = (opts.seats || "").trim();
+  if (seatsAreUnlimited(raw)) return "";
   const unset = !raw || raw === "PLACEHOLDER_UNSET";
 
   if (opts.adEnabled && unset) {
@@ -42,5 +54,6 @@ export function seatCountError(opts: {
 /** What to store for a seat field that passed seatCountError. */
 export function normaliseSeats(seats: string): string {
   const raw = (seats || "").trim();
+  if (seatsAreUnlimited(raw)) return "unlimited";
   return !raw || raw === "PLACEHOLDER_UNSET" ? "PLACEHOLDER_UNSET" : raw;
 }
