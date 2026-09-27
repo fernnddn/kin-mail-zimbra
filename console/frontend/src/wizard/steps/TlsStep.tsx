@@ -94,6 +94,15 @@ export default function TlsStep() {
             <strong> Edit zone DNS</strong> template, and restrict it to this domain&apos;s zone
             only. Paste the token below; it is written to /etc/letsencrypt/cloudflare.ini as
             root-only and is never stored in the wizard or shown again.
+            <br />
+            <br />
+            Leave <strong>Client IP address filtering</strong> empty, and set{" "}
+            <strong>Token expiration</strong> to no expiration. The call to Cloudflare is made
+            by this server, not by your browser, so a filter set to the address you are reading
+            this from rejects every renewal - Cloudflare answers{" "}
+            <em>&ldquo;Cannot use the access token from location&rdquo;</em> and the certificate
+            quietly stops renewing. An expiry date does the same thing on a date nobody chose.
+            The token is already narrow: one zone, DNS records only.
           </Hint>
           <FieldLabel htmlFor="cftoken">Cloudflare API token</FieldLabel>
           <PasswordInput

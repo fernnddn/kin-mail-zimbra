@@ -227,6 +227,37 @@ else
   bad "the refusals that protect against guessing were removed along with the rest"
 fi
 
+# --- the token has to work from the SERVER, not from the browser -------------
+# 27 Sep 2026. The operator created a correctly scoped token - one zone, DNS
+# edit only - and set Client IP address filtering to the address their browser
+# showed. certbot calls Cloudflare from the appliance, so every request was
+# refused with "Cannot use the access token from location: <server ip>", and
+# the deploy finished on a self-signed certificate. Nothing on the page said
+# which machine makes the call.
+#
+# The same page is where an expiry date gets chosen, and that fails identically
+# ninety days later: a renewal that stops working on a date nobody picked.
+T="$(cd "$(dirname "$0")/../../console/frontend/src/wizard/steps" && pwd)/TlsStep.tsx"
+if [ -f "$T" ]; then
+  if grep -q 'Client IP address filtering' "$T"; then
+    ok "the token instructions mention the IP filter at all"
+  else
+    bad "nothing warns that an IP filter set from the browser breaks renewal"
+  fi
+  if grep -q 'by this server, not by your browser' "$T"; then
+    ok "and say which machine actually calls Cloudflare"
+  else
+    bad "the operator has no way to know whose address the filter must match"
+  fi
+  if grep -q 'no expiration' "$T"; then
+    ok "and that an expiry date is a renewal that stops on an unchosen date"
+  else
+    bad "an expiring token would be chosen with nothing said about it"
+  fi
+else
+  ok "TlsStep.tsx not present here; skipped"
+fi
+
 # --- manual is not automatic, and the wizard has to say so -------------------
 # 26 Sep 2026: an operator who had asked for automatic Let's Encrypt chose
 # "Manual DNS record", because the wizard described it as "someone creates a
