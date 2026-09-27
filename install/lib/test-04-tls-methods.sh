@@ -227,6 +227,71 @@ else
   bad "the refusals that protect against guessing were removed along with the rest"
 fi
 
+# --- rehearsing the chain without spending a real certificate ----------------
+# Five certificates per exact name per week. Proving this appliance works end
+# to end costs one; proving it again after every fix costs the rest, which is
+# what happened between 21 and 27 Sep 2026 - a lab that could not issue at all
+# for a day and a half while nothing was wrong with it.
+#
+# The staging CA has its own limits and the same protocol, so the whole chain -
+# DNS-01 through the same token, the deploy hook, zmcertmgr, the restart, the
+# renewal test - can be rehearsed for free.
+if grep -q 'acme-staging-v02.api.letsencrypt.org' "$STAGE04"; then
+  ok "the chain can be rehearsed against the staging CA"
+else
+  bad "every rehearsal spends one of five production certificates"
+fi
+# Per run, never from the wizard or the config: a staging certificate on a
+# production appliance is an outage that looks like a configuration.
+C0="$(cd "$(dirname "$0")/.." && pwd)/00-config.sh"
+if grep -q 'KIN_TLS_STAGING' "$C0"; then
+  bad "staging is reachable from the config file, so it can be left on"
+else
+  ok "staging is an explicit per-run override, not a setting"
+fi
+if grep -q 'KIN_TLS_STAGING:-0}" = "1"' "$STAGE04"; then
+  ok "and defaults to off when nobody asks for it"
+else
+  bad "the default is not pinned to off"
+fi
+# It must be impossible to mistake the result for the real thing, at both ends
+# of the run - the operator reads the end, and remembers the start.
+if grep -q 'NOT trusted by any browser or mail client' "$STAGE04"; then
+  ok "the transcript says up front what the certificate will be worth"
+else
+  bad "a staging run could be read as a successful production issuance"
+fi
+if grep -q 'This was a STAGING certificate' "$STAGE04"; then
+  ok "and says it again at the end, where the operator stops reading"
+else
+  bad "the warning scrolls away before the run finishes"
+fi
+# certbot skips issuance when a certificate already exists, so the rehearsal
+# lineage has to be removed or the real one never gets issued.
+if grep -q 'certbot delete --cert-name' "$STAGE04"; then
+  ok "and names the command that clears the way for the real certificate"
+else
+  bad "a rehearsal would silently block the production issuance that follows"
+fi
+# The guard that matters most: never replace a trusted certificate with one
+# nothing trusts.
+if grep -q 'refuse_staging_over_production' "$STAGE04"; then
+  ok "staging is refused on a host already holding a real certificate"
+else
+  bad "a live appliance could be downgraded to an untrusted certificate"
+fi
+G=$(sed -n '/^refuse_staging_over_production() {/,/^}$/p' "$STAGE04")
+if printf '%s' "$G" | grep -q 'STAGING'; then
+  ok "and a host already holding a staging one is allowed to repeat"
+else
+  bad "a second rehearsal would be refused as if it were production"
+fi
+if printf '%s' "$G" | grep -q 'exit 1'; then
+  ok "the refusal stops the run rather than warning and continuing"
+else
+  bad "the guard warns and then does it anyway"
+fi
+
 # --- a rate limit is not a misconfiguration ----------------------------------
 # Three deploys in a week ended on "Issuance failed. See /var/log/letsencrypt/"
 # when nothing was wrong: Let's Encrypt allows five certificates per exact name

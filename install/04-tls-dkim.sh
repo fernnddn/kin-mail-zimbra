@@ -330,6 +330,73 @@ verify_tls_ports() {
 #
 # Measured three times on the lab pair between 21 and 27 Sep 2026, twice after
 # the operator had already fixed everything that was genuinely wrong.
+# Rehearsing the whole certificate chain without spending a real one.
+#
+# Let's Encrypt allows five certificates per exact name per week. Proving this
+# appliance works end to end costs one of those five, and proving it after
+# every fix costs the rest - which is exactly what happened between 21 and
+# 27 Sep 2026, leaving a lab that could not issue at all for a day and a half
+# while nothing was actually wrong with it.
+#
+# Let's Encrypt runs a staging CA for this. Separate rate limits, the same ACME
+# protocol, the same DNS-01 challenge through the same Cloudflare token, the
+# same deploy hook, the same zmcertmgr, the same renewal test. The only
+# difference is that nothing trusts the issuer, so the certificate is useless
+# for real clients and perfect for a rehearsal.
+#
+# Turned on per run, never from the wizard and never from the config file:
+#
+#   sudo KIN_TLS_STAGING=1 ./04-tls-dkim.sh
+#
+# It must be impossible to reach by accident, and impossible to mistake for the
+# real thing afterwards, so the transcript says what it is at both ends.
+KIN_ACME_STAGING_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+
+acme_server_args() {
+  [ "${KIN_TLS_STAGING:-0}" = "1" ] || return 0
+  printf '%s\n%s' "--server" "$KIN_ACME_STAGING_URL"
+}
+
+staging_banner_before() {
+  [ "${KIN_TLS_STAGING:-0}" = "1" ] || return 0
+  echo
+  warn "KIN_TLS_STAGING=1 - issuing from the Let's Encrypt STAGING CA."
+  info "This exercises the whole chain (DNS-01 via Cloudflare, the deploy hook,"
+  info "zmcertmgr, the service restart and the renewal test) without spending"
+  info "one of the five production certificates this name gets per week."
+  warn "The certificate it produces is NOT trusted by any browser or mail client."
+  echo
+}
+
+staging_banner_after() {
+  [ "${KIN_TLS_STAGING:-0}" = "1" ] || return 0
+  echo
+  warn "This was a STAGING certificate. Clients will still show a warning."
+  info "The chain is proven; the certificate is not usable. Before issuing the"
+  info "real one, remove this lineage or certbot will see a certificate that"
+  info "already exists and skip issuance:"
+  info "  sudo certbot delete --cert-name ${MAIL_HOST}"
+  info "  sudo ./04-tls-dkim.sh"
+  echo
+}
+
+# A live appliance already serving a trusted certificate must never be talked
+# into replacing it with one nothing trusts.
+refuse_staging_over_production() {
+  [ "${KIN_TLS_STAGING:-0}" = "1" ] || return 0
+  [ -f "${LE_DIR}/cert.pem" ] || return 0
+  local issuer
+  issuer=$(openssl x509 -in "${LE_DIR}/cert.pem" -noout -issuer 2>/dev/null || true)
+  case "$issuer" in
+    *STAGING*|*"Fake LE"*|*"(STAGING)"*) return 0 ;;
+  esac
+  fail "Refusing: this host already holds a real certificate for ${MAIL_HOST}."
+  info "Issuing from staging would replace a certificate clients trust with one"
+  info "they do not. If that is genuinely wanted, delete the current lineage"
+  info "first:  sudo certbot delete --cert-name ${MAIL_HOST}"
+  exit 1
+}
+
 explain_issuance_failure() {
   local log=/var/log/letsencrypt/letsencrypt.log
   [ -r "$log" ] || return 0
@@ -409,11 +476,17 @@ tls_cloudflare() {
   fi
 
   say "3. Issuing certificate (DNS-01 Cloudflare)"
+  refuse_staging_over_production
+  staging_banner_before
   if [ -f "${LE_DIR}/cert.pem" ] && [ "${KIN_TLS_FORCE_RENEW:-0}" != "1" ]; then
     ok "Certificate already exists, issuance skipped"
   else
     CF_FORCE=()
     [ "${KIN_TLS_FORCE_RENEW:-0}" = "1" ] && CF_FORCE+=(--force-renewal)
+    ACME_SRV=()
+    if [ "${KIN_TLS_STAGING:-0}" = "1" ]; then
+      ACME_SRV=(--server "$KIN_ACME_STAGING_URL")
+    fi
     certbot certonly \
       --dns-cloudflare \
       --dns-cloudflare-credentials "$CF_CREDS" \
@@ -422,6 +495,7 @@ tls_cloudflare() {
       --preferred-chain "ISRG Root X1" \
       --agree-tos --no-eff-email -m "$LE_EMAIL" \
       --non-interactive \
+      ${ACME_SRV[@]+"${ACME_SRV[@]}"} \
       "${CF_FORCE[@]}" 2>&1 | tail -8
     if [ ! -f "${LE_DIR}/cert.pem" ]; then
       fail "Issuance failed. See /var/log/letsencrypt/"
@@ -441,6 +515,7 @@ tls_cloudflare() {
   certbot renew --dry-run 2>&1 | grep -qi "simulated renewal" \
     && ok "certbot renew --dry-run succeeded" \
     || warn "dry-run inconclusive, check /var/log/letsencrypt/"
+  staging_banner_after
 
   # A passing dry-run only proves the renewal WOULD work. Something has to
   # actually run it, and nothing here ever checked that. A masked or disabled
