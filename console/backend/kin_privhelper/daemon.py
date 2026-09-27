@@ -205,6 +205,17 @@ def _authorize(username: str, cmd: str, args: dict[str, Any] | None = None) -> t
             return None, "denied_setup_after_deploy"
         if cmd not in deploy_state.SETUP_ALLOWED_COMMANDS:
             return None, "denied_setup_cmd"
+        # Appliance settings are not a wizard step, with one exception: the
+        # Cloudflare API token, which step 4 of the wizard has to store before
+        # the deploy that would create the first account. Every other section
+        # stays out of reach of the anonymous identity - seats, AD, firewall
+        # and the licence are post-deploy administration, and widening this to
+        # the whole command to let one field through would be the kind of
+        # convenience that is only noticed when it is abused.
+        if cmd == proto.CMD_APPLY_APPLIANCE_SETTINGS:
+            section = str((args or {}).get("section") or "")
+            if section != "cloudflare_token":
+                return None, "denied_setup_settings_section"
         # Pre-deploy setup identity - ops-equivalent for wizard whitelist only.
         return rbac.ROLE_SUPER_ADMIN, None
 

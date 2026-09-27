@@ -1237,7 +1237,7 @@ class CloudflareTokenBody(BaseModel):
 @app.post("/api/settings/cloudflare-token")
 async def api_settings_cloudflare_token(
     body: CloudflareTokenBody,
-    user: ConsoleUser = Depends(auth.require_roles(ROLE_SUPER_ADMIN)),
+    actor: auth.WizardActor = Depends(auth.wizard_actor),
 ) -> dict[str, object]:
     """Store the Cloudflare API token so DNS-01 can issue and renew unattended.
 
@@ -1245,11 +1245,31 @@ async def api_settings_cloudflare_token(
     no terminal, which is every console-driven run - so without this the
     operator had to SSH in and hand-write /etc/letsencrypt/cloudflare.ini.
     The token is never written to the wizard draft and never echoed back.
+
+    This is reached from step 4 of the wizard, which runs anonymously until the
+    appliance is deployed - that is what "first boot, nobody has an account
+    yet" means. Requiring a Super Admin session here made the one TLS choice
+    that issues and renews unattended impossible to complete on a new box: the
+    operator picked Automatic, pasted a correct token, and got "Not
+    authenticated" (reported 27 Sep 2026, after the same operator had already
+    fallen back to Manual once and finished a deploy on a self-signed cert).
+
+    wizard_actor is the same door every other wizard step uses, and it closes
+    by itself: once mail is deployed, anonymous setup is refused and this needs
+    a real session again.
     """
-    _require_settings(user)
+    # A real session still has to carry the role. Only the pre-deploy anonymous
+    # setup identity skips this, and the privhelper checks it again anyway.
+    if not actor.anonymous_setup and not command_allowed(
+        actor.role, proto.CMD_APPLY_APPLIANCE_SETTINGS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=deny_message(actor.role, proto.CMD_APPLY_APPLIANCE_SETTINGS),
+        )
     result = await _collect_privhelper(
         proto.CMD_APPLY_APPLIANCE_SETTINGS,
-        user.username,
+        actor.username,
         args={"section": "cloudflare_token", "token": body.token},
     )
     if not result.get("ok"):

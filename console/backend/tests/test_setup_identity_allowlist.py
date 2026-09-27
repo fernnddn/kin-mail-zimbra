@@ -42,6 +42,14 @@ EXPECTED = {
     "store_provisioning_secrets",
     "run_ha_orchestration",
     "ha_disk_preflight",
+    # Added 27 Sep 2026, and narrower than it looks: daemon._authorize lets the
+    # setup identity through this command ONLY for section="cloudflare_token".
+    # Step 4 of the wizard has to store that token before the deploy that
+    # creates the first account, and requiring a login there made the one TLS
+    # method that renews unattended impossible to configure on a new box - the
+    # operator pasted a correct token and got "Not authenticated". Every other
+    # section stays refused; see TheSettingsSectionIsNarrowed below.
+    "apply_appliance_settings",
 }
 
 # Named individually so a failure says which door was opened and why it
@@ -49,7 +57,6 @@ EXPECTED = {
 MUST_NEVER_BE_ANONYMOUS = {
     proto.CMD_INSTALL_MONITORING: "installs packages and rewrites monitoring config",
     proto.CMD_MUTATE_CONSOLE_USERS: "creates or promotes console logins",
-    proto.CMD_APPLY_APPLIANCE_SETTINGS: "writes the Cloudflare API token to disk",
     proto.CMD_CREATE_MAILBOX: "creates mail accounts",
     proto.CMD_CLEAR_INITIAL_CONSOLE_PASSWORD: "removes the first-boot password gate",
     proto.CMD_GET_AUDIT_LOG: "reads the audit trail",
@@ -94,6 +101,54 @@ class TheAnonymousSetupAllowlist(unittest.TestCase):
                     proto.ALLOWED_COMMANDS,
                     "allowlisted for the wizard but not a registered command",
                 )
+
+
+class TheSettingsSectionIsNarrowed(unittest.TestCase):
+    """apply_appliance_settings is on the list; almost all of it still is not.
+
+    The wizard needs one field from this command - the Cloudflare API token -
+    and nothing else. Seats, AD, firewall and the licence are post-deploy
+    administration, and letting the whole command through to pass one field is
+    the kind of convenience that is only noticed when somebody abuses it.
+    """
+
+    def _authorize(self, section, *, deployed: bool = False):
+        args = {} if section is None else {"section": section}
+        with mock.patch.object(deploy_state, "is_mail_deployed", lambda: deployed):
+            return daemon._authorize(
+                deploy_state.SETUP_USERNAME, proto.CMD_APPLY_APPLIANCE_SETTINGS, args
+            )
+
+    def test_the_token_section_is_the_only_one_allowed(self) -> None:
+        role, deny = self._authorize("cloudflare_token")
+        self.assertIsNone(deny)
+        self.assertIsNotNone(role)
+
+    def test_the_other_sections_are_refused(self) -> None:
+        for section in ("seats", "ad", "firewall", "license", "branding", ""):
+            with self.subTest(section=section):
+                role, deny = self._authorize(section)
+                self.assertIsNone(role, f"anonymous setup could write {section!r}")
+                self.assertEqual(deny, "denied_setup_settings_section")
+
+    def test_no_section_at_all_is_refused(self) -> None:
+        # Absent must not read as "the harmless one" and fall through to a
+        # handler that picks its own default.
+        for args in (None, {}):
+            with self.subTest(args=args):
+                with mock.patch.object(deploy_state, "is_mail_deployed", lambda: False):
+                    role, deny = daemon._authorize(
+                        deploy_state.SETUP_USERNAME,
+                        proto.CMD_APPLY_APPLIANCE_SETTINGS,
+                        args,
+                    )
+                self.assertIsNone(role)
+                self.assertEqual(deny, "denied_setup_settings_section")
+
+    def test_the_window_still_closes_after_deploy(self) -> None:
+        role, deny = self._authorize("cloudflare_token", deployed=True)
+        self.assertIsNone(role)
+        self.assertEqual(deny, "denied_setup_after_deploy")
 
 
 class TheDaemonEnforcesItIndependentlyOfTheConsole(unittest.TestCase):

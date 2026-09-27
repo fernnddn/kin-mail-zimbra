@@ -148,6 +148,8 @@ SETUP_ALLOWED_COMMANDS = frozenset(
         "cancel_firewall_deadman",
         "get_deploy_log",
         "store_provisioning_secrets",
+        # Only the cloudflare_token section; daemon._authorize enforces that.
+        "apply_appliance_settings",
         "run_ha_orchestration",
         "ha_disk_preflight",
     }
