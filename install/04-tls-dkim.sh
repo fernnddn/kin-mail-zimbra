@@ -319,6 +319,55 @@ verify_tls_ports() {
   done
 }
 
+# Why did issuance fail, and is it even this deployment's fault?
+#
+# A rate limit is not a misconfiguration. It is Let's Encrypt saying "not from
+# this name again until <time>", it clears by itself, and nothing on the
+# appliance needs changing. Reported as a bare "Issuance failed" it reads like
+# the operator broke something, and the reasonable next move - try again - is
+# the one move that makes it worse: five failed validations an hour buys
+# another hour, with a different error that reads like a new problem.
+#
+# Measured three times on the lab pair between 21 and 27 Sep 2026, twice after
+# the operator had already fixed everything that was genuinely wrong.
+explain_issuance_failure() {
+  local log=/var/log/letsencrypt/letsencrypt.log
+  [ -r "$log" ] || return 0
+  local tail_txt
+  tail_txt=$(tail -n 200 "$log" 2>/dev/null) || return 0
+
+  case "$tail_txt" in
+    *rateLimited*|*"too many certificates"*)
+      local when
+      when=$(printf '%s' "$tail_txt" | grep -oE 'retry after [0-9T:. -]+UTC' | tail -1)
+      echo
+      warn "This is a Let's Encrypt RATE LIMIT, not a configuration problem."
+      info "Five certificates have already been issued for this exact name in"
+      info "the last 7 days. Nothing here needs fixing."
+      [ -n "$when" ] && info "Let's Encrypt said: ${when}"
+      info "Wait for that time, then run this stage again:"
+      info "  sudo ./04-tls-dkim.sh"
+      warn "Do NOT keep retrying. Failed attempts have their own hourly limit,"
+      warn "and hitting it produces a different error that looks like a new fault."
+      ;;
+    *"Cannot use the access token from location"*|*9109*)
+      echo
+      warn "Cloudflare refused the API token because of WHERE the call came from."
+      info "The call is made by this server, not by your browser. If the token has"
+      info "Client IP address filtering set, it must contain this address:"
+      info "  $(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || echo '<could not determine>')"
+      info "Simplest fix: remove the IP filter. The token is already limited to"
+      info "one zone and to DNS records only."
+      ;;
+    *"Invalid response from"*|*"DNS problem"*)
+      echo
+      warn "The DNS-01 challenge did not validate."
+      info "Check that the zone for ${MAIL_DOMAIN} is really served by Cloudflare,"
+      info "and that the token covers that zone."
+      ;;
+  esac
+}
+
 # --- Cloudflare DNS-01 -------------------------------------------------------
 tls_cloudflare() {
   # A config file written by an older build has no CF_* keys, and this script
@@ -374,7 +423,11 @@ tls_cloudflare() {
       --agree-tos --no-eff-email -m "$LE_EMAIL" \
       --non-interactive \
       "${CF_FORCE[@]}" 2>&1 | tail -8
-    [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/"; exit 1; }
+    if [ ! -f "${LE_DIR}/cert.pem" ]; then
+      fail "Issuance failed. See /var/log/letsencrypt/"
+      explain_issuance_failure
+      exit 1
+    fi
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
 
@@ -536,7 +589,11 @@ HOOK
           ${MANUAL_FORCE[@]+"${MANUAL_FORCE[@]}"}
       rm -f "$AUTH_HOOK" "$CLEAN_HOOK"
     fi
-    [ -f "${LE_DIR}/cert.pem" ] || { fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"; exit 1; }
+    if [ ! -f "${LE_DIR}/cert.pem" ]; then
+      fail "Issuance failed. See /var/log/letsencrypt/ and /tmp/kin-mail-acme-challenge.txt"
+      explain_issuance_failure
+      exit 1
+    fi
   fi
   openssl x509 -in "${LE_DIR}/cert.pem" -noout -subject -dates | sed 's/^/    /'
 

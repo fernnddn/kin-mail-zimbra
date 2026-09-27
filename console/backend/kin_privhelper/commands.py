@@ -710,7 +710,11 @@ async def cmd_run_full_install() -> AsyncIterator[dict[str, Any]]:
     script = resolve_kin_mail()
     header = (
         f"Running fixed script: {script} --full-install "
-        f"(KIN_CONSOLE_CONFIRMED=1; dead-man NOT auto-cancelled)\n"
+        # Not "dead-man NOT auto-cancelled" any more: the installer cancels it
+        # itself once it has proved the sources holding the current console and
+        # SSH sessions are still allowed by the new rules. Saying otherwise put
+        # a contradiction in the same transcript as the cancellation.
+        f"(KIN_CONSOLE_CONFIRMED=1; dead-man cancelled only if access is proved)\n"
         f"Following redacted installer log: {ZIMBRA_INSTALL_LOG}\n"
     )
     yield proto.event_stdout(header)

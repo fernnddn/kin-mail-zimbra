@@ -227,6 +227,54 @@ else
   bad "the refusals that protect against guessing were removed along with the rest"
 fi
 
+# --- a rate limit is not a misconfiguration ----------------------------------
+# Three deploys in a week ended on "Issuance failed. See /var/log/letsencrypt/"
+# when nothing was wrong: Let's Encrypt allows five certificates per exact name
+# per week, and the lab had spent them. Twice the operator had already fixed
+# everything that genuinely was wrong, and read this as still being broken.
+#
+# The reasonable next move after a bare failure is to try again, and that is
+# the one move that makes it worse - failed validations have their own hourly
+# limit, and hitting it produces a different error that reads like a new fault.
+if grep -q 'explain_issuance_failure' "$STAGE04"; then
+  ok "a failed issuance is explained rather than left as a log path"
+else
+  bad "every issuance failure reads the same, whoever's fault it is"
+fi
+X=$(sed -n '/^explain_issuance_failure() {/,/^}$/p' "$STAGE04")
+if printf '%s' "$X" | grep -q 'RATE LIMIT, not a configuration problem'; then
+  ok "a rate limit says outright that nothing here needs fixing"
+else
+  bad "a rate limit still reads as something the operator broke"
+fi
+if printf '%s' "$X" | grep -q 'retry after'; then
+  ok "and repeats the time the CA said the limit will clear"
+else
+  bad "the operator is told to wait without being told how long"
+fi
+if printf '%s' "$X" | grep -q 'Do NOT keep retrying'; then
+  ok "and warns against the retry that turns one wait into two"
+else
+  bad "nothing stops the natural reaction from making it worse"
+fi
+# The other two failures that actually happened get their own words.
+if printf '%s' "$X" | grep -q 'Cannot use the access token from location'; then
+  ok "a token refused by source address is named, with this host address"
+else
+  bad "the IP-filter failure is not distinguished from any other"
+fi
+if printf '%s' "$X" | grep -q 'DNS problem'; then
+  ok "a challenge that did not validate is distinguished too"
+else
+  bad "a DNS failure reads the same as a rate limit"
+fi
+# It must never be the thing that fails the stage.
+if printf '%s' "$X" | grep -qE '^\s*exit [1-9]'; then
+  bad "the explainer can itself abort the stage"
+else
+  ok "explaining a failure cannot become a second failure"
+fi
+
 # --- the token has to work from the SERVER, not from the browser -------------
 # 27 Sep 2026. The operator created a correctly scoped token - one zone, DNS
 # edit only - and set Client IP address filtering to the address their browser

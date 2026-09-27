@@ -318,9 +318,15 @@ run_firewall_stage_interactive() {
       KIN_UFW_DEADMAN_SEC=1800
       export KIN_UFW_DEADMAN_SEC
     fi
-    warn "Dead-man will be armed for ${KIN_UFW_DEADMAN_SEC}s. Console will NOT auto-cancel it."
-    info "After verifying SSH + cluster + mail, cancel via console or:"
-    info "  sudo ./10-host-firewall.sh cancel-deadman"
+    # What happens next depends on verify-access below, so do not promise
+    # either outcome here. This line used to say the console would never
+    # cancel it, and the same transcript then printed "Dead-man cancelled" a
+    # few lines later - a log that contradicts itself is worse than a quiet
+    # one, because the operator stops trusting the parts that are true
+    # (27 Sep 2026).
+    info "Dead-man armed for ${KIN_UFW_DEADMAN_SEC}s while access is checked."
+    info "If the check cannot prove your access, cancel it yourself after"
+    info "verifying SSH and mail:  sudo ./10-host-firewall.sh cancel-deadman"
   else
     if ! ask_yn "Apply host firewall (ufw) on THIS host now?" "$default_ans"; then
       warn "Skipped 10-host-firewall.sh - host perimeter unchanged"

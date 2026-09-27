@@ -83,9 +83,22 @@ type DeploySessionCtx = {
 
 const Ctx = createContext<DeploySessionCtx | null>(null);
 
-/** Real firewall dead-man signals, not the banner "dead-man NOT auto-cancelled". */
+/** Real firewall dead-man signals, not the run banner that merely mentions one.
+ *
+ * The banner names the dead man on every console deploy, so it has to be
+ * excluded or the Confirm-access button appears before anything is armed. Its
+ * wording changed on 27 Sep 2026 - the installer now cancels the timer itself
+ * once it has proved the operator's access - so both spellings are excluded:
+ * an appliance deployed before that change still streams the old one.
+ *
+ * And a transcript that says the dead man was CANCELLED must not be read as
+ * one saying it is armed.
+ */
 function looksLikeDeadmanArmed(chunk: string): boolean {
-  if (/dead-man NOT auto-cancelled/i.test(chunk)) return false;
+  if (/dead-man (NOT auto-cancelled|cancelled only if access is proved)/i.test(chunk)) {
+    return false;
+  }
+  if (/Dead-man cancelled/i.test(chunk)) return false;
   return /Leaving dead-man ARMED|dead-man timer|Dead-man is ARMED|DEADMAN_ARMED|cancel-deadman after/i.test(
     chunk,
   );

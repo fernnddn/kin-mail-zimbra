@@ -267,6 +267,49 @@ else
   bad "an operator could read this as having locked themselves out"
 fi
 
+# --- do not print an expectation that can never be met -----------------------
+# On a multi deployment the admin console is on the mailbox node, so the edge
+# has nothing on :7071 and never will. The lockdown stage printed
+#
+#   7071 /zimbraAdmin/ -> 000 (expect 200/302 - local)
+#
+# on a machine where everything was correct. It fails nothing, which is worse:
+# a line that looks like a fault and is not teaches the reader to skim the
+# block, and the two lines above it are the ones that matter (27 Sep 2026).
+A="$(cd "$(dirname "$0")/.." && pwd)/11-admin-path-lockdown.sh"
+blk=$(sed -n '/443 \/zimbraAdmin\/ →/,/^fi$/p' "$A")
+# The whole condition, not just the name: "declare -F kin_topology_is_split"
+# contains that string too, so a grep for the name alone stays green while the
+# call itself is disabled.
+if printf '%s' "$blk" | grep -q '&& kin_topology_is_split &&'; then
+  ok "the 7071 probe knows whether this machine is supposed to have one"
+else
+  bad "a split edge still probes a port that is on the other node"
+fi
+if printf '%s' "$blk" | grep -q 'kin_node_role.*= "edge"'; then
+  ok "and only skips it on the edge, not on the mailbox"
+else
+  bad "the mailbox would skip a check that applies to it"
+fi
+if printf '%s' "$blk" | grep -q 'not on this machine'; then
+  ok "and says where the admin console actually is"
+else
+  bad "the line is dropped without saying why, which is its own puzzle"
+fi
+# A single appliance does have :7071, and must still be checked.
+if printf '%s' "$blk" | grep -q 'expect 200/302 - local'; then
+  ok "a single-server appliance is still probed as before"
+else
+  bad "the check was removed for everyone instead of skipped where it is wrong"
+fi
+# The two that gate the stage must stay gated.
+if grep -q 'Admin path on :443 still reachable' "$A" &&
+   grep -q 'Webmail broken after lockdown' "$A"; then
+  ok "the checks that can fail the stage are untouched"
+else
+  bad "a gating check was lost"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1

@@ -156,10 +156,19 @@ fi
 
 code443=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1/zimbraAdmin/ || true)
 code_root=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1/ || true)
-code7071=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1:7071/zimbraAdmin/ || true)
 info "443 /zimbraAdmin/ → ${code443} (expect 404)"
 info "443 / → ${code_root} (expect 200)"
-info "7071 /zimbraAdmin/ → ${code7071} (expect 200/302 - local)"
+# On a multi deployment the admin console lives on the mailbox node, so there
+# is nothing on :7071 here and there never will be. Printing "expect 200/302"
+# and then 000 reads as a fault on a machine where everything is correct, which
+# is how an operator learns to skim past this block (27 Sep 2026).
+if declare -F kin_topology_is_split >/dev/null 2>&1 && kin_topology_is_split &&
+   [ "$(kin_node_role 2>/dev/null)" = "edge" ]; then
+  info "7071 - not on this machine; the admin console is on the mailbox node"
+else
+  code7071=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 https://127.0.0.1:7071/zimbraAdmin/ || true)
+  info "7071 /zimbraAdmin/ → ${code7071} (expect 200/302 - local)"
+fi
 
 if [ "$code443" != "404" ]; then
   fail "Admin path on :443 still reachable (got ${code443})"

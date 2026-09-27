@@ -257,6 +257,38 @@ else
   bad "the summary names a stage without naming the consequence"
 fi
 
+# --- the transcript must not contradict itself -------------------------------
+# 27 Sep 2026, in one deploy log:
+#
+#   [WARN] Dead-man will be armed for 1800s. Console will NOT auto-cancel it.
+#   ...
+#   [ OK ] Dead-man cancelled: the firewall stays on, and your access is proved.
+#
+# The second line is the one that is true. The first was written when nothing
+# cancelled it automatically, and was never updated. A log that contradicts
+# itself is worse than a quiet one: the operator stops trusting the parts that
+# are correct, and this transcript is what gets captured for handover.
+# Scoped to lines that actually print. The phrase survives in a comment above
+# the fix, quoting what it used to say, and a test that cannot tell a comment
+# from output would force that context to be deleted to stay green.
+if grep -E '^[[:space:]]*(warn|info|say|ok|fail|echo|printf)' "$K" |
+     grep -q 'Console will NOT auto-cancel'; then
+  bad "the transcript still promises no auto-cancel, then auto-cancels"
+else
+  pass "the armed message does not promise an outcome it cannot know yet"
+fi
+if grep -q 'Dead-man armed for .* while access is checked' "$K"; then
+  pass "and says what is about to decide it"
+else
+  bad "the operator is told a timer is armed with no idea what happens next"
+fi
+# The manual escape has to stay: verify-access can fail to prove anything.
+if sed -n '/Dead-man armed for/,+4p' "$K" | grep -q 'cancel-deadman'; then
+  pass "the manual cancel is still named for when the check cannot prove access"
+else
+  bad "an operator whose access could not be proved has no instruction"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All firewall-skip-reporting tests passed\n'
 else
