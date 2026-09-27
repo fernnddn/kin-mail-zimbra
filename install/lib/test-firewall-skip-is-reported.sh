@@ -184,6 +184,79 @@ else
   bad "the operator is not told what happens if they do nothing"
 fi
 
+# --- the dead man must not be a step nobody remembers ------------------------
+#
+# THE REPORT THIS EXISTS FOR
+#
+# 27 Sep 2026, on the cluster page of a finished deploy:
+#
+#   Edge: The host firewall is not running on this machine. Applying it arms a
+#   dead man that switches ufw off again after five minutes unless it is
+#   cancelled, and it was not.
+#
+# The cancel is a button on a page the operator is not looking at, during a
+# forty-minute install, with a five-minute timer. It was missed on every
+# console deploy this product has done, and each time the edge - the machine
+# facing the internet - finished with no host firewall.
+#
+# The dead man is not the problem; leaving it to be remembered is. It asks one
+# question, and that question can be answered without a human.
+F="$(pwd)/../10-host-firewall.sh"
+if grep -q '^  verify-access) verify_access ;;' "$F"; then
+  pass "the firewall stage can answer whether current sessions survive its rules"
+else
+  bad "nothing can check access, so cancelling is either manual or blind"
+fi
+V=$(sed -n '/^verify_access() {/,/^}$/p' "$F")
+# Loopback always reaches the port and an established session survives a new
+# rule. Neither says anything about the NEXT connection, which is the only
+# thing the dead man is protecting.
+if printf '%s' "$V" | grep -q 'fe80:' && printf '%s' "$V" | grep -q '127'; then
+  pass "loopback and link-local are not treated as evidence"
+else
+  bad "a connection that was never filtered would count as proof"
+fi
+if printf '%s' "$V" | grep -q 'ipaddress.ip_network'; then
+  pass "coverage is decided by real network arithmetic, not string matching"
+else
+  bad "a /24 rule would not be seen to cover an address inside it"
+fi
+# No sessions means nothing to prove - which is not the same as proven.
+if printf '%s' "$V" | grep -q 'There is nothing to prove access for'; then
+  pass "an empty session list leaves the dead man armed"
+else
+  bad "a machine nobody is connected to would have its dead man cancelled"
+fi
+if printf '%s' "$V" | grep -q 'would be shut out'; then
+  pass "an address that would be locked out is named, not just counted"
+else
+  bad "the operator is told it failed but not who loses access"
+fi
+
+# --- and the deploy has to use it -------------------------------------------
+if grep -q 'run_stage 10-host-firewall.sh verify-access' "$K"; then
+  pass "a console deploy checks access instead of leaving a button to press"
+else
+  bad "the console path still depends on the operator noticing in five minutes"
+fi
+if sed -n '/verify-access/,/^  fi$/p' "$K" | grep -q 'cancel-deadman'; then
+  pass "and cancels only after that check passes"
+else
+  bad "the cancel is not gated on the check"
+fi
+# Still reported when it could not be proven: a firewall about to switch itself
+# off is not a firewall, and the closing summary is the last place anyone reads.
+if grep -q 'FIREWALL_DEADMAN_ARMED' "$K"; then
+  pass "an armed dead man reaches the closing summary"
+else
+  bad "the transcript would end clean over a firewall that is about to revert"
+fi
+if grep -q 'dead-man armed: ufw switches off unless cancelled' "$K"; then
+  pass "and the summary line says what will happen, not just which stage"
+else
+  bad "the summary names a stage without naming the consequence"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All firewall-skip-reporting tests passed\n'
 else

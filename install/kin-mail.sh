@@ -249,8 +249,14 @@ ensure_admin_ips_for_firewall() {
 # transcript, is reported to the operator as a clean install.
 FIREWALL_STAGE_SKIPPED=0
 
+# Set when ufw was applied but the dead man could not be cancelled, so the
+# firewall will switch itself off again. Same reason as the flag above: it must
+# reach the closing summary, not sit twenty minutes up a scrolling transcript.
+FIREWALL_DEADMAN_ARMED=0
+
 run_firewall_stage_interactive() {
   FIREWALL_STAGE_SKIPPED=0
+  FIREWALL_DEADMAN_ARMED=0
   echo
   hr
   say "Host firewall (stage 10) - HIGH RISK"
@@ -333,12 +339,35 @@ run_firewall_stage_interactive() {
   info "sudo ./10-host-firewall.sh cancel-deadman"
 
   if [ "$CONSOLE_CONFIRMED" = "1" ]; then
-    # Dead-man stays armed in the background. Do not stall or fail Deploy
-    # waiting for cancel - the operator cancels from the console after SSH
-    # still works. If they never cancel, ufw reverts when the timer ends.
-    warn "Dead-man stays armed for ${KIN_UFW_DEADMAN_SEC:-300}s. Verify SSH, then cancel from the console (or sudo ./10-host-firewall.sh cancel-deadman)."
+    # A console deploy used to stop here and leave the cancel to a button.
+    #
+    # That button is on a page the operator is not looking at, during a
+    # forty-minute install, with a five-minute timer. It was missed on every
+    # console deploy this product has done, and the result each time was the
+    # edge - the machine facing the internet - running with no host firewall
+    # and one line on the cluster page to say so (27 Sep 2026).
+    #
+    # So ask the question the dead man is really asking: are the sources that
+    # hold the console and SSH sessions right now covered by the rules that are
+    # now in force? If they are, nothing is being taken on trust by cancelling,
+    # and the step that nobody remembers is not needed. If they are not - or if
+    # it cannot be established - the timer stays armed and does its job.
+    if run_stage 10-host-firewall.sh verify-access; then
+      if ./10-host-firewall.sh cancel-deadman; then
+        ok "Dead-man cancelled: the firewall stays on, and your access is proven."
+      else
+        warn "Access is proven but cancel-deadman failed - ufw will switch off"
+        warn "when the timer ends. Cancel from the console, or run:"
+        info "  sudo ./10-host-firewall.sh cancel-deadman"
+        FIREWALL_DEADMAN_ARMED=1
+      fi
+      return 0
+    fi
+    warn "Dead-man stays armed for ${KIN_UFW_DEADMAN_SEC:-300}s - access could not be proven."
     warn "If nobody cancels it, this machine ends up with NO host firewall, facing the internet."
-    info "Continuing the install; ufw will auto-disable if you do not cancel in time."
+    info "Check the addresses named above, then cancel from the console"
+    info "(or sudo ./10-host-firewall.sh cancel-deadman) once you are sure."
+    FIREWALL_DEADMAN_ARMED=1
     return 0
   fi
 
@@ -534,6 +563,12 @@ run_full_install() {
   # as needs-attention instead of proof that nothing does.
   if [ "${FIREWALL_STAGE_SKIPPED:-0}" -eq 1 ]; then
     soft_failed_stages+=("10-host-firewall.sh apply (skipped: host firewall not applied)")
+  fi
+  # Applied, but reverting shortly unless somebody cancels. A firewall that is
+  # about to switch itself off is not a firewall, and the summary is the last
+  # place the operator is still reading.
+  if [ "${FIREWALL_DEADMAN_ARMED:-0}" -eq 1 ]; then
+    soft_failed_stages+=("10-host-firewall.sh (dead-man armed: ufw switches off unless cancelled)")
   fi
 
   # 11 - admin path lockdown on public 443 (Primary / mounted Zimbra only)

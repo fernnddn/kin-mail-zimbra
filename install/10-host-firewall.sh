@@ -57,7 +57,7 @@ esac
 
 usage() {
   cat <<EOF
-Usage: sudo KIN_ADMIN_IPS='203.0.113.10' $0 apply|status|disable|cancel-deadman
+Usage: sudo KIN_ADMIN_IPS='203.0.113.10' $0 apply|status|disable|cancel-deadman|verify-access
 EOF
 }
 
@@ -439,6 +439,98 @@ apply_rules() {
   ok "ufw enabled with dead-man (${DEADMAN_SEC}s). Verify SSH + cluster, then cancel-deadman."
 }
 
+# Would the people using this machine right now still get back in?
+#
+# The dead man exists because a wrong rule locks the operator out of the only
+# machine they can fix it from. Its price is a step nobody remembers: on a
+# console deploy the firewall is applied, the timer is armed, the operator is
+# looking at a forty-minute install, and five minutes later ufw switches itself
+# off. The edge - the machine facing the internet - then runs with no host
+# firewall, and the only thing that says so is a line in the cluster page
+# (reported 27 Sep 2026, and on every console deploy before it).
+#
+# Asking the question the dead man is really asking makes the step unnecessary.
+# Not "can something reach this box" - loopback always can, and an established
+# connection survives a new rule, so neither proves anything about the NEXT
+# connection. The question is whether the sources currently holding console and
+# SSH sessions are covered by the allow rules that now exist.
+#
+# Exit 0 means every one of them is, and the dead man can be cancelled with
+# nothing taken on trust. Anything else leaves it armed.
+verify_access() {
+  local port="${CONSOLE_PORT:-${KIN_CONSOLE_PORT:-9443}}"
+  say "Checking that current sessions would still be allowed"
+
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "ss is not available; cannot see who is connected."
+    return 1
+  fi
+  if ! ufw status >/dev/null 2>&1; then
+    warn "ufw status is not readable; not cancelling anything."
+    return 1
+  fi
+
+  # Peers holding a session on the console port or SSH. Link-local and
+  # loopback are dropped: neither is filtered, so neither is evidence.
+  local peers
+  peers=$(ss -Htn state established "( sport = :${port} or sport = :22 )" 2>/dev/null |
+    awk '{print $NF}' | sed -e 's/^\[//' -e 's/\]:[0-9]*$//' -e 's/:[0-9]*$//' |
+    grep -vE '^(127\.|::1$|fe80:)' | sort -u)
+  if [ -z "$peers" ]; then
+    warn "Nobody is connected over SSH or the console from another machine."
+    info "There is nothing to prove access for, so the dead man stays armed."
+    return 1
+  fi
+
+  # Sources ufw now allows to reach the console port or SSH. "Anywhere" is
+  # ufw's own word for 0.0.0.0/0.
+  local allowed
+  allowed=$(ufw status 2>/dev/null |
+    awk -v p="$port" '$2 == "ALLOW" && ($1 ~ "^"p"(/tcp)?$" || $1 ~ "^22(/tcp)?$") {print $3}' |
+    sed 's/^Anywhere$/0.0.0.0\/0/' | grep -vE '\(v6\)' | sort -u)
+  if [ -z "$allowed" ]; then
+    warn "No allow rule found for port ${port} or 22 - that is a lockout."
+    return 1
+  fi
+
+  local uncovered
+  uncovered=$(python3 - "$peers" "$allowed" <<'PYEOF'
+import ipaddress, sys
+peers = sys.argv[1].split()
+nets = []
+for n in sys.argv[2].split():
+    try:
+        nets.append(ipaddress.ip_network(n, strict=False))
+    except ValueError:
+        continue
+out = []
+for p in peers:
+    try:
+        addr = ipaddress.ip_address(p)
+    except ValueError:
+        continue
+    if not any(addr in n for n in nets if n.version == addr.version):
+        out.append(p)
+print(" ".join(out))
+PYEOF
+  ) || {
+    warn "Could not evaluate the rules; leaving the dead man armed."
+    return 1
+  }
+
+  if [ -n "$(printf '%s' "$uncovered" | tr -d '[:space:]')" ]; then
+    fail "These addresses are using this machine now and would be shut out:"
+    printf '    %s\n' $uncovered
+    info "Add them to KIN_ADMIN_IPS and re-apply, or the dead man will"
+    info "switch ufw off and you keep your access that way."
+    return 1
+  fi
+
+  ok "Every current session is covered by the rules that are now in force:"
+  printf '    %s\n' $peers
+  return 0
+}
+
 case "${1:-}" in
   apply) apply_rules ;;
   status) ufw_status ;;
@@ -448,5 +540,6 @@ case "${1:-}" in
     ok "ufw disabled"
     ;;
   cancel-deadman) cancel_deadman ;;
+  verify-access) verify_access ;;
   *) usage; exit 2 ;;
 esac
