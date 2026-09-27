@@ -133,7 +133,47 @@ say "TLS method: ${TLS_METHOD}"
 # non-empty" check passes happily and the deploy hook then appends that HTML to
 # chain.pem. Fail on the status code, and then confirm the bytes really are the
 # certificate we asked for rather than trusting their length.
+# The staging CA does not chain to ISRG Root X1, and the hook appends whatever
+# is in this file to chain.pem before zmcertmgr verifies it. A rehearsal run
+# therefore failed at exactly the step it exists to test:
+#
+#   ERROR: Unable to validate certificate chain: CN=(STAGING) Yonder Yam Root YR
+#   error 2 at 2 depth lookup: unable to get issuer certificate
+#
+# Found on the first staging run, 28 Sep 2026 - which is what the rehearsal is
+# for. Production was never affected: a real certificate chains to ISRG Root X1
+# and the hook was right for it.
+#
+# All four published staging roots go in, rather than one guessed from the
+# error: Let's Encrypt rotates them, openssl only needs the right issuer to be
+# present, and a rehearsal that breaks whenever staging rotates is a rehearsal
+# nobody runs.
+install_staging_roots() {
+  mkdir -p "$ZS" /etc/letsencrypt/renewal-hooks/deploy
+  local dest="${ZS}/isrgrootx1.pem" tmp got=0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/kin-stg-roots.XXXXXX") || return 1
+  local n
+  for n in gen-y/root-yr gen-y/root-ye letsencrypt-stg-root-x1 letsencrypt-stg-root-x2; do
+    if curl -fsS -m 30 "https://letsencrypt.org/certs/staging/${n}.pem" >>"$tmp" 2>/dev/null; then
+      got=$((got + 1))
+    fi
+  done
+  if [ "$got" -eq 0 ]; then
+    rm -f "$tmp"
+    fail "Could not download any Let's Encrypt staging root."
+    info "A rehearsal needs them to verify the chain. Check outbound HTTPS."
+    exit 1
+  fi
+  install -m 0644 "$tmp" "$dest"
+  rm -f "$tmp"
+  ok "${got} staging roots installed (rehearsal chain)"
+}
+
 install_isrg_root() {
+  if [ "${KIN_TLS_STAGING:-0}" = "1" ]; then
+    install_staging_roots
+    return $?
+  fi
   mkdir -p "$ZS" /etc/letsencrypt/renewal-hooks/deploy
   local dest="${ZS}/isrgrootx1.pem" tmp
   local url="${KIN_ISRG_ROOT_URL:-https://letsencrypt.org/certs/isrgrootx1.pem}"

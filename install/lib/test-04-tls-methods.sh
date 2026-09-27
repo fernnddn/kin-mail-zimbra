@@ -292,6 +292,49 @@ else
   bad "the guard warns and then does it anyway"
 fi
 
+# --- the rehearsal has to reach the end, not just the hook -------------------
+# First staging run, 28 Sep 2026. Everything up to the deploy hook worked, then:
+#
+#   ERROR: Unable to validate certificate chain:
+#          CN=(STAGING) Yonder Yam Root YR
+#   error 2 at 2 depth lookup: unable to get issuer certificate
+#
+# The hook appends ISRG Root X1 to chain.pem before zmcertmgr verifies it, and
+# a staging certificate does not chain to that root. Production was never
+# affected - a real certificate does chain to it - but the rehearsal stopped at
+# exactly the step it exists to prove, which makes it worthless.
+if grep -q 'install_staging_roots' "$STAGE04"; then
+  ok "a rehearsal installs the roots its own certificate chains to"
+else
+  bad "the rehearsal fails at the hook, which is the step it exists to test"
+fi
+R=$(sed -n '/^install_staging_roots() {/,/^}$/p' "$STAGE04")
+if printf '%s' "$R" | grep -q 'certs/staging/'; then
+  ok "and takes them from Let'\''s Encrypt, not from anywhere else"
+else
+  bad "the staging roots come from an unstated source"
+fi
+# Let's Encrypt rotates staging roots. Guessing one from today's error message
+# gives a rehearsal that breaks silently the next time they rotate.
+if [ "$(printf '%s' "$R" | grep -oE 'root-[a-z0-9]+|letsencrypt-stg-root-x[0-9]' | sort -u | wc -l)" -ge 3 ]; then
+  ok "several roots are installed, so a rotation does not break the rehearsal"
+else
+  bad "only one staging root is fetched; a rotation breaks this silently"
+fi
+# It must not quietly carry on with no root at all - that lands back at the
+# same verify failure, one step later.
+if printf '%s' "$R" | grep -q 'Could not download any'; then
+  ok "no roots at all stops the run rather than failing later at verify"
+else
+  bad "a failed download would surface as a confusing chain error"
+fi
+# Production must keep using the real root, unconditionally.
+if sed -n '/^install_isrg_root() {/,/^}$/p' "$STAGE04" | grep -q 'KIN_TLS_STAGING:-0}" = "1"'; then
+  ok "and a production run is unaffected, still using ISRG Root X1"
+else
+  bad "the staging path could be taken on a production run"
+fi
+
 # --- a rate limit is not a misconfiguration ----------------------------------
 # Three deploys in a week ended on "Issuance failed. See /var/log/letsencrypt/"
 # when nothing was wrong: Let's Encrypt allows five certificates per exact name
