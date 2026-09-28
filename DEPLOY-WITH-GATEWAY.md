@@ -1,11 +1,22 @@
-# Deploying KIN Mail 0.1.10, with the mail gateway
+# Deploying KIN Mail, with the mail gateway
 
 The order matters. Follow it top to bottom.
 
+Written against **0.1.12**, and correct for 0.1.10 and 0.1.11 as well — the
+phases below have not changed between them. Phase 8, Active Directory, exists
+only from 0.1.12; skip it on anything earlier and on any deployment where
+people sign in with local Zimbra passwords.
+
 This replaces the "bootstrap and you're done" flow of 0.1.9. From 0.1.10 a
-deployment is **two machines**: the KIN Mail appliance, and a Proxmox Mail
-Gateway VM in front of it. The appliance is deployed first and works on its own
-from the start; the gateway is put in front afterwards, without downtime.
+deployment is at least **two machines**: the KIN Mail appliance, and a Proxmox
+Mail Gateway VM in front of it. The appliance is deployed first and works on its
+own from the start; the gateway is put in front afterwards, without downtime.
+
+From 0.1.11 the appliance itself may be **split** in two — an edge that faces
+the network and a mailbox machine that holds every message and no public
+address. Choose that on the wizard's Topology step; everything else below is
+the same, and the whole build still runs from the edge over SSH, so you never
+log in to the mailbox machine.
 
 If you only read one thing: **do not move the MX record until Verify is
 green.** Everything else here is recoverable. That one is not — mail addressed
@@ -19,6 +30,7 @@ does not work.
 | | |
 | --- | --- |
 | Appliance VM | Ubuntu 22.04, 4 vCPU / 8 GB / 100 GB, fixed IP |
+| Mailbox VM | split deployments only: same again. The edge needs no large mail volume; the mailbox gets the storage. |
 | Gateway VM | 2 vCPU / 4 GB / 32 GB, fixed IP, on the same network |
 | DNS control | you must be able to edit MX, A, TXT at the registrar |
 | PTR control | ask the ISP to point the gateway's IP at its hostname |
@@ -401,7 +413,95 @@ check the MX record has actually propagated.
 
 ---
 
+## Phase 8 — Active Directory (0.1.12 and later; skip if not used)
+
+Only if the customer signs in with their Windows accounts. Zimbra's AD mode
+checks the **password** and nothing else — it never reads the account list — so
+without this phase everybody who exists in AD still has no mailbox and cannot
+receive mail. That looks, on screen, exactly like "AD is not syncing".
+
+**8.1** On the wizard's **Hybrid sign-in** step, give the directory address as
+a full URL, including the scheme:
+
+```
+ldaps://dc.example.com:636        preferred
+ldap://dc.example.com:389         only if the directory offers nothing better
+```
+
+Type the whole thing and read it back. One deployment lost its entire directory
+feature to `daps://` — the leading `l` missing — which passed the wizard,
+reached the config, and surfaced forty minutes later as nobody being able to
+sign in. The wizard now refuses that, but read it anyway.
+
+**8.2** Use the name on the certificate, not the address. `ldaps://` verifies
+the domain controller's certificate, and a DC's certificate names its FQDN. An
+IP address still works — the appliance checks the certificate chain separately
+and warns instead of refusing — but a name gives you full verification for no
+extra work.
+
+**8.3** Deploy. The appliance imports the directory's CA, and **proves it signs
+what the domain controller actually presents** before trusting it. If the
+customer's CA is not published in AD — an offline root, or a PKI that is not
+AD CS — put the file on the appliance and set `AD_CA_FILE` in
+`/etc/kin-mail/config` to its path. PEM or DER, either is read.
+
+**8.4** Before creating anybody, see who would be created:
+
+```bash
+sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --dry-run
+```
+
+It lists every address it would make and changes nothing. Read that list with
+the customer. It is the cheapest possible moment to discover that the search
+base is one OU too high.
+
+**8.5** Set the seat count first. Mailbox seats in the console, or
+`CONTRACTED_SEATS` in `/etc/kin-mail/config`. Set it to `unlimited` only if the
+contract genuinely has no cap. If it is unset, the sync creates **nobody** and
+says so — which is the correct behaviour and is also, on a deployment day, a
+confusing five minutes if you were not expecting it.
+
+**8.6** Create them, and keep the list in step:
+
+```bash
+sudo /opt/kin-mail-deploy/install/15-ad-sync.sh --schedule
+```
+
+A large first sync takes a few seconds per mailbox; leave it running. After
+that a new joiner gets a mailbox within `AD_SYNC_INTERVAL` (two minutes by
+default). Check the timer with `systemctl status kin-ad-sync.timer` — not
+`list-timers`, which prints `n/a` for a monotonic timer and reads as dead.
+
+**8.7** Confirm two things by hand. Sign in to webmail as a real AD user with
+their AD password. Then open the Zimbra admin console and count the accounts
+against AD. The sync prints its own arithmetic — how many the directory has,
+how many already had a mailbox, how many were skipped as not being people —
+and those numbers must add up.
+
+> **It never deletes.** No sweep will ever remove, disable or rename a mailbox,
+> whatever the directory returns. A leaver's mailbox is removed deliberately, by
+> a person, in the console. Disabled AD accounts are simply not created, so they
+> do not consume a seat.
+
+---
+
 ## If something goes wrong
+
+**Nobody from Active Directory got a mailbox, and the deploy said it finished.**
+Almost always the seat count. Run `sudo ./15-ad-sync.sh` by hand and read the
+first refusal: "the contracted seat count is not set" is a field you skipped,
+"seat limit reached" is a contract that is full. They are different problems
+and the message says which.
+
+**"Refused to read the directory - its certificate could not be verified."**
+The appliance has no CA that signs what the domain controller presents.
+Re-run `14-ad-trust.sh`, or set `AD_CA_FILE` to the CA the directory really
+uses. Nothing was sent: the message says so on purpose, because the next
+question is always whether the service account's password went out.
+
+**AD sign-in fails and the password is definitely right.** An `ldaps://` bind
+that fails on the certificate is reported by Zimbra as a bad password. Check
+`14-ad-trust.sh` ran and succeeded before blaming the credentials.
 
 **Inbound mail is rejected with "blocked using zen.spamhaus.org".**
 A DNSBL is configured on the gateway and its answers cannot be trusted.

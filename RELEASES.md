@@ -8,6 +8,94 @@ real hardware, its faults have been found by someone using it rather than by
 its own tests, and those faults have been fixed. A green build is not a smoke
 test.
 
+By that standard: **0.1.9, 0.1.10 and 0.1.11 are mature. 0.1.12 is not yet** —
+it is complete in code and covered by tests, which is a different claim.
+
+---
+
+## 0.1.12 — the directory, and what the last release trusted too easily
+
+**Not yet proven on hardware.** Everything 0.1.11 does, plus Active Directory
+filling the address book rather than only checking passwords, and a set of
+fixes to things 0.1.11 shipped working but shipped unsafely. 0.1.11 remains
+the proven choice for a deployment that cannot go wrong today; this is the one
+to deploy when there is somebody watching it.
+
+### Active Directory now populates Zimbra, not only authenticates against it
+
+`zimbraAuthMech=ad` delegates the password check and nothing else. It never
+reads the account list, so a person who exists in AD had no mailbox and could
+not receive mail — which reads, to whoever is comparing the two screens, as
+"AD is not syncing". None of Zimbra's three auto-provisioning modes closes that
+gap on this FOSS build: `LAZY` waits for each person's first sign-in, `EAGER`
+has no thread in this build, and `MANUAL`'s directory search is absent from its
+`zmprov`.
+
+- **New joiners get a mailbox within minutes**, with their given name, surname
+  and display name, so the address book has people in it rather than addresses.
+- **It only ever creates.** Never deletes, disables or renames. A person
+  vanishing from an LDAP search — a filter typo, a moved OU, a directory that
+  answered slowly — must not be able to destroy their mail.
+- **Disabled AD accounts are excluded**, so a leaver does not hold a seat.
+- **The seat gate applies**, the same one the console and the CLI use. A
+  directory import is not a way around a contracted limit, and a seat count
+  nobody set is reported as that rather than as a full contract.
+- **The numbers add up.** Six in AD and five in Zimbra used to be the whole
+  story an operator got; accounts skipped by policy are now counted and named.
+- **The directory's CA is proved before it is trusted.** `14-ad-trust.sh`
+  reads it from AD, or from a file the customer supplies, and checks that it
+  actually signs the certificate the domain controller presents. A CA that
+  proves nothing is refused rather than imported.
+
+### What 0.1.11 trusted, and no longer does
+
+- **The sync no longer accepts any certificate.** It read the directory with
+  `LDAPTLS_REQCERT=allow` — "continue even if the certificate is wrong" — which
+  discarded the proof `14-ad-trust.sh` had just made and handed the service
+  account's password to whatever host answered the address. On a timer, that
+  window reopened every few minutes indefinitely. Full verification is not
+  simply switched on, because operators point this field at an address and a
+  domain controller's certificate names its FQDN; the chain is verified
+  separately instead, and a name mismatch is a warning that says which name to
+  use. Nothing verifiable at all is a refusal, and the refusal says that no
+  password was sent.
+- **The bind password is out of `ps`.** It was passed on the command line,
+  which puts it in `/proc/<pid>/cmdline` — readable by any local account for
+  the duration of every search.
+- **A first sync of a large directory is minutes, not most of an hour.** The
+  seat gate was re-asked before every account, and it answers by dumping every
+  attribute of every mailbox through a fresh JVM — work that grew with each
+  mailbox created.
+- **The admin console cannot be stopped by a file mode.** Its settings read
+  claimed to be best-effort and was not: an existing but unreadable
+  `console.env` took the console down at import, before logging existed.
+- **A customer's real domain-controller address is out of the repository.** The
+  gate that forbids real addresses covered the installer and not the console's
+  own source, which is the larger half.
+- **No stage can be forgotten again.** Four stages added over the last
+  fortnight were missing from the list that decides whether a clone is
+  complete, so an absent file would have surfaced as "nobody can sign in" forty
+  minutes later. That list is now checked against the stages on disk.
+
+### The console moves where movement means something
+
+The report was not that an animation was broken; it was that no difference
+could be felt. Four pages that render a *set* stood completely still. The
+deployment topology now arrives in the order mail travels and draws its
+connectors the same way — which is the question that page exists to answer —
+and the node cards, the account list and the disk targets arrive as the sets
+they are. Anyone whose system asks for reduced motion still gets none, and
+still gets a finished page rather than an empty one.
+
+### Known limits, unchanged from 0.1.11
+
+Every limit listed under 0.1.11 still applies. One gateway and one edge are
+each a single point of failure, and this is still not a cluster.
+
+**This has not completed a clean installation on real hardware.** The build is
+complete in code and covered by tests. Those are different statements, and the
+difference has cost this product two releases before.
+
 ---
 
 ## 0.1.11 — multi deployment
@@ -234,12 +322,18 @@ not for new installations.
 
 | | |
 | --- | --- |
-| Deployment that must not go wrong | **0.1.10**, proven on hardware |
-| Two machines, and the mailbox must be off the internet | **0.1.11**, split, watched |
-| One machine only | **0.1.10**, single server with the gateway |
+| Deployment that must not go wrong, one machine | **0.1.10**, proven on hardware |
+| Deployment that must not go wrong, two machines | **0.1.11**, proven on hardware |
+| Active Directory has to fill the address book | **0.1.12**, with somebody watching it |
+| One machine only | **0.1.10** or **0.1.11** — both build a single appliance |
 | Existing 0.1.9 estate, gateway planned | upgrade to 0.1.10, then link the gateway — no reinstall |
 | Existing 0.1.9 estate, no second VM available | stay on 0.1.9 |
 | Anything at 0.1.8 or below | upgrade |
 
 Going from 0.1.9 to 0.1.10 does not require a redeploy. The gateway is added in
 front of a running appliance, and mail keeps flowing while the link is applied.
+
+0.1.12 is the first release where a directory sync exists at all, so an estate
+that needs one has no proven option. Deploy it with somebody watching the first
+sweep, and run `15-ad-sync.sh --dry-run` before the real one: it lists exactly
+who would get a mailbox and changes nothing.

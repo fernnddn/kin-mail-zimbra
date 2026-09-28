@@ -2,10 +2,11 @@
 
 <p align="center">
   <a href=".github/workflows/checks.yml"><img src="https://github.com/azana-nisaa/kin-mail/actions/workflows/checks.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/release-0.1.10-1B4F72" alt="Release 0.1.10">
+  <img src="https://img.shields.io/badge/release-0.1.12-1B4F72" alt="Release 0.1.12">
   <img src="https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420?logo=ubuntu&logoColor=white" alt="Ubuntu 22.04 | 24.04">
   <img src="https://img.shields.io/badge/Zimbra-FOSS%2010-0A66C2" alt="Zimbra FOSS 10">
   <img src="https://img.shields.io/badge/gateway-Proxmox%20Mail%20Gateway-E57000?logo=proxmox&logoColor=white" alt="Proxmox Mail Gateway">
+  <img src="https://img.shields.io/badge/directory-Active%20Directory-00A4EF?logo=microsoft&logoColor=white" alt="Active Directory">
   <a href="NOTICE"><img src="https://img.shields.io/badge/License-Proprietary-lightgrey" alt="Proprietary"></a>
 </p>
 
@@ -58,8 +59,28 @@
   </td>
   <td valign="top">
     <h3>🧩 Fits real networks</h3>
-    NAT, split DNS, a single uplink or several, Active Directory for logins.
-    TLS by Cloudflare DNS-01, manual DNS-01, or your own certificate.
+    NAT, split DNS, a single uplink or several. TLS by Cloudflare DNS-01,
+    manual DNS-01, or your own certificate. One machine, or the mail store
+    held on a second one behind the edge.
+  </td>
+</tr>
+<tr>
+  <td valign="top">
+    <h3>👥 The directory stays in step</h3>
+    Active Directory checks the passwords and also fills the address book. New
+    people get a mailbox within minutes of being added in AD, with their real
+    name on it. Nobody is ever deleted by a search returning less than usual.
+  </td>
+  <td valign="top">
+    <h3>🔎 It refuses rather than guesses</h3>
+    A certificate that cannot be verified stops the directory read before the
+    password is sent. A seat count nobody set blocks mailbox creation instead
+    of inventing a number. Refusals say what to do next.
+  </td>
+  <td valign="top">
+    <h3>🖥️ Two machines, one console</h3>
+    On a split deployment the console shows both: their disks, their services,
+    the link between them, and which one a button is about to act on.
   </td>
 </tr>
 </table>
@@ -73,10 +94,15 @@
 | **Understand the gateway** | [`MAIL-GATEWAY.md`](MAIL-GATEWAY.md) &mdash; the design, and every tuned setting with its reason |
 | **Run it day to day** | the console: mailboxes, monitoring, reports, disks, certificates |
 
-> **Scope, stated plainly.** This release deploys **one mail server** with **one
-> gateway** in front of it. That is the product. A two-server high-availability
-> layout exists in the tree, is not offered in the console, and is not part of
-> what 0.1.10 promises.
+> **Scope, stated plainly.** This release deploys a mail system in one of two
+> shapes: **a single appliance** with a gateway in front of it, or a **split**
+> one where the edge faces the network and a second machine holds every
+> mailbox. Both are offered in the console and both are what 0.1.12 promises.
+>
+> A two-server *high-availability* layout - shared storage, automatic failover -
+> exists in the tree, is deliberately hidden in the console, and is **not**
+> part of this release. Split is not HA: it separates the mail store from the
+> perimeter, and it does not survive a machine being lost.
 
 ---
 
@@ -130,6 +156,45 @@ gateway *is* recorded, anything wrong with the link is a **failure**.
 
 ---
 
+## Active Directory
+
+Zimbra's `zimbraAuthMech=ad` delegates the **password check** to Active
+Directory. It does not read the directory's account list, so somebody who
+exists in AD has no mailbox and cannot receive mail — which reads to whoever is
+comparing the two screens as "AD is not syncing".
+
+Zimbra's own answer is auto-provisioning, and none of its three modes closes
+that gap on the FOSS build: `LAZY` creates the mailbox only at that person's
+first sign-in, `EAGER` has no thread in this build, and `MANUAL`'s directory
+search is absent from its `zmprov`. So the sweep is ours:
+
+| Stage | What it does |
+| --- | --- |
+| `14-ad-trust.sh` | Reads the directory's CA — from AD itself, or from a file you supply — and **proves it signs the certificate the domain controller presents** before importing it. A CA that proves nothing is refused. |
+| `15-ad-sync.sh` | Lists enabled people, compares against Zimbra, and creates what is missing. Names come across too, so the address book is not a list of addresses. Installs a timer so a new joiner has a mailbox within minutes. |
+
+Three properties worth stating, because each one is a decision:
+
+**It only ever creates.** Never deletes, disables or renames. A person
+vanishing from an LDAP search — a filter typo, a moved OU, a directory that
+answered slowly — must not be able to destroy their mail. Removing somebody
+stays a decision a person makes.
+
+**It counts seats the same way everything else does.** The sync uses the same
+gate as the console and the CLI, so a directory import is not a way around a
+contracted limit. If the seat count was never set, it says that rather than
+reporting a full contract.
+
+**The password is not given away to reach the directory.** The bind password
+goes in a file, never in a command line where `ps` would show it, and an
+`ldaps://` certificate is verified before the bind is sent. If nothing on the
+machine can verify it, the read is refused — and the refusal says that no
+password was sent.
+
+Disabled AD accounts are excluded, so a leaver does not consume a seat.
+
+---
+
 ## Quick start
 
 ```bash
@@ -142,11 +207,16 @@ If stage scripts are missing next to the bootstrap, it clones
 and continues from `install/` inside that clone. A full local clone uses the
 files already on disk.
 
-The menu runs the full pipeline
-(`01 → 02 → 03 → 04 → 06 → [07?] → 09 → [10 prompted] → 11 → 05`, stop on first
-failure) or one stage at a time. Z-Push (`07`) follows `ZPUSH_ENABLED` from the
-wizard. Host firewall (`10`) always asks before applying and keeps the
-dead-man's switch.
+The menu runs the full pipeline (`01 → 02 → 03 → 04 → 06 → [07?] → 09 →
+[10 prompted] → 11 → 12 → 05`, stop on first failure) or one stage at a time.
+Z-Push (`07`) follows `ZPUSH_ENABLED` from the wizard. Host firewall (`10`)
+always asks before applying and keeps the dead-man's switch. Directory trust
+and the directory sync (`14`, `15`) are run by `06` when AD is enabled, on the
+machine that holds the mail store.
+
+On a **split** deployment `kin-mail.sh` hands the build to
+`kin-mail-split.sh`, which prepares and installs both machines and then
+hardens and firewalls each of them, before the stages above continue here.
 
 ### Manual stage-by-stage
 
@@ -164,6 +234,9 @@ sudo ./08-create-mailbox.sh   # create mailbox (shared quota gate); optional
 sudo ./09-hardening.sh        # Part A + SMTP rate limits (fail2ban / lockout / TLS / …)
 sudo ./10-host-firewall.sh apply   # ufw - needs KIN_ADMIN_IPS; dead-man armed
 sudo ./11-admin-path-lockdown.sh   # block /zimbraAdmin on public :443
+sudo ./12-branding.sh         # KIN branding on the web and admin clients
+sudo ./15-ad-sync.sh --dry-run     # who WOULD get a mailbox; changes nothing
+sudo ./15-ad-sync.sh --schedule    # create them, and keep the list in step
 sudo ./05-healthcheck.sh      # acceptance tests and status summary
 ```
 
@@ -175,12 +248,16 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 
 | Path | Role |
 |---|---|
-| `install/` | Single-node Zimbra FOSS stages + `kin-mail.sh` bootstrap |
-| `console/` | Admin console skeleton (FastAPI + React); `console/bootstrap.sh` |
-| `ansible/` | Phase 2 HA port (qnetd / qdevice first) plus OS hardening (`playbooks/mail-os-hardening.yml`) |
-| `backup/` | Backup repository pull scripts (`kin-mail-backup.sh` / restore); Timeline 3.1-3.5 |
-| `HA-RUNBOOK.md` | Pacemaker / DRBD / SBD operator runbook |
-| `.github/workflows/` | Shell syntax, ShellCheck, hygiene gates |
+| `install/` | Every deployment stage, plus the `kin-mail.sh` bootstrap and the `kin-mail-split.sh` two-machine build |
+| `install/lib/` | Shared helpers, and a `test-*.sh` suite beside each one — all discovered by CI, never listed by hand |
+| `console/` | The admin console: FastAPI backend, React frontend, root privhelper; `console/bootstrap.sh` installs it |
+| `ansible/` | The HA port (qnetd / qdevice first) plus OS hardening (`playbooks/mail-os-hardening.yml`) |
+| `backup/` | Backup repository pull scripts (`kin-mail-backup.sh` / restore) |
+| `DEPLOY-WITH-GATEWAY.md` | The deployment runbook: empty VM to verified gateway |
+| `MAIL-GATEWAY.md` | Gateway design, every tuned setting, and the failure modes |
+| `RELEASES.md` | What each release is ready for, and what it is not |
+| `HA-RUNBOOK.md` | Pacemaker / DRBD / SBD operator runbook (not part of this release) |
+| `.github/workflows/` | Syntax, ShellCheck, test suites, hygiene and leaked-data gates |
 | `NOTICE` | Proprietary terms |
 
 ---
@@ -201,7 +278,14 @@ Reconfigure anytime: `sudo ./install/00-config.sh --reset` (also in the menu).
 | `install/09-hardening.sh` | Part A hardening (fail2ban, COS lockout, cleartext off, unattended-upgrades, TLS, SMTP client rate limits) | yes |
 | `install/10-host-firewall.sh` | ufw allowlist + mandatory dead-man's switch (`apply` / `cancel-deadman`) | yes* |
 | `install/11-admin-path-lockdown.sh` | Block `/zimbraAdmin` + `/service/admin` on public :443 (admin stays on :7071) | yes |
-| `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08 + future console) | - |
+| `install/12-branding.sh` | KIN branding on the web client and admin console | yes |
+| `install/12-node-metrics.sh` | Node exporter on each machine, bound to its own LAN address | yes |
+| `install/13-log-relay.sh` | Syslog receiver on the mailbox, so **Server Status** tells the truth about the edge. Split only | yes |
+| `install/14-ad-trust.sh` | Import the directory's CA and **prove** it signs what the DC presents, before trusting ldaps:// | yes |
+| `install/15-ad-sync.sh` | Create mailboxes for people in AD, on a timer. **Only ever creates** - never deletes, renames or disables | yes |
+| `install/kin-mail-split.sh` | Builds both machines of a split deployment, in the only order that works | yes |
+| `install/lib/quota-gate.sh` | Shared seat counter / allow-deny for **new creates only** (sourced by 08, 15 and the console) | - |
+| `install/lib/ad-ldap.sh` | Every directory read: password in a 0600 file, never argv; ldaps:// verified before the bind | - |
 | `install/05-healthcheck.sh` | Services, listeners, cert, DNS, DKIM, SMTP egress, **both auth paths**, mail flow, open-relay | yes |
 | `install/check-zimbra-foss-update.sh` | Compare configured FOSS build vs newest GitHub release | yes |
 
@@ -414,8 +498,16 @@ separate disk. The console says so before you confirm.
 
 ## Deliberately out of scope
 
-No host firewall is enabled; perimeter control belongs on the network device.
-If `ufw` is wanted, allow port 22 first so SSH is not cut.
+Everything here is something this product **cannot** do from inside the
+server, not something it has chosen not to try.
+
+> Earlier versions of this file said "no host firewall is enabled; perimeter
+> control belongs on the network device". That has not been true since
+> `10-host-firewall.sh` joined the pipeline: the appliance configures `ufw`
+> itself, asks before applying it, and arms a dead-man's switch so a rule that
+> locks the operator out reverts on its own. The line is corrected rather than
+> quietly deleted, because anyone who read it drew a conclusion about this
+> product's security posture that was wrong.
 
 These scripts cannot resolve anything outside the server:
 
@@ -428,19 +520,33 @@ These scripts cannot resolve anything outside the server:
 **Port 25 cannot be relocated.** Sending mail servers read the MX and connect
 to port 25. Other services may share the public address on different ports.
 
-Hybrid AD auth is covered by `06-hybrid-auth.sh`. For the active-passive
-Pacemaker / DRBD / SBD cluster, see [`HA-RUNBOOK.md`](HA-RUNBOOK.md). Backup
-repository automation remains out of scope here.
+**High availability is not in this release.** The active-passive Pacemaker /
+DRBD / SBD cluster exists in the tree and has its own runbook
+([`HA-RUNBOOK.md`](HA-RUNBOOK.md)), but it is hidden in the console and nothing
+here promises it. A split deployment separates the mail store from the
+perimeter; it does **not** survive losing a machine.
+
+Backup repository automation remains out of scope here; see `backup/`.
 
 ---
 
 ## Requirements
+
+**Per mail machine**
 
 - Ubuntu Server 22.04 or 24.04 LTS, 64-bit, minimal install
 - 2 vCPU / 8 GB RAM minimum; 4 vCPU / 16 GB recommended
 - 40 GB free minimum; a dedicated blank volume for `/opt/zimbra` is preferred,
   and is picked up automatically when exactly one unpartitioned spare is present
 - A static LAN address, and root or sudo access
+
+**For a split deployment**, two such machines: the edge needs no large mail
+volume, and the mailbox gets the storage. They must reach each other on the
+LAN; the mailbox needs no public address at all, and is firewalled to accept
+only the edge.
+
+**For the gateway**, a Proxmox Mail Gateway VM reachable on TCP 8006 and 25,
+and its `root@pam` password. It does not need to be on the same host.
 
 ---
 
