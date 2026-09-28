@@ -95,12 +95,95 @@ cancel_deadman() {
     info "No live dead-man process (cancel flag set)"
   fi
   rm -f /run/kin-ufw-deadman.pid
+  # The disk half goes too, or the next reboot would disable a firewall the
+  # operator has just confirmed works.
+  disarm_deadman_across_reboot
   # Keep cancel flag so a racing sleep loop still sees it before disable.
+}
+
+# The dead-man that survives the operator's own panic.
+#
+# start_deadman below is a userspace loop holding its state in /run, which is
+# tmpfs. The reaction to being locked out of a machine is to reboot it from the
+# hypervisor - and that kills the loop and clears /run, leaving ufw enabled
+# (which is what ufw is for) with exactly the rules that locked the operator
+# out, and nothing left to undo them. The safety net was gone at the one moment
+# it was needed.
+#
+# So arming also writes a marker on real disk and a boot unit that reads it.
+# The unit can only ever DISABLE ufw, never add a rule, so the worst thing it
+# can do is leave the machine in the state it was in before stage 10 ran -
+# which is what the dead-man does anyway.
+#
+# Two things keep it from becoming a firewall that quietly switches itself off
+# forever: cancel-deadman removes the marker, and the unit ignores a marker
+# older than KIN_UFW_DEADMAN_BOOT_WINDOW (24h). A marker left behind by some
+# failure months ago must not disable a customer's firewall on an unrelated
+# reboot.
+DEADMAN_MARKER=/etc/kin-mail/ufw-deadman-armed
+DEADMAN_BOOT_UNIT=/etc/systemd/system/kin-ufw-deadman-boot.service
+DEADMAN_BOOT_WINDOW="${KIN_UFW_DEADMAN_BOOT_WINDOW:-86400}"
+
+arm_deadman_across_reboot() {
+  mkdir -p /etc/kin-mail
+  printf 'armed=%s\nwindow=%s\n' "$(date +%s)" "$DEADMAN_BOOT_WINDOW" >"$DEADMAN_MARKER"
+  chmod 0600 "$DEADMAN_MARKER"
+
+  cat >"$DEADMAN_BOOT_UNIT" <<UNIT
+[Unit]
+Description=KIN Mail - disable ufw if a firewall apply was never confirmed
+# Written by install/10-host-firewall.sh. Removed by 'cancel-deadman'.
+ConditionPathExists=${DEADMAN_MARKER}
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target ufw.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/bin/bash -c '\
+  m=${DEADMAN_MARKER}; \
+  armed=\$(sed -n "s/^armed=//p" "\$m" 2>/dev/null); \
+  win=\$(sed -n "s/^window=//p" "\$m" 2>/dev/null); \
+  : "\${win:=${DEADMAN_BOOT_WINDOW}}"; \
+  now=\$(date +%s); \
+  if [ -z "\$armed" ] || [ \$((now - armed)) -gt "\$win" ]; then \
+    logger -t kin-ufw "boot dead-man: marker is stale or unreadable; leaving ufw alone"; \
+    rm -f "\$m"; exit 0; \
+  fi; \
+  logger -t kin-ufw "boot dead-man: a firewall apply was never confirmed; disabling ufw"; \
+  ufw --force disable || true; \
+  rm -f "\$m"'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod 0644 "$DEADMAN_BOOT_UNIT"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl enable kin-ufw-deadman-boot.service >/dev/null 2>&1; then
+    ok "Dead-man survives a reboot: ufw is disabled on next boot unless confirmed"
+  else
+    # Not fatal. The in-memory dead-man still covers the ordinary case, and
+    # saying nothing would be worse than saying which half is missing.
+    warn "Could not enable the boot-time dead-man; only the ${DEADMAN_SEC}s timer protects this apply."
+    info "Do not reboot before running: $0 cancel-deadman"
+  fi
+}
+
+disarm_deadman_across_reboot() {
+  rm -f "$DEADMAN_MARKER"
+  if [ -f "$DEADMAN_BOOT_UNIT" ]; then
+    systemctl disable kin-ufw-deadman-boot.service >/dev/null 2>&1 || true
+    rm -f "$DEADMAN_BOOT_UNIT"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
 }
 
 start_deadman() {
   cancel_deadman
   rm -f /run/kin-ufw-deadman.cancel
+  arm_deadman_across_reboot
   : >/var/log/kin-ufw-deadman.log
   # Flag-polled loop (not one long sleep): cancel file stops disable even if kill races.
   # setsid → dedicated process group for reliable kill.
