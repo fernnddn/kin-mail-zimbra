@@ -221,12 +221,23 @@ kin_ad_ldapsearch() {
   # swept it - on disk, in any filesystem backup taken meanwhile. /run is
   # memory-backed and gone at reboot, and 0700 keeps it out of everyone else's
   # reach even while it is there.
-  local pwdir="${TMPDIR:-/tmp}" pwfile rc
-  if [ -d /run ] && mkdir -p /run/kin-mail 2>/dev/null &&
-    chmod 0700 /run/kin-mail 2>/dev/null; then
-    pwdir=/run/kin-mail
+  #
+  # A DIRECTORY OF OUR OWN, and never /run/kin-mail.
+  #
+  # The first version of this used /run/kin-mail and chmod 0700 on it. That
+  # directory belongs to the privhelper: it holds privhelper.sock and the
+  # daemon sets it root:kin-console 0750 precisely so the console, which runs
+  # as kin-console, can traverse it and reach the socket. Taking the group bit
+  # off cut the console off from its own helper, and every privileged action -
+  # Deploy, the mail gateway, all of it - failed with a permission error
+  # (reported from live QA, 28 Sep 2026). Nothing here has any business
+  # touching a path another component owns.
+  local pwdir="${TMPDIR:-/tmp}" rundir=/run/kin-ad-bind pwfile rc
+  if [ -d /run ] && mkdir -p "$rundir" 2>/dev/null &&
+    chmod 0700 "$rundir" 2>/dev/null; then
+    pwdir="$rundir"
     # An earlier run that was killed mid-search. Best effort, never fatal.
-    find /run/kin-mail -maxdepth 1 -name 'kin-ad-bind.*' -mmin +10 -delete 2>/dev/null || true
+    find "$rundir" -maxdepth 1 -name 'kin-ad-bind.*' -mmin +10 -delete 2>/dev/null || true
   fi
   pwfile=$(mktemp "${pwdir}/kin-ad-bind.XXXXXX") || return 1
   chmod 0600 "$pwfile" 2>/dev/null || {
