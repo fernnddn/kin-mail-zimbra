@@ -472,12 +472,106 @@ else
   fail "privhelper.sock missing"
   exit 1
 fi
+
+# CAN THE CONSOLE ACTUALLY REACH IT? Asked as the console user, by connecting.
+#
+# Everything above is asked as root, and root ignores permissions. The socket
+# existing, and its own mode, say nothing about whether kin-console can
+# TRAVERSE /run/kin-mail to get there - and that directory is the whole story:
+# it is root:kin-console 0750 so the group bit is the console's only way in.
+#
+# On 28 September 2026 an installer helper ran chmod 0700 on that directory for
+# a temporary file of its own. Every check here passed, every unit test passed
+# and CI was green, while the console could do nothing at all: Deploy, Install
+# monitoring and the mail gateway page each answered "cannot connect to
+# privhelper: [Errno 13] Permission denied". Nothing on this machine noticed,
+# because nothing had ever asked the question as the user who has to.
+#
+# A connect() as the service account is the only check that could have caught
+# it, and it is two lines.
+sock_probe='import socket,sys
+s=socket.socket(socket.AF_UNIX)
+s.settimeout(5)
+try:
+    s.connect("/run/kin-mail/privhelper.sock")
+except OSError as exc:
+    print(exc)
+    sys.exit(1)
+finally:
+    s.close()'
+if su -s /bin/bash -c "python3 -c '${sock_probe}'" "$SVC_USER" >/tmp/kin-sock-probe.$$ 2>&1; then
+  ok "${SVC_USER} can connect to the privhelper socket"
+  rm -f "/tmp/kin-sock-probe.$$"
+else
+  fail "${SVC_USER} CANNOT connect to the privhelper socket."
+  sed 's/^/    /' "/tmp/kin-sock-probe.$$" 2>/dev/null || true
+  rm -f "/tmp/kin-sock-probe.$$"
+  info "The console will answer 'cannot connect to privhelper' on every"
+  info "privileged action - Deploy, Install monitoring, the mail gateway."
+  info "Almost always the DIRECTORY, not the socket:"
+  info "  $(stat -c '%a %U:%G  %n' /run/kin-mail 2>/dev/null || echo '/run/kin-mail missing')"
+  info "  $(stat -c '%a %U:%G  %n' /run/kin-mail/privhelper.sock 2>/dev/null || true)"
+  info "It must be root:${SVC_USER} 0750. Restarting privhelperd resets it:"
+  info "  systemctl restart kin-mail-privhelperd"
+  exit 1
+fi
 # Confirm audit log not writable by kin-console
 if su -s /bin/bash -c "test -w ${LOG_ROOT}/privhelper.log" "$SVC_USER" 2>/dev/null; then
   fail "privhelper.log is writable by ${SVC_USER} - abort"
   exit 1
 fi
 ok "privhelper.log not writable by ${SVC_USER}"
+
+# --- every path the console needs, asked as the console -----------------------
+#
+# The same lesson as the socket probe above, applied to the rest of them. Each
+# of these is checked elsewhere as root, and root ignores permissions, so a
+# directory mode that locks the service account out reads as healthy from here.
+#
+# The failure mode is always the same shape and always confusing: the install
+# reports success, the service starts, and the console is broken in a way that
+# points at the feature the operator happened to press rather than at a mode
+# bit. Asking as the user who has to do the work is the only check that sees it.
+#
+# access(2) via `test`, not a read: this must not open or lock anything a
+# running console is using.
+say "9b. Paths the console depends on, checked as ${SVC_USER}"
+probe_fail=0
+probe_path() { # <test-flag> <path> <what breaks if it is wrong>
+  local flag="$1" path="$2" why="$3"
+  if [ ! -e "$path" ]; then
+    # Absent is not this check's business - several of these are created on
+    # first use. Only an unreachable one is.
+    info "not present yet: ${path}"
+    return 0
+  fi
+  if su -s /bin/bash -c "test ${flag} '${path}'" "$SVC_USER" 2>/dev/null; then
+    ok "${path}"
+  else
+    fail "${SVC_USER} cannot reach ${path}"
+    info "  $(stat -c '%a %U:%G' "$path" 2>/dev/null || echo 'unreadable')  ${path}"
+    info "  ${why}"
+    probe_fail=1
+  fi
+}
+probe_path -x "$(dirname "${DATA_ROOT}")"      "the console cannot reach its own state directory at all"
+probe_path -w "${DATA_ROOT}"                   "sessions, users and the admin hash cannot be written"
+probe_path -r "${DATA_ROOT}/users.json"        "nobody can sign in"
+probe_path -r "${DATA_ROOT}/session.secret"    "every session is rejected"
+probe_path -r "${DATA_ROOT}/tls/cert.pem"      "the console cannot serve HTTPS"
+probe_path -r "${DATA_ROOT}/tls/key.pem"       "the console cannot serve HTTPS"
+probe_path -x "${OPT_ROOT}/frontend/dist"      "the browser gets a blank page"
+probe_path -x /run/kin-mail                    "every privileged action fails with 'cannot connect to privhelper'"
+if [ -f /etc/kin-mail-console/console.env ]; then
+  probe_path -r /etc/kin-mail-console/console.env \
+    "settings fall back to defaults; systemd still passes them via EnvironmentFile"
+fi
+if [ "$probe_fail" -ne 0 ]; then
+  fail "The console would start and then fail at whatever the operator pressed first."
+  info "Fix the modes above and re-run this script."
+  exit 1
+fi
+ok "Every path the console needs is reachable by ${SVC_USER}"
 
 say "10. systemd - console (unprivileged)"
 install -m 644 "$UNIT_SRC" "$UNIT_DST"

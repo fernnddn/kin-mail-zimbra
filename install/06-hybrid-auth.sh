@@ -278,9 +278,28 @@ if [ "$AD_APPLY_OK" -eq 1 ]; then
   case "${AD_LDAP_URL}" in
     ldaps://*)
       if [ -x ./14-ad-trust.sh ]; then
-        ./14-ad-trust.sh || warn "Certificate trust step did not complete; AD sign-in may fail on TLS."
+        if ! ./14-ad-trust.sh; then
+          # Said in full, here, because the consequence arrives later and looks
+          # like something else entirely. An operator who reads one line of
+          # "may fail on TLS" in the middle of a forty-minute log finds out
+          # what it meant when the admin console is empty and nobody can sign
+          # in - and goes looking at authentication, not at a certificate.
+          warn "The directory's certificate could not be verified."
+          info "Two things follow from this, and both are worth knowing now:"
+          info "  - AD sign-in may fail on TLS, which Zimbra reports as a bad password."
+          info "  - The directory sync below will REFUSE rather than send the"
+          info "    service account's password to a server it cannot identify."
+          info "Fix it with either of these, then re-run this stage:"
+          info "  sudo ${KIN_MAIL_INSTALL_DIR}/14-ad-trust.sh"
+          info "  or set AD_CA_FILE in ${CONF_FILE} to the CA the directory uses"
+          info "    (PEM or DER; the domain controller's own self-signed"
+          info "     certificate is accepted, and is still proved against what"
+          info "     the server actually presents)"
+        fi
       else
         warn "14-ad-trust.sh is missing; the directory certificate was not checked."
+        info "The directory sync will refuse for the same reason. Re-run the"
+        info "installer so the clone is complete, then re-run this stage."
       fi
       ;;
   esac
