@@ -150,23 +150,43 @@ say "TLS method: ${TLS_METHOD}"
 # nobody runs.
 install_staging_roots() {
   mkdir -p "$ZS" /etc/letsencrypt/renewal-hooks/deploy
-  local dest="${ZS}/isrgrootx1.pem" tmp got=0
+  local dest="${ZS}/isrgrootx1.pem" tmp one got=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/kin-stg-roots.XXXXXX") || return 1
+  one=$(mktemp "${TMPDIR:-/tmp}/kin-stg-one.XXXXXX") || {
+    rm -f "$tmp"
+    return 1
+  }
   local n
   for n in gen-y/root-yr gen-y/root-ye letsencrypt-stg-root-x1 letsencrypt-stg-root-x2; do
-    if curl -fsS -m 30 "https://letsencrypt.org/certs/staging/${n}.pem" >>"$tmp" 2>/dev/null; then
-      got=$((got + 1))
+    curl -fsS -m 30 -o "$one" "https://letsencrypt.org/certs/staging/${n}.pem" 2>/dev/null || continue
+    # Each one is downloaded on its own and parsed before it is kept.
+    #
+    # -f already rejects an HTTP error, but a captive portal, a proxy or a CDN
+    # error page answers 200 with HTML - and the paragraph above this function
+    # says the bytes get confirmed, which is the protection install_isrg_root
+    # has and this function did not. Concatenating first and checking nothing
+    # meant one 200-with-HTML put markup into the chain the deploy hook builds,
+    # and zmcertmgr then failed on the chain: the same class of unexplained
+    # rehearsal failure this mode exists to eliminate, one layer further in.
+    if ! openssl x509 -in "$one" -noout -subject >/dev/null 2>&1; then
+      warn "What letsencrypt.org returned for ${n} is not a certificate; skipping it."
+      continue
     fi
+    cat "$one" >>"$tmp"
+    got=$((got + 1))
   done
+  rm -f "$one"
   if [ "$got" -eq 0 ]; then
     rm -f "$tmp"
     fail "Could not download any Let's Encrypt staging root."
-    info "A rehearsal needs them to verify the chain. Check outbound HTTPS."
+    info "A rehearsal needs them to verify the chain that staging issues."
+    info "Check outbound HTTPS - a proxy answering instead of Let's Encrypt looks"
+    info "exactly like this."
     exit 1
   fi
   install -m 0644 "$tmp" "$dest"
   rm -f "$tmp"
-  ok "${got} staging roots installed (rehearsal chain)"
+  ok "${got} staging roots installed and parsed (rehearsal chain)"
 }
 
 install_isrg_root() {

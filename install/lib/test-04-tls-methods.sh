@@ -455,6 +455,45 @@ else
   bad "the 25-minute wait is a surprise that arrives at stage 4"
 fi
 
+# --- the rehearsal's own chain is verified, not just downloaded -------------
+#
+# install_isrg_root learned this the hard way and says so at length: an HTTP
+# error page answers 200, Let's Encrypt's 404 is 23KB of HTML, and a file that
+# is merely non-empty passes. The deploy hook then appends whatever is in that
+# file to chain.pem and zmcertmgr fails on the chain - an unexplained failure
+# in exactly the mode that exists to find unexplained failures.
+#
+# install_staging_roots inherited the paragraph and not the check: it counted
+# successful downloads and installed the concatenation unparsed.
+fn=$(awk '/^install_staging_roots\(\) \{/,/^\}/' "$STAGE")
+if [ -z "$fn" ]; then
+  bad "install_staging_roots is not defined in stage 04"
+else
+  if printf '%s' "$fn" | grep -q 'openssl x509'; then
+    ok "each staging root is parsed before it is kept"
+  else
+    bad "staging roots are installed without checking they are certificates"
+  fi
+  # Per file, not after concatenating: one good root plus one HTML page still
+  # puts markup in the chain.
+  if printf '%s' "$fn" | grep -qE 'curl .*-o "\$one"|-o "\$one"'; then
+    ok "roots are downloaded one at a time so a bad one can be dropped"
+  else
+    bad "roots are concatenated as they download, so one bad answer poisons the file"
+  fi
+  if printf '%s' "$fn" | grep -q 'curl -fsS'; then
+    ok "curl still fails on an HTTP error status"
+  else
+    bad "curl -f is missing, so an error page counts as a download"
+  fi
+  # A rehearsal with no usable root must stop, not proceed to fail obscurely.
+  if printf '%s' "$fn" | grep -q 'exit 1'; then
+    ok "no usable staging root stops the stage"
+  else
+    bad "a rehearsal with no staging root carries on"
+  fi
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL OK ($pass checks)"; exit 0; fi
 echo "FAILED $fail test(s) ($pass ok)"; exit 1

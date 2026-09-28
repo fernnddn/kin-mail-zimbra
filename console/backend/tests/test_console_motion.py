@@ -172,3 +172,11 @@ class ThePagesThatShouldMoveDo(unittest.TestCase):
         # A dashed line means "not present". Restoring the attribute afterwards
         # is what keeps it from being silently promoted to a solid link.
         self.assertIn("dashed", body)
+        # The selector is explicit. "every line and path under here" would draw
+        # the first icon anybody adds to a node card, and the cause would look
+        # like their component rather than this hook.
+        self.assertIn("[data-draw]", body)
+        self.assertTrue(
+            'data-draw=""' in src,
+            "the topology's connectors are not marked, so useDrawIn finds nothing",
+        )

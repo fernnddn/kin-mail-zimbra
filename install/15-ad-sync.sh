@@ -113,6 +113,17 @@ if [ "$_rc" -eq 77 ]; then
   fail "Refused to read the directory - its certificate could not be verified."
   info "$KIN_AD_TLS_NOTE"
   info "No password was sent. Nothing on the directory side was contacted with credentials."
+  info ""
+  info "Three ways forward, in order of preference:"
+  info "  1. sudo ${KIN_MAIL_INSTALL_DIR}/14-ad-trust.sh"
+  info "     Reads the CA out of Active Directory and proves it before trusting it."
+  info "  2. Put the CA on this machine and set AD_CA_FILE in ${CONF_FILE}"
+  info "     PEM or DER; a self-signed certificate from the domain controller"
+  info "     itself is accepted, and is still proved against what it presents."
+  info "  3. Change AD_LDAP_URL to ldap://<host>:389 in ${CONF_FILE}"
+  info "     This works, and it sends the service account's password across the"
+  info "     network unencrypted. It is offered because it is honest about that,"
+  info "     where accepting any certificate was not."
   exit 1
 fi
 if [ "$_rc" -ne 0 ]; then

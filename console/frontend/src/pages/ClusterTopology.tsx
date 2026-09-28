@@ -301,6 +301,7 @@ export function MultiDeploymentTopology({ deployment }: { deployment: Deployment
                 {link ? (
                   <>
                     <line
+                      data-draw=""
                       x1={380}
                       y1={lineFrom}
                       x2={380}

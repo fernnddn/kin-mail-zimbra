@@ -190,14 +190,20 @@ export function drawPath(path: SVGGeometryElement | null, on: boolean) {
  * where it stopped is reading in the same direction. Static lines say only
  * that two boxes are near each other.
  *
- * getTotalLength() is on SVGGeometryElement, so <line> works as well as
- * <path>; anything else under the ref is left alone.
+ * Only elements carrying `data-draw` are touched, and getTotalLength() is on
+ * SVGGeometryElement, so <line> works as well as <path>.
  */
 export function useDrawIn(ref: React.RefObject<Element | null>, key: unknown = null) {
   useEffect(() => {
     const host = ref.current;
     if (!host) return;
-    const lines = Array.from(host.querySelectorAll("line, path")) as SVGGeometryElement[];
+    // Marked explicitly, not "every line and path under here". The node cards
+    // in the topology happen to contain no icon paths today; the first one
+    // somebody adds would otherwise draw itself on every render, and the cause
+    // would be this selector rather than their component.
+    const lines = Array.from(
+      host.querySelectorAll("[data-draw]"),
+    ) as SVGGeometryElement[];
     if (!lines.length) return;
     if (prefersReducedMotion()) {
       // Drawn instantly rather than skipped: a connector left at dashoffset
