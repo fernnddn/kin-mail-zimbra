@@ -2,10 +2,10 @@
 
 The order matters. Follow it top to bottom.
 
-Written against **0.1.12**, and correct for 0.1.10 and 0.1.11 as well — the
-phases below have not changed between them. Phase 8, Active Directory, exists
-only from 0.1.12; skip it on anything earlier and on any deployment where
-people sign in with local Zimbra passwords.
+Written against **0.1.11**, and correct for 0.1.10 as well — the phases below
+have not changed between them. Phase 8, Active Directory, exists only from
+0.1.11; skip it on 0.1.10 and earlier, and on any deployment where people sign
+in with local Zimbra passwords.
 
 This replaces the "bootstrap and you're done" flow of 0.1.9. From 0.1.10 a
 deployment is at least **two machines**: the KIN Mail appliance, and a Proxmox
@@ -413,7 +413,7 @@ check the MX record has actually propagated.
 
 ---
 
-## Phase 8 — Active Directory (0.1.12 and later; skip if not used)
+## Phase 8 — Active Directory (0.1.11 and later; skip if not used)
 
 Only if the customer signs in with their Windows accounts. Zimbra's AD mode
 checks the **password** and nothing else — it never reads the account list — so

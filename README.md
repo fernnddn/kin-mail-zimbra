@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href=".github/workflows/checks.yml"><img src="https://github.com/azana-nisaa/kin-mail/actions/workflows/checks.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/release-0.1.12-1B4F72" alt="Release 0.1.12">
+  <img src="https://img.shields.io/badge/release-0.1.11-1B4F72" alt="Release 0.1.11">
   <img src="https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420?logo=ubuntu&logoColor=white" alt="Ubuntu 22.04 | 24.04">
   <img src="https://img.shields.io/badge/Zimbra-FOSS%2010-0A66C2" alt="Zimbra FOSS 10">
   <img src="https://img.shields.io/badge/gateway-Proxmox%20Mail%20Gateway-E57000?logo=proxmox&logoColor=white" alt="Proxmox Mail Gateway">
@@ -97,7 +97,7 @@
 > **Scope, stated plainly.** This release deploys a mail system in one of two
 > shapes: **a single appliance** with a gateway in front of it, or a **split**
 > one where the edge faces the network and a second machine holds every
-> mailbox. Both are offered in the console and both are what 0.1.12 promises.
+> mailbox. Both are offered in the console and both are what 0.1.11 promises.
 >
 > A two-server *high-availability* layout - shared storage, automatic failover -
 > exists in the tree, is deliberately hidden in the console, and is **not**
