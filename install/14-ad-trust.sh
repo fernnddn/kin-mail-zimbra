@@ -146,7 +146,16 @@ CA_B64=$(kin_ad_ldapsearch "ldaps://${AD_HOST}:${AD_PORT}" \
   "$AD_SEARCH_BIND_DN" "$AD_SEARCH_BIND_PASSWORD" bootstrap \
   -LLL -b "$CA_BASE" "(objectClass=certificationAuthority)" cACertificate 2>/dev/null |
   sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g' |
-  sed -n 's/^cACertificate:: //p' | head -1)
+  sed -n 's/^cACertificate:: //p')
+  # Every CA the directory publishes, not just the first.
+  #
+  # An estate can have more than one - a CA that was replaced, a second AD CS
+  # install, a cross-forest trust - and the directory keeps publishing all of
+  # them. Taking the first meant that when it was not the one that signed the
+  # domain controller's certificate, the stage refused with the right CA
+  # sitting in the same result it had just read (production, 28 Sep 2026).
+  CA_ALL="$CA_B64"
+  CA_B64=$(printf '%s\n' "$CA_ALL" | head -1)
 
 if [ -z "$CA_B64" ]; then
   fail "Could not read the CA certificate out of the directory."
@@ -172,8 +181,34 @@ fi
 # Checked, not assumed. A CA read from a connection that was not validated
 # proves nothing on its own; this is what makes it evidence.
 say "3. Does it sign the certificate the directory presents?"
-if echo | timeout 15 openssl s_client -connect "${AD_HOST}:${AD_PORT}" -CAfile "$TMP_CA" 2>/dev/null |
-  grep -q "Verify return code: 0"; then
+_ca_verifies() {
+  echo | timeout 15 openssl s_client -connect "${AD_HOST}:${AD_PORT}" -CAfile "$1" 2>/dev/null |
+    grep -q "Verify return code: 0"
+}
+# With AD_CA_FILE there is one candidate and the operator chose it. Without one,
+# try every CA the directory published until one proves what is presented.
+_matched=0
+if _ca_verifies "$TMP_CA"; then
+  _matched=1
+elif [ -z "${AD_CA_FILE:-}" ] && [ -n "${CA_ALL:-}" ]; then
+  _try=$(mktemp "${TMPDIR:-/tmp}/kin-ad-ca-try.XXXXXX")
+  while IFS= read -r _b64; do
+    [ -n "$_b64" ] || continue
+    printf '%s' "$_b64" | base64 -d 2>/dev/null |
+      openssl x509 -inform DER -out "$_try" 2>/dev/null || continue
+    if _ca_verifies "$_try"; then
+      cat "$_try" >"$TMP_CA"
+      _matched=1
+      info "A different CA in the directory is the one that signs it:"
+      openssl x509 -in "$TMP_CA" -noout -subject 2>/dev/null | sed 's/^/           /'
+      break
+    fi
+  done <<KINEOF
+$(printf '%s\n' "$CA_ALL")
+KINEOF
+  rm -f "$_try"
+fi
+if [ "$_matched" -eq 1 ]; then
   ok "Yes - this CA verifies the directory's certificate."
 else
   fail "It does not. Refusing to import a certificate that proves nothing."

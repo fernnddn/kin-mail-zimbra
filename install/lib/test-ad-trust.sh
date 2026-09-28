@@ -79,7 +79,10 @@ fi
 # It is fetched over a connection that was deliberately not validated, so on its
 # own it proves nothing. What makes it evidence is that it verifies the
 # certificate the server actually presents.
-if grep -q -- '-CAfile "\$TMP_CA"' "$S"; then
+# The check moved into _ca_verifies when several CAs became possible, so the
+# candidate arrives as "$1" rather than "$TMP_CA". What must not change is that
+# a CA is proved against the live connection before anything is imported.
+if sed -n '/^_ca_verifies() {/,/^}$/p' "$S" | grep -q -- '-CAfile "\$1"'; then
   pass "checks the CA actually signs what the directory presents"
 else
   bad "imports a certificate without proving it belongs to this directory"
@@ -169,6 +172,47 @@ if grep -q ': "${AD_CA_FILE:=}"' "$C"; then
   pass "AD_CA_FILE defaults to empty, so nothing changes for anyone else"
 else
   bad "AD_CA_FILE has no default"
+fi
+
+# --- more than one CA in the directory ---------------------------------------
+# Production, 28 Sep 2026. The estate had two CAs published - an older one and
+# the AD CS install made that week. The directory returned the older one first,
+# it did not sign the domain controller's certificate, and the stage refused:
+#
+#   [ OK ] Read: CN = harbarindo-HBW19ADD01-CA
+#   [FAIL] It does not. Refusing to import a certificate that proves nothing.
+#
+# The CA that did sign it was in the same LDAP result, one entry further down.
+# An operator who had just installed AD CS, watched its CA appear, and been
+# told it proves nothing has no way to guess that.
+if grep -q 'CA_ALL' "$S"; then
+  pass "every CA the directory publishes is kept, not just the first"
+else
+  bad "only the first CA is read; a second one is never tried"
+fi
+if sed -n '/^_ca_verifies() {/,/^fi$/p' "$S" | grep -q 'while IFS= read -r _b64'; then
+  pass "and each one is tried against what the directory actually presents"
+else
+  bad "the extra CAs are collected and never used"
+fi
+if grep -q 'A different CA in the directory is the one that signs it' "$S"; then
+  pass "and the one that worked is named, so the estate can be tidied later"
+else
+  bad "a CA is trusted without saying which of several it was"
+fi
+# The operator-supplied file is a deliberate choice and must not be silently
+# replaced by something else found in the directory.
+if sed -n '/^_ca_verifies() {/,/^fi$/p' "$S" | grep -q 'z "${AD_CA_FILE:-}"'; then
+  pass "AD_CA_FILE still wins - a chosen CA is not second-guessed"
+else
+  bad "an explicitly supplied CA could be swapped for another"
+fi
+# Trying several must not weaken the proof: each candidate is still checked
+# against the live certificate, never trusted for being present.
+if sed -n '/^_ca_verifies() {/,/^}$/p' "$S" | grep -q 'Verify return code: 0'; then
+  pass "each candidate is proved against the server, not trusted on sight"
+else
+  bad "a CA from the directory could be imported without proving anything"
 fi
 
 if [ "$fails" -eq 0 ]; then
