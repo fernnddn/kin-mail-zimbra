@@ -2561,20 +2561,38 @@ export default function ClusterPage() {
                 </>
               ) : (
                 <>
-              <ClusterTopology
-                topology="2vm"
-                mailNodes={mailTopo}
-                drbdUpToDate={cluster.drbd_uptodate}
-                drbdSyncPercent={cluster.drbd_sync_percent}
-                observability={cluster.observability || { status: "absent" }}
-                ops={ops}
-                busy={busy || probing}
-                onAdd={() => {
-                  setAddErr("");
-                  setAddOpen(true);
-                }}
-                onRemove={openObsRemove}
-              />
+              {/* The HA pair diagram - DRBD, qdevice, SBD - renders ONLY for a
+                  deployment that really is one. It used to be the else branch,
+                  so it was also what an UNKNOWN topology fell through to: when
+                  the console could not read the cluster state, the overview
+                  card said "Single server" and the diagram underneath it drew
+                  DRBD between mail nodes with qdevice and SBD. Two answers on
+                  one screen, and the wrong one describes a layout this release
+                  does not ship. Seen in QA on 28 September 2026, when the
+                  console could not reach the privhelper at all. */}
+              {topology === "2vm" ? (
+                <ClusterTopology
+                  topology="2vm"
+                  mailNodes={mailTopo}
+                  drbdUpToDate={cluster.drbd_uptodate}
+                  drbdSyncPercent={cluster.drbd_sync_percent}
+                  observability={cluster.observability || { status: "absent" }}
+                  ops={ops}
+                  busy={busy || probing}
+                  onAdd={() => {
+                    setAddErr("");
+                    setAddOpen(true);
+                  }}
+                  onRemove={openObsRemove}
+                />
+              ) : (
+                <Hint>
+                  The deployment layout could not be read from this appliance, so
+                  no topology is drawn. That is usually the console being unable
+                  to reach its helper rather than anything wrong with mail - check
+                  the Activity log. Nothing is assumed in the meantime.
+                </Hint>
+              )}
               {displayNodes.length === 2 ? (
                 <Pair ref={nodeCardsRef}>
                   {nodeCard(displayNodes[0])}
