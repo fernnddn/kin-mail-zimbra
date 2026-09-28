@@ -335,6 +335,60 @@ else
   bad "the staging path could be taken on a production run"
 fi
 
+# --- a deployed certificate and a failed restart are different failures ------
+# Production, 28 Sep 2026. The certificate was issued, deployed to every Zimbra
+# service and trusted by clients. zmconfigd did not come back from the restart,
+# so the hook's health check failed, and the stage announced:
+#
+#   [FAIL] TLS was not completed for mail.<domain>
+#
+# Twenty lines later the healthcheck in the same run reported "Trusted
+# certificate installed". An operator reading that pair cannot tell which is
+# true, and the obvious response - reissue the certificate - fixes nothing and
+# spends one of five per week.
+H=$(sed -n '/^run_deploy_hook() {/,/^}$/p' "$STAGE04")
+if printf '%s' "$H" | grep -q 'CERTIFICATE ITSELF WAS DEPLOYED'; then
+  ok "a deployed certificate is not reported as a failed issuance"
+else
+  bad "a service that did not restart still reads as TLS never completing"
+fi
+if printf '%s' "$H" | grep -q 'fingerprint -sha256'; then
+  ok "and it is decided by comparing what Zimbra serves, not by guessing"
+else
+  bad "the distinction is asserted rather than checked"
+fi
+if printf '%s' "$H" | grep -q 'will not fix a service that is down'; then
+  ok "and says re-running this stage is not the fix"
+else
+  bad "the operator is left to reissue a certificate that is already correct"
+fi
+# It still has to fail. A stage that cannot confirm Zimbra is healthy has not
+# finished its job, whatever the certificate is doing.
+if printf '%s' "$H" | grep -q 'exit 1'; then
+  ok "the stage still exits non-zero - health could not be confirmed"
+else
+  bad "a half-finished deploy would be reported as success"
+fi
+
+# --- a CA that does not match must say what the directory actually presents --
+# Production, same day. AD CS was installed, its CA published in the directory
+# and read correctly by this stage - and the domain controller was still
+# presenting a certificate from before the install. The stage refused, which is
+# right, and said only "may present a certificate from a different CA", which
+# left the operator with no way to tell whether to fix the DC or supply a
+# different CA. The answer was one openssl call away.
+T="$(cd "$(dirname "$0")/.." && pwd)/14-ad-trust.sh"
+if grep -q 'The directory is actually presenting' "$T"; then
+  ok "a mismatched CA names the issuer the directory really serves"
+else
+  bad "the operator is told the CA is wrong but not what the right one is"
+fi
+if grep -q 'restart NTDS on the DC' "$T"; then
+  ok "and names the most likely cause, which is a DC still using the old cert"
+else
+  bad "no next step is offered for the case that actually happened"
+fi
+
 # --- a rate limit is not a misconfiguration ----------------------------------
 # Three deploys in a week ended on "Issuance failed. See /var/log/letsencrypt/"
 # when nothing was wrong: Let's Encrypt allows five certificates per exact name

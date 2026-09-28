@@ -177,7 +177,34 @@ if echo | timeout 15 openssl s_client -connect "${AD_HOST}:${AD_PORT}" -CAfile "
   ok "Yes - this CA verifies the directory's certificate."
 else
   fail "It does not. Refusing to import a certificate that proves nothing."
-  info "The directory may present a certificate from a different CA."
+  # Name the issuer the directory actually presents.
+  #
+  # "may present a certificate from a different CA" is true and useless: the
+  # operator has just installed AD CS, watched its CA appear in the directory,
+  # and is now told that CA proves nothing - with no way to see what the
+  # domain controller is really serving.
+  #
+  # Production, 28 Sep 2026. AD CS was installed, its CA published and read
+  # correctly, and the DC was still presenting a certificate from before the
+  # install. The answer was one openssl line away and the stage did not print
+  # it, so the operator had no idea whether to fix the DC or supply a
+  # different CA.
+  _presented=$(echo | timeout 15 openssl s_client -connect "${AD_HOST}:${AD_PORT}" 2>/dev/null |
+    openssl x509 -noout -issuer -subject 2>/dev/null)
+  if [ -n "$_presented" ]; then
+    info "The directory is actually presenting:"
+    printf '%s\n' "$_presented" | sed 's/^/           /'
+    info "The CA read from the directory was:"
+    openssl x509 -in "$TMP_CA" -noout -subject 2>/dev/null | sed 's/^/           /'
+    echo
+    info "Those two do not match. Either the domain controller is still using a"
+    info "certificate from before this CA existed - restart NTDS on the DC, or"
+    info "reboot it, so it picks up the one auto-enrolment issued - or point"
+    info "AD_CA_FILE at the CA named above as the issuer."
+  else
+    info "The directory may present a certificate from a different CA, and this"
+    info "host could not read what it presents to say which."
+  fi
   exit 1
 fi
 

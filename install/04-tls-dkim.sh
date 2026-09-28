@@ -356,10 +356,39 @@ run_deploy_hook() {
   say "Deploy certificate to Zimbra (hook)"
   if /etc/letsencrypt/renewal-hooks/deploy/zimbra-deploy.sh; then
     ok "Hook succeeded, certificate deployed"
-  else
-    fail "Hook failed - run manually to see its message"
-    exit 1
+    return 0
   fi
+  fail "Hook failed - run manually to see its message"
+
+  # Which half failed?
+  #
+  # The hook installs the certificate and THEN restarts Zimbra and waits for
+  # every service to come back. Those are different failures with different
+  # fixes, and until now both produced "TLS was not completed" - which was
+  # flatly wrong in the case that actually happened.
+  #
+  # Production, 28 Sep 2026: the certificate was issued, deployed to every
+  # service and trusted, zmconfigd did not come back from the restart, and the
+  # transcript announced that TLS had not completed. The healthcheck twenty
+  # lines later said "Trusted certificate installed". An operator reading that
+  # pair has no idea which to believe.
+  local live="/opt/zimbra/ssl/zimbra/commercial/commercial.crt"
+  if [ -f "$live" ] && [ -f "${LE_DIR}/cert.pem" ] &&
+    [ "$(openssl x509 -in "$live" -noout -fingerprint -sha256 2>/dev/null)" = \
+      "$(openssl x509 -in "${LE_DIR}/cert.pem" -noout -fingerprint -sha256 2>/dev/null)" ]; then
+    echo
+    warn "The CERTIFICATE ITSELF WAS DEPLOYED - Zimbra is serving it now."
+    info "What failed is the health check after the restart: a service did not"
+    info "come back. The certificate does not need reissuing, and re-running"
+    info "this stage will not fix a service that is down."
+    info "Find it, then start it:"
+    info "  su - zimbra -c 'zmcontrol status'"
+    info "  su - zimbra -c 'zmcontrol start'"
+    info "On a multi deployment, a service that cannot reach the mail store's"
+    info "LDAP will fail this way - check the mailbox node is up first."
+    echo
+  fi
+  exit 1
 }
 
 verify_tls_ports() {
