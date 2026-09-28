@@ -3,14 +3,14 @@
  * Until now the only check on this field was that it was not empty. A deploy on
  * 26 September 2026 was configured with
  *
- *   AD_LDAP_URL="daps://10.10.40.200:636"
+ *   AD_LDAP_URL="daps://192.0.2.200:636"
  *
  * - the leading "l" lost somewhere between the operator's head and the box.
  * It passed the wizard, passed validate_draft, was written into the config,
  * copied onto the domain as zimbraAuthLdapURL, and forty minutes later
  * produced:
  *
- *   Could not parse LDAP URI(s)=daps://10.10.40.200:636 (3)
+ *   Could not parse LDAP URI(s)=daps://192.0.2.200:636 (3)
  *
  * The cost of that one character was the whole feature: no mailbox was created
  * for anyone in the directory, the certificate-trust stage skipped itself

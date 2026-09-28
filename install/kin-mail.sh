@@ -52,6 +52,21 @@ REQUIRED_SCRIPTS=(
   10-host-firewall.sh
   11-admin-path-lockdown.sh
   12-branding.sh
+  # Added later than the rest, and left off this list when they were.
+  #
+  # This list is what decides whether a clone is complete; an incomplete one is
+  # re-pulled before anything runs. A stage missing from here is a stage that
+  # is simply absent at the moment it is called, and each of these fails
+  # quietly when that happens: 06-hybrid-auth.sh warns once and carries on, so
+  # a missing 14-ad-trust.sh means the directory's certificate is never trusted
+  # and AD sign-in fails on TLS forty minutes later, with the explanation
+  # buried in the middle of the log. Being told up front that the clone is
+  # short is the whole point of having this list.
+  12-node-metrics.sh
+  13-log-relay.sh
+  14-ad-trust.sh
+  15-ad-sync.sh
+  kin-mail-split.sh
   check-zimbra-foss-update.sh
   kin-mail.sh
 )

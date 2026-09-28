@@ -30,7 +30,7 @@ chk("the result never exceeds the budget", within(truncate("abcdefghijk", 10), 1
 {
   let bad = [];
   for (let max = 1; max <= 40; max++) {
-    for (const s of ["", "a", "mail2.helgaalan.my.id",
+    for (const s of ["", "a", "mail2.example.test",
                      "Promoted - VIP 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
                      "x".repeat(200)]) {
       if (!within(truncate(s, max), max)) bad.push(`${max}:${JSON.stringify(s.slice(0, 12))}`);

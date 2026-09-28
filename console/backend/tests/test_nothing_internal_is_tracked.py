@@ -109,3 +109,97 @@ class NothingInternalIsTracked(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheLeakGateCoversTheWholeProduct(unittest.TestCase):
+    """The CI scan must look at the console's source, not only the installer.
+
+    The gate that forbids real addresses and domains listed .sh, .md, .yml,
+    .j2, .py and NOTICE. The console frontend - the largest body of source in
+    this repository, and the part an operator reads on screen - was not in it.
+    A customer's real domain-controller address sat in
+    console/frontend/src/wizard/adLdapUrl.ts through every green build until
+    28 September 2026, on a public repository.
+
+    It also has to cover console/frontend/dist, because that committed bundle
+    is what bootstrap.sh rsyncs onto the appliance: a leak there ships.
+    """
+
+    WORKFLOW = REPO / ".github/workflows/checks.yml"
+
+    def setUp(self) -> None:
+        self.assertTrue(self.WORKFLOW.is_file(), "CI workflow is missing")
+        self.text = self.WORKFLOW.read_text(encoding="utf-8")
+        block = self.text[self.text.index("includes=("):]
+        self.includes = block[: block.index(")")]
+
+    def test_the_scan_covers_the_frontend_and_the_shipped_bundle(self) -> None:
+        for suffix in ("*.ts", "*.tsx", "*.mjs", "*.js", "*.html", "*.css"):
+            self.assertIn(
+                f"--include='{suffix}'",
+                self.includes,
+                f"the leaked-data scan does not look at {suffix} files",
+            )
+
+    def test_the_scan_still_covers_what_it_always_did(self) -> None:
+        for suffix in ("*.sh", "*.md", "*.yml", "*.yaml", "*.j2", "*.py"):
+            self.assertIn(f"--include='{suffix}'", self.includes)
+        self.assertIn("--include='NOTICE'", self.includes)
+
+    def test_no_real_address_or_domain_is_in_the_frontend_source(self) -> None:
+        """The check itself, not only that CI would run it.
+
+        Test fixtures are exempt in CI because a classifier cannot be proved
+        without naming a private address. Ordinary source has no such excuse:
+        documentation space exists for examples.
+        """
+        private = re.compile(
+            r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"
+            r"|\b192\.168\.\d{1,3}\.\d{1,3}\b"
+            r"|\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b"
+        )
+        bases = re.compile(r"10\.0\.0\.0/8|192\.168\.0\.0/16|172\.16\.0\.0/12")
+        offenders = []
+        for rel in _tracked():
+            if not rel.startswith("console/frontend/"):
+                continue
+            if not rel.endswith((".ts", ".tsx", ".mjs", ".js", ".css", ".html")):
+                continue
+            # Same exemption CI grants, and for the same reason.
+            if rel.endswith((".test.mjs", ".check.ts")) or "/dist/" in rel:
+                continue
+            path = REPO / rel
+            if not path.is_file():
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if private.search(bases.sub("", line)):
+                    offenders.append(f"{rel}:{n}: {line.strip()[:80]}")
+        self.assertEqual(
+            offenders,
+            [],
+            "real or private addresses in shipped frontend source:\n  "
+            + "\n  ".join(offenders),
+        )
+
+    def test_no_customer_domain_anywhere_in_the_console(self) -> None:
+        domains = re.compile(
+            r"nisaroti\.my\.id|gits-it\.site|helgaalan\.my\.id"
+            r"|fernnddn\.my\.id|kampretos\.my\.id"
+        )
+        offenders = []
+        for rel in _tracked():
+            if not rel.startswith("console/"):
+                continue
+            path = REPO / rel
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                # A line asserting the name is ABSENT is the point of the
+                # exercise; that is what keeps generated output clean.
+                if domains.search(line) and "assertNot" not in line:
+                    offenders.append(f"{rel}:{n}")
+        self.assertEqual(offenders, [], f"customer domains in the console: {offenders}")

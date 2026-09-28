@@ -63,7 +63,7 @@ export default function HybridStep() {
       setFieldErr(`Fill the required Active Directory fields: ${missing.join(", ")}.`);
       return;
     }
-    // Only emptiness was checked here before. "daps://10.0.0.1:636" - one
+    // Only emptiness was checked here before. "daps://192.0.2.200:636" - one
     // character short of ldaps:// - passed every layer, reached the domain as
     // zimbraAuthLdapURL, and surfaced forty minutes later as "Could not parse
     // LDAP URI(s)". It cost the whole feature: nobody was created, the

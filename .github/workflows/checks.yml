@@ -170,13 +170,31 @@ jobs:
       - name: Scan for leaked deployment data
         run: |
           fail=0
+          # The console's own source was not in this list until 28 Sep 2026,
+          # and a customer's real domain-controller address sat in
+          # console/frontend/src/wizard/adLdapUrl.ts, on a public repository,
+          # through every green build. A gate that covers the installer and not
+          # the product's largest body of source is a gate with a hole in the
+          # shape of the frontend.
+          #
+          # dist/ is included deliberately: it is the committed bundle that is
+          # rsynced onto the appliance, so it is the copy that actually ships.
           includes=(
             --include='*.sh' --include='*.md' --include='NOTICE'
             --include='*.yml' --include='*.yaml' --include='*.j2'
             --include='*.py'
+            --include='*.ts' --include='*.tsx' --include='*.mjs'
+            --include='*.cjs' --include='*.js' --include='*.css'
+            --include='*.html'
+          )
+          # Third-party trees and lockfiles: not ours to clean, and a lockfile
+          # is tens of thousands of lines of version strings.
+          excludes=(
+            --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=.git
+            --exclude='package-lock.json'
           )
           scan() {
-            if grep -RInE "$1" "${includes[@]}" . ; then
+            if grep -RInE "$1" "${includes[@]}" "${excludes[@]}" . ; then
               echo ">>> $2"; fail=1
             fi
           }
@@ -199,6 +217,14 @@ jobs:
           #   test_*.py              - unit fixtures must name RFC1918 (and
           #                            CGNAT) addresses to prove classifiers;
           #                            token/key scan() still covers tests
+          #   *.test.mjs, *.check.ts - the frontend's spelling of the same
+          #                            thing. isPublicIPv4 cannot be proved
+          #                            without naming a private address, and
+          #                            the LDAP-URL guard exists because a
+          #                            real one was mistyped. Ordinary
+          #                            frontend source gets no exemption:
+          #                            documentation space (RFC 5737) is what
+          #                            an example address should be.
           # The three RFC1918 range bases, each with its own canonical prefix
           # length, are not deployment addresses - they are the definition of
           # "private", and firewall rules that filter by source have to name
@@ -209,11 +235,13 @@ jobs:
           # covering everything.
           private_range_bases='10\.0\.0\.0/8|192\.168\.0\.0/16|172\.16\.0\.0/12'
           scan_private_ip() {
-            if grep -RInE "$1" "${includes[@]}" \
+            if grep -RInE "$1" "${includes[@]}" "${excludes[@]}" \
                  --exclude='*.example.yml' \
                  --exclude='checks.yml' \
                  --exclude='test_corosync_stub.py' \
                  --exclude='test_*.py' \
+                 --exclude='*.test.mjs' \
+                 --exclude='*.check.ts' \
                  --exclude-dir=defaults \
                  . | sed -E "s#${private_range_bases}##g" | grep -E "$1" ; then
               echo ">>> $2"; fail=1
@@ -241,7 +269,7 @@ jobs:
           # inventories clean, and they have to name what they forbid.
           # Use example.test / example.com for fixtures.
           scan_domain() {
-            if grep -RInE "$1" "${includes[@]}" . | grep -v 'assertNot'; then
+            if grep -RInE "$1" "${includes[@]}" "${excludes[@]}" . | grep -v 'assertNot'; then
               echo ">>> $2"; fail=1
             fi
           }
