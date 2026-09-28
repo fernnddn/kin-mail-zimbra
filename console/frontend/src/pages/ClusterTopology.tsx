@@ -1,8 +1,10 @@
+import { useRef } from "react";
 import styled from "@emotion/styled";
 import { HA_TOPOLOGY_OFFERED } from "../featureFlags";
 import { Button } from "../ui";
 import { theme } from "../styles/theme";
 import { charsThatFit, fitHostname, truncate } from "../lib/text";
+import { useDrawIn, useStaggerIn } from "../lib/motion";
 
 export type ObservabilitySnap = {
   present?: boolean;
@@ -253,6 +255,15 @@ export function MultiDeploymentTopology({ deployment }: { deployment: Deployment
   const stack = order.map(byRole).filter((n): n is DeploymentNode => Boolean(n));
   const linkFor = (from: string) => links.find((l) => l.from === from);
 
+  // The cards arrive in the order mail travels, and the connectors draw the
+  // same way. On a page whose whole job is "where did mail stop", the sequence
+  // is the reading order - a topology that appears all at once makes the
+  // operator find the direction for themselves.
+  const stackRef = useRef<SVGGElement | null>(null);
+  const stackKey = stack.map((n) => `${n.role}:${n.ok}:${n.present}`).join("|");
+  useStaggerIn(stackRef, stackKey, { step: 70, distance: 10, max: 6 });
+  useDrawIn(stackRef, stackKey);
+
   const ROW_H = 96;
   const GAP = 44;
   const top = 16;
@@ -277,7 +288,8 @@ export function MultiDeploymentTopology({ deployment }: { deployment: Deployment
               <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="rgba(26, 25, 22, 0.10)" />
             </filter>
           </defs>
-          {stack.map((node, i) => {
+          <g ref={stackRef}>
+            {stack.map((node, i) => {
             const cy = top + ROW_H / 2 + i * (ROW_H + GAP);
             const link = i < stack.length - 1 ? linkFor(node.role) : undefined;
             // Bottom edge of this card to the top edge of the next one. Cards
@@ -316,8 +328,9 @@ export function MultiDeploymentTopology({ deployment }: { deployment: Deployment
                     .join(" ")}
                 />
               </g>
-            );
-          })}
+              );
+            })}
+          </g>
         </svg>
       </SvgWrap>
     </Wrap>

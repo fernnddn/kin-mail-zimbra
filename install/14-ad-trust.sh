@@ -35,6 +35,8 @@ set -u
 cd "$(dirname "$0")" && . ./00-config.sh
 # shellcheck source=lib/zimbra-store.sh
 . ./lib/zimbra-store.sh
+# shellcheck source=lib/ad-ldap.sh
+. ./lib/ad-ldap.sh
 need_root
 
 echo
@@ -124,18 +126,25 @@ if [ -n "${AD_CA_FILE}" ]; then
 else
   info "No AD_CA_FILE set - reading the CA out of the directory."
 
-LDAPSEARCH=/opt/zimbra/common/bin/ldapsearch
-if [ ! -x "$LDAPSEARCH" ]; then
-  fail "Zimbra's ldapsearch is not at ${LDAPSEARCH}"
+if [ ! -x "$KIN_AD_LDAPSEARCH" ]; then
+  fail "Zimbra's ldapsearch is not at ${KIN_AD_LDAPSEARCH}"
   exit 1
 fi
 CA_BASE="CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,${AD_SEARCH_BASE}"
 # LDIF folds long values onto continuation lines that begin with a space.
 # Unfold first, or the base64 comes back in pieces.
-CA_B64=$(LDAPTLS_REQCERT=never "$LDAPSEARCH" -LLL \
-  -H "ldaps://${AD_HOST}:${AD_PORT}" \
-  -D "$AD_SEARCH_BIND_DN" -w "$AD_SEARCH_BIND_PASSWORD" \
-  -b "$CA_BASE" "(objectClass=certificationAuthority)" cACertificate 2>/dev/null |
+#
+# "bootstrap" is the one place in this product that reads the directory without
+# verifying its certificate, and it is why the mode exists: there is nothing to
+# verify against until this read succeeds. What comes back is proved in step 3
+# below before anything is imported. The password still goes in a 0600 file
+# rather than argv - that part is not a bootstrap problem.
+# Decided in this shell for the same reason as the sync: the substitution
+# below is a subshell and would throw the answer away.
+kin_ad_tls_decision "ldaps://${AD_HOST}:${AD_PORT}" bootstrap
+CA_B64=$(kin_ad_ldapsearch "ldaps://${AD_HOST}:${AD_PORT}" \
+  "$AD_SEARCH_BIND_DN" "$AD_SEARCH_BIND_PASSWORD" bootstrap \
+  -LLL -b "$CA_BASE" "(objectClass=certificationAuthority)" cACertificate 2>/dev/null |
   sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g' |
   sed -n 's/^cACertificate:: //p' | head -1)
 

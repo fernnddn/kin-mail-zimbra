@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useRef } from "react";
 import styled from "@emotion/styled";
+import { useStaggerIn } from "../lib/motion";
 import { keyframes } from "@emotion/react";
 import { theme } from "../styles/theme";
 import { Button, ConfirmModal, Hint, LogPane, ProgressSweep, ProgressTrack } from "../ui";
@@ -486,8 +487,14 @@ export default function DiskExtend({
         { heading: mailboxName, targets: MAILBOX_TARGETS },
       ]
     : [{ heading: "", targets: LOCAL_TARGETS }];
+  // On a split deployment this list is the two machines' disks one after the
+  // other, and which machine a row belongs to is the thing an operator must
+  // not get wrong before pressing Extend. Arriving in order groups them; a
+  // list that appears whole leaves the headings to do that work alone.
+  const groupsRef = useRef<HTMLDivElement | null>(null);
+  useStaggerIn(groupsRef, groups.map((g) => g.heading).join("|"), { step: 50, max: 4 });
   return (
-    <Wrap>
+    <Wrap ref={groupsRef}>
       <Head>
         <Name>Extend a disk</Name>
         <Blurb>

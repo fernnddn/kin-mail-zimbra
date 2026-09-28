@@ -84,7 +84,9 @@ function run(targets: Parameters<typeof animate>[0], params: AnimationParams) {
  * on every render is how a page ends up flickering while somebody types.
  */
 export function useStaggerIn(
-  ref: React.RefObject<HTMLElement | null>,
+  // Element, not HTMLElement: the deployment topology is an SVG, and its node
+  // groups are exactly the set this is for.
+  ref: React.RefObject<Element | null>,
   key: unknown = null,
   opts: { distance?: number; step?: number; max?: number } = {},
 ) {
@@ -95,7 +97,15 @@ export function useStaggerIn(
     // Capped rather than staggered to the end: past about eight items the last
     // one is waiting on decoration, and an operator scrolling down a long list
     // should not find it still arriving.
-    const kids = (Array.from(host.children) as HTMLElement[]).slice(0, max + 1);
+    // <defs> and <title> are children too and render nothing; animating them
+    // spends a stagger slot on an invisible element, which shows up as a gap
+    // in the middle of the sequence.
+    const kids = (Array.from(host.children) as HTMLElement[])
+      .filter((el) => {
+        const tag = el.tagName.toLowerCase();
+        return tag !== "defs" && tag !== "title" && tag !== "style";
+      })
+      .slice(0, max + 1);
     if (!kids.length) return;
     run(kids, {
       opacity: [0, 1],
@@ -154,7 +164,7 @@ export function useCountUp(
  * Pointless on something that was already true when the page loaded, which is
  * why it takes an explicit trigger rather than running on mount.
  */
-export function drawPath(path: SVGPathElement | null, on: boolean) {
+export function drawPath(path: SVGGeometryElement | null, on: boolean) {
   if (!path || !on) return;
   let length = 0;
   try {
@@ -170,6 +180,60 @@ export function drawPath(path: SVGPathElement | null, on: boolean) {
     duration: DUR.base,
     ease: EASE.standard,
   } as AnimationParams);
+}
+
+/**
+ * Every connector under `ref` draws itself, in document order.
+ *
+ * For the deployment topology, where the lines are the point: a link that
+ * draws downwards says mail travels that way, and an operator reading for
+ * where it stopped is reading in the same direction. Static lines say only
+ * that two boxes are near each other.
+ *
+ * getTotalLength() is on SVGGeometryElement, so <line> works as well as
+ * <path>; anything else under the ref is left alone.
+ */
+export function useDrawIn(ref: React.RefObject<Element | null>, key: unknown = null) {
+  useEffect(() => {
+    const host = ref.current;
+    if (!host) return;
+    const lines = Array.from(host.querySelectorAll("line, path")) as SVGGeometryElement[];
+    if (!lines.length) return;
+    if (prefersReducedMotion()) {
+      // Drawn instantly rather than skipped: a connector left at dashoffset
+      // would be an invisible link, which reads as a broken one.
+      for (const l of lines) {
+        l.style.strokeDasharray = "";
+        l.style.strokeDashoffset = "";
+      }
+      return;
+    }
+    lines.forEach((line, i) => {
+      let length = 0;
+      try {
+        length = line.getTotalLength();
+      } catch {
+        return;
+      }
+      if (!length) return;
+      // A dashed connector means "not present"; overwriting strokeDasharray
+      // would quietly turn it solid, which is the opposite of what it says.
+      const dashed = line.getAttribute("stroke-dasharray");
+      line.style.strokeDasharray = String(length);
+      line.style.strokeDashoffset = String(length);
+      run(line, {
+        strokeDashoffset: [length, 0],
+        duration: DUR.base,
+        delay: 120 + i * 70,
+        ease: EASE.standard,
+        onComplete: () => {
+          line.style.strokeDasharray = dashed ?? "";
+          line.style.strokeDashoffset = "";
+        },
+      } as AnimationParams);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 }
 
 /**

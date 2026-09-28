@@ -34,6 +34,8 @@ cd "$(dirname "$0")" && . ./00-config.sh
 . ./lib/quota-gate.sh
 # shellcheck source=lib/zimbra-store.sh
 . ./lib/zimbra-store.sh
+# shellcheck source=lib/ad-ldap.sh
+. ./lib/ad-ldap.sh
 need_root
 
 DRY_RUN=0
@@ -73,8 +75,10 @@ for req in AD_LDAP_URL AD_SEARCH_BASE AD_SEARCH_BIND_DN AD_SEARCH_BIND_PASSWORD;
   fi
 done
 
-LDAPSEARCH=/opt/zimbra/common/bin/ldapsearch
-[ -x "$LDAPSEARCH" ] || { fail "Zimbra's ldapsearch is missing"; exit 1; }
+[ -x "$KIN_AD_LDAPSEARCH" ] || {
+  fail "Zimbra's ldapsearch is missing"
+  exit 1
+}
 
 # Enabled people only.
 #
@@ -87,15 +91,36 @@ AD_SYNC_FILTER="${AD_SYNC_FILTER:-(&(objectClass=user)(objectCategory=person)(!(
 AD_SYNC_SKIP="${AD_SYNC_SKIP:-administrator guest krbtgt}"
 
 say "1. Reading the directory"
-RAW=$(LDAPTLS_REQCERT=allow "$LDAPSEARCH" -LLL \
-  -H "$AD_LDAP_URL" \
-  -D "$AD_SEARCH_BIND_DN" -w "$AD_SEARCH_BIND_PASSWORD" \
-  -b "$AD_SEARCH_BASE" "$AD_SYNC_FILTER" sAMAccountName givenName sn displayName 2>&1) || {
+# The bind password goes in a 0600 file, not in argv where `ps` would show it,
+# and an ldaps:// certificate is verified before the password is sent. Both are
+# in lib/ad-ldap.sh, shared with 14-ad-trust.sh so the two cannot drift.
+# The decision is made HERE, in this shell, before the command substitution
+# below. Command substitution runs in a subshell, so a decision made inside it
+# would be discarded - and reading KIN_AD_TLS_MODE afterwards under `set -u`
+# would then abort the stage on an unbound variable rather than report anything.
+kin_ad_tls_decision "$AD_LDAP_URL" verify
+RAW=$(kin_ad_ldapsearch "$AD_LDAP_URL" "$AD_SEARCH_BIND_DN" "$AD_SEARCH_BIND_PASSWORD" verify \
+  -LLL -b "$AD_SEARCH_BASE" "$AD_SYNC_FILTER" \
+  sAMAccountName givenName sn displayName 2>&1)
+_rc=$?
+case "$KIN_AD_TLS_MODE" in
+  pinned | system) ok "$KIN_AD_TLS_NOTE" ;;
+  chain | none) [ -z "$KIN_AD_TLS_NOTE" ] || warn "$KIN_AD_TLS_NOTE" ;;
+esac
+if [ "$_rc" -eq 77 ]; then
+  # Nothing was sent. Saying so matters: the operator's next question is
+  # whether the service account's password just crossed the network.
+  fail "Refused to read the directory - its certificate could not be verified."
+  info "$KIN_AD_TLS_NOTE"
+  info "No password was sent. Nothing on the directory side was contacted with credentials."
+  exit 1
+fi
+if [ "$_rc" -ne 0 ]; then
   fail "Could not read the directory."
   printf '%s\n' "$RAW" | sed 's/^/    /' | tail -4
   info "Check AD_LDAP_URL, AD_SEARCH_BIND_DN and AD_SEARCH_BIND_PASSWORD."
   exit 1
-}
+fi
 
 # LDIF folds long values onto continuation lines beginning with a space.
 UNFOLDED=$(printf '%s\n' "$RAW" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n //g' | tr -d '\r')
@@ -133,6 +158,26 @@ BLOCKED=0
 POLICY_SKIPPED=0
 POLICY_NAMES=""
 MISSING=""
+
+# One seat off the budget established before the loop. Returns 1 when there is
+# none left, leaving KIN_QUOTA_MESSAGE as the gate set it so the two refusals -
+# "never configured" and "contract full" - stay distinguishable.
+SEAT_BUDGET=""
+kin_ad_seat_available() {
+  case "${KIN_QUOTA_LIMIT:-}" in
+    unlimited) return 0 ;;
+  esac
+  case "$SEAT_BUDGET" in
+    '' | *[!0-9-]*)
+      # The gate refused before a number was ever established: not configured,
+      # or the count itself failed. Either way nothing may be created.
+      return 1
+      ;;
+  esac
+  [ "$SEAT_BUDGET" -gt 0 ] || return 1
+  SEAT_BUDGET=$((SEAT_BUDGET - 1))
+  return 0
+}
 
 MISSING_FILE=$(mktemp)
 trap 'rm -f "$MISSING_FILE"' EXIT
@@ -191,12 +236,35 @@ fi
 
 if [ "$MISSING_N" -gt 0 ]; then
   say "3. Creating the missing mailboxes"
+  # The seat gate, exactly as the console and the CLI apply it: a directory
+  # sync must not be a way around a contracted limit.
+  #
+  # It is asked ONCE and then counted down, rather than re-asked before every
+  # account. The gate answers by running `zmprov -l gaa -v`, which dumps every
+  # attribute of every mailbox on the domain through a fresh JVM - about three
+  # seconds on an idle lab pair, and longer with each mailbox created. Per
+  # account that is O(n^2) work: a first sync of a 200-person directory spent
+  # most of an hour re-reading accounts it had just made. The arithmetic here
+  # is the gate's own, so the ceiling is identical.
+  #
+  # A mailbox created by some other path DURING a sweep is the one thing this
+  # cannot see. The next run re-reads the real count from scratch and stops
+  # earlier, so the effect is at worst a refusal delayed by one run - never a
+  # higher ceiling.
+  kin_quota_gate_allow_new_mailbox "$MAIL_DOMAIN" >/dev/null 2>&1
+  SEAT_BUDGET="${KIN_QUOTA_REMAINING:-}"
+  if [ -n "${KIN_QUOTA_LIMIT:-}" ] && [ "${KIN_QUOTA_LIMIT}" != unlimited ]; then
+    info "${KIN_QUOTA_USED}/${KIN_QUOTA_LIMIT} seats used; ${SEAT_BUDGET} available for this sweep"
+  fi
+  # Each mailbox is one `zmprov ca` plus one read-back through su - zimbra, so
+  # a large first sync is minutes rather than seconds. Said here so a quiet
+  # terminal reads as work in progress rather than as a hang.
+  if [ "$MISSING_N" -ge 25 ]; then
+    info "${MISSING_N} to create - this takes a few seconds each. Leave it running."
+  fi
   while IFS=$'\t' read -r email given surname display; do
     [ -n "$email" ] || continue
-    # The seat gate, per account, exactly as the console and the CLI do it. A
-    # directory sync must not be a way around a contracted limit - the point of
-    # the gate is that it holds no matter who is asking.
-    if ! kin_quota_gate_allow_new_mailbox "$MAIL_DOMAIN" >/dev/null 2>&1; then
+    if ! kin_ad_seat_available; then
       # Two different situations arrive here and they need different answers.
       # "Not configured" is a step the operator skipped in the wizard; "limit
       # reached" is a contract they have filled. Reporting the first as the
@@ -210,7 +278,12 @@ if [ "$MISSING_N" -gt 0 ]; then
           ;;
         *)
           warn "Seat limit reached - stopping at ${email}"
-          info "${KIN_QUOTA_MESSAGE:-}"
+          # Recomposed, not echoed. KIN_QUOTA_MESSAGE was written by the single
+          # gate call before the loop, when seats were still available, so
+          # repeating it here would print "seat available: 3/10" underneath
+          # "Seat limit reached" and leave the operator with two answers.
+          info "${KIN_QUOTA_LIMIT}/${KIN_QUOTA_LIMIT} seats are in use - contact KIN to add seats"
+          info "${CREATED} of ${MISSING_N} were created; the rest are listed above as missing."
           ;;
       esac
       BLOCKED=$((BLOCKED + 1))

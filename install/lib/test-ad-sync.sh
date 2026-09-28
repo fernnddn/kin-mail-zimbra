@@ -507,6 +507,72 @@ else
   bad "it uses a fixed sleep, which is wrong on both fast and slow machines"
 fi
 
+# --- the seat budget ----------------------------------------------------------
+# The gate used to be re-asked before every single account. It answers by
+# running `zmprov -l gaa -v`, which dumps every attribute of every mailbox on
+# the domain through a fresh JVM, so a first sync of a large directory spent
+# most of its time re-reading the accounts it had just created - and got slower
+# with each one. It is now asked once and counted down. The ceiling must be
+# exactly the same ceiling, which is what these exercise.
+_seatfn=$(mktemp)
+sed -n '/^kin_ad_seat_available() {/,/^}/p' "$S" >"$_seatfn"
+if [ ! -s "$_seatfn" ]; then
+  bad "kin_ad_seat_available is not defined in the sync"
+else
+  # shellcheck source=/dev/null
+  . "$_seatfn"
+
+  KIN_QUOTA_LIMIT=10 SEAT_BUDGET=3
+  n=0
+  while kin_ad_seat_available; do n=$((n + 1)); [ "$n" -gt 20 ] && break; done
+  [ "$n" -eq 3 ] && pass "a budget of 3 allows exactly 3 creates" \
+    || bad "a budget of 3 allowed ${n} creates"
+
+  KIN_QUOTA_LIMIT=10 SEAT_BUDGET=0
+  kin_ad_seat_available && bad "a full contract still allowed a create" \
+    || pass "no seats left refuses immediately"
+
+  # "unlimited" is a deliberate answer, not an absent one, and must never be
+  # capped by an empty budget.
+  KIN_QUOTA_LIMIT=unlimited SEAT_BUDGET=""
+  n=0
+  while kin_ad_seat_available; do n=$((n + 1)); [ "$n" -ge 50 ] && break; done
+  [ "$n" -ge 50 ] && pass "unlimited is not capped" || bad "unlimited stopped after ${n}"
+
+  # The dangerous direction: a gate that could not produce a number must deny,
+  # never default to letting everybody through.
+  KIN_QUOTA_LIMIT=10 SEAT_BUDGET=""
+  kin_ad_seat_available && bad "an unknown budget allowed a create" \
+    || pass "an unknown budget denies rather than assuming"
+  KIN_QUOTA_LIMIT=10 SEAT_BUDGET="not-a-number"
+  kin_ad_seat_available && bad "a non-numeric budget allowed a create" \
+    || pass "a non-numeric budget denies"
+  KIN_QUOTA_LIMIT=10 SEAT_BUDGET="-1"
+  kin_ad_seat_available && bad "a negative budget allowed a create" \
+    || pass "a negative budget denies"
+fi
+rm -f "$_seatfn"
+
+# The gate is still consulted - counted down, not removed.
+if grep -q 'kin_quota_gate_allow_new_mailbox' "$S"; then
+  pass "the seat gate is still the source of the ceiling"
+else
+  bad "the sync no longer consults the seat gate at all"
+fi
+# And it must not be back inside the create loop.
+if awk '/^  while IFS=/,/^  done </' "$S" | grep -q 'kin_quota_gate_allow_new_mailbox'; then
+  bad "the gate is being re-asked inside the create loop again"
+else
+  pass "the gate is not re-asked per account"
+fi
+# "Seat limit reached" must not be followed by the earlier "seat available"
+# message: that call happened before the loop, when seats still remained.
+if sed -n '/Seat limit reached/,/;;/p' "$S" | grep -v '^[[:space:]]*#' | grep -q 'KIN_QUOTA_MESSAGE'; then
+  bad "the stale pre-loop quota message is printed under 'Seat limit reached'"
+else
+  pass "the refusal composes its own message rather than echoing a stale one"
+fi
+
 if [ "$fails" -eq 0 ]; then
   printf 'All AD sync tests passed\n'
   exit 0

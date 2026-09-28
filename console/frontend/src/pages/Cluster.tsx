@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import styled from "@emotion/styled";
+import { useStaggerIn } from "../lib/motion";
 import { keyframes } from "@emotion/react";
 import { ConsoleChrome } from "../ConsoleChrome";
 import { isOpsRole, useAuth } from "../auth";
@@ -2027,6 +2028,16 @@ export default function ClusterPage() {
   const offline = new Set([...(cluster.offline || []), ...(cluster.stale_peers || [])]);
   const lines = healthLines(cluster, topology);
   const clusterOk = loaded && lines.every((l) => l.ok);
+  // The machines are a set. The overview cards above them already fade in from
+  // CSS, so leaving these still made the lower half of the page read as the
+  // part that had not finished loading. Keyed on the names and their health so
+  // a node going offline replays the sequence rather than silently swapping a
+  // colour underneath someone who has already looked away.
+  const nodeCardsRef = useRef<HTMLDivElement | null>(null);
+  const nodeCardsKey = displayNodes
+    .map((n) => `${n}:${offline.has(n) ? "off" : "on"}:${standby.has(n) ? "sb" : ""}`)
+    .join("|");
+  useStaggerIn(nodeCardsRef, nodeCardsKey, { step: 60, max: 4 });
 
   function nodeCard(node: string) {
     const isStandby = standby.has(node);
@@ -2565,7 +2576,7 @@ export default function ClusterPage() {
                 onRemove={openObsRemove}
               />
               {displayNodes.length === 2 ? (
-                <Pair>
+                <Pair ref={nodeCardsRef}>
                   {nodeCard(displayNodes[0])}
                   <LinkCol>
                     <LinkLine />
@@ -2573,7 +2584,7 @@ export default function ClusterPage() {
                   {nodeCard(displayNodes[1])}
                 </Pair>
               ) : (
-                <Grid>{displayNodes.map((node) => nodeCard(node))}</Grid>
+                <Grid ref={nodeCardsRef}>{displayNodes.map((node) => nodeCard(node))}</Grid>
               )}
               {topology === "2vm" && displayNodes.length === 0 ? (
                 <Hint>No mail nodes are visible in the cluster yet.</Hint>

@@ -103,3 +103,72 @@ class MotionIsUsedForMeaningNotDecoration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThePagesThatShouldMoveDo(unittest.TestCase):
+    """Motion that was added and then quietly lost is the same as none.
+
+    The console grew four pages - the deployment topology, the cluster's node
+    cards, the account list and the disk targets - that render a *set* and
+    stood completely still. The operator's report was not "the animation is
+    broken", it was "I cannot feel any difference", which is what a console
+    with a motion library and four static pages feels like.
+
+    Each entry below is a list or a diagram where the sequence carries meaning:
+    how many machines there are, which order mail travels in, whether the
+    people expected from the directory actually arrived. Decoration is still
+    not wanted anywhere; these are the places where it is not decoration.
+    """
+
+    CASES = {
+        "src/pages/ClusterTopology.tsx": ("useStaggerIn", "useDrawIn"),
+        "src/pages/Cluster.tsx": ("useStaggerIn",),
+        "src/pages/Users.tsx": ("useStaggerIn",),
+        "src/pages/ActivityCenter.tsx": ("useStaggerIn",),
+        "src/monitoring/DiskExtend.tsx": ("useStaggerIn",),
+        # Already animated before this; kept so they cannot regress either.
+        "src/monitoring/MonitoringTab.tsx": ("useStaggerIn",),
+        "src/monitoring/ReportsTab.tsx": ("useStaggerIn", "useCountUp"),
+        "src/pages/MailGateway.tsx": ("useStaggerIn",),
+        "src/ConsoleChrome.tsx": ("slideTo",),
+    }
+
+    def test_each_page_that_renders_a_set_animates_it(self) -> None:
+        missing = []
+        for rel, helpers in self.CASES.items():
+            path = FRONTEND / rel
+            self.assertTrue(path.is_file(), f"missing {rel}")
+            src = path.read_text(encoding="utf-8")
+            for helper in helpers:
+                if helper not in src:
+                    missing.append(f"{rel}: {helper}")
+        self.assertEqual(missing, [], f"these stopped animating: {missing}")
+
+    def test_the_animated_container_is_actually_wired_to_a_ref(self) -> None:
+        """A hook with no ref on an element animates nothing and fails silently."""
+        for rel in self.CASES:
+            src = (FRONTEND / rel).read_text(encoding="utf-8")
+            for match in re.finditer(r"use(?:StaggerIn|DrawIn)\(\s*([A-Za-z0-9_]+)", src):
+                ref = match.group(1)
+                # assertIn on a short string, not assertRegex on the file: a
+                # failure here should name the ref, not print the component.
+                self.assertTrue(
+                    f"ref={{{ref}}}" in src,
+                    f"{rel}: {ref} is passed to a motion hook but never attached "
+                    f"to an element, so it animates nothing and says nothing",
+                )
+
+    def test_the_topology_draws_its_connectors_in_reading_order(self) -> None:
+        """The lines are the point: a link that draws downwards says which way
+        mail travels, and that is the question the page exists to answer."""
+        src = (FRONTEND / "src/pages/ClusterTopology.tsx").read_text(encoding="utf-8")
+        self.assertIn("useDrawIn", src)
+        motion = MOTION.read_text(encoding="utf-8")
+        body = motion[motion.index("export function useDrawIn("):]
+        body = body[: body.index("\n}\n")]
+        # Reduced motion must leave the connectors VISIBLE, not half-drawn.
+        self.assertIn("prefersReducedMotion()", body)
+        self.assertIn('strokeDasharray = ""', body)
+        # A dashed line means "not present". Restoring the attribute afterwards
+        # is what keeps it from being silently promoted to a solid link.
+        self.assertIn("dashed", body)

@@ -51,7 +51,13 @@ fi
 # --- no new dependency --------------------------------------------------------
 # The mail store has neither ldap3 nor a system ldapsearch. Adding a package to
 # a mail server for one read would be the wrong trade; Zimbra ships its own.
-if grep -q '/opt/zimbra/common/bin/ldapsearch' "$S"; then
+#
+# The path moved into lib/ad-ldap.sh when the bind stopped putting the password
+# in argv, so this follows it there rather than only reading this stage - which
+# would have passed on a stage that had quietly switched to a system client.
+if grep -q '/opt/zimbra/common/bin/ldapsearch' "$S" ||
+  { grep -q 'kin_ad_ldapsearch' "$S" &&
+    grep -q '/opt/zimbra/common/bin/ldapsearch' "$(dirname "$S")/lib/ad-ldap.sh"; }; then
   pass "uses the OpenLDAP client Zimbra already ships"
 else
   bad "does not use Zimbra's bundled ldapsearch"

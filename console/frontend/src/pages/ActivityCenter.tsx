@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import styled from "@emotion/styled";
 import { useLocation } from "react-router-dom";
 import { ConsoleChrome } from "../ConsoleChrome";
@@ -8,6 +8,7 @@ import { useTasks } from "../tasks/TaskProvider";
 import { formatElapsed, taskElapsedMs, type Task } from "../tasks/taskStore";
 import { useAlerts } from "../tasks/AlertProvider";
 import type { Alert } from "../tasks/alerts";
+import { useStaggerIn } from "../lib/motion";
 
 /** Full history for the header dropdowns.
  *
@@ -172,6 +173,16 @@ export default function ActivityCenterPage() {
     location.hash === "#alerts" ? "alerts" : "tasks",
   );
 
+  // The two tabs hold different sets, and switching between them is the one
+  // moment a sequence says so: rows that arrive in order read as a new list,
+  // where rows that are simply replaced read as the same list with different
+  // words in it.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useStaggerIn(listRef, `${tab}:${tab === "tasks" ? tasks.length : alerts.length}`, {
+    step: 34,
+    max: 8,
+  });
+
   return (
     <ConsoleChrome subtitle="Activity">
       <Page $wide>
@@ -188,7 +199,7 @@ export default function ActivityCenterPage() {
             Cluster alerts ({alerts.length})
           </TabBtn>
         </Tabs>
-        <List>
+        <List ref={listRef}>
           {tab === "tasks" ? (
             tasks.length ? (
               tasks.map((t) => <TaskRow key={t.id} task={t} />)

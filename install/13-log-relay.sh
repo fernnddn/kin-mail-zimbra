@@ -136,7 +136,10 @@ if ! command -v ss >/dev/null 2>&1; then
 fi
 UP=0
 for _try in 1 2 3 4 5; do
-  if ss -lnu 2>/dev/null | grep -q "${BIND}:${PORT}"; then
+  # -F: an IPv4 address is full of dots, and in a regex every one of them
+  # matches any character. A receiver bound to the wrong address could satisfy
+  # an unanchored pattern and report itself as correct.
+  if ss -lnu 2>/dev/null | grep -qF "${BIND}:${PORT}"; then
     UP=1
     break
   fi

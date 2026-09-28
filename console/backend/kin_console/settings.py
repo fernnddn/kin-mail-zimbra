@@ -6,16 +6,49 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# systemd passes these through EnvironmentFile= already; reading the file here
+# is a convenience for anything started outside the unit.
+ENV_FILE_CANDIDATES: tuple[str, ...] = ("/etc/kin-mail-console/console.env",)
+
+
+def readable_env_files() -> tuple[str, ...]:
+    """The dotenv paths that can actually be opened.
+
+    pydantic-settings opens every path in ``env_file`` while the class body is
+    being evaluated, so a file that exists but cannot be read raises
+    PermissionError during *import* - before logging exists, and with a
+    traceback that names python-dotenv rather than the file an operator has to
+    fix. The console runs as ``kin-console`` and reads console.env only through
+    group ownership (``root:kin-console 0640``). A restore that lands the file
+    as ``root:root``, a hand-typed ``chmod 600``, or any other tool importing
+    this module as a different user would otherwise take the console down at
+    startup - discarding the process environment that systemd has already
+    supplied, which is where these values come from in production anyway.
+
+    Skipping an unreadable file is therefore strictly safer than failing: under
+    systemd nothing is lost, and outside it the defaults below still apply.
+    """
+    usable = []
+    for path in ENV_FILE_CANDIDATES:
+        try:
+            with open(path, "rb"):
+                pass
+        except OSError:
+            # Missing, unreadable, a dangling symlink, a directory: all mean
+            # "no settings from here", never "refuse to start".
+            continue
+        usable.append(path)
+    return tuple(usable)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # Prefer process environment (systemd EnvironmentFile=). Optional dotenv
-        # is best-effort so an unreadable file cannot crash startup.
-        env_file=("/etc/kin-mail-console/console.env",),
+        # Prefer process environment (systemd EnvironmentFile=). The dotenv
+        # read is genuinely best-effort - see readable_env_files().
+        env_file=readable_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
     # Override via CONSOLE_PORT in console.env - do not hard-lock in code callers.
     console_port: int = 9443
     # Local-only HTTPS backend. The public listener on console_port is a mux

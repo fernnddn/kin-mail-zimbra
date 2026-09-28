@@ -1,5 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState, useRef } from "react";
 import { Link, Navigate } from "react-router-dom";
+import { useStaggerIn } from "../lib/motion";
 import styled from "@emotion/styled";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -135,6 +136,13 @@ export default function UsersPage() {
 
   const roleLabel = (id: string) => roles.find((r) => r.id === id)?.label || id;
 
+  // Accounts arrive as a set. After a directory sync this is the page an
+  // operator checks to see whether the people they expected actually came
+  // across, and a list that assembles in order is countable at a glance where
+  // one that appears whole is not.
+  const rowsRef = useRef<HTMLTableSectionElement | null>(null);
+  useStaggerIn(rowsRef, loaded ? rows.length : -1, { step: 26, distance: 6, max: 10 });
+
   return (
     <ConsoleChrome>
       <Page>
@@ -170,7 +178,7 @@ export default function UsersPage() {
                 <th />
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={rowsRef}>
               {!loaded ? (
                 <tr>
                   <td colSpan={4}>
